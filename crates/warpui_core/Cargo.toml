@@ -20,12 +20,14 @@ anyhow = "1.0"
 async-broadcast.workspace = true
 async-channel.workspace = true
 async-executor = "1.4.1"
+async-io.workspace = true
 async-task.workspace = true
 async-fs.workspace = true
 bounded-vec-deque = "0.1"
 bytes.workspace = true
 cfg-if.workspace = true
 chrono = "0.4"
+ctrlc.workspace = true
 dashmap.workspace = true
 derivative.workspace = true
 derive_more.workspace = true
@@ -35,6 +37,7 @@ float-cmp.workspace = true
 futures = "0.3"
 futures-lite.workspace = true
 futures-util = { version = "0.3", default-features = false }
+font-kit.workspace = true
 image.workspace = true
 minimp4 = { workspace = true, optional = true }
 openh264 = { workspace = true, optional = true }
@@ -70,7 +73,7 @@ sum_tree.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 titlecase = "1.0"
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 trait-set = "0.3.0"
 vec1.workspace = true
 warp_util.workspace = true
@@ -85,19 +88,8 @@ simplelog.workspace = true
 # Enable the `test-util` feature for our own package when running tests.
 warpui_core = { path = ".", features = ["test-util"] }
 
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-async-io.workspace = true
-ctrlc.workspace = true
-font-kit.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread"] }
-
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 arboard = { workspace = true, features = ["image-data"] }
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-gloo.workspace = true
-wasm-bindgen-futures.workspace = true
-woothee = "0.13.0"
 
 [build-dependencies]
 cfg_aliases.workspace = true

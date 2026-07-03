@@ -6,13 +6,12 @@
 use cfg_aliases::cfg_aliases;
 
 use anyhow::Result;
-use sha2::Digest;
 use std::path::Path;
 use std::{env, fs, process::Command};
 use walkdir::WalkDir;
 use warp_util::assets::{
-    ASSETS_DIR, ASYNC_ASSETS_DIR, CONPTY_DLL_FILE, DXCOMPILER_DLL_FILE, DXIL_DLL_FILE,
-    OPEN_CONSOLE_EXE_FILE, REMOTE_ASSETS_DIR, WINDOWS_ASSETS_DIR,
+    ASSETS_DIR, CONPTY_DLL_FILE, DXCOMPILER_DLL_FILE, DXIL_DLL_FILE, OPEN_CONSOLE_EXE_FILE,
+    WINDOWS_ASSETS_DIR,
 };
 use warp_util::path::app_target_dir;
 
@@ -24,14 +23,12 @@ fn main() -> Result<()> {
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
-    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_FAMILY");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
-    let target_family = env::var("CARGO_CFG_TARGET_FAMILY")?;
 
-    add_features(&target_family, &target_os);
+    add_features(&target_os);
 
-    if target_os == "macos" && target_family != "wasm" {
+    if target_os == "macos" {
         println!("cargo:rustc-link-lib=framework=MetalKit");
         println!("cargo:rustc-link-lib=framework=UserNotifications");
 
@@ -137,10 +134,6 @@ fn main() -> Result<()> {
         embed_resource_file(&target_dir);
     }
 
-    if target_family == "wasm" {
-        copy_async_assets();
-    }
-
     Ok(())
 }
 
@@ -155,11 +148,9 @@ fn get_build_profile_name() -> String {
         .to_string()
 }
 
-fn add_features(target_family: &str, target_os: &str) {
-    if target_family != "wasm" {
-        println!("cargo:rustc-cfg=feature=\"local_fs\"");
-        println!("cargo:rustc-cfg=feature=\"local_tty\"");
-    }
+fn add_features(target_os: &str) {
+    println!("cargo:rustc-cfg=feature=\"local_fs\"");
+    println!("cargo:rustc-cfg=feature=\"local_tty\"");
 
     if target_os != "windows" {
         println!("cargo:rustc-cfg=feature=\"iterm_images\"");
@@ -167,44 +158,6 @@ fn add_features(target_family: &str, target_os: &str) {
 
     if env::var("PROFILE").ok().is_some_and(|val| val == "debug") {
         println!("cargo:rustc-cfg=feature=\"agent_mode_debug\"");
-    }
-}
-
-fn copy_async_assets() {
-    println!("cargo:rerun-if-changed=assets/async");
-    println!("cargo:rerun-if-env-changed=ASSET_TARGET_DIR");
-    let Ok(out_dir_str) = env::var("ASSET_TARGET_DIR") else {
-        // Don't build assets if no target dir specified.
-        return;
-    };
-    let out_dir = Path::new(&out_dir_str);
-
-    let remote_asset_subdirs = &[ASYNC_ASSETS_DIR, REMOTE_ASSETS_DIR];
-    for remote_asset_subdir in remote_asset_subdirs {
-        let asset_dir = Path::new(ASSETS_DIR).join(remote_asset_subdir);
-
-        for asset in WalkDir::new(&asset_dir) {
-            let asset = asset.expect("access error");
-            let asset_path = asset.path();
-            if asset_path.is_file() {
-                let contents = fs::read(asset_path).expect("could not read file");
-
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(&contents);
-                let hash: [u8; 32] = hasher.finalize().into();
-                let new_relative_path = warp_util::assets::hashed_asset_path(
-                    asset_path
-                        .strip_prefix(&asset_dir)
-                        .expect("asset in unexpected location"),
-                    &hash,
-                );
-                let new_path = out_dir.join(new_relative_path);
-
-                fs::create_dir_all(new_path.parent().unwrap())
-                    .expect("failed to create directories");
-                fs::write(new_path, contents).expect("failed to copy file");
-            }
-        }
     }
 }
 

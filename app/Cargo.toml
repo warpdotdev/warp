@@ -27,6 +27,7 @@ test = false
 addr = "0.15.6"
 ai.workspace = true
 anyhow.workspace = true
+app-installation-detection.workspace = true
 arrayvec.workspace = true
 asset_cache.workspace = true
 asset_macro.workspace = true
@@ -34,9 +35,11 @@ async-broadcast.workspace = true
 async-channel.workspace = true
 async-compat.workspace = true
 async-fs.workspace = true
+async-io.workspace = true
 async-recursion.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
+axum.workspace = true
 base64.workspace = true
 bimap = "0.6.2"
 bincode.workspace = true
@@ -51,6 +54,7 @@ cfg-if.workspace = true
 channel_versions.workspace = true
 chrono.workspace = true
 clap.workspace = true
+comfy-table = "7.1.4"
 command = { workspace = true }
 command-corrections.workspace = true
 command-signatures-v2 = { workspace = true, optional = true }
@@ -63,7 +67,8 @@ dashmap.workspace = true
 deltae = "0.3.1"
 derivative.workspace = true
 dhat = { version = "0.3.2", optional = true }
-diesel.workspace = true
+diesel = { workspace = true, features = ["sqlite", "chrono"] }
+diesel_migrations = { version = "2.2.0", features = ["sqlite"] }
 difflib = { git = "https://github.com/warpdotdev/difflib.git", rev = "114177e7d8e1f8017baca397f943e11644b14d63" }
 directories.workspace = true
 dirs.workspace = true
@@ -72,6 +77,7 @@ email_address = { git = "https://github.com/warpdotdev/rust-email_address", bran
 embed_plist = "1.2"
 enclose = "1.1.8"
 enum-iterator.workspace = true
+env_logger.workspace = true
 event-listener = "5.4.0"
 field_mask.workspace = true
 flate2 = "1.0.17"
@@ -81,12 +87,18 @@ futures-util.workspace = true
 futures.workspace = true
 fuzzy_match.workspace = true
 getset.workspace = true
+git2 = { version = "0.20.4", default-features = false, features = [
+    "vendored-libgit2",
+] }
 handlebars.workspace = true
 hex.workspace = true
 http.workspace = true
 http_client.workspace = true
+http_server.workspace = true
+hyper.workspace = true
 image.workspace = true
 infer = "0.19.0"
+inquire = "0.9.1"
 jaq-json.workspace = true
 jaq-all.workspace = true
 jemalloc_pprof = { version = "0.8.1", optional = true, features = [
@@ -103,6 +115,7 @@ kmeans_colors = { version = "0.5", default-features = false, features = [
 ] }
 lazy_static.workspace = true
 libc.workspace = true
+libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
 line-ending.workspace = true
 log.workspace = true
 lsp.workspace = true
@@ -206,13 +219,37 @@ counter = "0.6.0"
 typed-path.workspace = true
 urlencoding = "2.1.3"
 mime_guess = "2.0"
+mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
 warp_multi_agent_api.workspace = true
 repo_metadata.workspace = true
 vim.workspace = true
-rmcp = { workspace = true, features = ["client"] }
+rmcp = { workspace = true, features = [
+    "client",
+    "auth",
+    "transport-streamable-http-client-reqwest",
+    "transport-sse-client-reqwest",
+    "transport-child-process",
+] }
+aws-config = { version = "1.8.12", features = ["credentials-login"] }
+aws-credential-types = "1"
+aws-sdk-sts = "1"
+aws-types = "1"
+tokio.workspace = true
+tokio-util.workspace = true
 warp_isolation_platform.workspace = true
 warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
+notify-debouncer-full.workspace = true
+rquickjs = { workspace = true, optional = true }
+rustls.workspace = true
+syntect = "5.0"
+sysinfo.workspace = true
+warp-command-signatures = { workspace = true, features = ["embed-signatures"] }
+is_executable = "1.0.1"
+gethostname = "1.1.0"
+watcher.workspace = true
+warp_files.workspace = true
+tantivy = "0.26.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block.workspace = true
@@ -228,68 +265,6 @@ security-framework-sys = "2.0.0"
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 winit = { workspace = true }
 wgpu.workspace = true
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-app-installation-detection.workspace = true
-async-io.workspace = true
-axum.workspace = true
-comfy-table = "7.1.4"
-inquire = "0.9.1"
-diesel = { workspace = true, features = ["sqlite", "chrono"] }
-diesel_migrations = { version = "2.2.0", features = ["sqlite"] }
-env_logger.workspace = true
-git2 = { version = "0.20.4", default-features = false, features = [
-    "vendored-libgit2",
-] }
-http_server.workspace = true
-hyper.workspace = true
-libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
-mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
-tokio.workspace = true
-tokio-util.workspace = true
-
-# AWS SDK (loading credentials for BYO LLM)
-aws-config = { version = "1.8.12", features = ["credentials-login"] }
-aws-credential-types = "1"
-aws-sdk-sts = "1"
-aws-types = "1"
-
-rmcp = { workspace = true, features = [
-    "auth",
-    "transport-streamable-http-client-reqwest",
-    "transport-sse-client-reqwest",
-    "transport-child-process",
-] }
-notify-debouncer-full.workspace = true
-rquickjs = { workspace = true, optional = true }
-rustls.workspace = true
-syntect = "5.0"
-sysinfo.workspace = true
-warp-command-signatures = { workspace = true, features = ["embed-signatures"] }
-is_executable = "1.0.1"
-gethostname = "1.1.0"
-watcher.workspace = true
-warp_files.workspace = true
-tantivy = "0.26.0"
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-console_error_panic_hook = { version = "0.1.6" }
-js-sys = "0.3.63"
-# Make sure we embed the data into the wasm binary even when running in debug
-# mode, as it cannot be read directly from the filesystem.
-rust-embed = { workspace = true, features = ["debug-embed"] }
-syntect = { version = "5.0", default-features = false, features = [
-    "default-fancy",
-] }
-wasm-bindgen.workspace = true
-# We need to make sure that "js" is enabled as a feature when using wasm.
-getrandom = { version = "0.2", features = ["js"] }
-gloo.workspace = true
-serde-wasm-bindgen = "0.6.5"
-# For wasm, we don't use the feature "embed-signatures".
-warp-command-signatures = { workspace = true }
-web-sys.workspace = true
-warp_web_event_bus.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 cvt = "0.1.1"
@@ -358,7 +333,6 @@ warpui_extras = { workspace = true, features = ["test-util"] }
 warp_files = { workspace = true, features = ["test-util"] }
 repo_metadata = { workspace = true, features = ["test-util"] }
 
-[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time"] }
 
 [build-dependencies]
@@ -600,12 +574,12 @@ trim_trailing_blank_lines = []
 cli_agent_rich_input = []
 list_skills = []
 # This feature is enabled in build.rs when compiling for platforms which
-# support having a local tty/shell session.  It can be used to conditionally
+# support having a local tty/shell session. It can be used to conditionally
 # include dependencies that should only exist in such environments.
 local_tty = []
 local_computer_use = []
 # This feature is enabled in build.rs when compiling for platforms which
-# have APIs for interacting with a local filesystem.  It can be used to
+# have APIs for interacting with a local filesystem. It can be used to
 # conditionally include dependencies that should only exist in such
 # environments.
 local_fs = [

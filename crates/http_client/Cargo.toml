@@ -26,7 +26,3 @@ serde.workspace = true
 serde_json.workspace = true
 serde_urlencoded.workspace = true
 warp_core.workspace = true
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-gloo.workspace = true
-wasm-bindgen-futures.workspace = true

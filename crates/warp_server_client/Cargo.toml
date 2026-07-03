@@ -14,6 +14,7 @@ anyhow.workspace = true
 bincode.workspace = true
 chrono.workspace = true
 derivative.workspace = true
+diesel = { workspace = true, features = ["sqlite", "chrono"] }
 itertools.workspace = true
 lasso.workspace = true
 log.workspace = true
@@ -29,6 +30,3 @@ warpui_core.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-diesel = { workspace = true, features = ["sqlite", "chrono"] }

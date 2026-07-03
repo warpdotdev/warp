@@ -16,7 +16,6 @@ fn main() {
         // We use wgpu for rendering on all platforms where we use winit, but
         // we can also use it on macOS, if enabled.
         wgpu: { any(winit, feature = "experimental-wgpu-renderer") },
-        native: { not(target_family = "wasm") },
     }
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {

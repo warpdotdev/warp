@@ -13,12 +13,14 @@ test = false
 
 [dependencies]
 anyhow = "1.0"
+app-installation-detection.workspace = true
 backtrace.workspace = true
 cfg-if.workspace = true
 chrono.workspace = true
 clap.workspace = true
 command.workspace = true
 directories.workspace = true
+diesel = { version = "2.2.4", features = ["sqlite", "chrono"] }
 itertools.workspace = true
 float-cmp.workspace = true
 instant.workspace = true
@@ -37,6 +39,7 @@ simplelog.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
 sum_tree.workspace = true
+sysinfo.workspace = true
 version-compare.workspace = true
 warp = { workspace = true, features = ["integration_tests"] }
 warp_cli = { workspace = true, features = ["integration_tests"] }
@@ -54,11 +57,6 @@ whoami = "1.5.2"
 command = { workspace = true, features = ["test-util"] }
 warpui = { workspace = true, features = ["integration_tests"] }
 warp_core = { workspace = true, features = ["test-util"] }
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-app-installation-detection.workspace = true
-diesel = { version = "2.2.4", features = ["sqlite", "chrono"] }
-sysinfo.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["user", "signal"] }

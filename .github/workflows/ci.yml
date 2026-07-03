@@ -28,7 +28,7 @@ env:
   # in test failures.  This should speed up compilation somewhat and
   # reduces the size of built artifacts (which addresses issues with
   # running out of space on GitHub-hosted runners).
-  RUSTFLAGS: -C debuginfo=line-tables-only --cfg=web_sys_unstable_apis
+  RUSTFLAGS: -C debuginfo=line-tables-only
   # Ensure we open up real windows that render their contents via the GPU,
   # so that we can exercise the actual rendering logic.
   WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: 1

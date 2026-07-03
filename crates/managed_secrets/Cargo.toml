@@ -30,8 +30,5 @@ hpke = { version = "0.13", default-features = false, features = ["alloc", "x2551
 # Pinned to 0.9 (not the workspace 0.8) to match hpke's rand_core 0.9 requirement.
 rand = "0.9"
 
-[target.'cfg(target_family = "wasm")'.dependencies]
-getrandom = { version = "0.3", features = ["wasm_js"] }
-
 [dev-dependencies]
 tink-core = { version = "0.3", features = ["json", "insecure"] }

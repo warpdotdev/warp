@@ -9,21 +9,12 @@ license.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 cfg-if.workspace = true
+dirs.workspace = true
 env_logger.workspace = true
 log.workspace = true
-warp_core.workspace = true
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-dirs.workspace = true
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
+warp_core.workspace = true
 zip = "2.1"
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-console_error_panic_hook = { version = "0.1.6" }
-js-sys = "0.3.63"
-wasm-bindgen.workspace = true
-web-sys.workspace = true
-warp_web_event_bus.workspace = true
 
 [features]
 agent_mode_evals = []

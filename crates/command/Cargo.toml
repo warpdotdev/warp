@@ -9,8 +9,6 @@ license.workspace = true
 test-util = []
 
 [dependencies]
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
 async-process = { workspace = true }
 futures-lite.workspace = true
 

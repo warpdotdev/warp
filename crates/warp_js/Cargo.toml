@@ -9,12 +9,10 @@ license.workspace = true
 [dependencies]
 bincode.workspace = true
 cfg-if.workspace = true
+rquickjs.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-rquickjs.workspace = true
 
 [features]
 test-util = []

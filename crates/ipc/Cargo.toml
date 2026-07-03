@@ -19,9 +19,7 @@ serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 warpui.workspace = true
+interprocess = { version = "1.2.1", features = ["tokio_support"] }
 
 [dev-dependencies]
 parking_lot.workspace = true
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-interprocess = {version = "1.2.1", features = ["tokio_support"]}

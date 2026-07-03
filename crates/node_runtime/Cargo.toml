@@ -10,22 +10,20 @@ local_fs = []
 
 [dependencies]
 anyhow = { workspace = true }
+async-fs = { workspace = true }
 async-trait = { workspace = true }
 cfg-if = { workspace = true }
+command.workspace = true
+flate2 = "1.0"
 futures = { workspace = true }
 log = { workspace = true }
 http_client = { workspace = true }
 semver = "1.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
-warp_core = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-fs = { workspace = true }
-command.workspace = true
-flate2 = "1.0"
 sha2 = { workspace = true }
 tar = "0.4"
+warp_core = { workspace = true }
 zip = "2.1"
 
 [build-dependencies]

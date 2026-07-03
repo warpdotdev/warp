@@ -77,7 +77,6 @@ warp_ripgrep = { path = "crates/warp_ripgrep" }
 warp_server_client = { path = "crates/warp_server_client" }
 warp_terminal = { path = "crates/warp_terminal" }
 warp_util = { path = "crates/warp_util" }
-warp_web_event_bus = { path = "crates/warp_web_event_bus" }
 warpui = { path = "crates/warpui" }
 warpui_core = { path = "crates/warpui_core" }
 warpui_extras = { path = "crates/warpui_extras", default-features = false }
@@ -134,11 +133,6 @@ futures-lite = "1.13.0"
 futures-util = { version = "0.3", default-features = false }
 get-size = { version = "0.1.4", features = ["derive"] }
 globset = "0.4.18"
-gloo = { version = "0.11.0", default-features = false, features = [
-  "events",
-  "futures",
-  "utils",
-] }
 hex = "0.4.3"
 # This matches the version of hyper used by reqwest.
 hyper = "1.6.0"
@@ -152,7 +146,7 @@ image = { version = "0.25.9", default-features = false, features = [
   "gif",
   "webp",
 ] }
-instant = { version = "0.1.12", features = ["wasm-bindgen"] }
+instant = "0.1.12"
 itertools = "0.14.0"
 jaq-json = { version = "2.0", features = ["serde"] }
 # Disabling the default `formats` feature is intended to avoid pulling in
@@ -281,29 +275,8 @@ vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
 warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "78a78f21a75432bf0141e396fb318bf1694e47f0" }
-wasm-bindgen = "0.2.89"
-wasm-bindgen-futures = "0.4.42"
-web-sys = { version = "0.3.69", features = [
-  "Blob",
-  "Clipboard",
-  "ClipboardEvent",
-  "ClipboardItem",
-  "CompositionEvent",
-  "Document",
-  "DataTransfer",
-  "Event",
-  "HtmlCanvasElement",
-  "HtmlInputElement",
-  "InputEvent",
-  "Navigator",
-  "MediaQueryList",
-  "Window",
-  "Notification",
-  "NotificationPermission",
-] }
-# Disable default features to disable support for WebGPU, which does not yet
-# have wide browser support.  We enable all other default feature of wgpu,
-# though.
+# Disable default features to disable support for WebGPU. We enable all other
+# default features of wgpu.
 wgpu = { version = "29.0.1", default-features = false, features = [
   "dx12",
   "gles",
@@ -430,8 +403,7 @@ debug-assertions = true
 inherits = "release-lto-debug_assertions"
 
 # A profile tuned for CLI tarballs. We trade some compile time and a small
-# amount of runtime perf for a smaller binary by mirroring the size-leaning
-# settings used by `release-wasm`.
+# amount of runtime perf for a smaller binary.
 [profile.release-cli]
 inherits = "release-lto"
 opt-level = "s"
@@ -443,25 +415,11 @@ codegen-units = 1
 inherits = "release-cli"
 debug-assertions = true
 
-[profile.release-wasm]
-inherits = "release"
-opt-level = "s"
-lto = true
-codegen-units = 1
-
-[profile.release-wasm-debug_assertions]
-inherits = "release-wasm"
-debug-assertions = true
-
 # A dev profile optimized for remote-session helper deployment. Strips symbols
 # to reduce binary size and improve rsync delta transfer efficiency.
 [profile.dev-remote]
 inherits = "dev"
 strip = "symbols"
-
-[profile.dev-wasm]
-inherits = "dev"
-opt-level = "s"
 
 [patch.crates-io]
 core-foundation = { git = "https://github.com/servo/core-foundation-rs", rev = "0bcad1e103ead6bd71c4e5f85598ada9508e3a82" }
