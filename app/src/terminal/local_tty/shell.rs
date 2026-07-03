@@ -186,9 +186,7 @@ impl ShellStarter {
     fn compute_fallback_shell() -> Option<ShellStarterSource> {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
-                let pw_shell_path = nix::unistd::User::from_uid(nix::unistd::getuid())
-                    .expect("should not fail to read user information")
-                    .expect("current user should exist")
+                let pw_shell_path = nix::unistd::User::from_uid(nix::unistd::getuid()).ok()??
                     .shell
                     .display()
                     .to_string();
