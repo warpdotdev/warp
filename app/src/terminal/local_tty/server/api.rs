@@ -29,6 +29,9 @@ impl<T> From<anyhow::Result<T>> for Result<T> {
 /// logic to ensure that, for example, the server doesn't receive a message that
 /// should only be sent server->client; it would be preferable if we didn't need
 /// to ever perform that check.)
+// This IPC enum intentionally keeps request payloads inline. Boxing PtyOptions
+// would only satisfy Clippy while touching the local-tty request/response path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) enum Message {
     /// A message sent from client -> server requesting that the server spawns
