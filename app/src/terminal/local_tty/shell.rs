@@ -186,31 +186,24 @@ impl ShellStarter {
     fn compute_fallback_shell() -> Option<ShellStarterSource> {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
-                // The current uid may have no entry in the password database
-                // (e.g. some containerized or enterprise NSS setups), in which
-                // case `User::from_uid` returns `Ok(None)`. Treat that — and a
-                // lookup error — as "no user default shell" and fall through to
-                // the well-known fallback shells below instead of panicking.
                 let pw_shell_path = Self::user_default_shell_path(nix::unistd::User::from_uid(
                     nix::unistd::getuid(),
                 ));
-                if let Some(pw_shell_path) = pw_shell_path.as_deref() {
-                    if let Some((resolved_pw_shell_path, shell_type)) =
-                        supported_shell_path_and_type(pw_shell_path)
-                    {
-                        let session_id = generate_session_id();
-                        let args = arguments_for_session_spawning_command(
-                            resolved_pw_shell_path.as_path().to_string_lossy().as_ref(),
-                            shell_type,
-                            session_id,
-                        );
-                        return Some(ShellStarterSource::UserDefault(DirectShellStarter {
-                            args,
-                            shell_path: resolved_pw_shell_path,
-                            shell_type,
-                            session_id,
-                        }));
-                    }
+                if let Some((resolved_pw_shell_path, shell_type)) =
+                    pw_shell_path.as_deref().and_then(supported_shell_path_and_type)
+                {
+                    let session_id = generate_session_id();
+                    let args = arguments_for_session_spawning_command(
+                        resolved_pw_shell_path.as_path().to_string_lossy().as_ref(),
+                        shell_type,
+                        session_id,
+                    );
+                    return Some(ShellStarterSource::UserDefault(DirectShellStarter {
+                        args,
+                        shell_path: resolved_pw_shell_path,
+                        shell_type,
+                        session_id,
+                    }));
                 }
                 let unsupported_shell = pw_shell_path;
 
@@ -271,14 +264,6 @@ impl ShellStarter {
         }
     }
 
-    /// Maps the result of looking up the current user in the password database
-    /// to that user's login shell path, when one is available.
-    ///
-    /// `nix::unistd::User::from_uid` returns `Ok(None)` when the current uid has
-    /// no password-database entry (which happens in some containerized or
-    /// enterprise NSS environments) and `Err(..)` when the lookup itself fails.
-    /// Neither case is fatal: we simply have no user-default shell and fall back
-    /// to the well-known shells, so this returns `None` instead of panicking.
     #[cfg(unix)]
     fn user_default_shell_path(user: nix::Result<Option<nix::unistd::User>>) -> Option<String> {
         match user {
