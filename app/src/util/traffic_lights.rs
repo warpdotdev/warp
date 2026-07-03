@@ -99,7 +99,7 @@ pub enum TrafficLightSide {
 
 /// Mouse state handles that the containing View must manage.
 #[derive(Default)]
-#[cfg_attr(any(target_family = "wasm", target_os = "macos"), allow(dead_code))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub struct TrafficLightMouseStates {
     pub minimize_window_button: MouseStateHandle,
     pub maximize_window_button: MouseStateHandle,

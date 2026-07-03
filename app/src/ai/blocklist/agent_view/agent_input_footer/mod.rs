@@ -53,9 +53,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "voice_input")]
 use crate::ai::api_errors::TranscribeError;
-#[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_shell::LocalShellState;
-#[cfg(not(target_family = "wasm"))]
 use crate::terminal::ShellLaunchData;
 use ai::document::{AIDocumentId, AIDocumentVersion};
 use parking_lot::FairMutex;
@@ -63,17 +61,19 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting;
 use settings::ToggleableSetting;
-#[cfg(not(target_family = "wasm"))]
 use std::env;
-#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
-#[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
-#[cfg(not(target_family = "wasm"))]
 use tokio::fs;
 #[cfg(feature = "voice_input")]
 use voice_input::{StartListeningError, VoiceSessionResult};
 
+use crate::terminal::cli_agent_sessions::plugin_manager::{
+    compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
+    PluginInstallError, PluginModalKind,
+};
+use crate::view_components::ToastLink;
+use crate::workspace::WorkspaceAction;
 use warp_core::{
     report_if_error,
     ui::{
@@ -83,6 +83,7 @@ use warp_core::{
 };
 #[cfg(feature = "voice_input")]
 use warpui::r#async::SpawnedFutureHandle;
+use warpui::r#async::Timer;
 use warpui::{
     elements::{
         Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
@@ -94,20 +95,6 @@ use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
-
-#[cfg(not(target_family = "wasm"))]
-use warpui::r#async::Timer;
-
-#[cfg(not(target_family = "wasm"))]
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{
-    compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
-    PluginInstallError, PluginModalKind,
-};
-#[cfg(not(target_family = "wasm"))]
-use crate::view_components::ToastLink;
-#[cfg(not(target_family = "wasm"))]
-use crate::workspace::WorkspaceAction;
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
@@ -129,10 +116,7 @@ enum CLIVoiceInputState {
 
 /// How long to wait after session creation before showing the install chip.
 /// Gives the plugin time to connect and send its `SessionStart` event.
-#[cfg(not(target_family = "wasm"))]
 const PLUGIN_CHIP_DEBOUNCE: Duration = Duration::from_secs(3);
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PluginChipKind {
     Install,
@@ -454,7 +438,6 @@ impl AgentInputFooter {
 
                 // When a session starts, update the install chip label and
                 // start a debounce timer for non-auto-install agents.
-                #[cfg(not(target_family = "wasm"))]
                 if let CLIAgentSessionsModelEvent::Started { .. } = event {
                     if let Some(agent) = me.cli_agent(ctx) {
                         let label = format!("Enable {} notifications", agent.display_name());
@@ -743,12 +726,6 @@ impl AgentInputFooter {
 
     /// Which plugin chip to show, if any.
     fn plugin_chip_kind(&self, app: &AppContext) -> Option<PluginChipKind> {
-        #[cfg(target_family = "wasm")]
-        {
-            let _ = (app, self.plugin_operation_in_progress);
-            None
-        }
-        #[cfg(not(target_family = "wasm"))]
         {
             if self.plugin_operation_in_progress {
                 return None;
@@ -837,8 +814,6 @@ impl AgentInputFooter {
         if session.custom_command_prefix.is_some() {
             return true;
         }
-
-        #[cfg(not(target_family = "wasm"))]
         if let Some(manager) = plugin_manager_for(session.agent) {
             if !manager.can_auto_install() {
                 return true;
@@ -853,9 +828,8 @@ impl AgentInputFooter {
         // modal so the user can paste the install command into the sandbox
         // PTY and install inside the container.
         //
-        // `ShellLaunchData` is only available on native builds; wasm builds
+        // `ShellLaunchData` is only available with local session support;
         // can't produce a `DockerSandbox` variant either way.
-        #[cfg(not(target_family = "wasm"))]
         {
             let shell_data = {
                 let model = self.terminal_model.lock();
@@ -870,7 +844,6 @@ impl AgentInputFooter {
 
     /// Records that the auto plugin operation could not start, shows an error toast,
     /// and re-renders so the chip switches to manual-instructions mode.
-    #[cfg(not(target_family = "wasm"))]
     fn record_plugin_auto_failure_and_notify(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(agent) = self.cli_agent(ctx) {
             let remote_host = CLIAgentSessionsModel::as_ref(ctx)
@@ -897,7 +870,6 @@ impl AgentInputFooter {
 
     /// Shared handler for both install and update plugin operations.
     /// `progress_toast` is shown while the operation runs; `success_toast` on success.
-    #[cfg(not(target_family = "wasm"))]
     fn handle_plugin_operation<F, Fut>(
         &mut self,
         progress_toast: &str,
@@ -1038,8 +1010,6 @@ impl AgentInputFooter {
         );
         true
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn handle_install_plugin(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let success_msg = self
             .cli_agent(ctx)
@@ -1054,8 +1024,6 @@ impl AgentInputFooter {
             ctx,
         )
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn handle_update_plugin(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let success_msg = self
             .cli_agent(ctx)
@@ -1943,23 +1911,16 @@ impl TypedActionView for AgentInputFooter {
                 }
             }
             AgentInputFooterAction::InstallPlugin => {
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    if !self.handle_install_plugin(ctx) {
-                        self.record_plugin_auto_failure_and_notify(ctx);
-                    }
+                if !self.handle_install_plugin(ctx) {
+                    self.record_plugin_auto_failure_and_notify(ctx);
                 }
             }
             AgentInputFooterAction::UpdatePlugin => {
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    if !self.handle_update_plugin(ctx) {
-                        self.record_plugin_auto_failure_and_notify(ctx);
-                    }
+                if !self.handle_update_plugin(ctx) {
+                    self.record_plugin_auto_failure_and_notify(ctx);
                 }
             }
             AgentInputFooterAction::OpenPluginInstallInstructionsPane => {
-                #[cfg(not(target_family = "wasm"))]
                 if let Some(agent) = self.cli_agent(ctx) {
                     ctx.emit(AgentInputFooterEvent::OpenPluginInstructionsPane(
                         agent,
@@ -1968,7 +1929,6 @@ impl TypedActionView for AgentInputFooter {
                 }
             }
             AgentInputFooterAction::OpenPluginUpdateInstructionsPane => {
-                #[cfg(not(target_family = "wasm"))]
                 if let Some(agent) = self.cli_agent(ctx) {
                     ctx.emit(AgentInputFooterEvent::OpenPluginInstructionsPane(
                         agent,
@@ -1986,7 +1946,6 @@ impl TypedActionView for AgentInputFooter {
                     let chip_key =
                         plugin_chip_key(session.agent.command_prefix(), &session.remote_host);
                     if is_update {
-                        #[cfg(not(target_family = "wasm"))]
                         if let Some(manager) = plugin_manager_for(session.agent) {
                             let version = manager.minimum_plugin_version().to_owned();
                             AISettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -2002,7 +1961,6 @@ impl TypedActionView for AgentInputFooter {
                 ctx.notify();
             }
             AgentInputFooterAction::OpenCodingAgentSettings => {
-                #[cfg(not(target_family = "wasm"))]
                 ctx.dispatch_typed_action_deferred(WorkspaceAction::ScrollToSettingsWidget {
                     page: SettingsSection::ThirdPartyCLIAgents,
                     widget_id: crate::settings_view::cli_agent_settings_widget_id(),
@@ -2050,7 +2008,6 @@ pub enum AgentInputFooterEvent {
         position: Vector2F,
     },
     PluginInstalled(CLIAgent),
-    #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(CLIAgent, PluginModalKind),
 }
 
@@ -2175,7 +2132,6 @@ impl ActionButtonTheme for InstallPluginButtonTheme {
 
 /// Writes the detailed plugin installation log to a temp file.
 /// Returns the log file path on success, or `None` if writing failed.
-#[cfg(not(target_family = "wasm"))]
 async fn write_install_log(agent: CLIAgent, err: &PluginInstallError) -> Option<PathBuf> {
     let log_path = env::temp_dir().join("warp-plugin-install.log");
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");

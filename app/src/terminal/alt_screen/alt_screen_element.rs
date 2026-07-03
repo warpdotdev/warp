@@ -245,11 +245,6 @@ impl AltScreenElement {
 
         ctx.dispatch_typed_action(TerminalAction::Focus);
 
-        // On mobile, request soft keyboard so users can input.
-        if warpui::platform::is_mobile_device() {
-            ctx.request_soft_keyboard();
-        }
-
         let point = self.coord_to_point(local_position);
         let side = self
             .grid_render_params

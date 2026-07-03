@@ -6,8 +6,7 @@ use warpui::{Entity, SingletonEntity};
 use crate::ai::api_errors::TranscribeError;
 
 /// Interface for transcribing voice input.
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 pub trait Transcriber: Send + Sync {
     /// Transcribe the given base64 encoded wav file into text.
     /// This is expected to be async and called off the main thread.

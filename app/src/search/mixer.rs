@@ -20,13 +20,8 @@ use warpui::{Action, AppContext, Entity, ModelContext};
 /// sources (e.g. command palette file search), but we still want to show something quickly
 /// if an async source is slow.
 const INITIAL_RESULTS_TIMEOUT: Duration = Duration::from_millis(500);
-
-#[cfg(not(target_family = "wasm"))]
 pub(crate) type BoxFuture<'a, T> =
     std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-
-#[cfg(target_family = "wasm")]
-pub(crate) type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + 'a>>;
 
 #[derive(Debug, Clone, Default)]
 pub enum DedupeStrategy {
@@ -566,8 +561,7 @@ pub trait SyncDataSource: 'static {
 }
 
 /// A trait representing a set of data that can be queried for search results asynchronously.
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 pub trait AsyncDataSource: 'static + Send + Sync {
     /// The action that is dispatched when a result produced by this data source is
     /// accepted.

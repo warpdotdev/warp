@@ -1,6 +1,4 @@
-// Allowing dead code when targeting wasm as most of the functions in this
 // module are only used on native.
-#![cfg_attr(target_family = "wasm", allow(dead_code))]
 
 use std::fs;
 use std::path::{Path, PathBuf};

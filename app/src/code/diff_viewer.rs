@@ -111,20 +111,16 @@ impl DisplayMode {
 
 /// A shared trait for views that display an inline diff.
 /// Implemented by both `LocalCodeEditorView` (for native file-backed diffs)
-/// and `InlineDiffView` (for mocked/WASM diffs).
+/// and `InlineDiffView` (for mocked diffs).
 pub trait DiffViewer
 where
     Self: Sized + View,
 {
     fn editor(&self) -> &ViewHandle<CodeEditorView>;
     fn diff(&self) -> Option<&DiffType>;
-
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn was_edited(&self) -> bool {
         false
     }
-
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn changed_lines(&self, ctx: &AppContext) -> Vec<Range<usize>> {
         self.editor().as_ref(ctx).changed_lines(ctx)
     }

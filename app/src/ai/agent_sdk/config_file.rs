@@ -73,7 +73,6 @@ pub struct LoadedAgentConfigSnapshotFile {
 /// - `.json` => JSON
 /// - `.yml` / `.yaml` => YAML
 /// - otherwise: try JSON, then YAML
-#[cfg(not(target_family = "wasm"))]
 pub fn load_config_file(path: &Path) -> anyhow::Result<LoadedAgentConfigSnapshotFile> {
     let contents = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file '{}'", path.display()))?;
@@ -104,14 +103,6 @@ pub fn load_config_file(path: &Path) -> anyhow::Result<LoadedAgentConfigSnapshot
     }
 
     Ok(LoadedAgentConfigSnapshotFile { file })
-}
-
-/// WASM builds don't use CLI command execution / local file access.
-#[cfg(target_family = "wasm")]
-pub fn load_config_file(_path: &Path) -> anyhow::Result<LoadedAgentConfigSnapshotFile> {
-    Err(anyhow::anyhow!(
-        "Config files are not supported in WASM builds"
-    ))
 }
 
 fn parse_json(input: &str) -> anyhow::Result<AgentConfigSnapshotFile> {

@@ -251,8 +251,6 @@ pub fn render_sub_header_with_description(
     .with_padding_bottom(HEADER_PADDING)
     .finish()
 }
-
-#[cfg_attr(target_family = "wasm", allow(unused))]
 pub fn render_sub_sub_header(
     appearance: &Appearance,
     text_name: impl Into<Cow<'static, str>>,

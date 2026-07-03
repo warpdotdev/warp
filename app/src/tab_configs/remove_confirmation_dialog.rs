@@ -38,8 +38,6 @@ pub(crate) fn init(app: &mut AppContext) {
 }
 
 const DIALOG_WIDTH: f32 = 460.;
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) enum RemoveTabConfigConfirmationEvent {
     Confirm { path: PathBuf },
     Cancel,

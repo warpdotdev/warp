@@ -82,8 +82,6 @@ mod privacy_page;
 mod settings_file_footer;
 pub(crate) mod settings_page;
 mod warpify_page;
-
-#[cfg(not(target_family = "wasm"))]
 pub(crate) use ai_page::cli_agent_settings_widget_id;
 pub use code_page::CodeSettingsPageView;
 pub use features_page::FeaturesPageAction;

@@ -30,7 +30,6 @@ use crate::ai::blocklist::inline_action::suggested_unit_tests::SuggestedUnitTest
 use crate::ai::blocklist::inline_action::suggested_unit_tests::SuggestedUnitTestsView;
 use crate::ai::blocklist::BlocklistAIContextEvent;
 use crate::ai::blocklist::BlocklistAIContextModel;
-#[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
 
 #[cfg(feature = "local_fs")]
@@ -1375,7 +1374,7 @@ impl AIBlock {
     ///
     /// On `local_fs`, this spawns a background task via `spawn_blocking` to avoid blocking
     /// the main thread with filesystem I/O (file path detection + code block path resolution).
-    /// On other targets (e.g. WASM), `spawn_blocking` is unavailable so detection runs
+    /// On other targets when local execution is unavailable, `spawn_blocking` is unavailable so detection runs
     /// synchronously. This is fine because it's only URL detection which is cheap.
     fn spawn_link_detection(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(handle) = self.link_detection_handle.take() {
@@ -5026,13 +5025,10 @@ impl AIBlock {
         canonical_cwd: Option<&Path>,
         ctx: &mut ViewContext<Self>,
     ) {
-        #[cfg(not(target_family = "wasm"))]
         let repo_path = self
             .current_working_directory
             .as_ref()
             .and_then(|cwd| DetectedRepositories::as_ref(ctx).get_root_for_path(Path::new(cwd)));
-        #[cfg(target_family = "wasm")]
-        let repo_path = self.current_working_directory.as_ref().map(PathBuf::from);
 
         let cwd_matches_repo = match (canonical_cwd, repo_path.as_deref()) {
             (Some(cwd), Some(rp)) => cwd.starts_with(rp),

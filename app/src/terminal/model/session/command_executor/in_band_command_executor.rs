@@ -165,7 +165,6 @@ impl InBandCommandExecutor {
     /// it represents an *internal* cancellation where something downstack has cancelled
     /// a command believed to be running. In this case, we remove the command from
     /// execution, but also resolve the command with a CommandResult.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(super) fn handle_cancelled_in_band_command_event(
         &self,
         InBandCommandCancelledEvent { command_id }: InBandCommandCancelledEvent,

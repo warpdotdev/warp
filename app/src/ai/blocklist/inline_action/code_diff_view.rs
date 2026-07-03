@@ -312,7 +312,6 @@ impl FileDiff {
 /// After the above two conditions are all met, we can emit the Accepted event with all of the diffs.
 /// This tracks which diffs have been computed.
 #[derive(Clone, Debug)]
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub struct SavingDiffs {
     pending_diffs: Vec<DiffApplicationState>,
 }
@@ -352,7 +351,6 @@ impl SavingDiffs {
 
 /// The status of saving a file.
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 enum SaveStatus {
     #[default]
     Pending,
@@ -368,7 +366,6 @@ impl SaveStatus {
 
 /// The diff application state for a single file.
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 struct DiffApplicationState {
     computed_diff: Option<Rc<DiffResult>>,
     save_status: SaveStatus,
@@ -493,7 +490,6 @@ pub struct CodeDiffView {
     /// Client and server identifiers for the AI output associated with the code diffs.
     identifiers: AIIdentifiers,
     /// `False` until a user makes the first edit to one of the diffs in the view.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     user_edited_file_contents: bool,
     /// The ID of the pane that opened this code diff view.
     /// Used to return to the original pane after editing.
@@ -621,26 +617,20 @@ impl CodeDiffView {
         file_path_for_error: String,
         ctx: &mut ViewContext<Self>,
     ) {
-        #[cfg(not(target_family = "wasm"))]
         let file_path_clone = file_path_for_error;
-        #[cfg(target_family = "wasm")]
         let _ = file_path_for_error;
-        #[cfg(not(target_family = "wasm"))]
         let window_id = ctx.window_id();
 
         ctx.subscribe_to_view(diff_view, move |me, _, event, ctx| match event {
             InlineDiffViewEvent::DiffStatusUpdated => {
                 ctx.notify();
             }
-            #[cfg(not(target_family = "wasm"))]
             InlineDiffViewEvent::FileLoaded => {
                 ctx.notify();
             }
-            #[cfg(not(target_family = "wasm"))]
             InlineDiffViewEvent::FileSaved => {
                 me.handle_save_completed(idx, None, ctx);
             }
-            #[cfg(not(target_family = "wasm"))]
             InlineDiffViewEvent::FailedToSave { error } => {
                 crate::safe_error!(
                     safe: ("Failed to save file for accepted AgentMode diffs"),
@@ -997,8 +987,7 @@ impl CodeDiffView {
                     )
                 });
 
-                // On non-WASM, register the file with FileModel for save support.
-                #[cfg(not(target_family = "wasm"))]
+                // Register the file with FileModel for save support.
                 {
                     let session_type = &self.diff_session_type;
                     diff_viewer.update(ctx, |view, ctx| view.register_file(session_type, ctx));
@@ -2201,7 +2190,6 @@ impl CodeDiffView {
     ///
     /// The diffs applied for each CodeEditorView are received individually.
     /// Store this diff, and try to emit the diffs saved event.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn accepted_file_diff_computed(
         &mut self,
         file_idx: usize,
@@ -2221,7 +2209,6 @@ impl CodeDiffView {
     ///
     /// The save state for each CodeEditorView are received individually.
     /// Update the accepted diff state, and try to emit the diffs saved event.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn handle_save_completed(
         &mut self,
         file_idx: usize,
@@ -2238,7 +2225,6 @@ impl CodeDiffView {
 
     /// Check if we have all pending diffs computed and saved.
     /// Emit the SavedAcceptedDiffs event if so.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn try_emit_diffs_saved(&mut self, ctx: &mut ViewContext<Self>) {
         if let CodeDiffState::Accepted(state) = &mut self.state {
             let is_complete = state

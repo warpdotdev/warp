@@ -449,7 +449,6 @@ impl FileNotebookView {
 
         #[cfg(not(feature = "local_fs"))]
         {
-            // WASM builds should never call `open_local`, so we should never get here!
             safe_warn!(
                 safe: ("Local filesystem access is not available in this build"),
                 full: ("Local filesystem access is not available in this build (feature \"local_fs\" disabled)")

@@ -1599,7 +1599,6 @@ impl BlocklistAIHistoryModel {
     /// Returns `Some` with the [`AIConversationId`] of the last conversation created for a given
     /// [`crate::terminal::TerminalView`] with the given [`EntityId`] if there is one. Returns
     /// `None` otherwise.
-    #[cfg_attr(target_family = "wasm", allow(unused))]
     pub(crate) fn last_conversation_id(
         &self,
         terminal_view_id: EntityId,

@@ -4,7 +4,7 @@ use super::*;
 
 // TODO(CORE-3626): figure out why the colors returned on Windows are slightly different.
 #[test]
-#[cfg(all(not(target_family = "wasm"), not(windows)))]
+#[cfg(not(windows))]
 fn top_colors_jellyfish_test() {
     let jellyfish_bg_path: PathBuf = [
         env!("CARGO_MANIFEST_DIR"),
@@ -27,7 +27,6 @@ fn top_colors_jellyfish_test() {
 }
 
 #[test]
-#[cfg(not(target_family = "wasm"))]
 fn top_colors_invalid_image_test() {
     let invalid_image_path: PathBuf = [
         env!("CARGO_MANIFEST_DIR"),

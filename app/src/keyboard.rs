@@ -118,7 +118,7 @@ fn save_custom_keybindings(map: CustomKeybindings) {
                 log::warn!("Unable to serialize custom keybindings to file: {e}");
             }
         } else {
-            log::warn!("TODO(wasm): need to implement keybindings support");
+            log::warn!("Custom keybindings require local filesystem support");
         }
     }
 }

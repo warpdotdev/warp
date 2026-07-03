@@ -831,11 +831,9 @@ impl AIDocumentView {
         );
     }
 
-    /// Export the current content as a markdown file (WASM stub).
+    /// Export is unavailable without local filesystem support.
     #[cfg(not(feature = "local_fs"))]
-    fn export(&self, _ctx: &mut ViewContext<Self>) {
-        // No-op for WASM target
-    }
+    fn export(&self, _ctx: &mut ViewContext<Self>) {}
 }
 
 impl Entity for AIDocumentView {

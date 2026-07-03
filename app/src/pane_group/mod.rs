@@ -24,7 +24,6 @@ use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
 use crate::settings_view::SettingsSection;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
-#[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::view::inline_banner::{
     ZeroStatePromptSuggestionTriggeredFrom, ZeroStatePromptSuggestionType,
@@ -32,8 +31,6 @@ use crate::terminal::view::inline_banner::{
 use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
 use crate::undo_close::UndoCloseStack;
 use crate::undo_close::UndoCloseStackEvent;
-#[cfg(target_family = "wasm")]
-use crate::uri::browser_url_handler::update_browser_url;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
 use crate::view_components::ToastFlavor;
@@ -642,7 +639,6 @@ pub enum Event {
     OpenLspLogs {
         log_path: PathBuf,
     },
-    #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(crate::terminal::CLIAgent, PluginModalKind),
 }
 
@@ -4875,19 +4871,6 @@ impl PaneGroup {
         if let Some(pane) = self.focused_pane_content(ctx) {
             pane.focus(ctx);
         }
-
-        #[cfg(target_family = "wasm")]
-        {
-            if ContextFlag::DynamicBrowserUrl.is_enabled() {
-                self.update_browser_url(ctx);
-            }
-        }
-    }
-
-    #[cfg(target_family = "wasm")]
-    fn update_browser_url(&self, ctx: &mut ViewContext<Self>) {
-        let _ = ctx;
-        update_browser_url(None, false);
     }
 
     /// Focus the active terminal session, if there is one.

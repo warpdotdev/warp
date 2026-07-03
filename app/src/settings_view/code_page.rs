@@ -112,7 +112,6 @@ impl CodeSubpage {
 #[derive(Clone, Default)]
 struct LspServerRowMouseStates {
     restart: MouseStateHandle,
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     view_logs: MouseStateHandle,
     toggle: SwitchStateHandle,
     install: MouseStateHandle,
@@ -1851,7 +1850,6 @@ impl CodePageWidget {
         }
 
         // Show "View logs" when the server has been started (Available, Starting/Busy, or Failed)
-        #[cfg(not(target_family = "wasm"))]
         {
             let has_logs = server_model.is_some_and(|model| {
                 matches!(

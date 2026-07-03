@@ -9,7 +9,6 @@ pub(crate) mod ambient_agents;
 pub(crate) mod api_errors;
 pub mod artifacts;
 pub(crate) mod ask;
-#[cfg(not(target_family = "wasm"))]
 pub mod aws_credentials;
 pub(crate) mod block_context;
 pub(crate) mod blocklist;
@@ -26,7 +25,6 @@ pub(crate) mod restored_conversations;
 pub(crate) mod skills;
 pub use agent_tips::*;
 use warpui::AppContext;
-#[cfg(not(target_family = "wasm"))]
 pub mod agent_sdk;
 pub mod execution_context;
 pub mod execution_profiles;

@@ -1,41 +1,26 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-#[cfg(not(target_family = "wasm"))]
 use super::search_item::CodeSearchItem;
-#[cfg(not(target_family = "wasm"))]
+use crate::ai::outline::{OutlineStatus, RepoOutlines, RepoOutlinesEvent};
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
-#[cfg(not(target_family = "wasm"))]
 use crate::search::data_source::{Query, QueryResult};
-#[cfg(not(target_family = "wasm"))]
 use crate::search::files::model::FileSearchModel;
-#[cfg(not(target_family = "wasm"))]
 use crate::search::mixer::{
     AsyncDataSource, BoxFuture, DataSourceRunError, DataSourceRunErrorWrapper,
 };
+use crate::workspace::ActiveSession;
 use ai::index::Symbol;
 use fuzzy_match::FuzzyMatchResult;
-#[cfg(not(target_family = "wasm"))]
 use instant::Instant;
-#[cfg(not(target_family = "wasm"))]
 use itertools::Itertools;
+use repo_metadata::repositories::DetectedRepositories;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
-#[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 use warpui::AppContext;
-#[cfg(not(target_family = "wasm"))]
 use warpui::ModelSpawner;
-
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::outline::{OutlineStatus, RepoOutlines, RepoOutlinesEvent};
-#[cfg(not(target_family = "wasm"))]
-use crate::workspace::ActiveSession;
-#[cfg(not(target_family = "wasm"))]
-use repo_metadata::repositories::DetectedRepositories;
-#[cfg(not(target_family = "wasm"))]
-use std::path::Path;
-#[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 
 const MAX_RESULTS: usize = 200;
@@ -67,7 +52,6 @@ impl SymbolCache {
 /// query re-populates it from the fresh outline.
 pub struct CodeSymbolCache {
     symbol_cache: RefCell<HashMap<PathBuf, SymbolCache>>,
-    #[cfg(not(target_family = "wasm"))]
     spawner: ModelSpawner<Self>,
 }
 
@@ -76,7 +60,6 @@ impl warpui::Entity for CodeSymbolCache {
 }
 
 impl CodeSymbolCache {
-    #[cfg(not(target_family = "wasm"))]
     pub fn new(ctx: &mut warpui::ModelContext<Self>) -> Self {
         let spawner = ctx.spawner();
         let cache = Self {
@@ -93,15 +76,6 @@ impl CodeSymbolCache {
 
         cache
     }
-
-    #[cfg(target_family = "wasm")]
-    pub fn new() -> Self {
-        Self {
-            symbol_cache: RefCell::new(HashMap::new()),
-        }
-    }
-
-    #[cfg(not(target_family = "wasm"))]
     pub fn spawner(&self) -> ModelSpawner<Self> {
         self.spawner.clone()
     }
@@ -110,7 +84,6 @@ impl CodeSymbolCache {
     /// and lazily populates the symbol cache from that outline. Returns the repo
     /// path and total symbol count, or `None` when no repo or completed outline is
     /// available.
-    #[cfg(not(target_family = "wasm"))]
     pub fn ensure_symbols_cached(&mut self, app: &AppContext) -> Option<(PathBuf, usize)> {
         let git_repo_path = app
             .windows()
@@ -157,7 +130,6 @@ impl CodeSymbolCache {
 
     /// Processes a chunk of symbols starting at `cursor`, fuzzy-matching each against `query`
     /// until `budget` is exceeded. Returns `(new_cursor, batch_results)`.
-    #[cfg(not(target_family = "wasm"))]
     pub fn search_symbols_chunk(
         &mut self,
         repo_path: &Path,
@@ -189,8 +161,6 @@ impl CodeSymbolCache {
         }
         (i, batch)
     }
-
-    #[cfg(not(target_family = "wasm"))]
     pub fn get_git_changed_files(&self, app: &AppContext) -> HashSet<String> {
         let Some(git_repo_path) = app
             .windows()
@@ -208,18 +178,9 @@ impl CodeSymbolCache {
             .get_git_changed_files(&git_repo_path)
             .unwrap_or_default()
     }
-
-    #[cfg(target_family = "wasm")]
-    pub fn get_git_changed_files(&self, _app: &AppContext) -> HashSet<String> {
-        HashSet::new()
-    }
 }
-
-#[cfg(not(target_family = "wasm"))]
 #[derive(Debug)]
 struct CodeSearchError;
-
-#[cfg(not(target_family = "wasm"))]
 impl DataSourceRunError for CodeSearchError {
     fn user_facing_error(&self) -> String {
         "Code search failed".to_string()
@@ -232,19 +193,14 @@ impl DataSourceRunError for CodeSearchError {
 
 /// Data source that searches code symbols incrementally on the main thread
 /// using time-budgeted chunks, avoiding bulk-cloning the symbol list.
-#[cfg(not(target_family = "wasm"))]
 pub struct CodeCursorDataSource {
     spawner: ModelSpawner<CodeSymbolCache>,
 }
-
-#[cfg(not(target_family = "wasm"))]
 impl CodeCursorDataSource {
     pub fn new(spawner: ModelSpawner<CodeSymbolCache>) -> Self {
         Self { spawner }
     }
 }
-
-#[cfg(not(target_family = "wasm"))]
 impl AsyncDataSource for CodeCursorDataSource {
     type Action = AIContextMenuSearchableAction;
 
@@ -314,14 +270,11 @@ impl AsyncDataSource for CodeCursorDataSource {
         })
     }
 }
-
-#[cfg(not(target_family = "wasm"))]
 pub fn code_data_source(cache: &CodeSymbolCache) -> CodeCursorDataSource {
     CodeCursorDataSource::new(cache.spawner())
 }
 
 /// Zero-state finalisation: prioritize symbols from git-changed files.
-#[cfg(not(target_family = "wasm"))]
 fn finalize_zero_state(
     items: Vec<CodeSearchItem>,
     git_changed_files: &HashSet<String>,
@@ -362,7 +315,6 @@ fn finalize_zero_state(
 }
 
 /// Query finalisation: take top-k by fuzzy score.
-#[cfg(not(target_family = "wasm"))]
 fn finalize_query(items: Vec<CodeSearchItem>) -> Vec<QueryResult<AIContextMenuSearchableAction>> {
     items
         .into_iter()

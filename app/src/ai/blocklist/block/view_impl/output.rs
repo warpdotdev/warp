@@ -2967,7 +2967,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         flex.add_child(continue_button);
     }
 
-    if !props.is_conversation_transcript_viewer && !cfg!(target_family = "wasm") {
+    if !props.is_conversation_transcript_viewer && true {
         let ui_builder = appearance.ui_builder().clone();
         let fork_button = icon_button(
             appearance,

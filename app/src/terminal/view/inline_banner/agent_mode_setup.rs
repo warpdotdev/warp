@@ -35,7 +35,6 @@ pub struct AgentModeSetupSpeedbumpBannerState {
     pub close_button_mouse_state: MouseStateHandle,
 
     // The path to the repo that the banner is for.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub repo_path: PathBuf,
 }
 

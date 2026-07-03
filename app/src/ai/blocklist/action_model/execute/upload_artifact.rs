@@ -1,25 +1,19 @@
-#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 
-use futures::{future::BoxFuture, FutureExt};
-use warpui::{Entity, EntityId, ModelContext, ModelHandle};
-
-#[cfg(not(target_family = "wasm"))]
 use crate::ai::{
     agent::{AIAgentAction, AIAgentActionResultType, AIAgentActionType, UploadArtifactResult},
     blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions},
     paths::host_native_absolute_path,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
-#[cfg(not(target_family = "wasm"))]
+use futures::{future::BoxFuture, FutureExt};
 use warpui::SingletonEntity;
+use warpui::{Entity, EntityId, ModelContext, ModelHandle};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 
 pub struct UploadArtifactExecutor {
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     active_session: ModelHandle<ActiveSession>,
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     terminal_view_id: EntityId,
 }
 
@@ -30,19 +24,11 @@ impl UploadArtifactExecutor {
             terminal_view_id,
         }
     }
-
-    #[cfg_attr(target_family = "wasm", allow(unused_variables), allow(dead_code))]
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        #[cfg(target_family = "wasm")]
-        {
-            false
-        }
-
-        #[cfg(not(target_family = "wasm"))]
         {
             let ExecuteActionInput {
                 action:
@@ -67,19 +53,11 @@ impl UploadArtifactExecutor {
                 .is_allowed()
         }
     }
-
-    #[cfg_attr(target_family = "wasm", allow(unused_variables), allow(dead_code))]
     pub(super) fn execute(
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> AnyActionExecution {
-        #[cfg(target_family = "wasm")]
-        {
-            ActionExecution::<()>::InvalidAction.into()
-        }
-
-        #[cfg(not(target_family = "wasm"))]
         {
             let ExecuteActionInput {
                 action,
@@ -119,8 +97,6 @@ impl UploadArtifactExecutor {
     ) -> BoxFuture<'static, ()> {
         futures::future::ready(()).boxed()
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn resolve_path(&self, file_path: &str, ctx: &ModelContext<Self>) -> PathBuf {
         let current_working_directory = self
             .active_session

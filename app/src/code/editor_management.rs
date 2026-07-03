@@ -208,7 +208,6 @@ struct CodePaneData {
     locator: PaneViewLocator,
 }
 
-// Allow dead_code here for wasm compilation
 #[allow(dead_code)]
 pub enum CodeManagerEvent {
     EditCompleted { action_id: AIAgentActionId },
@@ -264,7 +263,6 @@ impl CodeManager {
             .map(|(_, data)| data.locator)
     }
 
-    // Allow dead_code here for wasm compilation
     #[allow(dead_code)]
     pub fn complete_pending_diffs(&mut self, source: CodeSource, ctx: &mut ModelContext<Self>) {
         if !self.source_to_pane_data.contains_key(&source) {

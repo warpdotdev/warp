@@ -13,7 +13,6 @@ pub struct CodeReviewEditorState {
 }
 
 impl CodeReviewEditorState {
-    #[cfg(not(target_family = "wasm"))]
     pub fn new(editor: ViewHandle<LocalCodeEditorView>) -> Self {
         Self {
             editor,

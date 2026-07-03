@@ -39,7 +39,6 @@ use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::util::bindings::keybinding_name_to_keystroke;
 use crate::workspace::tab_settings::TabSettings;
-#[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
 use crate::BlocklistAIHistoryModel;
 
@@ -389,7 +388,6 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         }
 
         // Code review only works locally.
-        #[cfg(not(target_family = "wasm"))]
         if *TabSettings::as_ref(app).show_code_review_button {
             let code_review_keystroke = if OperatingSystem::get().is_mac() {
                 Keystroke::parse("cmd-shift-+").expect("keystroke should parse")

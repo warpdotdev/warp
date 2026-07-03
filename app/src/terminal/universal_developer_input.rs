@@ -1,6 +1,4 @@
-#[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::view::AIContextMenu;
-#[cfg(not(target_family = "wasm"))]
 use crate::settings::InputSettings;
 use crate::{
     ai::{blocklist::block::cli_controller::CLISubagentController, llms::LLMPreferences},
@@ -11,7 +9,6 @@ use crate::{
     terminal::view::local_agent::AmbientAgentViewModel,
 };
 use pathfinder_color::ColorU;
-#[cfg(not(target_family = "wasm"))]
 use settings::Setting as _;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -48,8 +45,6 @@ use warp_core::ui::theme::color::internal_colors;
 
 use crate::ai::blocklist::prompt::PromptIconButtonTheme;
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
-
-#[cfg(not(target_family = "wasm"))]
 use crate::terminal::model::session::SessionType;
 use crate::{
     ai::{
@@ -79,49 +74,27 @@ use warp_core::features::FeatureFlag;
 use warpui::ui_components::segmented_control::{LabelConfig, TooltipConfig};
 
 pub enum AtContextMenuDisabledReason {
-    #[cfg(target_family = "wasm")]
     Wasm,
-    #[cfg(not(target_family = "wasm"))]
     NoObjectsAvailable,
-    #[cfg(not(target_family = "wasm"))]
     SshSession,
-    #[cfg(not(target_family = "wasm"))]
     Subshell,
-    #[cfg(not(target_family = "wasm"))]
     DisabledInTerminalMode,
 }
 
 impl AtContextMenuDisabledReason {
     fn tooltip_text(&self) -> String {
         match self {
-            #[cfg(not(target_family = "wasm"))]
             AtContextMenuDisabledReason::NoObjectsAvailable => {
                 "No available objects in the current context.".to_string()
             }
-            #[cfg(not(target_family = "wasm"))]
             AtContextMenuDisabledReason::SshSession => "Not supported in SSH sessions".to_string(),
-            #[cfg(not(target_family = "wasm"))]
             AtContextMenuDisabledReason::Subshell => "Not supported in subshells".to_string(),
-            #[cfg(target_family = "wasm")]
             AtContextMenuDisabledReason::Wasm => "Requires a filesystem".to_string(),
-            #[cfg(not(target_family = "wasm"))]
             AtContextMenuDisabledReason::DisabledInTerminalMode => {
                 "Disabled in terminal mode, re-enable in settings".to_string()
             }
         }
     }
-
-    #[cfg(target_family = "wasm")]
-    pub fn get_disable_reason(
-        _active_block_metadata: Option<&BlockMetadata>,
-        _sessions: &Sessions,
-        _input_config: &InputConfig,
-        _ctx: &AppContext,
-    ) -> Option<AtContextMenuDisabledReason> {
-        Some(AtContextMenuDisabledReason::Wasm)
-    }
-
-    #[cfg(not(target_family = "wasm"))]
     pub fn get_disable_reason(
         active_block_metadata: Option<&BlockMetadata>,
         sessions: &Sessions,

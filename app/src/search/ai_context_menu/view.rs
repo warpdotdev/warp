@@ -1,27 +1,19 @@
 use crate::appearance::Appearance;
 use crate::debounce::debounce;
-#[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::blocks::data_source::BlockDataSource;
-#[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::code::data_source::{code_data_source, CodeSymbolCache};
-#[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::code::is_code_symbols_indexing;
-#[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::commands::data_source::CommandDataSource;
 use crate::search::ai_context_menu::conversations::data_source::ConversationDataSource;
-#[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::diffset::data_source::DiffSetDataSource;
-#[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::files::data_source::{
     file_data_source_for_current_repo, file_data_source_for_pwd,
 };
 use crate::search::ai_context_menu::mixer::AIContextMenuMixer;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
-#[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::skills::data_source::SkillsDataSource;
 use crate::search::data_source::QueryResult;
 use crate::search::data_source::{Query, QueryFilter};
-#[cfg(not(target_family = "wasm"))]
 use crate::search::mixer::AddAsyncSourceOptions;
 use crate::search::result_renderer::{QueryResultRenderer, QueryResultRendererStyles};
 use crate::search::search_bar::{SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering};
@@ -51,6 +43,9 @@ use warpui::elements::{
     SavePosition, Shrinkable, Stack, Text, XAxisAnchor, YAxisAnchor,
 };
 
+use crate::workspace::ActiveSession;
+use repo_metadata::repositories::DetectedRepositories;
+use std::path::Path;
 use warpui::platform::Cursor;
 use warpui::windowing::WindowManager;
 use warpui::SingletonEntity;
@@ -59,13 +54,6 @@ use warpui::{
     AppContext, Element, Entity, ModelHandle, TypedActionView, ViewContext, ViewHandle,
     WeakViewHandle,
 };
-
-#[cfg(not(target_family = "wasm"))]
-use crate::workspace::ActiveSession;
-#[cfg(not(target_family = "wasm"))]
-use repo_metadata::repositories::DetectedRepositories;
-#[cfg(not(target_family = "wasm"))]
-use std::path::Path;
 
 use super::styles;
 
@@ -223,7 +211,6 @@ pub struct AIContextMenu {
     /// a lot of helpful logic for managing the search state.
     search_bar: ViewHandle<SearchBar<AIContextMenuSearchableAction>>,
     search_bar_state: ModelHandle<SearchBarState<AIContextMenuSearchableAction>>,
-    #[cfg(not(target_family = "wasm"))]
     code_symbol_cache: ModelHandle<CodeSymbolCache>,
     state: AIContextMenuState,
     /// Debounce channel for search queries
@@ -371,24 +358,16 @@ impl AIContextMenu {
         is_cli_agent_input: bool,
         app: &AppContext,
     ) -> Vec<AIContextMenuCategory> {
-        // Compute once — used by CLI agent, AI-mode, and terminal-mode branches.
+        // Compute once - used by CLI agent, AI-mode, and terminal-mode branches.
         let is_active_dir_in_git_repo = {
-            #[cfg(target_family = "wasm")]
-            {
-                false
-            }
-
-            #[cfg(not(target_family = "wasm"))]
-            {
-                let active_window_id = app.windows().state().active_window;
-                let active_dir = active_window_id
-                    .and_then(|window_id| ActiveSession::as_ref(app).path_if_local(window_id));
-                active_dir.is_some_and(|dir| {
-                    DetectedRepositories::as_ref(app)
-                        .get_root_for_path(Path::new(dir))
-                        .is_some()
-                })
-            }
+            let active_window_id = app.windows().state().active_window;
+            let active_dir = active_window_id
+                .and_then(|window_id| ActiveSession::as_ref(app).path_if_local(window_id));
+            active_dir.is_some_and(|dir| {
+                DetectedRepositories::as_ref(app)
+                    .get_root_for_path(Path::new(dir))
+                    .is_some()
+            })
         };
 
         // For CLI agent input, use a positive allowlist of categories that CLI agents
@@ -559,7 +538,6 @@ impl AIContextMenu {
         });
 
         // Subscribe to repository detection so categories (Files/Code) update when a git repo is found.
-        #[cfg(not(target_family = "wasm"))]
         ctx.subscribe_to_model(
             &DetectedRepositories::handle(ctx),
             |me, _handle, _event, ctx| {
@@ -571,8 +549,6 @@ impl AIContextMenu {
             // Need to update categories state because the active window may have changed, affecting the active repo data.
             me.refresh_categories_state(ctx);
         });
-
-        #[cfg(not(target_family = "wasm"))]
         ctx.observe(
             &ActiveSession::handle(ctx),
             Self::handle_active_session_change,
@@ -588,13 +564,10 @@ impl AIContextMenu {
 
         // Get initial categories for proper initialization
         let initial_categories = Self::get_categories_for_mode(true, false, false, false, ctx); // Default to AI mode, not a viewer, not ambient agent, not CLI agent input
-
-        #[cfg(not(target_family = "wasm"))]
         let code_symbol_cache = ctx.add_model(CodeSymbolCache::new);
 
         // When the outline updates (e.g. indexing finishes), re-run the current
         // mixer query so the Code results refresh automatically.
-        #[cfg(not(target_family = "wasm"))]
         ctx.subscribe_to_model(&code_symbol_cache, |me, _handle, _event, ctx| {
             let code_active = matches!(
                 me.state.navigation_state,
@@ -614,7 +587,6 @@ impl AIContextMenu {
             mixer,
             search_bar,
             search_bar_state,
-            #[cfg(not(target_family = "wasm"))]
             code_symbol_cache,
             state: AIContextMenuState {
                 navigation_state: if initial_categories.len() > 1 {
@@ -643,8 +615,6 @@ impl AIContextMenu {
         result.reset_mixer(ctx);
         result
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn handle_active_session_change(
         &mut self,
         _handle: ModelHandle<ActiveSession>,
@@ -808,7 +778,6 @@ impl AIContextMenu {
 
         match self.state.navigation_state {
             NavigationState::MainMenu => {}
-            #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::CurrentFolderFiles) => {
                 self.mixer.update(ctx, |mixer, ctx| {
                     mixer.add_async_source(
@@ -830,7 +799,6 @@ impl AIContextMenu {
                     );
                 });
             }
-            #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::RepoFiles) => {
                 self.mixer.update(ctx, |mixer, ctx| {
                     mixer.add_async_source(
@@ -852,7 +820,6 @@ impl AIContextMenu {
                     );
                 });
             }
-            #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::Commands) => {
                 let command_data_source = ctx.add_model(|_| CommandDataSource::new());
                 self.mixer.update(ctx, |mixer, ctx| {
@@ -866,7 +833,6 @@ impl AIContextMenu {
                     );
                 });
             }
-            #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::Blocks) => {
                 let block_data_source = ctx.add_model(|_| BlockDataSource::new());
                 self.mixer.update(ctx, |mixer, ctx| {
@@ -880,7 +846,6 @@ impl AIContextMenu {
                     );
                 });
             }
-            #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::Code) => {
                 self.mixer.update(ctx, |mixer, ctx| {
                     mixer.add_async_source(
@@ -902,7 +867,6 @@ impl AIContextMenu {
                     );
                 });
             }
-            #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::Rules) => {
                 self.mixer.update(ctx, |mixer, ctx| {
                     mixer.run_query(
@@ -914,7 +878,6 @@ impl AIContextMenu {
                     );
                 });
             }
-            #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::DiffSet) => {
                 let diffset_data_source = ctx.add_model(|_| DiffSetDataSource);
                 self.mixer.update(ctx, |mixer, ctx| {
@@ -941,7 +904,6 @@ impl AIContextMenu {
                     );
                 });
             }
-            #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::Skills) => {
                 let skills_data_source = ctx.add_model(|_| SkillsDataSource::new());
                 self.mixer.update(ctx, |mixer, ctx| {
@@ -989,7 +951,6 @@ impl AIContextMenu {
     }
 
     /// Set up data sources for all available categories
-    #[cfg(not(target_family = "wasm"))]
     fn setup_data_sources_for_all_categories(&mut self, query: &str, ctx: &mut ViewContext<Self>) {
         // Reset mixer first
         self.mixer.update(ctx, |mixer, ctx| {
@@ -1085,40 +1046,6 @@ impl AIContextMenu {
             );
         });
     }
-
-    #[cfg(target_family = "wasm")]
-    fn setup_data_sources_for_all_categories(&mut self, query: &str, ctx: &mut ViewContext<Self>) {
-        self.mixer.update(ctx, |mixer, ctx| {
-            mixer.reset(ctx);
-        });
-
-        let categories = Self::get_categories_for_mode(
-            self.state.is_ai_or_autodetect_mode,
-            self.state.is_shared_session_viewer,
-            self.state.is_in_ambient_agent,
-            self.state.is_cli_agent_input,
-            ctx,
-        );
-        for category in categories.iter() {
-            if matches!(category, AIContextMenuCategory::Conversations) {
-                let conversation_data_source = ctx.add_model(|_| ConversationDataSource);
-                self.mixer.update(ctx, |mixer, _ctx| {
-                    mixer.add_sync_source(conversation_data_source, [QueryFilter::Conversations]);
-                });
-            }
-        }
-
-        self.mixer.update(ctx, |mixer, ctx| {
-            mixer.run_query(
-                Query {
-                    text: query.into(),
-                    filters: HashSet::new(),
-                },
-                ctx,
-            );
-        });
-    }
-
     /// Get the list of categories that match the current query filter
     fn get_filtered_categories(&self, app: &AppContext) -> Vec<AIContextMenuCategory> {
         let categories = Self::get_categories_for_mode(
@@ -1311,8 +1238,6 @@ impl AIContextMenu {
         .with_uniform_padding(PADDING)
         .finish()
     }
-
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn render_code_symbols_indexing(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
@@ -1400,7 +1325,6 @@ impl AIContextMenu {
     }
 
     /// Whether the AI context menu should render.
-    #[cfg(not(target_family = "wasm"))]
     pub fn should_render(&self, app: &AppContext) -> bool {
         !Self::get_categories_for_mode(
             self.state.is_ai_or_autodetect_mode,
@@ -1410,11 +1334,6 @@ impl AIContextMenu {
             app,
         )
         .is_empty()
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub fn should_render(&self, _app: &AppContext) -> bool {
-        false
     }
 
     /// Returns the selected result renderer, if any.
@@ -1527,14 +1446,12 @@ impl AIContextMenu {
 
     /// Renders the appropriate empty-state element: code-symbols-indexing
     /// indicator (when applicable), loading spinner, or the provided fallback.
-    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
     fn render_empty_state(
         &self,
         category: Option<&AIContextMenuCategory>,
         fallback: Box<dyn Element>,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        #[cfg(not(target_family = "wasm"))]
         if let Some(cat) = category {
             if *cat == AIContextMenuCategory::Code && is_code_symbols_indexing(app) {
                 return self.render_code_symbols_indexing(app);

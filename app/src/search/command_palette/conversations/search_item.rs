@@ -208,7 +208,7 @@ impl ConversationSearchItem {
             .map(|c| c.status().is_done())
             .unwrap_or(true);
 
-        if highlight_state.is_hovered() && conversation_is_done && !cfg!(target_family = "wasm") {
+        if highlight_state.is_hovered() && conversation_is_done && true {
             // Base row content (unchanged layout for existing children)
             let base_row = Flex::row()
                 .with_child(Expanded::new(1.0, search_item_content).finish())

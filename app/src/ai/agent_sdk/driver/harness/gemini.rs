@@ -22,8 +22,7 @@ pub(crate) struct GeminiHarness;
 /// Slash command Gemini's TUI recognises as a graceful shutdown.
 const GEMINI_EXIT_COMMAND: &str = "/quit";
 
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 impl ThirdPartyHarness for GeminiHarness {
     fn harness(&self) -> Harness {
         Harness::Gemini
@@ -102,8 +101,7 @@ impl GeminiHarnessRunner {
     }
 }
 
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 impl HarnessRunner for GeminiHarnessRunner {
     async fn start(
         &self,

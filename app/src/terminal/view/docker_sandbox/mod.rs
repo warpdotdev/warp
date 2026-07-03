@@ -6,7 +6,6 @@ use warpui::geometry::vector::Vector2F;
 #[cfg(feature = "local_tty")]
 use warpui::ModelHandle;
 use warpui::ViewContext;
-#[cfg(not(target_family = "wasm"))]
 use warpui::{View, ViewHandle};
 
 #[cfg(feature = "local_tty")]
@@ -157,7 +156,6 @@ impl TerminalView {
     }
 
     /// Hosted environment initialization is intentionally absent in Warper.
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn initialize_docker_sandbox_environment<V: View>(
         _terminal_view: &ViewHandle<TerminalView>,
         _ctx: &mut ViewContext<V>,

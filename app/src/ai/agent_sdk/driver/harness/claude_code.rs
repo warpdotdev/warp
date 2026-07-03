@@ -23,8 +23,7 @@ use super::{write_temp_file, HarnessRunner, ManagedSecretValue, SavePoint, Third
 
 pub(crate) struct ClaudeHarness;
 
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 impl ThirdPartyHarness for ClaudeHarness {
     fn harness(&self) -> Harness {
         Harness::Claude
@@ -201,8 +200,7 @@ impl ClaudeHarnessRunner {
     }
 }
 
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 impl HarnessRunner for ClaudeHarnessRunner {
     async fn start(
         &self,

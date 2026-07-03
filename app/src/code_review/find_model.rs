@@ -4,11 +4,8 @@ use crate::view_components::find::{FindDirection, FindEvent, FindModel};
 use std::collections::HashMap;
 use std::ops::Range;
 use string_offset::CharOffset;
-#[cfg(not(target_family = "wasm"))]
 use warp_core::channel::ChannelState;
-#[cfg(not(target_family = "wasm"))]
 use warp_editor::content::find::SearchConfig;
-#[cfg(not(target_family = "wasm"))]
 use warp_editor::search::Searcher;
 use warp_editor::search::{RestorableSearchResults, SelectedResult};
 use warpui::WeakViewHandle;
@@ -28,8 +25,6 @@ pub struct MultiEditorSelectedResult {
     pub editor_id: EntityId,
     pub selected_result: SelectedResult,
 }
-
-#[cfg_attr(target_family = "wasm", expect(dead_code))]
 pub struct MultiEditorSearchMatches {
     editor_id: EntityId,
     matches: Vec<SearchMatch>,
@@ -52,8 +47,6 @@ pub struct SelectedMatchInfo {
     pub start_offset: CharOffset,
     pub end_offset: CharOffset,
 }
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub struct CodeReviewFindModel {
     query_text: String,
     case_sensitive: bool,
@@ -64,8 +57,6 @@ pub struct CodeReviewFindModel {
     is_find_bar_open: bool,
     weak_view_handle: WeakViewHandle<CodeReviewView>,
 }
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 impl CodeReviewFindModel {
     pub fn new(
         weak_view_handle: WeakViewHandle<CodeReviewView>,
@@ -124,8 +115,6 @@ impl CodeReviewFindModel {
         self.regex = regex;
         self.run_search(editor_handles, ctx);
     }
-
-    #[cfg(not(target_family = "wasm"))]
     pub fn focus_next_find_match(
         &mut self,
         direction: FindDirection,
@@ -198,8 +187,6 @@ impl CodeReviewFindModel {
             end_offset: selected_match.end_offset,
         })
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn get_editor_searcher(
         &self,
         editor_id: EntityId,
@@ -240,8 +227,6 @@ impl CodeReviewFindModel {
                 .clone(),
         )
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn handle_run_search_result(
         &mut self,
         all_matches: Vec<SearchMatch>,
@@ -283,8 +268,6 @@ impl CodeReviewFindModel {
         self.results = Some(all_matches);
         ctx.emit(FindEvent::RanFind);
     }
-
-    #[cfg(not(target_family = "wasm"))]
     pub fn run_search(
         &mut self,
         editor_handles: impl Iterator<Item = ViewHandle<LocalCodeEditorView>>,
@@ -358,16 +341,6 @@ impl CodeReviewFindModel {
             |me, all_matches, ctx| me.handle_run_search_result(all_matches, ctx),
         ));
     }
-
-    #[cfg(target_family = "wasm")]
-    pub fn run_search(
-        &mut self,
-        _editor_handles: impl Iterator<Item = ViewHandle<LocalCodeEditorView>>,
-        _ctx: &mut ModelContext<Self>,
-    ) {
-        unreachable!("Code review is not available on wasm")
-    }
-
     pub fn matches_by_editor(&self) -> HashMap<EntityId, Vec<Range<CharOffset>>> {
         let mut matches_map: HashMap<EntityId, Vec<Range<CharOffset>>> = HashMap::new();
 

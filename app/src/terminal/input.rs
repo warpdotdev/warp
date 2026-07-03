@@ -49,7 +49,6 @@ use crate::code::editor_management::CodeSource;
 use crate::suggestions::ignored_suggestions_model::{
     IgnoredSuggestionsModel, IgnoredSuggestionsModelEvent, SuggestionType,
 };
-#[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
@@ -894,7 +893,6 @@ pub enum Event {
         exchange_id: AIAgentExchangeId,
     },
     RegisterPluginListener(CLIAgent),
-    #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(CLIAgent, PluginModalKind),
 }
 
@@ -2003,7 +2001,6 @@ impl Input {
                 AgentInputFooterEvent::PluginInstalled(agent) => {
                     ctx.emit(Event::RegisterPluginListener(*agent));
                 }
-                #[cfg(not(target_family = "wasm"))]
                 AgentInputFooterEvent::OpenPluginInstructionsPane(agent, kind) => {
                     ctx.emit(Event::OpenPluginInstructionsPane(*agent, *kind));
                 }
@@ -2214,10 +2211,7 @@ impl Input {
                     // and we don't want to double-paste.
                     middle_click_paste: false,
                     allow_user_cursor_preference: true,
-                    #[cfg(not(target_family = "wasm"))]
                     include_ai_context_menu: true,
-                    #[cfg(target_family = "wasm")]
-                    include_ai_context_menu: false,
                     delegate_paste_handling: true,
                     keymap_context_modifier: Some(Box::new(move |context, app| {
                         // When ctrl-enter is bound to accepting prompt suggestions and there's
@@ -2421,18 +2415,8 @@ impl Input {
                     ctx.notify();
                 }
             }
-            BlocklistAIControllerEvent::ExportConversationToFile {
-                #[cfg_attr(target_family = "wasm", allow(unused))]
-                filename,
-            } => {
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    me.export_conversation_to_file(filename.clone(), ctx);
-                }
-                #[cfg(target_family = "wasm")]
-                {
-                    log::warn!("Export to file is not supported on WASM");
-                }
+            BlocklistAIControllerEvent::ExportConversationToFile { filename } => {
+                me.export_conversation_to_file(filename.clone(), ctx);
             }
             _ => {}
         });
@@ -4083,8 +4067,6 @@ impl Input {
 
         true
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn export_conversation_to_file(
         &mut self,
         filename_arg: Option<String>,

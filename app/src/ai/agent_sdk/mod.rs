@@ -10,7 +10,6 @@ use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use anyhow::Context;
 use warp_cli::{agent::AgentCommand, CliCommand, GlobalOptions};
 use warp_core::features::FeatureFlag;
-#[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
 use warpui::{platform::TerminationMode, AppContext, ModelSpawner};
 
@@ -380,8 +379,6 @@ fn report_fatal_error(err: anyhow::Error, ctx: &mut AppContext) {
     for cause in err.chain().skip(1) {
         let _ = write!(&mut message, "\n=> {cause}");
     }
-
-    #[cfg(not(target_family = "wasm"))]
     {
         if let Ok(path) = log_file_path() {
             let _ = write!(

@@ -1,11 +1,5 @@
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
-#[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::terminal::model::session::active_session::ActiveSession;
-use futures::{future::BoxFuture, FutureExt};
-use warpui::{Entity, EntityId, ModelContext, ModelHandle};
-
-#[cfg(not(target_family = "wasm"))]
 use crate::ai::{
     agent::{AIAgentActionResultType, ReadMCPResourceResult},
     blocklist::{
@@ -13,12 +7,13 @@ use crate::ai::{
         BlocklistAIPermissions,
     },
 };
-#[cfg(not(target_family = "wasm"))]
+use crate::terminal::model::session::active_session::ActiveSession;
+use futures::{future::BoxFuture, FutureExt};
 use warpui::SingletonEntity;
+use warpui::{Entity, EntityId, ModelContext, ModelHandle};
 
 pub struct ReadMCPResourceExecutor {
     _active_session: ModelHandle<ActiveSession>,
-    #[cfg_attr(target_family = "wasm", expect(unused))]
     terminal_view_id: EntityId,
 }
 
@@ -29,19 +24,11 @@ impl ReadMCPResourceExecutor {
             terminal_view_id,
         }
     }
-
-    #[cfg_attr(target_family = "wasm", allow(unused_variables), allow(dead_code))]
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        #[cfg(target_family = "wasm")]
-        {
-            false
-        }
-
-        #[cfg(not(target_family = "wasm"))]
         {
             let ExecuteActionInput {
                 action:
@@ -71,19 +58,11 @@ impl ReadMCPResourceExecutor {
             )
         }
     }
-
-    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
     pub(super) fn execute(
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> {
-        #[cfg(target_family = "wasm")]
-        {
-            ActionExecution::<()>::InvalidAction
-        }
-
-        #[cfg(not(target_family = "wasm"))]
         {
             let ExecuteActionInput { action, .. } = input;
             let AIAgentAction {
@@ -150,7 +129,6 @@ impl Entity for ReadMCPResourceExecutor {
 }
 
 /// Handles the result of a read_resource request, converting it to an AIAgentActionResultType.
-#[cfg(not(target_family = "wasm"))]
 fn handle_read_resource_result(
     res: Result<rmcp::model::ReadResourceResult, rmcp::ServiceError>,
 ) -> AIAgentActionResultType {

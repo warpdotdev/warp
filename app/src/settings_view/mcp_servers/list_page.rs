@@ -1,7 +1,7 @@
 #[cfg(feature = "local_fs")]
 use crate::ai::mcp::{
     // Import events for file-based manager and watcher conditionally
-    // since their WASM variants don't export events.
+    // since these controls do not export events.
     file_based_manager::FileBasedMCPManagerEvent,
     FileMCPWatcher,
     FileMCPWatcherEvent,

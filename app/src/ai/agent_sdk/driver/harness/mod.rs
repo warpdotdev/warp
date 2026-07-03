@@ -29,8 +29,7 @@ use gemini::GeminiHarness;
 /// Each retained harness must be local-only: it may launch and configure the
 /// third-party CLI, but must not create hosted conversations, poll tasks, upload
 /// transcripts, or depend on hosted Warp server APIs.
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// Returns the [`Harness`] variant this implementation corresponds to.
     fn harness(&self) -> Harness;
@@ -149,8 +148,7 @@ pub(crate) enum SavePoint {
 /// store the runner in a mutex and lock it across `await` points.
 ///
 /// The driver uses this to manage the lifecycle of a particular third-party harness.
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 pub(crate) trait HarnessRunner: Send + Sync {
     /// Start the harness command in the terminal.
     ///

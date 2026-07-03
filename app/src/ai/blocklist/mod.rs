@@ -20,8 +20,6 @@ pub mod usage;
 
 pub(crate) mod codebase_index_speedbump_banner;
 pub(super) mod view_util;
-
-#[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
     apply_edits, read_local_file_context, BlocklistAIActionEvent, BlocklistAIActionModel,
     FileReadResult, RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
@@ -51,7 +49,6 @@ pub(crate) use passive_suggestions::{
     LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
     MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
 };
-#[cfg_attr(target_family = "wasm", allow(unused))]
 pub(crate) use persistence::PersistedAIInputType;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
 pub(crate) use view_util::{

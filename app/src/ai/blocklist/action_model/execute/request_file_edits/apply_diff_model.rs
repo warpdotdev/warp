@@ -56,12 +56,6 @@ impl ApplyDiffModel {
                 .await
             }
         };
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                fut.boxed_local()
-            } else {
-                fut.boxed()
-            }
-        }
+        fut.boxed()
     }
 }

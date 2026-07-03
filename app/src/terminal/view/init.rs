@@ -190,7 +190,6 @@ pub fn init(app: &mut AppContext) {
             id!("Terminal") & !id!("IMEOpen"),
         ),
         // On the web, we get pastes from system paste events.
-        #[cfg(target_family = "wasm")]
         FixedBinding::standard(
             warpui::actions::StandardAction::Paste,
             TerminalAction::Paste,
@@ -392,7 +391,6 @@ pub fn init(app: &mut AppContext) {
         .with_custom_action(CustomAction::FocusInput)
         .with_context_predicate(id!("Terminal")),
         // Paste is not rebindable on the web.
-        #[cfg(not(target_family = "wasm"))]
         EditableBinding::new("terminal:paste", "Paste", TerminalAction::Paste)
             .with_custom_action(CustomAction::Paste)
             .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),

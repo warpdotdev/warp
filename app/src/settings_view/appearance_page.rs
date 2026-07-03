@@ -964,7 +964,6 @@ impl AppearanceSettingsPageView {
         if ChannelState::channel() != Channel::Integration {
             // There's no such thing as a "system font" on the web, so the
             // `all_system_fonts` API doesn't exist.
-            #[cfg(not(target_family = "wasm"))]
             {
                 let all_system_fonts = warpui::fonts::Cache::handle(ctx)
                     .update(ctx, |font_cache, ctx| font_cache.all_system_fonts(ctx));
@@ -1984,8 +1983,6 @@ impl AppearanceSettingsPageView {
 
         ctx.notify();
     }
-
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn set_system_fonts(
         &mut self,
         available_families: Vec<(Option<FamilyId>, FontInfo)>,

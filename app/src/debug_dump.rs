@@ -18,7 +18,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
     }
 
     #[cfg_attr(windows, expect(unused_mut))]
-    #[cfg_attr(any(target_os = "macos", target_family = "wasm"), expect(unused))]
+    #[cfg_attr(target_os = "macos", expect(unused))]
     let mut windowing_system: Option<windowing::System> = None;
 
     // On non-macOS platforms, initialize winit and wgpu.

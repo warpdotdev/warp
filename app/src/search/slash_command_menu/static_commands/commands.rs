@@ -482,7 +482,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(QUEUE.clone());
     }
 
-    if !cfg!(target_family = "wasm") {
+    if true {
         commands.extend([FORK.clone(), FORK_AND_COMPACT.clone()]);
 
         if FeatureFlag::ForkFromCommand.is_enabled() {
@@ -490,11 +490,11 @@ fn all_commands() -> Vec<StaticCommand> {
         }
     }
 
-    if !cfg!(target_family = "wasm") {
+    if true {
         commands.extend([EDIT.clone(), EXPORT_TO_FILE.clone()]);
     }
 
-    if FeatureFlag::ListSkills.is_enabled() && !cfg!(target_family = "wasm") {
+    if FeatureFlag::ListSkills.is_enabled() && true {
         commands.push(EDIT_SKILL.clone());
         commands.push(INVOKE_SKILL.clone());
     }
@@ -514,7 +514,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(REWIND);
     }
 
-    if FeatureFlag::InlineRepoMenu.is_enabled() && !cfg!(target_family = "wasm") {
+    if FeatureFlag::InlineRepoMenu.is_enabled() && true {
         commands.push(OPEN_REPO);
     }
 

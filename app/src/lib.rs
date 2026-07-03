@@ -29,8 +29,6 @@ mod dynamic_libraries;
 mod env_vars;
 mod experiments;
 mod external_secrets;
-#[cfg(target_family = "wasm")]
-mod font_fallback;
 mod global_resource_handles;
 mod gpu_state;
 mod input_classifier;
@@ -79,8 +77,6 @@ mod vim_registers;
 mod voice;
 mod voltron;
 mod warp_managed_paths_watcher;
-#[cfg(target_family = "wasm")]
-mod wasm_nux_dialog;
 mod window_settings;
 mod workspaces;
 
@@ -115,12 +111,10 @@ pub mod tab_configs;
 pub mod terminal;
 pub mod themes;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-#[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::AwsCredentialRefresher as _;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::mcp::FileBasedMCPManager;
 use crate::ai::mcp::FileMCPWatcher;
-use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 use ::ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ::ai::index::full_source_code_embedding::store_client::MockStoreClient;
 use ::ai::index::full_source_code_embedding::SyncTask;
@@ -151,7 +145,7 @@ use watcher::HomeDirectoryWatcher;
 use settings_view::pane_manager::SettingsPaneManager;
 use terminal::general_settings::GeneralSettings;
 use terminal::keys_settings::KeysSettings;
-#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+#[cfg(feature = "local_tty")]
 use terminal::local_shell::LocalShellState;
 pub use util::bindings::cmd_or_ctrl_shift;
 pub mod workflows;
@@ -253,13 +247,12 @@ use warpui::{AppContext, SingletonEntity, WindowId};
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "assets"]
 #[include = "bundled/**"] // Should be kept in sync with BUNDLED_ASSETS_DIR.
-#[include = "async/**"] // Should be kept in sync with ASYNC_ASSETS_DIR.
-#[cfg_attr(target_family = "wasm", exclude = "async/**")]
+#[include = "async/**"]
+// Should be kept in sync with ASYNC_ASSETS_DIR.
 // Excludes take precedence.
 // Standalone CLI builds are headless and never render the
 // theme imagery in `async/`, so we exclude those bytes from the
 // embedded asset set to keep the CLI binary small — mirroring the carve-out
-// already applied for the WASM target above.
 #[cfg_attr(feature = "standalone", exclude = "async/**")]
 pub struct Assets;
 
@@ -445,7 +438,6 @@ pub fn run() -> Result<()> {
                 let _ = socket_name;
                 panic!("The minidump server is not supported in Warper");
             }
-            #[cfg(not(target_family = "wasm"))]
             warp_cli::Command::Worker(warp_cli::WorkerCommand::RipgrepSearch {
                 parent,
                 ignore_case,
@@ -462,19 +454,6 @@ pub fn run() -> Result<()> {
                 )
                 .map_err(|err| anyhow!(err.to_string()))?;
                 return Ok(());
-            }
-            #[cfg(not(any(
-                feature = "local_tty",
-                feature = "plugin_host",
-                not(target_family = "wasm")
-            )))]
-            warp_cli::Command::Worker(worker) => {
-                // Need this case to handle platforms where there are no enum variants in
-                // warp_cli::WorkerCommand, as we still need to check Command::Worker.
-
-                // On wasm, specifically, we should fail spectacularly if we get here.
-                #[cfg(target_family = "wasm")]
-                panic!("Worker process not supported on WASM: {worker:?}")
             }
             warp_cli::Command::Completions { shell } => {
                 return warp_cli::completions::generate_to_stdout(*shell);
@@ -583,17 +562,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // rlimits.
     resource_limits::adjust_resource_limits();
 
-    // For wasm builds we have this special case to parse out the intent
-    // from the url that is used to visite the app on web.
-    #[cfg(target_family = "wasm")]
-    {
-        use uri::web_intent_parser;
-        if let Some(intent) = web_intent_parser::parse_web_intent_from_current_url() {
-            launch_mode.add_url(intent);
-        }
-        web_intent_parser::set_context_flags_from_current_url();
-    }
-
     #[cfg(all(feature = "release_bundle", target_os = "linux"))]
     if let LaunchMode::App { .. } = launch_mode {
         match app_services::linux::pass_startup_args_to_existing_instance(
@@ -643,7 +611,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // Configure rustls to use its default crypto provider.  This MUST be called
     // before making any network requests that use TLS, otherwise rustls will
     // panic.
-    #[cfg(not(target_family = "wasm"))]
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .expect("must be able to initialize crypto provider for TLS support");
@@ -753,7 +720,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     );
 
     app_builder.run(move |ctx| {
-        #[cfg(not(target_family = "wasm"))]
         // Rotate the log files in the background.
         ctx.background_executor()
             .spawn(warp_logging::rotate_log_files())
@@ -929,9 +895,7 @@ fn initialize_app(
 
     // Initialize ApiKeyManager after UserWorkspaces so it can subscribe to workspace/settings changes
     ctx.add_singleton_model(|ctx| {
-        #[cfg_attr(target_family = "wasm", allow(unused_mut))]
         let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
-        #[cfg(not(target_family = "wasm"))]
         manager.subscribe_to_settings_changes(ctx);
         manager
     });
@@ -984,17 +948,6 @@ fn initialize_app(
         apply_scroll_multiplier(event, ctx);
     });
 
-    // Rewrite recognized Warp web URLs (sessions, Drive, settings, home) into local
-    // intent URLs when possible so they open directly in the desktop app.
-    ctx.set_before_open_url(|url_str, _ctx| {
-        if let Ok(url) = Url::parse(url_str) {
-            if let Some(intent) = maybe_rewrite_web_url_to_intent(&url) {
-                return intent.to_string();
-            }
-        }
-        url_str.to_owned()
-    });
-
     ctx.set_a11y_verbosity(*AccessibilitySettings::as_ref(ctx).a11y_verbosity);
 
     #[cfg(enable_crash_recovery)]
@@ -1028,8 +981,6 @@ fn initialize_app(
             crash_recovery.on_frame_drawn(window_id, ctx);
         });
     });
-
-    #[cfg(not(target_family = "wasm"))]
     {
         ctx.add_singleton_model(DirectoryWatcher::new);
         ctx.add_singleton_model(|_| DetectedRepositories::default());
@@ -1074,8 +1025,6 @@ fn initialize_app(
     // Register initial keybindings prior to creating menus
     ai::init(ctx);
     app_services::init(ctx);
-    // // TODO: Temporarily disabling keybindings for WASM builds. Will be implemented in future WASM support.
-    #[cfg(not(target_family = "wasm"))]
     code::editor::find::view::init(ctx);
     workspace::init(ctx);
     pane_group::init(ctx);
@@ -1189,7 +1138,7 @@ fn initialize_app(
     ctx.add_singleton_model(NotebookKeybindings::new);
     ctx.add_singleton_model(TerminalKeybindings::new);
     ctx.add_singleton_model(|_| ActiveSession::default());
-    #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+    #[cfg(feature = "local_tty")]
     {
         ctx.add_singleton_model(LocalShellState::new);
         ctx.add_singleton_model(system::SystemInfo::new);
@@ -1264,7 +1213,6 @@ fn initialize_app(
     ctx.add_singleton_model(move |_| IgnoredSuggestionsModel::new(persisted_ignored_suggestions));
 
     // When running natively, add the http server singleton to the application.
-    #[cfg(not(target_family = "wasm"))]
     ctx.add_singleton_model(move |ctx| {
         let routers = vec![
             app_installation_detection::make_router(),
@@ -1605,10 +1553,6 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
         timer.mark_interval_end("KEYBINDINGS_LOADED");
     });
 
-    // For now, we only specify application-level fallback fonts on web.
-    #[cfg(target_family = "wasm")]
-    ctx.set_fallback_font_fn(font_fallback::fallback_font_fn);
-
     match &launch_mode {
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {
             // Attempt to restore windows from the persisted application state.
@@ -1645,22 +1589,17 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
                 maybe_register_app_as_login_item(ctx);
             }
         }
-        #[cfg_attr(target_family = "wasm", allow(unused_variables))]
         LaunchMode::CommandLine {
             command,
             global_options,
             ..
         } => {
-            cfg_if::cfg_if! {
-                if #[cfg(target_family = "wasm")] {
-                    panic!("Cannot execute CLI command {command:?} on the web");
-                } else {
-                    if let Err(err) = crate::ai::agent_sdk::run(ctx, command.clone(), global_options.clone()) {
-                        eprintln!("{err:#}");
-                        report_error!(err);
-                        std::process::exit(1);
-                    }
-                }
+            if let Err(err) =
+                crate::ai::agent_sdk::run(ctx, command.clone(), global_options.clone())
+            {
+                eprintln!("{err:#}");
+                report_error!(err);
+                std::process::exit(1);
             }
         }
     }

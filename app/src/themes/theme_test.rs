@@ -2,7 +2,6 @@ use super::*;
 use crate::util::color::OPAQUE;
 
 #[test]
-#[cfg(not(target_family = "wasm"))]
 fn in_memory_theme_generation_test() {
     let mountains_bg_path: PathBuf = [
         env!("CARGO_MANIFEST_DIR"),

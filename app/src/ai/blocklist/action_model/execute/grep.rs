@@ -302,7 +302,6 @@ async fn run_grep(
         )
         .await
     } else {
-        #[cfg(not(target_family = "wasm"))]
         if session.is_local() {
             return run_ripgrep(&queries, absolute_path).await;
         }
@@ -328,8 +327,6 @@ async fn run_grep(
         }
     }
 }
-
-#[cfg(not(target_family = "wasm"))]
 async fn run_ripgrep(queries: &[String], absolute_path: String) -> Result<GrepResult, GrepError> {
     let path = PathBuf::from(absolute_path);
     let result = warp_ripgrep::search::search(queries, &[path], false, false).await;

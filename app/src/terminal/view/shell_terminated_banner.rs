@@ -129,7 +129,6 @@ pub enum TerminationType {
     #[allow(dead_code)]
     Normal,
     /// The PTY failed to spawn and the shell process never started.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     PtySpawnFailure { pty_spawn_error: anyhow::Error },
     /// The shell process terminated before we were able to bootstrap.
     Premature { shell_detail: String },

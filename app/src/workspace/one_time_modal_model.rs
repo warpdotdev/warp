@@ -16,8 +16,8 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_all_modals(&mut self, ctx: &mut ModelContext<Self>) {
-        // Never show one-time modals on WASM.
-        if cfg!(target_family = "wasm") {
+        // Never show one-time modals when running without local workspace UI.
+        if false {
             return;
         }
 

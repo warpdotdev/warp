@@ -133,7 +133,6 @@ impl MCPServersEditPageView {
         });
 
         let json_editor = ctx.add_typed_action_view(|ctx| {
-            #[cfg_attr(target_family = "wasm", allow(unused_mut))]
             let mut editor = CodeEditorView::new(
                 None,
                 None,

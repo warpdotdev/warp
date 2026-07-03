@@ -309,7 +309,7 @@ fn init_subshell_script_for_unknown_shell(
 ///
 /// Gated on `unix` because the sole caller today is the Unix Docker
 /// sandbox spawn path (`local_tty::unix::prepare_docker_sandbox`); on
-/// Windows/wasm the function is dead code.
+/// Windows the function is dead code.
 #[cfg(unix)]
 pub fn raw_init_shell_script_for_shell(
     shell_type: ShellType,

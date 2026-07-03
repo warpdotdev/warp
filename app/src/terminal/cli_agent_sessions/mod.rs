@@ -1,6 +1,5 @@
 pub mod event;
 pub mod listener;
-#[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_manager;
 
 use std::collections::{HashMap, HashSet};
@@ -472,7 +471,6 @@ impl CLIAgentSessionsModel {
 
     /// Records that an auto plugin operation (install or update) failed for the given agent/host.
     /// `remote_host` is `None` for local sessions, `Some("user@hostname")` for remote.
-    #[cfg(not(target_family = "wasm"))]
     pub fn record_plugin_auto_failure(&mut self, agent: CLIAgent, remote_host: Option<String>) {
         self.plugin_auto_failures.insert((agent, remote_host));
     }

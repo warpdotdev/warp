@@ -1,8 +1,4 @@
 mod docker;
-pub mod web_intent_parser;
-
-#[cfg(target_family = "wasm")]
-pub mod browser_url_handler;
 
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
@@ -146,13 +142,10 @@ impl UriHost {
                 ctx.dispatch_global_action("root_view::open_new", &());
             }
             UriHost::Mcp => {
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx)
-                        .update(ctx, |manager, _ctx| manager.handle_oauth_callback(url));
-                    if let Err(e) = result {
-                        log::error!("Failed to handle MCP OAuth callback: {e:?}");
-                    }
+                let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx)
+                    .update(ctx, |manager, _ctx| manager.handle_oauth_callback(url));
+                if let Err(e) = result {
+                    log::error!("Failed to handle MCP OAuth callback: {e:?}");
                 }
             }
             UriHost::Linear => match LinearAction::parse(url) {

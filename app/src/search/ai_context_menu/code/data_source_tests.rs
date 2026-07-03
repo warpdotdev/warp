@@ -184,8 +184,6 @@ fn test_search_code_symbols_untyped_symbols() {
         .iter()
         .any(|r| r.code_symbol.symbol.name == "my_variable"));
 }
-
-#[cfg(not(target_family = "wasm"))]
 #[test]
 fn test_finalize_zero_state_git_changed_first() {
     let items = vec![
@@ -209,8 +207,6 @@ fn test_finalize_zero_state_git_changed_first() {
     assert_eq!(results.len(), 3);
     assert!(results[0].score() > results[1].score());
 }
-
-#[cfg(not(target_family = "wasm"))]
 #[test]
 fn test_finalize_query_returns_top_results() {
     let items: Vec<CodeSearchItem> = vec![
@@ -260,8 +256,6 @@ fn test_fuzzy_match_code_symbols_3x_multiplier() {
     assert!(match_result.score > 0);
     assert_eq!(match_result.score % 3, 0);
 }
-
-#[cfg(not(target_family = "wasm"))]
 #[test]
 fn test_finalize_zero_state_respects_max_results() {
     let items: Vec<CodeSearchItem> = (0..300)

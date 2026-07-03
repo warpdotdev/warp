@@ -1,8 +1,7 @@
 pub(crate) mod app;
 pub(crate) mod service;
 
-#[cfg_attr(not(target_family = "wasm"), path = "host/native/mod.rs")]
-#[cfg_attr(target_family = "wasm", path = "host/wasm/mod.rs")]
+#[path = "host/native/mod.rs"]
 mod host;
 
 pub(crate) use app::PluginHost;

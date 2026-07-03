@@ -84,18 +84,11 @@ pub fn convert_persisted_conversation_to_ai_conversation_with_metadata(
 }
 
 /// Boxes a future with the right type for the platform.
-/// On WASM, futures must not implement Send.
 fn box_future<F>(f: F) -> warpui::r#async::BoxFuture<'static, Option<LocalConversationData>>
 where
     F: Future<Output = Option<LocalConversationData>> + warpui::r#async::Spawnable,
 {
-    cfg_if::cfg_if! {
-        if #[cfg(target_family = "wasm")] {
-            f.boxed_local()
-        } else {
-            f.boxed()
-        }
-    }
+    f.boxed()
 }
 
 impl BlocklistAIHistoryModel {

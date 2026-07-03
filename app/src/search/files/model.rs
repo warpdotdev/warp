@@ -180,13 +180,13 @@ impl FileSearchModel {
         (contents, git_changed_files)
     }
 
-    /// Gets repository contents from the LocalRepoMetadataModel for the current working directory (WASM stub)
+    /// Gets repository contents from the LocalRepoMetadataModel for the current working directory.
     #[cfg(not(feature = "local_fs"))]
     pub fn get_repo_contents(&self, _app: &AppContext) -> Arc<Vec<FileSearchResult>> {
         Arc::new(Vec::new())
     }
 
-    /// Gets repository contents with git status information for prioritization (WASM stub)
+    /// Gets repository contents with git status information for prioritization.
     #[cfg(not(feature = "local_fs"))]
     pub fn get_repo_contents_with_git_status(
         &self,

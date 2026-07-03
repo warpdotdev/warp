@@ -18,7 +18,6 @@ const ACTIVE_SESSION_BONUS: i64 = 5;
 pub struct BlockDataSource;
 
 impl BlockDataSource {
-    #![cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn new() -> Self {
         Self
     }

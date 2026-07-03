@@ -104,15 +104,7 @@ pub struct RequestParams {
 }
 
 pub type Event = Result<warp_multi_agent_api::ResponseEvent, Arc<AIApiError>>;
-
-#[cfg(not(target_family = "wasm"))]
 pub type ResponseStream = Pin<Box<dyn Stream<Item = Event> + Send + 'static>>;
-
-// The WASM version of this type has no bound on `Send`, which is an unnecessary bound when
-// targeting wasm because the browser is single-threaded (and we don't leverage WebWorkers for async
-// execution in WoW).
-#[cfg(target_family = "wasm")]
-pub type ResponseStream = Pin<Box<dyn Stream<Item = Event>>>;
 
 #[derive(Debug, Clone)]
 pub struct ConversationData {

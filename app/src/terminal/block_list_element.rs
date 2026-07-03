@@ -1528,11 +1528,6 @@ impl BlockListElement {
                                 .block_at(block_index)
                                 .is_some_and(|block| block.is_active_and_long_running());
 
-                            // On mobile, request soft keyboard so users can input
-                            if warpui::platform::is_mobile_device() && on_long_running_block {
-                                ctx.request_soft_keyboard();
-                            }
-
                             if on_long_running_block
                                 && !should_intercept_mouse(&model, modifiers.shift, app)
                             {

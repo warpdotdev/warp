@@ -1,5 +1,3 @@
-#![cfg(not(target_family = "wasm"))] // Tantivy is not supported for wasm target as of now.
-
 use anyhow::Context;
 use futures::FutureExt as _;
 use instant::Instant;

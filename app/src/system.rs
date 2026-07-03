@@ -1,10 +1,6 @@
-cfg_if::cfg_if! {
-    if #[cfg(not(target_family = "wasm"))] {
-        mod info;
-        mod memory_footprint;
-        pub use info::SystemInfo;
-    }
-}
+mod info;
+mod memory_footprint;
+pub use info::SystemInfo;
 
 use warpui::{Entity, ModelContext, SingletonEntity};
 

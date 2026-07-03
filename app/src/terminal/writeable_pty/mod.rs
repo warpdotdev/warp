@@ -1,4 +1,3 @@
-#[cfg(not(target_family = "wasm"))]
 mod bootstrap_file;
 pub mod command_history;
 mod message;

@@ -26,10 +26,7 @@ pub struct FileInvalidationTask {
 impl SyncQueueTaskTrait for FileInvalidationTask {
     type Error = FileInvalidationError;
     type Result = (PathBuf, Option<FileDiffAndContent>);
-    #[cfg(not(target_arch = "wasm32"))]
     type Fut = Pin<Box<dyn Future<Output = Result<Self::Result, Self::Error>> + Send>>;
-    #[cfg(target_arch = "wasm32")]
-    type Fut = Pin<Box<dyn Future<Output = Result<Self::Result, Self::Error>>>>;
 
     fn run(&mut self) -> Self::Fut {
         let repo_path = self.repo_path.clone();

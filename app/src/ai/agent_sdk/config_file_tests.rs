@@ -1,5 +1,3 @@
-#![cfg(not(target_family = "wasm"))]
-
 use std::io::Write as _;
 
 use serde_json::json;

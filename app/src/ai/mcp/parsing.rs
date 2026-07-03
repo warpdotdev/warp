@@ -23,7 +23,6 @@ use crate::{
 /// wrap it with a generated name. Otherwise, return the JSON as-is.
 ///
 /// Note: When returning the original JSON, we preserve the exact input string.
-#[cfg(not(target_family = "wasm"))]
 pub(crate) fn normalize_mcp_json(json_str: &str) -> serde_json::Result<String> {
     // Some docs don't show curly braces around the json object, so add them if necessary.
     let json = json_str.trim();

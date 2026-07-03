@@ -79,37 +79,10 @@ fn parse_json_with_optional_braces(input: &str) -> anyhow::Result<Value> {
 
     serde_json::from_str(&json).with_context(|| "Invalid MCP JSON".to_string())
 }
-
-#[cfg(not(target_family = "wasm"))]
 fn normalize_mcp_json_for_single_server(input: &str) -> anyhow::Result<String> {
     crate::ai::mcp::parsing::normalize_mcp_json(input)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to normalize MCP JSON")
-}
-
-// The CLI path is not used in WASM builds, but this module still needs to compile.
-// Implement the same normalization behavior (single-server shorthand wrap) locally.
-#[cfg(target_family = "wasm")]
-fn normalize_mcp_json_for_single_server(input: &str) -> anyhow::Result<String> {
-    let json = input.trim();
-    let json_for_parsing = if json.starts_with('{') {
-        json.to_owned()
-    } else {
-        format!("{{{json}}}")
-    };
-
-    let value: Value =
-        serde_json::from_str(&json_for_parsing).with_context(|| "Invalid MCP JSON".to_string())?;
-
-    let is_single_server = value.get("command").is_some() || value.get("url").is_some();
-    if is_single_server {
-        let name = uuid::Uuid::new_v4().to_string();
-        let mut map = Map::new();
-        map.insert(name, value);
-        Ok(Value::Object(map).to_string())
-    } else {
-        Ok(input.to_string())
-    }
 }
 
 pub(super) fn validate_mcp_servers(mcp_servers: &Map<String, Value>) -> anyhow::Result<()> {

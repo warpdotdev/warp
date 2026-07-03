@@ -3,12 +3,10 @@ use crate::ai::skills::SkillManager;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
+use crate::workspace::ActiveSession;
 use fuzzy_match::FuzzyMatchResult;
 use std::path::PathBuf;
 use warpui::{AppContext, Entity, SingletonEntity};
-
-#[cfg(not(target_family = "wasm"))]
-use crate::workspace::ActiveSession;
 
 const MAX_RESULTS: usize = 50;
 
@@ -32,18 +30,11 @@ impl SyncDataSource for SkillsDataSource {
 
         // Resolve the current working directory from the active window's session.
         let cwd: Option<PathBuf> = {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                app.windows()
-                    .state()
-                    .active_window
-                    .and_then(|window_id| ActiveSession::as_ref(app).path_if_local(window_id))
-                    .map(PathBuf::from)
-            }
-            #[cfg(target_family = "wasm")]
-            {
-                None
-            }
+            app.windows()
+                .state()
+                .active_window
+                .and_then(|window_id| ActiveSession::as_ref(app).path_if_local(window_id))
+                .map(PathBuf::from)
         };
 
         let skills =

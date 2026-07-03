@@ -93,8 +93,6 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     });
     #[cfg(feature = "voice_input")]
     app.add_singleton_model(voice_input::VoiceInput::new);
-
-    #[cfg(not(target_family = "wasm"))]
     app.add_singleton_model(SystemInfo::new);
 
     app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));

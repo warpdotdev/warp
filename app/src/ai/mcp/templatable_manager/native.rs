@@ -189,8 +189,6 @@ impl TemplatableMCPServerManager {
 
         me
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn load_credentials_from_secure_storage_if_needed(&mut self, ctx: &mut ModelContext<Self>) {
         if cfg!(test) || self.credentials_loaded_from_secure_storage {
             return;
@@ -209,9 +207,6 @@ impl TemplatableMCPServerManager {
 
         self.credentials_loaded_from_secure_storage = true;
     }
-
-    #[cfg(target_family = "wasm")]
-    fn load_credentials_from_secure_storage_if_needed(&mut self, _ctx: &mut ModelContext<Self>) {}
 
     pub fn change_server_state(
         &mut self,

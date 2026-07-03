@@ -54,18 +54,12 @@ pub struct NewSessionDataSource {
 }
 
 impl NewSessionDataSource {
-    #[cfg(not(target_family = "wasm"))]
     pub fn new(binding_source: ModelHandle<BindingSource>, ctx: &mut ModelContext<Self>) -> Self {
         if FeatureFlag::UseTantivySearch.is_enabled() {
             Self::new_full_text(binding_source, ctx)
         } else {
             Self::new_fuzzy(binding_source, ctx)
         }
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub fn new(binding_source: ModelHandle<BindingSource>, ctx: &mut ModelContext<Self>) -> Self {
-        Self::new_fuzzy(binding_source, ctx)
     }
 
     fn new_fuzzy(binding_source: ModelHandle<BindingSource>, ctx: &mut ModelContext<Self>) -> Self {
@@ -75,8 +69,6 @@ impl NewSessionDataSource {
             allowed: Default::default(),
         }
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn new_full_text(
         binding_source: ModelHandle<BindingSource>,
         ctx: &mut ModelContext<Self>,
@@ -298,8 +290,6 @@ impl NewSessionSearcher for FuzzyNewSessionSearcher {
             .map(|score| score as f64)
     }
 }
-
-#[cfg(not(target_family = "wasm"))]
 mod full_text_searcher {
     use crate::define_search_schema;
     use crate::search::command_palette::new_session::data_source::{

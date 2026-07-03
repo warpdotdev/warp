@@ -15,7 +15,6 @@ use crate::terminal::model::session::{
 use crate::terminal::model::tmux::commands::TmuxCommand;
 use crate::terminal::model_events::AnsiHandlerEvent;
 use crate::terminal::view::LINEFEED_REGEX;
-#[cfg(not(target_family = "wasm"))]
 use crate::terminal::writeable_pty::bootstrap_file::{permanent_bootstrap_file, TempBootstrapFile};
 use crate::terminal::{
     bootstrap,
@@ -103,7 +102,6 @@ pub struct PtyController<T: EventLoopSender> {
     /// If we're bootstrapping the shell by sourcing a file with the bootstrap
     /// script, this will hold the handle to the file.  Once bootstrapping is
     /// complete, it will be dropped to clean up the temporary file.
-    #[cfg(not(target_family = "wasm"))]
     bootstrap_file: Option<TempBootstrapFile>,
     tmux_control_mode: Option<TmuxControlMode>,
     in_flight_native_completions_state: Option<NativeShellCompletionsState>,
@@ -257,7 +255,6 @@ impl<T: EventLoopSender> PtyController<T> {
             pending_writes: VecDeque::new(),
             is_user_command_executing: false,
             is_bracketed_paste_enabled: false,
-            #[cfg(not(target_family = "wasm"))]
             bootstrap_file: None,
             tmux_control_mode: None,
             in_flight_native_completions_state: None,
@@ -522,7 +519,6 @@ impl<T: EventLoopSender> PtyController<T> {
 
         // Now that we have bootstrapped, we can be sure that the bootstrap
         // file is no longer needed.
-        #[cfg(not(target_family = "wasm"))]
         self.bootstrap_file.take();
     }
 

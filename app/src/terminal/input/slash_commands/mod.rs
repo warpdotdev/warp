@@ -506,14 +506,12 @@ impl Input {
                 });
             }
             export_to_file if command.name == commands::EXPORT_TO_FILE.name => {
-                #[cfg(not(target_family = "wasm"))]
                 {
                     self.export_conversation_to_file(
                         argument.map(|filename| filename.to_owned()),
                         ctx,
                     );
                 }
-                #[cfg(target_family = "wasm")]
                 {
                     show_error_toast(
                         "Export conversation to file unsupported in web".to_owned(),

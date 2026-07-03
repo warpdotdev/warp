@@ -53,22 +53,15 @@ fn file_title_text(openable_path: &OpenablePath) -> String {
             "Did you know that Warper can directly display Markdown files?".to_string()
         }
         OpenableFileType::Code | OpenableFileType::Text => {
-            cfg_if::cfg_if! {
-                if #[cfg(not(target_family = "wasm"))] {
-                    // Language is a temporary variable to ensure our copy of the Arc<Language>
-                    // lives long enough to borrow the display name for the duration of the function.
-                    let language = languages::language_by_filename(&openable_path.path);
+            // Language is a temporary variable to ensure our copy of the Arc<Language>
+            // lives long enough to borrow the display name for the duration of the function.
+            let language = languages::language_by_filename(&openable_path.path);
 
-                    match language.as_ref().map(|language| language.display_name()) {
-                        Some(display_name) => {
-                            format!("Did you know that Warper can directly edit {display_name} files?")
-                        }
-                        None => "Did you know that Warper can directly edit code?".to_string(),
-                    }
-                } else {
-                    // The `languages` crate is not available on WASM, so use a fallback message.
-                    "Did you know that Warper can directly edit code?".to_string()
+            match language.as_ref().map(|language| language.display_name()) {
+                Some(display_name) => {
+                    format!("Did you know that Warper can directly edit {display_name} files?")
                 }
+                None => "Did you know that Warper can directly edit code?".to_string(),
             }
         }
     }

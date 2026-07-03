@@ -31,16 +31,14 @@ use crate::{
     workspace::{sync_inputs::SyncedInputState, PaneViewLocator},
 };
 
-#[cfg(feature = "local_fs")]
-use crate::ai::blocklist::BlocklistAIHistoryEvent;
-use warp_core::execution_mode::AppExecutionMode;
-
-#[cfg(not(target_family = "wasm"))]
 use super::local_harness_launch::{prepare_local_harness_child_launch, PreparedLocalHarnessLaunch};
 use super::{
     DetachType, PaneConfiguration, PaneContent, PaneId, PaneStackEvent, PaneView, ShareableLink,
     ShareableLinkError, TerminalPaneId,
 };
+#[cfg(feature = "local_fs")]
+use crate::ai::blocklist::BlocklistAIHistoryEvent;
+use warp_core::execution_mode::AppExecutionMode;
 
 pub type TerminalPaneView = PaneView<TerminalView>;
 
@@ -568,7 +566,6 @@ fn handle_terminal_view_event(
             Event::OpenSettings(section) => {
                 ctx.emit(pane_group::Event::OpenSettings(*section));
             }
-            #[cfg(not(target_family = "wasm"))]
             Event::OpenPluginInstructionsPane(agent, kind) => {
                 ctx.emit(pane_group::Event::OpenPluginInstructionsPane(*agent, *kind));
             }
@@ -917,7 +914,6 @@ fn handle_terminal_view_event(
                             });
                         }
                     }
-                    #[cfg(not(target_family = "wasm"))]
                     StartAgentExecutionMode::Local {
                         harness_type: Some(harness_type),
                     } => {
@@ -1012,18 +1008,6 @@ fn handle_terminal_view_event(
                                     );
                                 }
                             },
-                        );
-                    }
-                    #[cfg(target_family = "wasm")]
-                    StartAgentExecutionMode::Local { .. } => {
-                        create_error_child_agent_conversation(
-                            group,
-                            pane_id,
-                            request.name,
-                            request.parent_conversation_id,
-                            "Local harness child agents are not supported in WASM builds."
-                                .to_string(),
-                            ctx,
                         );
                     }
                     StartAgentExecutionMode::Remote { .. } => {

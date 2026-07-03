@@ -163,7 +163,6 @@ pub struct PersistedWorkspace {
 #[derive(Debug, Clone)]
 pub enum PersistedWorkspaceEvent {
     /// Emitted when LSP installation status changes.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     InstallStatusUpdate {
         server_type: LSPServerType,
         status: LSPInstallationStatus,
@@ -171,21 +170,17 @@ pub enum PersistedWorkspaceEvent {
     /// Emitted when LSP installation completes successfully.
     /// Toast notification is shown directly by PersistedWorkspace.
     /// The server is also spawned automatically by PersistedWorkspace.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     InstallationSucceeded,
     /// Emitted when LSP installation fails.
     /// Toast notification is shown directly by PersistedWorkspace.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     InstallationFailed,
     /// Emitted when async detection of available servers for a workspace completes.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     AvailableServersDetected {
         workspace_path: PathBuf,
         servers: Vec<LSPServerType>,
     },
     /// Emitted when the user explicitly adds a repo via a picker (e.g. the tab-config
     /// params modal's repo dropdown). Subscribers can use this to refresh their list.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     WorkspaceAdded { path: PathBuf },
 }
 

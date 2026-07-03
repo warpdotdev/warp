@@ -25,7 +25,6 @@ mod open_in_warp;
 mod pane_impl;
 mod passive_suggestions;
 mod pending_user_query;
-#[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_instructions_block;
 pub mod rich_content;
 mod shell_terminated_banner;
@@ -128,7 +127,6 @@ use crate::terminal::cli_agent_sessions::event::{
     CLI_AGENT_NOTIFICATION_SENTINEL,
 };
 use crate::terminal::cli_agent_sessions::listener::{is_agent_supported, CLIAgentSessionListener};
-#[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
@@ -1635,7 +1633,6 @@ pub enum Event {
     OpenAgentProfileEditor {
         profile_id: ClientProfileId,
     },
-    #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(CLIAgent, PluginModalKind),
     ShowToast {
         message: String,
@@ -9680,11 +9677,8 @@ impl TerminalView {
         // No SessionStart event in this path (mid-session install/update).
         // Assume the just-installed plugin meets the minimum version for this agent
         // so the update chip doesn't flash before the user runs /reload-plugins.
-        #[cfg(not(target_family = "wasm"))]
         let plugin_version =
             plugin_manager_for(agent).map(|m| m.minimum_plugin_version().to_owned());
-        #[cfg(target_family = "wasm")]
-        let plugin_version = None;
         let notification = CLIAgentEvent {
             v: 1,
             agent,
@@ -10833,8 +10827,6 @@ impl TerminalView {
         self.update_input_prompt_suggestions_banner_state(ctx);
         ctx.notify();
     }
-
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn remove_plugin_instructions_block(
         &mut self,
         block_handle: ViewHandle<plugin_instructions_block::PluginInstructionsBlock>,
@@ -11503,8 +11495,6 @@ impl TerminalView {
             ctx.notify();
         }
     }
-
-    #[cfg(not(target_family = "wasm"))]
     pub(super) fn on_shell_determined(&self, ctx: &mut ViewContext<Self>) {
         self.start_bootstrap_timer(BOOTSTRAP_FAILED_DURATION, ctx);
     }
@@ -11527,8 +11517,6 @@ impl TerminalView {
     pub fn clear_enter_agent_view_after_pending_commands(&mut self) {
         self.enter_agent_view_after_pending_commands = false;
     }
-
-    #[cfg(not(target_family = "wasm"))]
     pub(super) fn on_pty_spawn_failed(
         &mut self,
         pty_spawn_error: anyhow::Error,
@@ -12353,7 +12341,7 @@ impl TerminalView {
                         ));
 
                         // Add fork option for conversation management
-                        if !cfg!(target_family = "wasm") {
+                        if true {
                             let fork_label = fork_label_for_query(
                                 &ai_metadata
                                     .ai_block_handle
@@ -13274,7 +13262,7 @@ impl TerminalView {
             )
         };
 
-        if !cfg!(target_family = "wasm") {
+        if true {
             let fork_label = fork_label_for_query(
                 &self
                     .rich_content_views
@@ -16573,7 +16561,6 @@ impl TerminalView {
             InputEvent::RegisterPluginListener(agent) => {
                 self.register_cli_agent_listener_without_session_start_event(*agent, ctx);
             }
-            #[cfg(not(target_family = "wasm"))]
             InputEvent::OpenPluginInstructionsPane(agent, kind) => {
                 ctx.emit(Event::OpenPluginInstructionsPane(*agent, *kind));
             }

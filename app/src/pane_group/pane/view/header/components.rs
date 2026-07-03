@@ -73,7 +73,6 @@ pub fn render_pane_overflow_button<A: ActionPayload, B: ActionPayload>(
 }
 
 /// Renders a row containing the standard pane overflow and close buttons.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub fn render_pane_header_buttons<A: ActionPayload, B: ActionPayload>(
     header_ctx: &HeaderRenderContext<'_>,
     appearance: &Appearance,

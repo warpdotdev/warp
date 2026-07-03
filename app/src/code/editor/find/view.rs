@@ -1,6 +1,3 @@
-#![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
-// Adding this file level gate as some of the code around editability is not used in WASM yet.
-
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorView, Event as EditorEvent, InteractionState, PropagateAndNoOpNavigationKeys,

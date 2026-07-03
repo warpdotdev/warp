@@ -30,8 +30,6 @@ impl fmt::Debug for TmuxCommandExecutor {
         write!(f, "TmuxCommandExecutor {{}}")
     }
 }
-
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 impl TmuxCommandExecutor {
     pub fn new(executor_command_tx: Sender<ExecutorCommandEvent>) -> Self {
         Self {

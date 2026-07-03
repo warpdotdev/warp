@@ -8,9 +8,7 @@ use crate::ai::{
     blocklist::{action_model::AIAgentActionType, BlocklistAIPermissions},
     mcp::TemplatableMCPServerManager,
 };
-#[cfg(not(target_family = "wasm"))]
 use itertools::Itertools;
-#[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 
 pub struct CallMCPToolExecutor {
@@ -26,19 +24,11 @@ impl CallMCPToolExecutor {
             terminal_view_id,
         }
     }
-
-    #[cfg_attr(target_family = "wasm", allow(unused_variables), allow(dead_code))]
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        #[cfg(target_family = "wasm")]
-        {
-            false
-        }
-
-        #[cfg(not(target_family = "wasm"))]
         {
             let ExecuteActionInput {
                 action:
@@ -64,19 +54,11 @@ impl CallMCPToolExecutor {
             )
         }
     }
-
-    #[cfg_attr(target_family = "wasm", allow(unused_variables), allow(dead_code))]
     pub(super) fn execute(
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> {
-        #[cfg(target_family = "wasm")]
-        {
-            ActionExecution::<()>::InvalidAction
-        }
-
-        #[cfg(not(target_family = "wasm"))]
         {
             let AIAgentAction {
                 action:
@@ -195,7 +177,6 @@ pub(crate) fn coerce_integer_args(
 mod tests;
 
 /// Handles the result of a call_tool request, converting it to an AIAgentActionResultType.
-#[cfg(not(target_family = "wasm"))]
 fn handle_call_tool_result(
     res: Result<rmcp::model::CallToolResult, rmcp::ServiceError>,
 ) -> AIAgentActionResultType {
