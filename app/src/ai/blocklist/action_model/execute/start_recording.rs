@@ -9,9 +9,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
-use crate::ai::blocklist::action_model::recording_controller::{
-    RecordingController, RecordingSession,
-};
+use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 
 pub struct StartRecordingExecutor;
 
@@ -84,8 +82,7 @@ impl StartRecordingExecutor {
                     let width_px = handle.width() as i32;
                     let height_px = handle.height() as i32;
                     RecordingController::handle(ctx).update(ctx, |controller, _| {
-                        controller
-                            .finish_start(recording_id.clone(), RecordingSession::new(handle));
+                        controller.finish_start(recording_id.clone(), handle);
                     });
                     AIAgentActionResultType::StartRecording(StartRecordingResult::Success(
                         RecordingStarted {

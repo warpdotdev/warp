@@ -5,8 +5,6 @@
 //! from a later resumed turn), so the live handle lives here rather than in a
 //! per-call executor.
 
-use std::collections::HashMap;
-
 use thiserror::Error;
 use warpui::{Entity, SingletonEntity};
 
@@ -24,29 +22,16 @@ pub enum StopRecordingControllerError {
     ConversationNotSynced,
 }
 
-/// Holds the live capture handle for a single in-progress recording.
-pub struct RecordingSession {
+/// The single in-progress recording: its controller id and live capture handle.
+struct ActiveRecording {
+    id: String,
     handle: computer_use::RecordingHandle,
 }
 
-impl RecordingSession {
-    pub fn new(handle: computer_use::RecordingHandle) -> Self {
-        Self { handle }
-    }
-
-    pub fn into_handle(self) -> computer_use::RecordingHandle {
-        self.handle
-    }
-}
-
-/// Tracks recordings keyed by id and enforces one active recording per client runtime.
-///
-/// NOTE: Ambient agent environment setup currently provides one Xvfb instance
-/// per runtime, which exposes a single display to the recorder. If that changes,
-/// this controller should key active recordings by display.
+/// Enforces a single active recording per client runtime.
 pub struct RecordingController {
-    sessions: HashMap<String, RecordingSession>,
-    /// Set while a start is in flight (after reservation, before the session is
+    active: Option<ActiveRecording>,
+    /// Set while a start is in flight (after reservation, before the recording is
     /// registered) so a concurrent start cannot race past the single-slot guard.
     starting: bool,
 }
@@ -54,7 +39,7 @@ pub struct RecordingController {
 impl RecordingController {
     pub fn new() -> Self {
         Self {
-            sessions: HashMap::new(),
+            active: None,
             starting: false,
         }
     }
@@ -62,7 +47,7 @@ impl RecordingController {
     /// Reserves the single recording slot, failing if one is already active or
     /// starting.
     pub fn try_begin_start(&mut self) -> Result<(), StartRecordingControllerError> {
-        if self.starting || !self.sessions.is_empty() {
+        if self.starting || self.active.is_some() {
             return Err(StartRecordingControllerError::AlreadyInProgress);
         }
         self.starting = true;
@@ -70,9 +55,12 @@ impl RecordingController {
     }
 
     /// Registers a successfully started recording, releasing the start reservation.
-    pub fn finish_start(&mut self, recording_id: String, session: RecordingSession) {
+    pub fn finish_start(&mut self, recording_id: String, handle: computer_use::RecordingHandle) {
         self.starting = false;
-        self.sessions.insert(recording_id, session);
+        self.active = Some(ActiveRecording {
+            id: recording_id,
+            handle,
+        });
     }
 
     /// Releases the start reservation after a failed start.
@@ -80,16 +68,21 @@ impl RecordingController {
         self.starting = false;
     }
 
-    /// Removes and returns the session for `recording_id`.
-    pub fn take_session_or_err(
+    /// Removes and returns the live handle for `recording_id`, leaving any
+    /// non-matching active recording in place.
+    pub fn take_handle_or_err(
         &mut self,
         recording_id: &str,
-    ) -> Result<RecordingSession, StopRecordingControllerError> {
-        self.sessions.remove(recording_id).ok_or_else(|| {
-            StopRecordingControllerError::NoActiveRecording {
-                recording_id: recording_id.to_string(),
+    ) -> Result<computer_use::RecordingHandle, StopRecordingControllerError> {
+        match self.active.take() {
+            Some(active) if active.id == recording_id => Ok(active.handle),
+            other => {
+                self.active = other;
+                Err(StopRecordingControllerError::NoActiveRecording {
+                    recording_id: recording_id.to_string(),
+                })
             }
-        })
+        }
     }
 }
 

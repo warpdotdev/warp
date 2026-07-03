@@ -67,7 +67,6 @@ impl StopRecordingExecutor {
             let AIAgentActionType::StopRecording { recording_id } = &action.action else {
                 return ActionExecution::<()>::InvalidAction.into();
             };
-            let recording_id = recording_id.clone();
             let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&conversation_id)
                 .and_then(|conversation| conversation.server_conversation_token())
@@ -81,11 +80,11 @@ impl StopRecordingExecutor {
                 .into();
             };
 
-            let session = RecordingController::handle(ctx).update(ctx, |controller, _| {
-                controller.take_session_or_err(&recording_id)
+            let handle = RecordingController::handle(ctx).update(ctx, |controller, _| {
+                controller.take_handle_or_err(recording_id)
             });
-            let session = match session {
-                Ok(session) => session,
+            let handle = match handle {
+                Ok(handle) => handle,
                 Err(error) => {
                     return ActionExecution::<()>::Sync(AIAgentActionResultType::StopRecording(
                         StopRecordingResult::Error(error.to_string()),
@@ -96,7 +95,6 @@ impl StopRecordingExecutor {
 
             let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
             let server_api = ServerApiProvider::as_ref(ctx).get();
-            let handle = session.into_handle();
 
             ActionExecution::new_async(
                 async move {
