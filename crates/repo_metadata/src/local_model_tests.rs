@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
@@ -2664,6 +2665,133 @@ fn load_directory_completion_skips_removed_tree_entry() {
                     panic!("expected indexed lazy-loaded path");
                 };
                 assert!(!state.entry.contains(&sub));
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn load_directory_completion_skips_replaced_tree_entry() {
+    VirtualFS::test("lazy_load_replaced_subdir", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/sub/inner/file.txt",
+                "x",
+            )]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+        let nested =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub/inner"))
+                .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            let completion = model_handle.update(&mut app, |model, ctx| {
+                let completion = model
+                    .load_directory_with_completion(&root, &sub, ctx)
+                    .expect("should start loading subdir");
+                let Some(IndexedRepoState::Indexed(state)) = model.repositories.get_mut(&root)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                state.entry.remove(&sub);
+                state.entry.insert_entry_at_path(
+                    Arc::new(sub.clone()),
+                    Entry::File(FileMetadata::from_standardized(sub.clone(), false)),
+                );
+                completion
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+            assert!(matches!(
+                completion.await,
+                Err(RepoMetadataError::InvalidPath(_))
+            ));
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(matches!(
+                    state.entry.get(&sub),
+                    Some(FileTreeEntryState::File(_))
+                ));
+                assert!(!state.entry.contains(&nested));
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn load_directory_completion_skips_recreated_unloaded_tree_entry() {
+    VirtualFS::test("lazy_load_recreated_subdir", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/sub/inner/file.txt",
+                "x",
+            )]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+        let nested =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub/inner"))
+                .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            let completion = model_handle.update(&mut app, |model, ctx| {
+                let completion = model
+                    .load_directory_with_completion(&root, &sub, ctx)
+                    .expect("should start loading subdir");
+                let Some(IndexedRepoState::Indexed(state)) = model.repositories.get_mut(&root)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                state.entry.remove(&sub);
+                state.entry.insert_entry_at_path(
+                    Arc::new(sub.clone()),
+                    Entry::Directory(DirectoryEntry {
+                        path: sub.clone(),
+                        children: Vec::new(),
+                        ignored: false,
+                        loaded: false,
+                    }),
+                );
+                completion
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+            assert!(matches!(
+                completion.await,
+                Err(RepoMetadataError::InvalidPath(_))
+            ));
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(matches!(
+                    state.entry.get(&sub),
+                    Some(FileTreeEntryState::Directory(directory)) if !directory.loaded
+                ));
+                assert!(!state.entry.contains(&nested));
             });
         });
     });

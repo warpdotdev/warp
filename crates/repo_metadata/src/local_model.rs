@@ -1236,6 +1236,12 @@ impl LocalRepoMetadataModel {
             .get(dir_path)
             .is_some_and(|entry| entry.ignored());
         let dir_was_present = state.entry.contains(dir_path);
+        let target_unloaded_directory_path = match state.entry.get(dir_path) {
+            Some(FileTreeEntryState::Directory(directory)) if !directory.loaded => {
+                Some(directory.path.clone())
+            }
+            _ => None,
+        };
         let mut gitignores = state.gitignores.clone();
         let dir_path_for_build = dir_path.to_local_path_lossy();
         let repo_root_for_build = repo_root.clone();
@@ -1271,8 +1277,22 @@ impl LocalRepoMetadataModel {
                             if let Some(IndexedRepoState::Indexed(state)) =
                                 model.repositories.get_mut(&repo_root)
                             {
-                                if dir_was_present && !state.entry.contains(&dir_path) {
-                                    Err(RepoMetadataError::RepoNotFound(dir_path.to_string()))
+                                let target_still_accepts_load =
+                                    if let Some(expected_path) = &target_unloaded_directory_path {
+                                        matches!(
+                                            state.entry.get(&dir_path),
+                                            Some(FileTreeEntryState::Directory(directory))
+                                                if !directory.loaded
+                                                    && Arc::ptr_eq(&directory.path, expected_path)
+                                        )
+                                    } else {
+                                        !dir_was_present || state.entry.contains(&dir_path)
+                                    };
+
+                                if !target_still_accepts_load {
+                                    Err(RepoMetadataError::InvalidPath(format!(
+                                        "Directory load target changed while loading: {dir_path}"
+                                    )))
                                 } else {
                                     state
                                         .entry
