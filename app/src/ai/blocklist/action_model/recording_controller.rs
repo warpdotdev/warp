@@ -14,6 +14,7 @@ pub enum StartRecordingControllerError {
     AlreadyInProgress,
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 #[derive(Debug, Error)]
 pub enum StopRecordingControllerError {
     #[error("No active recording with id '{recording_id}'.")]
@@ -23,6 +24,7 @@ pub enum StopRecordingControllerError {
 }
 
 /// The single in-progress recording: its controller id and live capture handle.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 struct ActiveRecording {
     id: String,
     handle: computer_use::RecordingHandle,
@@ -70,6 +72,7 @@ impl RecordingController {
 
     /// Removes and returns the live handle for `recording_id`, leaving any
     /// non-matching active recording in place.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn take_handle_or_err(
         &mut self,
         recording_id: &str,
