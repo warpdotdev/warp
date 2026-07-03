@@ -700,6 +700,7 @@ impl AgentInputFooter {
         let new_cloud_vm_indicator = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::CloudOffline)
+                .with_icon_ansi_color(AnsiColorIdentifier::Yellow)
                 .with_tooltip(NEW_CLOUD_VM_INDICATOR_TOOLTIP)
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
@@ -2236,42 +2237,6 @@ impl AgentInputFooter {
         }
     }
 
-    /// Overlays a small status dot on the top-right of `chip`, mirroring the context-window
-    /// chip's notification dot. `color` is resolved against the active terminal theme.
-    fn status_dot_overlay(
-        chip: Box<dyn Element>,
-        color: AnsiColorIdentifier,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let appearance = Appearance::as_ref(app);
-        let dot = Container::new(
-            ConstrainedBox::new(Empty::new().finish())
-                .with_width(6.)
-                .with_height(6.)
-                .finish(),
-        )
-        .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
-        .with_background(Fill::Solid(
-            color
-                .to_ansi_color(&appearance.theme().terminal_colors().normal)
-                .into(),
-        ))
-        .finish();
-
-        let mut stack = Stack::new();
-        stack.add_child(chip);
-        stack.add_positioned_overlay_child(
-            dot,
-            OffsetPositioning::offset_from_parent(
-                vec2f(3., -3.),
-                ParentOffsetBounds::WindowByPosition,
-                ParentAnchor::TopRight,
-                ChildAnchor::TopRight,
-            ),
-        );
-        stack.finish()
-    }
-
     #[cfg(test)]
     pub fn displayed_chip_kinds(
         &self,
@@ -2357,8 +2322,7 @@ impl View for AgentInputFooter {
             is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
 
         // Indicate whether the next follow-up continues on the live remote VM or starts a new one.
-        // The new-cloud-VM chip carries a yellow top-right status dot (mirroring the context-window
-        // chip's notification dot); the live-session chip is shown without a dot.
+        // The new-cloud-VM chip uses a yellow icon; the live-session chip uses the default color.
         match resolve_ai_query_routing(
             self.terminal_view_id,
             self.ambient_agent_view_model.as_ref(),
@@ -2372,12 +2336,7 @@ impl View for AgentInputFooter {
                 left_buttons.add_child(ChildView::new(&self.live_session_indicator).finish());
             }
             AIQueryRouting::NewCloudVm { .. } => {
-                let chip = ChildView::new(&self.new_cloud_vm_indicator).finish();
-                left_buttons.add_child(Self::status_dot_overlay(
-                    chip,
-                    AnsiColorIdentifier::Yellow,
-                    app,
-                ));
+                left_buttons.add_child(ChildView::new(&self.new_cloud_vm_indicator).finish());
             }
             // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
             AIQueryRouting::LiveRemoteVm {
