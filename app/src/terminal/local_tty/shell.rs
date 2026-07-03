@@ -186,11 +186,13 @@ impl ShellStarter {
     fn compute_fallback_shell() -> Option<ShellStarterSource> {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
-                let pw_shell_path = Self::user_default_shell_path(nix::unistd::User::from_uid(
-                    nix::unistd::getuid(),
-                ));
+                let pw_shell_path = nix::unistd::User::from_uid(nix::unistd::getuid())
+                    .ok()??
+                    .shell
+                    .display()
+                    .to_string();
                 if let Some((resolved_pw_shell_path, shell_type)) =
-                    pw_shell_path.as_deref().and_then(supported_shell_path_and_type)
+                    supported_shell_path_and_type(&pw_shell_path)
                 {
                     let session_id = generate_session_id();
                     let args = arguments_for_session_spawning_command(
@@ -205,7 +207,7 @@ impl ShellStarter {
                         session_id,
                     }));
                 }
-                let unsupported_shell = pw_shell_path;
+                let unsupported_shell = Some(pw_shell_path);
 
                 let (resolved_default_shell_path, shell_type) = if let Some(shell_path_and_type) =
                     supported_shell_path_and_type(ZSH_SHELL_PATH)
@@ -260,25 +262,6 @@ impl ShellStarter {
                     shell_type,
                     session_id,
                 }))
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    fn user_default_shell_path(user: nix::Result<Option<nix::unistd::User>>) -> Option<String> {
-        match user {
-            Ok(Some(user)) => Some(user.shell.display().to_string()),
-            Ok(None) => {
-                log::warn!(
-                    "No password-database entry for the current uid; falling back to a default shell."
-                );
-                None
-            }
-            Err(err) => {
-                log::warn!(
-                    "Failed to read the current user's password-database entry ({err}); falling back to a default shell."
-                );
-                None
             }
         }
     }
