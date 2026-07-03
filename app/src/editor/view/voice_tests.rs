@@ -1,3 +1,8 @@
+use std::sync::Arc;
+
+use warpui::platform::WindowStyle;
+use warpui::{AddSingletonModel, App};
+
 use super::super::EditorAction;
 use super::VoiceInputState;
 use crate::appearance::Appearance;
@@ -12,9 +17,6 @@ use crate::vim_registers::VimRegisters;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use std::sync::Arc;
-use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -103,8 +105,8 @@ fn test_handle_action_keeps_active_voice_for_passive_action() {
 }
 
 /// When transcription returns blank text (empty or whitespace-only), the editor
-/// buffer must not be modified. This guards against replacing selections with an
-/// empty insert.
+/// buffer must not be modified even with an active selection. This guards
+/// against replacing a selection with an empty insert.
 #[test]
 fn test_blank_transcription_does_not_modify_buffer() {
     App::test((), |mut app| async move {
@@ -116,6 +118,12 @@ fn test_blank_transcription_does_not_modify_buffer() {
         for transcribed_text in ["", "   \n\t "] {
             editor.update(&mut app, |editor, ctx| {
                 editor.set_buffer_text("existing content", ctx);
+                <EditorView as warpui::TypedActionView>::handle_action(
+                    editor,
+                    &EditorAction::SelectAll,
+                    ctx,
+                );
+                assert_eq!(editor.selected_text(ctx), "existing content");
                 editor.apply_transcribed_voice_input(Ok(transcribed_text.to_string()), ctx);
             });
 
