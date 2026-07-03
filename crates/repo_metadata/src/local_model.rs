@@ -214,6 +214,7 @@ struct RepoWatch {
 }
 
 struct BuildTask {
+    owner_repo_path: StandardizedPath,
     handle: SpawnedFutureHandle,
     completion_waiters: Vec<oneshot::Sender<Result<(), String>>>,
 }
@@ -735,7 +736,12 @@ impl LocalRepoMetadataModel {
         }
     }
 
-    fn track_build_task(&mut self, path: StandardizedPath, handle: SpawnedFutureHandle) {
+    fn track_build_task(
+        &mut self,
+        owner_repo_path: StandardizedPath,
+        path: StandardizedPath,
+        handle: SpawnedFutureHandle,
+    ) {
         debug_assert!(
             !self.build_tasks.contains_key(&path),
             "duplicate build tasks should subscribe to the existing task or abort it first"
@@ -743,6 +749,7 @@ impl LocalRepoMetadataModel {
         if let Some(existing_task) = self.build_tasks.insert(
             path,
             BuildTask {
+                owner_repo_path,
                 handle,
                 completion_waiters: Vec::new(),
             },
@@ -836,17 +843,9 @@ impl LocalRepoMetadataModel {
 
     #[cfg(feature = "local_fs")]
     fn abort_watcher_update_tasks_for_repo(&mut self, repo_path: &StandardizedPath) {
-        let task_repo_paths = self
-            .watcher_update_tasks
-            .keys()
-            .filter(|path| path.starts_with(repo_path))
-            .cloned()
-            .collect::<Vec<_>>();
-        for task_repo_path in task_repo_paths {
-            if let Some(tasks) = self.watcher_update_tasks.remove(&task_repo_path) {
-                for handle in tasks.into_values() {
-                    handle.abort();
-                }
+        if let Some(tasks) = self.watcher_update_tasks.remove(repo_path) {
+            for handle in tasks.into_values() {
+                handle.abort();
             }
         }
     }
@@ -854,9 +853,9 @@ impl LocalRepoMetadataModel {
     fn abort_builds_for_repo(&mut self, repo_path: &StandardizedPath) {
         let task_paths = self
             .build_tasks
-            .keys()
-            .filter(|path| path.starts_with(repo_path))
-            .cloned()
+            .iter()
+            .filter(|(_, task)| &task.owner_repo_path == repo_path)
+            .map(|(path, _)| path.clone())
             .collect::<Vec<_>>();
         for path in task_paths {
             if let Some(task) = self.build_tasks.remove(&path) {
@@ -1172,7 +1171,7 @@ impl LocalRepoMetadataModel {
             },
         );
         task_future_id.set(Some(build_handle.future_id()));
-        self.track_build_task(task_path, build_handle);
+        self.track_build_task(path.clone(), task_path, build_handle);
         Ok(())
     }
 
@@ -1331,7 +1330,7 @@ impl LocalRepoMetadataModel {
             },
         );
         task_future_id.set(Some(build_handle.future_id()));
-        self.track_build_task(task_path, build_handle);
+        self.track_build_task(repo_root.clone(), task_path, build_handle);
         Ok(async move {
             completion_rx
                 .await
@@ -2019,7 +2018,7 @@ impl LocalRepoMetadataModel {
             },
         );
         task_future_id.set(Some(build_handle.future_id()));
-        self.track_build_task(task_path, build_handle);
+        self.track_build_task(std_path.clone(), task_path, build_handle);
 
         Ok(())
     }

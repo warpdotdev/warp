@@ -81,7 +81,7 @@ async fn await_build_tasks_for_repo(
             model
                 .build_tasks
                 .iter()
-                .filter(|(path, _)| path.starts_with(repo_path))
+                .filter(|(_, task)| &task.owner_repo_path == repo_path)
                 .map(|(_, task)| task.handle.future_id())
                 .collect::<Vec<_>>()
         });
@@ -267,7 +267,7 @@ fn remove_repository_aborts_and_drops_build_tasks() {
                 |_, _, _| {},
             );
             let future_id = handle.future_id();
-            model.track_build_task(repo_path.clone(), handle);
+            model.track_build_task(repo_path.clone(), repo_path.clone(), handle);
             future_id
         });
 
@@ -288,6 +288,63 @@ fn remove_repository_aborts_and_drops_build_tasks() {
         model_handle.read(&app, |model, _ctx| {
             assert!(!model.build_tasks.contains_key(&repo_path));
         });
+    });
+}
+
+#[test]
+fn remove_repository_keeps_nested_repo_build_tasks() {
+    let parent_repo_path = StandardizedPath::try_new("/parent_repo").unwrap();
+    let nested_repo_path = StandardizedPath::try_new("/parent_repo/nested_repo").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_release_tx, release_rx) = oneshot::channel::<()>();
+        let nested_future_id = model_handle.update(&mut app, |model, ctx| {
+            model.repositories.insert(
+                parent_repo_path.clone(),
+                IndexedRepoState::Indexed(empty_repo_state(&parent_repo_path)),
+            );
+            model
+                .repositories
+                .insert(nested_repo_path.clone(), IndexedRepoState::pending());
+
+            let handle = ctx.spawn(
+                async move {
+                    let _ = release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let future_id = handle.future_id();
+            model.track_build_task(nested_repo_path.clone(), nested_repo_path.clone(), handle);
+            future_id
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            model
+                .remove_repository(&parent_repo_path, ctx)
+                .expect("parent repository should be removed");
+        });
+
+        let nested_handle = model_handle.update(&mut app, |model, _ctx| {
+            assert!(model.repository_state(&parent_repo_path).is_none());
+            assert!(matches!(
+                model.repository_state(&nested_repo_path),
+                Some(IndexedRepoState::Pending(_))
+            ));
+            let task = model
+                .build_tasks
+                .remove(&nested_repo_path)
+                .expect("nested repo build task should not be aborted by parent teardown");
+            assert_eq!(&task.owner_repo_path, &nested_repo_path);
+            task.handle
+        });
+
+        nested_handle.abort();
+        model_handle
+            .update(&mut app, |_, ctx| {
+                ctx.await_spawned_future(nested_future_id)
+            })
+            .await;
     });
 }
 
@@ -359,6 +416,59 @@ fn remove_repository_aborts_and_drops_watcher_update_tasks() {
     });
 }
 
+#[cfg(feature = "local_fs")]
+#[test]
+fn remove_repository_keeps_nested_repo_watcher_update_tasks() {
+    let parent_repo_path = StandardizedPath::try_new("/parent_watcher_repo").unwrap();
+    let nested_repo_path = StandardizedPath::try_new("/parent_watcher_repo/nested_repo").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_release_tx, release_rx) = oneshot::channel::<()>();
+        let nested_future_id = model_handle.update(&mut app, |model, ctx| {
+            model.repositories.insert(
+                parent_repo_path.clone(),
+                IndexedRepoState::Indexed(empty_repo_state(&parent_repo_path)),
+            );
+
+            let handle = ctx.spawn(
+                async move {
+                    let _ = release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let future_id = handle.future_id();
+            model.track_watcher_update_task(nested_repo_path.clone(), handle);
+            future_id
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            model
+                .remove_repository(&parent_repo_path, ctx)
+                .expect("parent repository should be removed");
+        });
+
+        let nested_handle = model_handle.update(&mut app, |model, _ctx| {
+            assert!(model.repository_state(&parent_repo_path).is_none());
+            let tasks = model
+                .watcher_update_tasks
+                .remove(&nested_repo_path)
+                .expect("nested repo watcher task should not be aborted by parent teardown");
+            tasks
+                .into_values()
+                .next()
+                .expect("nested repo watcher task should still be tracked")
+        });
+
+        nested_handle.abort();
+        model_handle
+            .update(&mut app, |_, ctx| {
+                ctx.await_spawned_future(nested_future_id)
+            })
+            .await;
+    });
+}
+
 #[test]
 fn stale_build_future_id_does_not_finish_newer_task() {
     let repo_path = StandardizedPath::try_new("/repo_with_replaced_build").unwrap();
@@ -375,7 +485,7 @@ fn stale_build_future_id_does_not_finish_newer_task() {
                 |_, _, _| {},
             );
             let old_future_id = old_handle.future_id();
-            model.track_build_task(repo_path.clone(), old_handle);
+            model.track_build_task(repo_path.clone(), repo_path.clone(), old_handle);
             model.abort_builds_for_repo(&repo_path);
 
             let new_handle = ctx.spawn(
@@ -385,7 +495,7 @@ fn stale_build_future_id_does_not_finish_newer_task() {
                 |_, _, _| {},
             );
             let new_future_id = new_handle.future_id();
-            model.track_build_task(repo_path.clone(), new_handle);
+            model.track_build_task(repo_path.clone(), repo_path.clone(), new_handle);
 
             assert!(model
                 .finish_build_task(&repo_path, Some(old_future_id))
@@ -909,7 +1019,11 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                         |_, _, _| {},
                     );
                     let future_id = handle.future_id();
-                    model.track_build_task(repo_root_for_index.clone(), handle);
+                    model.track_build_task(
+                        repo_root_for_index.clone(),
+                        repo_root_for_index.clone(),
+                        handle,
+                    );
                     future_id
                 });
 
