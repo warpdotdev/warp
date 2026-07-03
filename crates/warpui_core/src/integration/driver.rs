@@ -19,7 +19,6 @@ use crate::{
 };
 use futures::{Future, FutureExt};
 use instant::{Duration, Instant};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::Ordering;
 use std::{
     backtrace::BacktraceStatus,
@@ -296,10 +295,7 @@ impl TestDriver {
 
         // Set up Ctrl+C handler to ensure on_finish runs
         let sigint_received = Arc::new(AtomicBool::new(false));
-        #[cfg(not(target_family = "wasm"))]
         let sigint_received_clone = sigint_received.clone();
-
-        #[cfg(not(target_family = "wasm"))]
         ctrlc::set_handler(move || {
             log::info!("Received Ctrl+C in test driver");
             sigint_received_clone.store(true, Ordering::Relaxed);

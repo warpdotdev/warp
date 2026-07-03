@@ -7,7 +7,6 @@ use winit::event::ElementState;
 #[cfg(windows)]
 use winit::keyboard::NativeKey;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-#[cfg(not(target_family = "wasm"))]
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
 use crate::platform::KEYS_TO_IGNORE;
@@ -133,21 +132,15 @@ pub fn convert_keyboard_input_event(
         is_composing: false,
     })
 }
-
-#[cfg(not(target_family = "wasm"))]
 /// Returns the base key without any modifiers applied, or `None` if it cannot be determined.
 fn get_key_without_modifiers(input: &winit::event::KeyEvent) -> Option<String> {
     let unmodified = input.key_without_modifiers();
     let unmodified_input = get_input_key(&unmodified, false);
     convert_key(unmodified_input).map(|k| k.to_string())
 }
-
-#[cfg(target_family = "wasm")]
 fn get_key_without_modifiers(_input: &winit::event::KeyEvent) -> Option<String> {
     None
 }
-
-#[cfg(not(target_family = "wasm"))]
 /// Returns the text of the [`winit::event::KeyEvent`] with the characters modified by `ctrl`.
 /// For example,  `Ctrl+a` produces `Some("\x01")`.
 fn text_with_modifiers(
@@ -156,8 +149,6 @@ fn text_with_modifiers(
 ) -> Option<&str> {
     key_event.text_with_all_modifiers()
 }
-
-#[cfg(target_family = "wasm")]
 fn text_with_modifiers(
     key_event: &winit::event::KeyEvent,
     modifier_state: ModifiersState,
@@ -165,7 +156,7 @@ fn text_with_modifiers(
     // Provide the bare-minimum amount of support for mapping modifiers to their corresponding
     // ASCII character. This is not actually fully functional because keys like `@` require the
     // addition of the `SHIFT` key, which doesn't yet work here.
-    // TODO(wasm): Extend this to support all of the function/shift/arrow keys.
+    // Extend this to support all of the function/shift/arrow keys.
     match (modifier_state, &key_event.logical_key) {
         (ModifiersState::CONTROL, Key::Character(character))
             if CONTROL_CHARACTER_MAP.contains_key(character.as_str()) =>

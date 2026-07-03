@@ -13,28 +13,6 @@ use std::{
     rc::Rc,
 };
 
-use anyhow::{Context as _, Result};
-use itertools::Itertools;
-use lazy_static::lazy_static;
-use parking_lot::Mutex;
-use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use wgpu::rwh::HasDisplayHandle;
-use wgpu::{AdapterInfo, CompositeAlphaMode};
-use winit::dpi::PhysicalPosition;
-use winit::error::ExternalError;
-use winit::event_loop::{ActiveEventLoop, EventLoopProxy, OwnedDisplayHandle};
-#[cfg(not(target_family = "wasm"))]
-use winit::monitor::MonitorHandle;
-#[cfg(windows)]
-use winit::platform::windows::{BackdropType, WindowExtWindows};
-use winit::window::{CursorIcon, ResizeDirection, UserAttentionType, WindowLevel};
-use winit::{
-    dpi::{LogicalPosition, LogicalSize, PhysicalSize, Position, Size},
-    window::Fullscreen,
-};
-
-#[cfg(not(target_family = "wasm"))]
 use crate::platform::WindowBounds;
 use crate::platform::{
     self, Cursor, FullscreenState, GraphicsBackend, TerminationMode, WindowFocusBehavior,
@@ -50,6 +28,25 @@ use crate::rendering::{
 use crate::windowing::WindowCallbacks;
 use crate::{fonts, geometry, Scene};
 use crate::{DisplayId, DisplayIdx, OptionalPlatformWindow, WindowId};
+use anyhow::{Context as _, Result};
+use itertools::Itertools;
+use lazy_static::lazy_static;
+use parking_lot::Mutex;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use wgpu::rwh::HasDisplayHandle;
+use wgpu::{AdapterInfo, CompositeAlphaMode};
+use winit::dpi::PhysicalPosition;
+use winit::error::ExternalError;
+use winit::event_loop::{ActiveEventLoop, EventLoopProxy, OwnedDisplayHandle};
+use winit::monitor::MonitorHandle;
+#[cfg(windows)]
+use winit::platform::windows::{BackdropType, WindowExtWindows};
+use winit::window::{CursorIcon, ResizeDirection, UserAttentionType, WindowLevel};
+use winit::{
+    dpi::{LogicalPosition, LogicalSize, PhysicalSize, Position, Size},
+    window::Fullscreen,
+};
 
 use super::app::CustomEvent;
 
@@ -72,11 +69,9 @@ cfg_if::cfg_if! {
         /// The window cannot be resized smaller than this.
         /// TODO(CORE-1891) Instead of being hard-coded, this should be configurable by the user via
         /// [`crate::platform::WindowOptions`].
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
         pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
             LogicalSize::new(124., 34.);
     } else {
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
         pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
             LogicalSize::new(480., 192.);
     }
@@ -1114,7 +1109,6 @@ impl Window {
     ///
     /// See [`Self::set_visible`] for an explanation of what "visible" means in winit. For
     /// platforms where setting visibility is unsupported, e.g. Wayland, always return `true`.
-    #[cfg(not(target_family = "wasm"))]
     fn is_visible(&self) -> bool {
         self.inner
             .borrow()
@@ -1125,8 +1119,7 @@ impl Window {
 
     /// Intended for reading whether or not the window is visible. Always returns true.
     ///
-    /// winit does not support is_visible on wasm. See: https://docs.rs/winit/latest/winit/window/struct.Window.html#method.is_visible
-    #[cfg(target_family = "wasm")]
+    /// winit may not support is_visible on every backend. See: https://docs.rs/winit/latest/winit/window/struct.Window.html#method.is_visible
     fn is_visible(&self) -> bool {
         true
     }
@@ -1178,43 +1171,6 @@ impl Window {
         }
     }
 }
-
-#[cfg(target_family = "wasm")]
-fn create_window(
-    window_target: &ActiveEventLoop,
-    _window_options: &WindowOptions,
-    _window_class: &Option<String>,
-    _tiling_window_manager: bool,
-) -> Result<winit::window::Window> {
-    use winit::platform::web::WindowAttributesExtWebSys;
-    use winit::platform::web::WindowExtWebSys;
-
-    use crate::platform::current::add_prevent_default_listener;
-
-    let window_attributes = winit::window::WindowAttributes::default().with_prevent_default(false);
-
-    let window = window_target.create_window(window_attributes)?;
-    let canvas = window
-        .canvas()
-        .ok_or(anyhow::anyhow!("Failed to find canvas element"))?;
-
-    if let Some(element) = gloo::utils::document().get_element_by_id("wasm-container") {
-        log::info!("Attaching canvas element \"{canvas:?}\" to the wasm-container element");
-        element.replace_children_with_node_1(&canvas);
-    } else {
-        log::info!("Attaching canvas element \"{canvas:?}\" to the document body");
-        gloo::utils::body()
-            .append_child(&canvas)
-            .map_err(|_| anyhow::anyhow!("Failed to append canvas element to <body>"))?;
-    }
-
-    add_prevent_default_listener(&canvas);
-    let _ = canvas.focus();
-
-    Ok(window)
-}
-
-#[cfg(not(target_family = "wasm"))]
 fn create_window(
     window_target: &ActiveEventLoop,
     window_options: &WindowOptions,

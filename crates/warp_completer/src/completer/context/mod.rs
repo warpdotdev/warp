@@ -218,8 +218,6 @@ impl CommandOutput {
         String::from_utf8(self.stdout.to_vec()).map_err(anyhow::Error::from)
     }
 }
-
-#[cfg(not(target_family = "wasm"))]
 impl From<command::Output> for CommandOutput {
     fn from(other: command::Output) -> CommandOutput {
         let status = if other.status.success() {

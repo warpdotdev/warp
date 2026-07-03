@@ -1,7 +1,6 @@
 //! Thin wrapper around ripgrep for searching files.
 
 pub mod search;
-#[cfg(not(target_family = "wasm"))]
 mod types;
 
 /// On Unix, monitor the parent PID and exit this process if it changes.

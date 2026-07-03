@@ -1,4 +1,4 @@
-//! Traits for converting Rust values into `rquickjs`-compatible values on native (non-wasm)
+//! Traits for converting Rust values into `rquickjs`-compatible values on native (native)
 //! platforms.
 pub mod util;
 

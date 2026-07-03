@@ -27,7 +27,6 @@ use lsp_types::{
     TextDocumentPositionParams, UnregistrationParams, VersionedTextDocumentIdentifier, WatchKind,
 };
 use serde_json::Value;
-#[cfg(not(target_arch = "wasm32"))]
 use simple_logger::SimpleLogger;
 use warp_util::on_cancel::OnCancelFutureExt;
 
@@ -42,11 +41,9 @@ pub struct DocumentSyncState {
 pub struct LspService {
     jsonrpc_service: JsonRpcService,
     server_capabilities: Option<lsp_types::ServerCapabilities>,
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     open_documents: Arc<Mutex<HashMap<PathBuf, DocumentSyncState>>>,
     watched_files_registry: Arc<Mutex<WatchedFilesRegistry>>,
     notify_tx: async_channel::Sender<ServerNotificationEvent>,
-    #[cfg(not(target_arch = "wasm32"))]
     logger: Option<SimpleLogger>,
 }
 
@@ -133,12 +130,11 @@ impl LspServerRequestHandler {
 
 impl LspService {
     /// Creates a new LspService with the given JsonRpcService.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn new(
         jsonrpc_service: JsonRpcService,
         notify_tx: async_channel::Sender<ServerNotificationEvent>,
         workspace_root: PathBuf,
-        #[cfg(not(target_arch = "wasm32"))] logger: Option<SimpleLogger>,
+        logger: Option<SimpleLogger>,
     ) -> Result<Self> {
         let watched_files_registry =
             Arc::new(Mutex::new(WatchedFilesRegistry::new(workspace_root)));
@@ -158,14 +154,11 @@ impl LspService {
             open_documents: Arc::new(Mutex::new(HashMap::new())),
             watched_files_registry,
             notify_tx,
-            #[cfg(not(target_arch = "wasm32"))]
             logger,
         };
 
         Ok(service)
     }
-
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) async fn initialize(&mut self, params: InitializeParams) -> Result<()> {
         let response = self.send_request::<request::Initialize>(params).await?;
         self.server_capabilities = Some(response.capabilities);
@@ -189,16 +182,8 @@ impl LspService {
     }
 
     pub fn log_to_server_log(&self, level: LspServerLogLevel, message: impl Into<String>) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Some(logger) = &self.logger {
-                logger.log(format!("[{level}] {}", message.into()));
-            }
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = (level, message.into());
+        if let Some(logger) = &self.logger {
+            logger.log(format!("[{level}] {}", message.into()));
         }
     }
 

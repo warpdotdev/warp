@@ -3,17 +3,11 @@
 //! This defines an API for interacting with an underlying secure storage
 //! system, implementations of the API for various platforms, testing
 //! utilities, and extension traits to improve ergonomics of using the APIs.
-
-#[cfg(not(target_family = "wasm"))]
 #[cfg_attr(target_os = "macos", path = "mac.rs")]
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
 mod imp;
 mod noop;
-
-// Treat this as a noop on web, as there is no backing storage which is "secure".
-#[cfg(target_family = "wasm")]
-use noop as imp;
 
 #[cfg(target_os = "windows")]
 mod windows_only {

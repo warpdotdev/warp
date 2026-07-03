@@ -258,23 +258,12 @@ impl ApiKeyManager {
         self.keys_loaded_from_secure_storage = true;
         Self::write_secure_storage_presence_marker(self.keys.has_any_configured_value());
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn secure_storage_presence_marker_path() -> std::path::PathBuf {
         warp_core::paths::state_dir().join("ai-api-keys-present")
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn secure_storage_presence_marker_exists() -> bool {
         Self::secure_storage_presence_marker_path().is_file()
     }
-
-    #[cfg(target_family = "wasm")]
-    fn secure_storage_presence_marker_exists() -> bool {
-        true
-    }
-
-    #[cfg(not(target_family = "wasm"))]
     fn write_secure_storage_presence_marker(has_configured_value: bool) {
         let path = Self::secure_storage_presence_marker_path();
         if has_configured_value {
@@ -293,9 +282,6 @@ impl ApiKeyManager {
             }
         }
     }
-
-    #[cfg(target_family = "wasm")]
-    fn write_secure_storage_presence_marker(_has_configured_value: bool) {}
 }
 
 impl Entity for ApiKeyManager {

@@ -22,7 +22,7 @@ cfg_if::cfg_if! {
 #[cfg(feature = "local_fs")]
 use native::*;
 #[cfg(not(feature = "local_fs"))]
-use wasm::*;
+use no_local_fs::*;
 
 #[cfg(feature = "local_fs")]
 mod native {
@@ -48,7 +48,7 @@ mod native {
 }
 
 #[cfg(not(feature = "local_fs"))]
-mod wasm {
+mod no_local_fs {
     lazy_static::lazy_static! {
         pub(super) static ref THREADPOOL: Option<rayon::ThreadPool> = None;
     }

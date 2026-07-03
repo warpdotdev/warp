@@ -36,8 +36,7 @@ const END_TOKEN_COMPLETE_KEYS: &[char] = &[' ', '?', '!', '.', '"', ','];
 /// A classifier that uses simple heuristics to determine the type of input.
 pub struct HeuristicClassifier;
 
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 impl InputClassifier for HeuristicClassifier {
     async fn detect_input_type(&self, input: ParsedTokensSnapshot, context: &Context) -> InputType {
         let word_tokens = parse_query_into_tokens(input.buffer_text.as_str());

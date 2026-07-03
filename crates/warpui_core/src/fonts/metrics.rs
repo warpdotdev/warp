@@ -20,7 +20,6 @@ pub struct Metrics {
     pub line_gap: i16,
 }
 
-#[cfg(native)]
 impl From<font_kit::metrics::Metrics> for Metrics {
     fn from(value: font_kit::metrics::Metrics) -> Self {
         Self {

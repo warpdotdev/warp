@@ -25,7 +25,6 @@ use std::{
     ops::Range,
 };
 
-use cfg_if::cfg_if;
 use get_size::GetSize;
 use string_offset::ByteOffset;
 use thiserror::Error;
@@ -72,15 +71,7 @@ pub struct Entry {
 // If `Entry` grows in size, it will significantly impact perforamnce due
 // to fitting fewer instances in a single 64-byte cache line.
 //
-// This is smaller on wasm due to it using a 32-bit usize (other platforms
-// have a 64-bit usize).
-cfg_if! {
-    if #[cfg(target_family = "wasm")] {
-        static_assertions::assert_eq_size!(Entry, [u8; 16]);
-    } else {
-        static_assertions::assert_eq_size!(Entry, [u8; 24]);
-    }
-}
+static_assertions::assert_eq_size!(Entry, [u8; 24]);
 
 impl Index {
     /// Creates a new empty index for a grid with the given number of columns.

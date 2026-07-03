@@ -597,11 +597,6 @@ impl<V: EditorView> RichTextElement<V> {
             return false;
         }
 
-        // On mobile WASM, request the soft keyboard when tapping on an editable text input.
-        if self.display_options.editable && self.is_in_bounds(position, ctx) {
-            ctx.request_soft_keyboard();
-        }
-
         if let HitTestResult::Hit(location) = self.position_to_location(
             position,
             ClampBehavior::NoneIfOutBound,

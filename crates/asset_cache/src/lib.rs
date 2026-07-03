@@ -79,16 +79,7 @@ impl AssetCacheExt for AssetCache {
 
 /// Fetches a file from the given `url` to memory.
 async fn fetch_file_to_memory(url: Url) -> Result<Bytes, anyhow::Error> {
-    cfg_if::cfg_if! {
-        if #[cfg(target_family = "wasm")] {
-            let response = reqwest::get(url).await?;
-        } else {
-            // On non-web platforms, reqwest expects that it is operating within
-            // a Tokio-compatible runtime, so use async-compat to wrap the call
-            // so reqwest's expectations are met.
-            let response = async_compat::Compat::new(async move { reqwest::get(url).await }).await?;
-        }
-    }
+    let response = async_compat::Compat::new(async move { reqwest::get(url).await }).await?;
     let content = response.bytes().await?;
     Ok(content)
 }

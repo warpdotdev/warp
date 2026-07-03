@@ -139,7 +139,7 @@ fn keystroke_to_csi_u(
                 let base = base.to_ascii_lowercase();
                 base as u32
             } else {
-                // No platform info available (e.g., tests, WASM). Lowercase ASCII letters
+                // No platform info available. Lowercase ASCII letters
                 // since that mapping is universal, but use the key as-is for symbols.
                 let c = key.chars().next()?;
                 if c.is_ascii_uppercase() {

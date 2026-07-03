@@ -19,8 +19,7 @@ pub use onnx::{Model as OnnxModel, OnnxClassifier};
 
 /// An input classifier, which can take some parsed user input and determine
 /// what type of input it is.
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 pub trait InputClassifier: 'static + Send + Sync {
     async fn detect_input_type(
         &self,

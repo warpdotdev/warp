@@ -10,7 +10,6 @@ impl ErrorExt for reqwest::Error {
 
         // There's no way to check for connection errors via web APIs, so
         // `is_connect` can only be called on native platforms.
-        #[cfg(not(target_family = "wasm"))]
         if self.is_connect() {
             return false;
         }

@@ -10,8 +10,7 @@ use super::{
 };
 
 /// Client interface for a remote full source code embedding store.
-#[cfg_attr(not(target_family = "wasm"), async_trait::async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait::async_trait(?Send))]
+#[async_trait::async_trait]
 pub trait StoreClient: 'static + Send + Sync {
     /// Persist new intermediate Merkle tree nodes.
     async fn update_intermediate_nodes(
@@ -65,8 +64,7 @@ pub trait StoreClient: 'static + Send + Sync {
 #[derive(Debug, Default, Clone)]
 pub struct MockStoreClient;
 
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 impl StoreClient for MockStoreClient {
     async fn update_intermediate_nodes(
         &self,

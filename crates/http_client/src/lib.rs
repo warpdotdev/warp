@@ -1,9 +1,3 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::time::Duration;
-use std::{fmt, future};
-
-#[cfg(not(target_family = "wasm"))]
 use async_compat::{Compat, CompatExt};
 use async_stream::stream;
 use bytes::Bytes;
@@ -15,6 +9,10 @@ use reqwest::IntoUrl;
 use reqwest_eventsource::RequestBuilderExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+use std::{fmt, future};
 use warp_core::{
     channel::{Channel, ChannelState},
     execution_mode,
@@ -39,8 +37,7 @@ pub mod headers {
     /// Custom Warp header indicating the linux kernel version. This is only sent from Linux.
     pub(crate) const WARP_OS_LINUX_KERNEL_VERSION: &str = "X-Warp-OS-Linux-Kernel-Version";
 
-    /// Custom Warp header indicating the client role. We don't use the User-Agent header
-    /// because it can't be set from WASM.
+    /// Custom Warp header indicating the client role.
     pub(crate) const WARP_CLIENT_ID: &str = "X-Warp-Client-ID";
 }
 
@@ -73,23 +70,10 @@ pub type RequestHookFn = Box<dyn Fn(&reqwest::Request, &Option<String>) + 'stati
 /// reference to the inbound response object.
 pub type ResponseHookFn = Box<dyn Fn(&reqwest::Response) + 'static + Send + Sync>;
 
-cfg_if::cfg_if! {
-    if #[cfg(target_family = "wasm")] {
-        // The WASM version of this type has no bound on `Send`, which is not implemented on
-        // `wasm_bindgen::JsValue`, which is ultimately used in reqwest_eventsource::Error.
-        // Furthermore, `Send` is an unnecessary bound when targeting wasm because the browser is
-        // single-threaded (and we don't leverage WebWorkers for async execution in WoW).
-        pub type EventSourceStream = futures::stream::LocalBoxStream<
-            'static,
-            Result<reqwest_eventsource::Event, reqwest_eventsource::Error>,
-        >;
-    } else {
-        pub type EventSourceStream = futures::stream::BoxStream<
-            'static,
-            Result<reqwest_eventsource::Event, reqwest_eventsource::Error>,
-        >;
-    }
-}
+pub type EventSourceStream = futures::stream::BoxStream<
+    'static,
+    Result<reqwest_eventsource::Event, reqwest_eventsource::Error>,
+>;
 
 /// A custom request builder that is a wrapper around a `request::RequestBuilder`. Ensures any async
 /// call to the underyling `reqwest::RequestBuilder` are properly adapted to run outside of a Tokio
@@ -122,20 +106,15 @@ impl Default for Client {
 
 impl Client {
     pub fn new() -> Self {
-        #[cfg_attr(target_family = "wasm", expect(unused_mut))]
         let mut builder = reqwest::Client::builder();
 
-        // Set some HTTP/2-related settings that aren't available on wasm.
-        #[cfg(not(target_family = "wasm"))]
-        {
-            builder = builder
-                .http2_keep_alive_interval(Duration::from_secs(60))
-                // If a pong is not received within 15s, consider the connection dead.
-                .http2_keep_alive_timeout(Duration::from_secs(15))
-                // Send these even when there aren't active streams, to ensure that we detect
-                // dead connections before we attempt to use them.
-                .http2_keep_alive_while_idle(true);
-        }
+        builder = builder
+            .http2_keep_alive_interval(Duration::from_secs(60))
+            // If a pong is not received within 15s, consider the connection dead.
+            .http2_keep_alive_timeout(Duration::from_secs(15))
+            // Send these even when there aren't active streams, to ensure that we detect
+            // dead connections before we attempt to use them.
+            .http2_keep_alive_while_idle(true);
 
         Self::from_client_builder(builder).expect("should not fail to create client")
     }
@@ -224,28 +203,6 @@ impl Client {
         )
     }
 
-    /// Helper method to determine if the request should include warp-specific headers. The only case
-    /// where we should include custom headers is if the request is same-origin and is targetted to our server.
-    /// For example, localhost --> localhost.
-    #[cfg(target_family = "wasm")]
-    fn include_warp_http_headers<U: IntoUrl + Clone>(url: U) -> bool {
-        url.into_url().is_ok_and(|url| {
-            url.host_str().is_some_and(|dest_host| {
-                let window_hostname = gloo::utils::window()
-                    .location()
-                    .hostname()
-                    .expect("Can't get window hostname");
-
-                // If the request is going to our server, the destination host and window
-                // hostname should be the same.
-                // Note that reqwest's host_str() method is described here: https://docs.rs/reqwest/latest/reqwest/struct.Url.html#method.domain and
-                // gloo's hostname() method refers to this mozilla definition: https://developer.mozilla.org/en-US/docs/Web/API/Location/hostname.
-                window_hostname == dest_host
-            })
-        })
-    }
-
-    #[cfg(not(target_family = "wasm"))]
     fn include_warp_http_headers<U: IntoUrl + Clone>(_url: U) -> bool {
         true
     }
@@ -338,17 +295,7 @@ impl Client {
 
         let _guard = prevent_sleep_reason.map(prevent_sleep::prevent_sleep);
 
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                let result = self.wrapped.execute(request).await?;
-            } else {
-                // Explicitly await the future before converting from tokio -> futures. This is because
-                // certain calls to tokio (such as tokio::time::sleep) will panic upon creation if they
-                // are not in a tokio runtime. Wrapping the call in an async block first makes sure that it
-                // is lazily evaluated, ensuring that it is created within a tokio runtime.
-                let result = Compat::new(async { self.wrapped.execute(request).await }).await?;
-            }
-        }
+        let result = Compat::new(async { self.wrapped.execute(request).await }).await?;
 
         if let Some(after_response_received_fn) = &self.after_response_received {
             after_response_received_fn(&result);
@@ -413,52 +360,25 @@ impl<'a> RequestBuilder<'a> {
     /// Sends the request to the endpoint, which is assumed to be a streaming server-sent-events
     /// endpoint, and returns a corresponding `EventSource`.
     pub fn eventsource(self) -> EventSourceStream {
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                let mut stream = self
-                    .wrapped
-                    .eventsource()
-                    .expect("Request type for SSE endpoint must be cloneable.");
+        let mut stream = self
+            .wrapped
+            .eventsource()
+            .expect("Request type for SSE endpoint must be cloneable.");
 
-                let stream = stream! {
-                    while let Some(event) = stream.next().await {
-                        match event {
-                            Ok(event) => {
-                                yield Ok(event);
-                            }
-                            Err(err) => {
-                                yield Err(err);
-
-                                // Close the stream if an error occurs.
-                                stream.close();
-                            }
-                        }
+        let stream = stream! {
+            // Wrap the stream with async-compat since reqwest requires Tokio.
+            while let Some(event) = stream.next().compat().await {
+                match event {
+                    Ok(event) => {
+                        yield Ok(event);
                     }
-                };
-            } else {
-                let mut stream = self
-                    .wrapped
-                    .eventsource()
-                    .expect("Request type for SSE endpoint must be cloneable.");
-
-                let stream = stream! {
-                    // Wrap the stream with async-compat since reqwest requires Tokio.
-                    while let Some(event) = stream.next().compat().await {
-                        match event {
-                            Ok(event) => {
-                                yield Ok(event);
-                            }
-                            Err(err) => {
-                                yield Err(err);
-
-                                // Close the stream if an error occurs.
-                                stream.close();
-                            }
-                        }
+                    Err(err) => {
+                        yield Err(err);
+                        stream.close();
                     }
-                };
+                }
             }
-        }
+        };
         let stream = stream.take_while(|event| {
             if let Err(reqwest_eventsource::Error::StreamEnded) = event {
                 return future::ready(false);
@@ -472,13 +392,7 @@ impl<'a> RequestBuilder<'a> {
             self.prevent_sleep_reason.map(prevent_sleep::prevent_sleep),
         );
 
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                stream.boxed_local()
-            } else {
-                stream.boxed()
-            }
-        }
+        stream.boxed()
     }
 
     pub fn basic_auth<U, P>(self, username: U, password: Option<P>) -> RequestBuilder<'a>
@@ -502,20 +416,10 @@ impl<'a> RequestBuilder<'a> {
         }
     }
 
-    // The `timeout` argument is unused on wasm.
-    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
     pub fn timeout(self, timeout: Duration) -> RequestBuilder<'a> {
-        cfg_if::cfg_if! {
-            // reqwest provides no ability to configure a request timeout
-            // on wasm, so make this a no-op (it's the best we can do).
-            if #[cfg(target_family = "wasm")] {
-                self
-            } else {
-                Self {
-                    wrapped: self.wrapped.timeout(timeout),
-                    ..self
-                }
-            }
+        Self {
+            wrapped: self.wrapped.timeout(timeout),
+            ..self
         }
     }
 
@@ -589,13 +493,7 @@ impl std::error::Error for ResponseError {
 
 impl Response {
     pub async fn text(self) -> reqwest::Result<String> {
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                self.0.text().await
-            } else {
-                Compat::new(async { self.0.text().compat().await }).await
-            }
-        }
+        Compat::new(async { self.0.text().compat().await }).await
     }
 
     pub fn status(&self) -> StatusCode {
@@ -603,13 +501,7 @@ impl Response {
     }
 
     pub async fn json<T: DeserializeOwned>(self) -> reqwest::Result<T> {
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                self.0.json().await
-            } else {
-                Compat::new(async { self.0.json().compat().await }).await
-            }
-        }
+        Compat::new(async { self.0.json().compat().await }).await
     }
 
     /// Checks the response status and returns an error if it's not successful.
@@ -655,9 +547,6 @@ impl Response {
 impl<'c> oauth2::AsyncHttpClient<'c> for Client {
     type Error = oauth2::HttpClientError<reqwest::Error>;
 
-    #[cfg(target_arch = "wasm32")]
-    type Future = Pin<Box<dyn Future<Output = Result<oauth2::HttpResponse, Self::Error>> + 'c>>;
-    #[cfg(not(target_arch = "wasm32"))]
     type Future =
         Pin<Box<dyn Future<Output = Result<oauth2::HttpResponse, Self::Error>> + Send + Sync + 'c>>;
 
@@ -676,8 +565,6 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Client {
                 .map_err(Box::new)?;
 
             let mut builder = ::http::Response::builder().status(response.status());
-
-            #[cfg(not(target_arch = "wasm32"))]
             {
                 builder = builder.version(response.0.version());
             }

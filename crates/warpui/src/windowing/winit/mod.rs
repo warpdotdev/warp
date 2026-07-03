@@ -6,8 +6,6 @@ pub(crate) mod fonts;
 pub mod linux;
 
 mod notifications;
-#[cfg(target_family = "wasm")]
-pub mod wasm;
 
 mod window;
 

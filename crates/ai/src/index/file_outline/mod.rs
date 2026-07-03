@@ -1,11 +1,5 @@
-#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
-
-cfg_if::cfg_if! {
-    if #[cfg(not(target_arch = "wasm32"))] {
-        mod native;
-        pub use native::build_outline;
-    }
-}
+mod native;
+pub use native::build_outline;
 
 use crate::index::{Entry, FileId};
 use ignore::gitignore::Gitignore;

@@ -1,6 +1,4 @@
 #![allow(unused)]
-
-#[cfg(not(target_family = "wasm"))]
 mod global_hotkey;
 
 use std::mem::ManuallyDrop;
@@ -44,16 +42,10 @@ use crate::{
     platform::TerminationMode,
 };
 
+use self::global_hotkey::GlobalHotKeyHandler;
 use super::{notifications, CustomEvent};
 
-#[cfg(not(target_family = "wasm"))]
-use self::global_hotkey::GlobalHotKeyHandler;
-
-// No-op on WASM since the browser cannot provide this functionality.
-#[cfg(target_family = "wasm")]
-struct GlobalHotKeyHandler {}
-
-#[cfg(target_family = "wasm")]
+// struct GlobalHotKeyHandler {}
 impl GlobalHotKeyHandler {
     fn register(&self, _: keymap::Keystroke) {}
     fn unregister(&self, _: &keymap::Keystroke) {}
@@ -65,12 +57,6 @@ static MAIN_THREAD_ID: OnceLock<thread::ThreadId> = OnceLock::new();
 
 /// Open a URL using the platform's default handler.
 pub fn open_url_in_system(url: &str) {
-    #[cfg(target_family = "wasm")]
-    if let Some(window) = web_sys::window() {
-        // Try to open the URL in a new tab.
-        let _ = window.open_with_url_and_target(url, "_blank");
-    }
-
     #[cfg(target_os = "linux")]
     {
         // Opening in WSL is complicated for a few reasons
@@ -185,19 +171,13 @@ pub struct AppDelegate {
 
 impl AppDelegate {
     pub fn new(event_loop_proxy: EventLoopProxy<super::CustomEvent>) -> Result<Self> {
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                let global_hotkey_handler = None;
-            } else {
-                let global_hotkey_handler = match GlobalHotKeyHandler::new(event_loop_proxy.clone()) {
-                    Ok(handler) => Some(handler),
-                    Err(err) => {
-                        log::error!("Error creating global hotkey handler: {err:?}");
-                        None
-                    }
-                };
+        let global_hotkey_handler = match GlobalHotKeyHandler::new(event_loop_proxy.clone()) {
+            Ok(handler) => Some(handler),
+            Err(err) => {
+                log::error!("Error creating global hotkey handler: {err:?}");
+                None
             }
-        }
+        };
         Ok(Self {
             event_loop_proxy,
             clipboard: Box::<InMemoryClipboard>::default(),
@@ -212,9 +192,7 @@ impl AppDelegate {
     /// matching against the display server raw handle.
     pub fn use_platform_clipboard(&mut self) {
         cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                self.clipboard = Box::new(super::wasm::WebClipboard::new());
-            } else if #[cfg(target_os = "linux")] {
+            if #[cfg(target_os = "linux")] {
                 match super::linux::LinuxClipboard::new() {
                     Ok(clipboard) => self.clipboard = Box::new(clipboard),
                     Err(err) => {
@@ -248,8 +226,6 @@ impl platform::Delegate for AppDelegate {
     fn clipboard(&mut self) -> &mut dyn crate::Clipboard {
         self.clipboard.as_mut()
     }
-
-    #[cfg(not(target_family = "wasm"))]
     fn system_theme(&self) -> platform::SystemTheme {
         #[cfg(target_os = "linux")]
         match super::linux::get_system_theme() {
@@ -273,22 +249,6 @@ impl platform::Delegate for AppDelegate {
 
         platform::SystemTheme::Light
     }
-
-    #[cfg(target_family = "wasm")]
-    fn system_theme(&self) -> platform::SystemTheme {
-        // To determine dark mode versus light mode, we check the CSS media query string "prefers-color-scheme". According
-        // to StackOverflow, this is the current consensus solution.
-        // See https://stackoverflow.com/questions/56393880/how-do-i-detect-dark-mode-using-javascript.
-        if let Ok(Some(media_query_list)) =
-            gloo::utils::window().match_media("(prefers-color-scheme: dark)")
-        {
-            if media_query_list.matches() {
-                return platform::SystemTheme::Dark;
-            }
-        }
-        platform::SystemTheme::Light
-    }
-
     fn open_url(&self, url: &str) {
         open_url_in_system(url);
     }
@@ -299,14 +259,6 @@ impl platform::Delegate for AppDelegate {
                 let _ = command::blocking::Command::new("xdg-open")
                     .arg(path)
                     .spawn();
-            } else if #[cfg(target_family = "wasm")] {
-                if let Some(window) = web_sys::window() {
-                    if let Some(path) = path.to_str() {
-                        // Try to open the path via a file:// URL.
-                        let url = format!("file://{path}");
-                        let _ = window.open_with_url(&url);
-                    }
-                }
             } else if #[cfg(windows)] {
                 if let Err(e) = open::that_detached(path) {
                     log::warn!("Unable to open path {e:?}");
@@ -320,94 +272,87 @@ impl platform::Delegate for AppDelegate {
         callback: FilePickerCallback,
         file_picker_config: FilePickerConfiguration,
     ) {
-        // TODO(wasm): Investigate implementing this by creating a <input> element
-        // and calling `click` on it.
+        // This callback is called either on the "File Picker" background thread or, if starting
+        // that thread fails, on this thread. Wrap this type in order to make ownership work.
+        let callback = Arc::new(takecell::TakeOwnCell::new(callback));
+        let callback_clone = callback.clone();
 
-        #[cfg(not(target_family = "wasm"))]
-        {
-            // This callback is called either on the “File Picker” background thread or, if starting
-            // that thread fails, on this thread. Wrap this type in order to make ownership work.
-            let callback = Arc::new(takecell::TakeOwnCell::new(callback));
-            let callback_clone = callback.clone();
+        // Since native_dialog::FileDialog blocks while waiting for the user to select a file,
+        // put it in its own thread to avoid blocking the rest of the app.
+        let event_loop_proxy = self.event_loop_proxy.clone();
+        let thread_result = std::thread::Builder::new()
+            .name("File Picker".to_string())
+            .spawn(move || {
+                let file_type_names = file_picker_config
+                    .file_types()
+                    .iter()
+                    .map(|file_type| file_type.display_name())
+                    .join(", ");
+                let allowed_extensions = file_picker_config
+                    .file_types()
+                    .iter()
+                    .map(|file_type| file_type.extensions())
+                    .collect_vec()
+                    .concat();
 
-            // Since native_dialog::FileDialog blocks while waiting for the user to select a file,
-            // put it in its own thread to avoid blocking the rest of the app.
-            let event_loop_proxy = self.event_loop_proxy.clone();
-            let thread_result = std::thread::Builder::new()
-                .name("File Picker".to_string())
-                .spawn(move || {
-                    let file_type_names = file_picker_config
-                        .file_types()
-                        .iter()
-                        .map(|file_type| file_type.display_name())
-                        .join(", ");
-                    let allowed_extensions = file_picker_config
-                        .file_types()
-                        .iter()
-                        .map(|file_type| file_type.extensions())
-                        .collect_vec()
-                        .concat();
-
-                    // native-dialog doesn't support file-or-directory or multi-directory pickers,
-                    // so if folders are allowed, it can only show a directory picker.
-                    let result = if file_picker_config.allows_folder() {
-                        native_dialog::FileDialog::new()
-                            .set_title("Choose directory...")
-                            .show_open_single_dir()
-                            .map(|opt| opt.into_iter().collect())
+                // native-dialog doesn't support file-or-directory or multi-directory pickers,
+                // so if folders are allowed, it can only show a directory picker.
+                let result = if file_picker_config.allows_folder() {
+                    native_dialog::FileDialog::new()
+                        .set_title("Choose directory...")
+                        .show_open_single_dir()
+                        .map(|opt| opt.into_iter().collect())
+                        .map_err(|e| FilePickerError::DialogFailed(e.to_string()))
+                } else {
+                    let mut file_dialog =
+                        native_dialog::FileDialog::new().set_title("Choose file...");
+                    if !allowed_extensions.is_empty() {
+                        file_dialog = file_dialog
+                            .add_filter(file_type_names.as_str(), allowed_extensions.as_slice());
+                    }
+                    if file_picker_config.allows_multi_select() {
+                        file_dialog
+                            .show_open_multiple_file()
                             .map_err(|e| FilePickerError::DialogFailed(e.to_string()))
                     } else {
-                        let mut file_dialog =
-                            native_dialog::FileDialog::new().set_title("Choose file...");
-                        if !allowed_extensions.is_empty() {
-                            file_dialog = file_dialog.add_filter(
-                                file_type_names.as_str(),
-                                allowed_extensions.as_slice(),
-                            );
-                        }
-                        if file_picker_config.allows_multi_select() {
-                            file_dialog
-                                .show_open_multiple_file()
-                                .map_err(|e| FilePickerError::DialogFailed(e.to_string()))
-                        } else {
-                            file_dialog
-                                .show_open_single_file()
-                                .map(|opt| opt.into_iter().collect())
-                                .map_err(|e| FilePickerError::DialogFailed(e.to_string()))
-                        }
-                    };
+                        file_dialog
+                            .show_open_single_file()
+                            .map(|opt| opt.into_iter().collect())
+                            .map_err(|e| FilePickerError::DialogFailed(e.to_string()))
+                    }
+                };
 
-                    let result =
-                        result.and_then(|file_result| {
-                            file_result
-                                .iter()
-                                .map(|path_buf| {
-                                    path_buf.as_os_str().to_str().map(String::from).ok_or_else(
-                                        || {
-                                            FilePickerError::DialogFailed(format!(
-                                                "Invalid path encoding: {:?}",
-                                                path_buf
-                                            ))
-                                        },
-                                    )
+                let result = result.and_then(|file_result| {
+                    file_result
+                        .iter()
+                        .map(|path_buf| {
+                            path_buf
+                                .as_os_str()
+                                .to_str()
+                                .map(String::from)
+                                .ok_or_else(|| {
+                                    FilePickerError::DialogFailed(format!(
+                                        "Invalid path encoding: {:?}",
+                                        path_buf
+                                    ))
                                 })
-                                .collect::<Result<Vec<_>, _>>()
-                        });
-
-                    event_loop_proxy.send_event(CustomEvent::UpdateUIApp(Box::new(move |app| {
-                        if let Some(callback) = callback_clone.take() {
-                            callback(result, app);
-                        }
-                    })));
+                        })
+                        .collect::<Result<Vec<_>, _>>()
                 });
-            if let Err(e) = thread_result {
-                self.event_loop_proxy
-                    .send_event(CustomEvent::UpdateUIApp(Box::new(move |app| {
-                        if let Some(callback) = callback.take() {
-                            callback(Err(FilePickerError::ThreadSpawnFailed(Arc::new(e))), app);
-                        }
-                    })));
-            }
+
+                event_loop_proxy.send_event(CustomEvent::UpdateUIApp(Box::new(move |app| {
+                    if let Some(callback) = callback_clone.take() {
+                        callback(result, app);
+                    }
+                })));
+            });
+        if let Err(e) = thread_result {
+            self.event_loop_proxy
+                .send_event(CustomEvent::UpdateUIApp(Box::new(move |app| {
+                    if let Some(callback) = callback.take() {
+                        callback(Err(FilePickerError::ThreadSpawnFailed(Arc::new(e))), app);
+                    }
+                })));
         }
     }
 
@@ -416,7 +361,6 @@ impl platform::Delegate for AppDelegate {
         callback: SaveFilePickerCallback,
         config: SaveFilePickerConfiguration,
     ) {
-        #[cfg(not(target_family = "wasm"))]
         {
             let event_loop_proxy = self.event_loop_proxy.clone();
             std::thread::Builder::new()
@@ -493,22 +437,15 @@ impl platform::Delegate for AppDelegate {
             .send_event(CustomEvent::SetCursorShape(cursor));
     }
 
-    fn close_ime_async(&self, _window_id: WindowId) {
-        // TODO(wasm): implement this.
-    }
+    fn close_ime_async(&self, _window_id: WindowId) {}
 
     fn is_ime_open(&self) -> bool {
-        // TODO(wasm): implement this.
         false
     }
 
-    fn open_character_palette(&self) {
-        // TODO(wasm): Implement this.
-    }
+    fn open_character_palette(&self) {}
 
-    fn set_accessibility_contents(&self, content: accessibility::AccessibilityContent) {
-        // TODO(wasm): Implement this.
-    }
+    fn set_accessibility_contents(&self, _content: accessibility::AccessibilityContent) {}
 
     fn register_global_shortcut(&self, shortcut: keymap::Keystroke) {
         if let Some(handler) = &self.global_hotkey_handler {
@@ -528,7 +465,6 @@ impl platform::Delegate for AppDelegate {
     }
 
     fn is_screen_reader_enabled(&self) -> Option<bool> {
-        // TODO(wasm): Implement this.
         None
     }
 

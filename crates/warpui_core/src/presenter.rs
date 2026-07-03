@@ -88,10 +88,6 @@ pub struct DispatchResult {
 
     /// An optional update to the mouse cursor
     pub cursor_update: Option<CursorUpdate>,
-
-    /// Whether the soft keyboard was requested by an element during dispatch.
-    /// Used on mobile WASM to trigger the keyboard in user gesture context.
-    pub soft_keyboard_requested: bool,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -235,9 +231,6 @@ pub struct EventContext<'a> {
     /// For now it's highest z-index wins if multiple elements try to set the
     /// cursor (later we could make this more sophisticated)
     cursor_update: Option<CursorUpdate>,
-    /// Flag indicating the soft keyboard should be shown.
-    /// Used on mobile WASM to trigger the keyboard in user gesture context.
-    soft_keyboard_requested: bool,
 }
 
 impl<'a> EventContext<'a> {
@@ -505,7 +498,6 @@ impl Presenter {
             notify_timers_to_set: Default::default(),
             notify_timers_to_clear: Default::default(),
             cursor_update: Default::default(),
-            soft_keyboard_requested: false,
         }
     }
 
@@ -531,7 +523,6 @@ impl Presenter {
             notify_timers_to_set: event_ctx.notify_timers_to_set,
             notify_timers_to_clear: event_ctx.notify_timers_to_clear,
             cursor_update: event_ctx.cursor_update,
-            soft_keyboard_requested: event_ctx.soft_keyboard_requested,
         }
     }
 
@@ -749,12 +740,6 @@ impl EventContext<'_> {
         if self.cursor_update.is_none() {
             self.cursor_update = Some(CursorUpdate::Reset);
         }
-    }
-
-    /// Request that the soft keyboard be shown on mobile devices.
-    /// This is used on mobile WASM to trigger the keyboard when a text input area is tapped.
-    pub fn request_soft_keyboard(&mut self) {
-        self.soft_keyboard_requested = true;
     }
 }
 

@@ -1,4 +1,3 @@
-#[cfg(native)]
 #[cfg_attr(not(macos), allow(dead_code))]
 pub mod font_kit;
 

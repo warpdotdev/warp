@@ -1,6 +1,5 @@
 use crate::index::Entry;
 use anyhow::anyhow;
-use cfg_if::cfg_if;
 use std::{
     collections::{HashSet, VecDeque},
     path::PathBuf,
@@ -151,21 +150,14 @@ impl MerkleTree {
             )
         };
 
-        cfg_if! {
-            if #[cfg(not(target_family = "wasm"))] {
-                let upsert_result = if tokio::runtime::Handle::try_current().is_ok() {
-                    // `upsert_files` is expensive and can block a background thread for a while,
-                    // so use `block_in_place` to tell tokio to move any tasks enqueued for this
-                    // thread to another thread (so that they might be able to run on a different
-                    // thread).
-                    tokio::task::block_in_place(do_upsert)
-                } else {
-                    do_upsert()
-                };
-            } else {
-                let upsert_result = do_upsert();
-            }
-        }
+        let upsert_result = if tokio::runtime::Handle::try_current().is_ok() {
+            // `upsert_files` is expensive and can block a background thread for a while,
+            // so use `block_in_place` to tell tokio to move any tasks enqueued for this
+            // thread to another thread.
+            tokio::task::block_in_place(do_upsert)
+        } else {
+            do_upsert()
+        };
 
         // Note that we cannot early return directly here on error. We need to make sure leaf_node_to_fragment_metadatas
         // is properly written so the tree remains valid.

@@ -39,7 +39,7 @@ impl CommandRegistry {
     pub fn global_instance() -> Arc<Self> {
         GLOBAL_REGISTRY
             .get_or_init(|| {
-                // TODO(wasm): Determine how to asynchronously load command signatures on wasm.
+                // Command signature loading is synchronous in this fallback path.
                 Arc::new(CommandRegistry::new())
             })
             .clone()

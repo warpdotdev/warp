@@ -4,8 +4,6 @@ pub mod keyboard;
 pub mod menu;
 
 pub mod test;
-#[cfg(target_family = "wasm")]
-pub mod wasm;
 
 pub use app::AppCallbacks;
 use derivative::Derivative;
@@ -50,14 +48,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::{ops::Range, rc::Rc, sync::Arc};
 
-#[cfg(not(target_family = "wasm"))]
 lazy_static! {
     pub static ref KEYS_TO_IGNORE: HashSet<Keystroke> = HashSet::new();
-}
-#[cfg(target_family = "wasm")]
-lazy_static! {
-    pub static ref KEYS_TO_IGNORE: HashSet<Keystroke> =
-        HashSet::from([Keystroke::parse("cmdorctrl-v").unwrap()]);
 }
 
 /// Type of the callback function that provides the result of requesting
@@ -292,18 +284,10 @@ pub enum TerminationMode {
 }
 
 /// A trait for interacting with the main thread.
-#[cfg(not(target_family = "wasm"))]
 pub trait DispatchDelegate: 'static + Send + Sync {
     fn is_main_thread(&self) -> bool;
     fn run_on_main_thread(&self, task: Runnable);
 }
-
-#[cfg(target_family = "wasm")]
-pub trait DispatchDelegate: 'static {
-    fn is_main_thread(&self) -> bool;
-    fn run_on_main_thread(&self, task: Runnable);
-}
-
 /// A marker trait for the types that [`FontDB`] implementations return from
 /// [`FontDB::load_all_system_fonts`].
 pub trait LoadedSystemFonts: 'static + Any + Send + Sync {
@@ -353,19 +337,16 @@ pub trait FontDB: 'static {
     fn load_from_bytes(&mut self, name: &str, bytes: Vec<Vec<u8>>) -> Result<FamilyId>;
 
     /// Loads a font from the system by family name.
-    #[cfg(not(target_family = "wasm"))]
     fn load_from_system(&mut self, font_family: &str) -> Result<FamilyId>;
 
     /// Returns a background task that produces the set of data the font DB
     /// needs to make all system fonts available to the application.
-    #[cfg(not(target_family = "wasm"))]
     fn load_all_system_fonts(
         &self,
     ) -> futures::future::BoxFuture<'static, Box<dyn LoadedSystemFonts>>;
 
     /// Processes the data produced by [`FontDB::load_all_system_fonts`],
     /// returning the list of system fonts that can be used by the application.
-    #[cfg(not(target_family = "wasm"))]
     fn process_loaded_system_fonts(
         &mut self,
         loaded_system_fonts: Box<dyn LoadedSystemFonts>,
@@ -667,9 +648,7 @@ pub enum OperatingSystem {
 impl OperatingSystem {
     pub fn get() -> Self {
         cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                wasm::current_platform()
-            } else if #[cfg(target_os = "linux")] {
+            if #[cfg(target_os = "linux")] {
                 OperatingSystem::Linux
             } else if #[cfg(target_os = "macos")] {
                 OperatingSystem::Mac

@@ -197,21 +197,17 @@ impl SupportedPlatforms {
     pub fn matches_current_platform(&self) -> bool {
         match self {
             SupportedPlatforms::ALL => true,
-            SupportedPlatforms::DESKTOP => {
-                cfg!(not(target_family = "wasm"))
-            }
+            SupportedPlatforms::DESKTOP => true,
             SupportedPlatforms::MAC => {
-                cfg!(all(not(target_family = "wasm"), target_os = "macos"))
+                cfg!(target_os = "macos")
             }
             SupportedPlatforms::LINUX => {
-                cfg!(all(not(target_family = "wasm"), target_os = "linux"))
+                cfg!(target_os = "linux")
             }
             SupportedPlatforms::WINDOWS => {
-                cfg!(all(not(target_family = "wasm"), target_os = "windows"))
+                cfg!(target_os = "windows")
             }
-            SupportedPlatforms::WEB => {
-                cfg!(target_family = "wasm")
-            }
+            SupportedPlatforms::WEB => false,
             SupportedPlatforms::OR(first, second) => {
                 first.matches_current_platform() || second.matches_current_platform()
             }

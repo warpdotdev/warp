@@ -2162,7 +2162,7 @@ impl RenderState {
         }
 
         // Autoscroll when viewport height changes on mobile (e.g., keyboard appears)
-        if cfg!(target_family = "wasm") && height_changed {
+        if false && height_changed {
             self.request_autoscroll();
         }
     }

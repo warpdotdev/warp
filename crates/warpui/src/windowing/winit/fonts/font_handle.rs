@@ -1,11 +1,8 @@
-// Neither macOS nor wasm make use of the "load font from path" functionality,
+// Neither macOS nor the headless backend make use of the "load font from path" functionality,
 // and so there's a lot of unused code in here.  Instead of marking each of the
 // relevant functions with allow(dead_code), we'll do it at the module level
 // instead for simplicity.
-#![cfg_attr(
-    any(target_os = "macos", target_os = "windows", target_family = "wasm"),
-    allow(dead_code)
-)]
+#![cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
 
 use owned_ttf_parser::{AsFaceRef, Face, FaceParsingError, OwnedFace};
 use std::fs::File;

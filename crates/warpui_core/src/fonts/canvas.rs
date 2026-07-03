@@ -21,7 +21,6 @@ impl RasterFormat {
     }
 }
 
-#[cfg(native)]
 impl From<font_kit::canvas::Format> for RasterFormat {
     fn from(value: font_kit::canvas::Format) -> Self {
         match value {
@@ -44,7 +43,6 @@ pub struct Canvas {
     pub format: RasterFormat,
 }
 
-#[cfg(native)]
 impl From<font_kit::canvas::Canvas> for Canvas {
     fn from(value: font_kit::canvas::Canvas) -> Self {
         Self {

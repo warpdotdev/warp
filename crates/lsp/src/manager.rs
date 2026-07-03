@@ -325,11 +325,6 @@ impl LspManagerModel {
         }
         None
     }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn repo_path_for_path(_path: &Path, _ctx: &AppContext) -> Option<PathBuf> {
-        None
-    }
 }
 
 impl Entity for LspManagerModel {

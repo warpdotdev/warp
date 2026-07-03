@@ -244,7 +244,6 @@ fn device_info_from_adapter_info(adapter_info: wgpu::AdapterInfo) -> GPUDeviceIn
 /// This is inspired by the implementation of `request_adapter` in `wgpu_core`:
 /// https://github.com/gfx-rs/wgpu/blob/badb3c88ea29acb159d333e2f60b1cc305bbd512/wgpu-core/src/instance.rs#L857
 #[allow(clippy::too_many_arguments)]
-#[cfg_attr(target_family = "wasm", allow(unused_variables))]
 async fn select_adapter(
     instance: &wgpu::Instance,
     surface: &wgpu::Surface<'static>,
@@ -261,27 +260,7 @@ async fn select_adapter(
     SurfaceConfiguration,
     HashSet<wgpu::Backend>,
 )> {
-    cfg_if::cfg_if! {
-        if #[cfg(target_family = "wasm")] {
-            let power_preference = match gpu_power_preference {
-                GPUPowerPreference::LowPower => wgpu::PowerPreference::LowPower,
-                GPUPowerPreference::HighPerformance => wgpu::PowerPreference::HighPerformance,
-            };
-            let request_adapter_options = wgpu::RequestAdapterOptions {
-                power_preference,
-                force_fallback_adapter: false,
-                compatible_surface: Some(surface),
-            };
-
-            let adapter = instance.request_adapter(&request_adapter_options).await.ok()?;
-            let adapters = [adapter].into_iter();
-        } else {
-            let adapters = instance
-                .enumerate_adapters(backends)
-                .await
-                .into_iter();
-            }
-    }
+    let adapters = instance.enumerate_adapters(backends).await.into_iter();
 
     log::info!("Enabled wgpu backends: {backends:?}");
 

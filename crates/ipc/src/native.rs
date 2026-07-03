@@ -11,7 +11,7 @@ pub(crate) mod client {
     use interprocess::local_socket::tokio::LocalSocketStream;
 
     /// Returns a tuple containing structs for reading and writing to a local socket, which is the
-    /// underlying IPC transport for native (non-wasm) platforms.
+    /// underlying IPC transport for native (native) platforms.
     pub async fn connect_client(
         connection_address: ConnectionAddress,
     ) -> Result<(impl AsyncRead + Unpin, impl AsyncWrite + Unpin)> {

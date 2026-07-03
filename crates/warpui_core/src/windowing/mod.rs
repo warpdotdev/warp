@@ -18,8 +18,6 @@ use crate::{
 pub struct EventDispatchResult {
     /// Whether the event was handled by the UI framework.
     pub handled: bool,
-    /// Whether the soft keyboard should be shown (mobile WASM only).
-    pub soft_keyboard_requested: bool,
 }
 
 pub(crate) type EventCallback = Box<dyn Fn(Event, &mut AppContext) -> EventDispatchResult>;
@@ -96,13 +94,10 @@ impl<'a> WindowCallbackDispatcher<'a> {
 
 // Functions in WindowCallbackDispatcher that relate to application menus.
 //
-// This is marked as `allow(dead_code)` on Linux and wasm, as they do not
+// This is marked as `allow(dead_code)` on Linux, as they do not
 // support application menus, so these never get called.
 // TODO(CORE-2691): implement native Windows OS app menus
-#[cfg_attr(
-    any(target_os = "linux", target_os = "windows", target_family = "wasm"),
-    allow(dead_code)
-)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 impl WindowCallbackDispatcher<'_> {
     pub fn dispatch_standard_action(&mut self, action: StandardAction) {
         (self.callbacks.standard_action_callback)(action, &mut self.ctx)

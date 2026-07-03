@@ -124,10 +124,7 @@ pub fn bundled_or_fetched_asset(input: TokenStream) -> TokenStream {
     // be applied in a statement context.
     quote! {
         {
-            #[cfg(not(target_family = "wasm"))]
             let val = ::asset_macro::bundled_asset!( #input_lit, #ASYNC_ASSETS_DIR );
-            #[cfg(target_family = "wasm")]
-            let val = ::asset_macro::remote_asset!( #input_lit, #ASYNC_ASSETS_DIR );
 
             val
         }

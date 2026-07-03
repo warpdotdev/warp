@@ -1,9 +1,7 @@
 mod anyhow;
 mod registration;
 mod reqwest;
-#[cfg(not(target_family = "wasm"))]
 mod tokio;
-#[cfg(not(target_family = "wasm"))]
 // Re-export for macro use.
 #[doc(hidden)]
 pub use inventory::submit;

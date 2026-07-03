@@ -105,8 +105,7 @@ pub enum SecretOwner {
     CurrentUser,
 }
 
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+#[async_trait]
 pub trait ManagedSecretsClient: 'static + Send + Sync {
     async fn get_managed_secret_configs(&self) -> Result<ManagedSecretConfigs>;
 

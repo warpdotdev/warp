@@ -126,8 +126,6 @@ impl CustomWeightConversion for CustomWeight {
         )
     }
 }
-
-#[cfg(not(target_family = "wasm"))]
 use {futures_util::future::BoxFuture, futures_util::FutureExt};
 
 pub(crate) use external_fallback::{FontBytes, RequestedFallbackFontSource};
@@ -221,7 +219,6 @@ pub struct Cache {
     glyph_advances: DashMap<(FontId, GlyphId), Result<Vector2I, Error>>,
     glyph_typographic_bounds: DashMap<(FontId, GlyphId), Result<RectI, Error>>,
     raster_bounds: DashMap<RasterBoundsKey, Result<RectI, Error>>,
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     available_system_fonts: Option<Vec<(Option<FamilyId>, FontInfo)>>,
     font_fallback_cache: FontFallbackCache,
 }
@@ -282,7 +279,6 @@ impl Cache {
     /// that returns all of the system fonts when awaited.
     /// NOTE it is up to the caller to cache the result of the future via a call to
     /// [`Self::set_system_fonts`].
-    #[cfg(not(target_family = "wasm"))]
     pub fn all_system_fonts(
         &self,
         ctx: &mut crate::ModelContext<Self>,
@@ -311,8 +307,6 @@ impl Cache {
     pub fn load_family_from_bytes(&mut self, name: &str, bytes: Vec<Vec<u8>>) -> Result<FamilyId> {
         self.platform.load_from_bytes(name, bytes)
     }
-
-    #[cfg(not(target_family = "wasm"))]
     /// Returns the family ID for a given font, loading it into memory if it's
     /// not already known to the cache.
     pub fn get_or_load_system_font(&mut self, font_family: &str) -> Result<FamilyId> {
@@ -332,8 +326,6 @@ impl Cache {
             None => self.load_system_font(font_family),
         }
     }
-
-    #[cfg(not(target_family = "wasm"))]
     pub fn load_system_font(&mut self, font_family: &str) -> Result<FamilyId> {
         self.platform.load_from_system(font_family)
     }

@@ -39,15 +39,3 @@ pub fn hashed_asset_url(hashed_asset_path: &Path) -> String {
         hashed_asset_path.to_str().unwrap()
     )
 }
-
-#[cfg(target_family = "wasm")]
-/// Makes a domain-relative url absolute by prepending the current origin.
-pub fn make_absolute_url(relative_url: &str) -> String {
-    // This should be infallible.
-    let origin = gloo::utils::window()
-        .location()
-        .origin()
-        .expect("Can't get window origin.");
-
-    format!("{origin}{relative_url}")
-}
