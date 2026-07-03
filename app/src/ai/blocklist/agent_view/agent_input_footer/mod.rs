@@ -2113,7 +2113,11 @@ impl AgentInputFooter {
 
                     let mut stack = Stack::new();
                     stack.add_child(chip);
-                    stack.add_positioned_overlay_child(
+                    // Position the dot relative to the chip, but keep it in the
+                    // normal render layer (not an overlay). As an overlay it
+                    // floated above other overlays like the lightbox scrim; a
+                    // positioned child stays layered with the input footer.
+                    stack.add_positioned_child(
                         dot,
                         OffsetPositioning::offset_from_parent(
                             vec2f(3., -3.),
