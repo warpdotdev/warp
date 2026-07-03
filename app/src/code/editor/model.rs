@@ -6,6 +6,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, mem};
 
 use ai::diff_validation::DiffDelta;
@@ -27,6 +28,7 @@ use vim::{
     vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
     vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
+use warp_core::r#async::debounce;
 use warp_core::platform::SessionPlatform;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::theme::Fill;
@@ -314,7 +316,14 @@ pub struct CodeEditorModel {
     /// Whether lines soft-wrap to the viewport width. When set, the editor re-lays out its
     /// content on viewport resize so wrapping tracks the available width.
     soft_wrap: bool,
+    /// Debounced channel that coalesces viewport-resize relayouts. Only fed when `soft_wrap` is
+    /// set (see the `NeedsResize` handler).
+    resize_tx: async_channel::Sender<()>,
 }
+
+/// How long to wait for viewport-width changes to settle before re-laying out soft-wrapped
+/// content, so a window/pane drag triggers a single rebuild rather than one per frame.
+const DEBOUNCED_RESIZE_PERIOD: Duration = Duration::from_millis(5);
 
 impl CodeEditorModel {
     pub fn new(
@@ -455,6 +464,16 @@ impl CodeEditorModel {
             pending_comment: PendingComment::Closed,
         });
 
+        // Coalesce viewport-resize relayouts: `NeedsResize` (only emitted when soft-wrapping)
+        // pushes here, and we rebuild once the width settles instead of once per drag frame.
+        // A full-buffer relayout is expensive, so debouncing avoids doing it every frame.
+        let (resize_tx, resize_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(
+            debounce(DEBOUNCED_RESIZE_PERIOD, resize_rx),
+            |me, _, ctx| me.rebuild_layout_and_refresh_diff(ctx),
+            |_, _| {},
+        );
+
         Self {
             render_state,
             diff,
@@ -475,6 +494,7 @@ impl CodeEditorModel {
             lazy_layout_initialized,
             pending_syntax_tree_bootstrap: false,
             soft_wrap,
+            resize_tx,
         }
     }
 
@@ -605,10 +625,12 @@ impl CodeEditorModel {
                 ctx.emit(CodeEditorModelEvent::LayoutInvalidated);
             }
             RenderEvent::NeedsResize => {
-                // When soft-wrapping, a viewport width change must re-wrap the content.
-                // Non-wrapping editors lay out at infinite width and ignore resizes (current behavior).
+                // When soft-wrapping, a viewport width change must re-wrap the content. Route it
+                // through the debounced channel so a window/pane drag triggers a single rebuild
+                // once the width settles, rather than a full-buffer relayout every frame.
+                // Non-wrapping editors lay out at infinite width and ignore resizes.
                 if self.soft_wrap {
-                    self.rebuild_layout_and_refresh_diff(ctx);
+                    let _ = self.resize_tx.try_send(());
                 }
             }
         }

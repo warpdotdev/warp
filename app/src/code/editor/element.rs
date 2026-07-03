@@ -16,7 +16,8 @@ use warp_editor::editor::EditorView;
 use warp_editor::render::element::lens_element::RichTextElementLens;
 use warp_editor::render::element::{RenderableBlock, RichTextElement, VerticalExpansionBehavior};
 use warp_editor::render::model::{
-    gutter_expansion_button_types, BlockLocation, ExpansionType, LineCount, RenderState,
+    gutter_expansion_button_types, BlockLocation, ExpansionType, LineCount, LogicalLineCount,
+    RenderState,
 };
 use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
 use warpui::elements::{
@@ -618,20 +619,28 @@ impl<V: EditorView> EditorWrapper<V> {
                 .into_pixels(),
                 InnerEditor::FullEditor(_) => block.viewport_item().viewport_offset,
             };
-            let diff_hunk = self.diff_status.diff_hunk(line_count, appearance);
+            // Diff hunks/decorations are keyed by logical (source) lines, and the gutter should
+            // display logical line numbers, so derive a logical line index. `line_count` (visual
+            // rows) is retained only for visual-row positioning, like the hidden-section hover
+            // checks below.
+            let logical_line_count = model
+                .start_logical_line_index(&**block)
+                .map(|logical| LineCount::from(logical.as_usize()))
+                .unwrap_or(line_count);
+            let diff_hunk = self.diff_status.diff_hunk(logical_line_count, appearance);
             let is_removal = matches!(diff_hunk, Some(DiffHunkDisplay::Remove(_)));
 
             let current_line = if self.should_display_relative_line_number() {
-                line_number_config.display_line_number(line_count)
+                line_number_config.display_line_number(logical_line_count)
             } else {
-                line_number_config.absolute_line_number(line_count)
+                line_number_config.absolute_line_number(logical_line_count)
             };
 
             // If the block is temporary, don't render line number.
             // Currently, all temporary blocks are removal hunks, either from a deleted section,
             // or the old lines from a replacement hunk.
             if block.is_temporary() {
-                let diff_range = self.diff_status.removed_diff_range(line_count);
+                let diff_range = self.diff_status.removed_diff_range(logical_line_count);
                 let range_already_clicked = diff_range
                     .as_ref()
                     .is_some_and(|range| self.state_handle.is_range_clicked(range));
@@ -643,11 +652,11 @@ impl<V: EditorView> EditorWrapper<V> {
                         || matches!(diff_hunk, Some(DiffHunkDisplay::Replacement { .. })))
                 {
                     // Track the index for this removal line
-                    if removed_hunk_line_number == Some(line_count) {
+                    if removed_hunk_line_number == Some(logical_line_count) {
                         removed_hunk_line_index += 1;
                     } else {
                         removed_hunk_line_index = 0;
-                        removed_hunk_line_number = Some(line_count);
+                        removed_hunk_line_number = Some(logical_line_count);
                     }
 
                     let height = block.viewport_item().content_size.y();
@@ -656,8 +665,8 @@ impl<V: EditorView> EditorWrapper<V> {
                     let first_line_height = model.first_line_height(&**block).unwrap_or(height);
 
                     let line = EditorLineLocation::Removed {
-                        line_number: line_count,
-                        line_range: diff_range.unwrap_or(line_count..line_count),
+                        line_number: logical_line_count,
+                        line_range: diff_range.unwrap_or(logical_line_count..logical_line_count),
                         index: removed_hunk_line_index,
                     };
                     // Show comment button only on the specific hovered line with matching index
@@ -808,7 +817,7 @@ impl<V: EditorView> EditorWrapper<V> {
 
                 continue;
             }
-            let diff_range = self.diff_status.added_diff_range(line_count);
+            let diff_range = self.diff_status.added_diff_range(logical_line_count);
             let range_already_clicked = diff_range
                 .as_ref()
                 .is_some_and(|range| self.state_handle.is_range_clicked(range));
@@ -818,7 +827,9 @@ impl<V: EditorView> EditorWrapper<V> {
             // given this is a wrapper specific to our code pane implementation.
             let overlay = line_decorations
                 .iter()
-                .filter(|decoration| decoration.start <= line_count && decoration.end > line_count)
+                .filter(|decoration| {
+                    decoration.start <= logical_line_count && decoration.end > logical_line_count
+                })
                 .map(|decoration| decoration.overlay)
                 .next();
 
@@ -1386,8 +1397,12 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                 InnerEditor::FullEditor(_) => model.viewport().scroll_top(),
             };
             for decoration in model.decorations().line_decoration_ranges() {
-                let start_y = content.y_offset_at_line(decoration.start);
-                let end_y = content.y_offset_at_line(decoration.end);
+                // Decoration ranges are in logical (source) line space, so map them to Y via the
+                // logical-line dimension; otherwise they drift against soft-wrapped content.
+                let start_y = content
+                    .y_offset_at_logical_line(LogicalLineCount::from(decoration.start.as_usize()));
+                let end_y = content
+                    .y_offset_at_logical_line(LogicalLineCount::from(decoration.end.as_usize()));
                 ctx.scene
                     .draw_rect_without_hit_recording(RectF::new(
                         origin + vec2f(0., (start_y - y_adjustment).as_f32()),

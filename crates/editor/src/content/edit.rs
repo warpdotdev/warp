@@ -34,7 +34,7 @@ use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style
 use crate::render::model::{
     BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
     HiddenBlockConfig, HorizontalRuleConfig, ImageBlockConfig, LaidOutEmbeddedItem, LaidOutTable,
-    LineCount, OffsetMap, Paragraph, ParagraphBlock, ParagraphStyles, RenderLayoutOptions,
+    LogicalLineCount, OffsetMap, Paragraph, ParagraphBlock, ParagraphStyles, RenderLayoutOptions,
     SelectableTextRun, TableBlockConfig, TableStyle, gutter_expansion_button_types,
 };
 use crate::render::{TABLE_BASELINE_RATIO, TABLE_LINE_HEIGHT_RATIO};
@@ -135,7 +135,9 @@ const MAX_TABLE_CELL_CONTENT_WIDTH_PX: f32 = 500.0;
 #[derive(Debug, Clone, PartialEq)]
 pub struct TemporaryBlock {
     pub content: String,
-    pub insert_before: LineCount,
+    /// The *logical* (source) line this removed-content block is anchored before. Logical, not
+    /// visual, so the anchor survives soft-wrapping of surrounding lines.
+    pub insert_before: LogicalLineCount,
     pub line_decoration: Option<ThemeFill>,
     pub inline_text_decorations: Vec<Decoration>,
 }
@@ -613,7 +615,7 @@ impl EditDelta {
 pub fn layout_temporary_blocks(
     blocks: Vec<TemporaryBlock>,
     layout: &TextLayout,
-) -> HashMap<LineCount, Vec<BlockItem>> {
+) -> HashMap<LogicalLineCount, Vec<BlockItem>> {
     let layout_tasks = blocks
         .into_iter()
         .map(|block| {
@@ -633,7 +635,7 @@ pub fn layout_temporary_blocks(
     let results: Vec<_> = layout_tasks
         .into_par_iter()
         .enumerate()
-        .filter_map(|(idx, (task, line_count))| {
+        .filter_map(|(idx, (task, insert_before))| {
             let location = if idx == 0 {
                 BlockLocation::Start
             } else if idx >= last_task {
@@ -643,7 +645,7 @@ pub fn layout_temporary_blocks(
             };
 
             match task.run(layout, location, false) {
-                Ok(result) => Some((line_count, result.0)),
+                Ok(result) => Some((insert_before, result.0)),
                 Err(e) => {
                     log::error!("Failed to lay out temporary blocks: {e:?}");
                     None
