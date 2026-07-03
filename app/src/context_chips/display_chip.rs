@@ -201,7 +201,7 @@ fn git_branch_status_count(
     let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
     add_git_branch_status_child(
         &mut content,
-        git_branch_status_icon(icon, color, GIT_BRANCH_STATUS_STATUS_ICON_SIZE),
+        git_branch_status_icon(icon, color, font_size - GIT_BRANCH_STATUS_STATUS_ICON_INSET),
         GIT_BRANCH_STATUS_COUNT_GAP,
     );
     content.add_child(git_branch_status_text(
@@ -234,12 +234,11 @@ const CHIP_MARGIN_RIGHT: f32 = 8.;
 const UDI_CHIP_MAX_NUM_CHARACTERS: usize = 40;
 
 const CHIP_CORNER_RADIUS: f32 = 4.0;
-const GIT_BRANCH_STATUS_CHIP_HORIZONTAL_PADDING: f32 = 8.0;
-const GIT_BRANCH_STATUS_CHIP_VERTICAL_PADDING: f32 = 4.0;
 const GIT_BRANCH_STATUS_MAIN_GAP: f32 = 4.0;
 const GIT_BRANCH_STATUS_COUNT_GAP: f32 = 2.0;
-const GIT_BRANCH_STATUS_BRANCH_ICON_SIZE: f32 = 14.0;
-const GIT_BRANCH_STATUS_STATUS_ICON_SIZE: f32 = 12.0;
+/// Ahead/behind/rebased icons render slightly smaller than the branch icon so
+/// the counts read as secondary to the branch name.
+const GIT_BRANCH_STATUS_STATUS_ICON_INSET: f32 = 2.0;
 pub(crate) const CHIP_BORDER_WIDTH: f32 = 1.0;
 /// Inner rounded corners are 1px smaller than the outer border radius
 const CHIP_INNER_CORNER_RADIUS: f32 = CHIP_CORNER_RADIUS - CHIP_BORDER_WIDTH;
@@ -1485,7 +1484,11 @@ impl DisplayChip {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let font_color = internal_colors::neutral_6(theme);
-        let font_family = appearance.ui_font_family();
+        let font_family = if self.is_in_agent_view || !FeatureFlag::AgentView.is_enabled() {
+            appearance.ui_font_family()
+        } else {
+            appearance.monospace_font_family()
+        };
         let font_size = udi_font_size(appearance);
         let fallback_branch = self.text.clone();
         let tracking_status = tracking_status
@@ -1504,11 +1507,9 @@ impl DisplayChip {
             let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
             add_git_branch_status_child(
                 &mut content,
-                git_branch_status_icon(
-                    Icon::GitBranch,
-                    font_color,
-                    GIT_BRANCH_STATUS_BRANCH_ICON_SIZE,
-                ),
+                // Standard chips size their icon to the font size (see
+                // `render_udi_chip`), which keeps this chip the same height.
+                git_branch_status_icon(Icon::GitBranch, font_color, font_size),
                 GIT_BRANCH_STATUS_MAIN_GAP,
             );
             add_git_branch_status_child(
@@ -1539,7 +1540,7 @@ impl DisplayChip {
                     content.add_child(git_branch_status_icon(
                         Icon::SwitchVertical02,
                         font_color,
-                        GIT_BRANCH_STATUS_STATUS_ICON_SIZE,
+                        font_size - GIT_BRANCH_STATUS_STATUS_ICON_INSET,
                     ));
                 } else {
                     if let Some(ahead) = ahead {
@@ -1569,15 +1570,9 @@ impl DisplayChip {
                 }
             }
 
-            let mut chip_element = Container::new(content.finish())
-                .with_background(theme.surface_1())
-                .with_border(
-                    Border::all(CHIP_BORDER_WIDTH)
-                        .with_border_color(internal_colors::neutral_3(theme)),
-                )
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CHIP_CORNER_RADIUS)))
-                .with_vertical_padding(GIT_BRANCH_STATUS_CHIP_VERTICAL_PADDING)
-                .with_horizontal_padding(GIT_BRANCH_STATUS_CHIP_HORIZONTAL_PADDING);
+            // Shared container so padding, border, and corner radius stay
+            // consistent with the other UDI chips.
+            let mut chip_element = chip_container(content.finish(), None, appearance);
             if state.is_hovered() {
                 chip_element = chip_element.with_background(theme.surface_2());
             }
