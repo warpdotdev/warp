@@ -11,7 +11,7 @@ use crate::ai::agent_management::notifications::{
     NotificationSourceAgent,
 };
 use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, ConversationStatusUpdate};
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, ConversationStatusUpdate, QueuedQueryModel};
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::AISettings;
 use crate::terminal::cli_agent_sessions::{
@@ -42,17 +42,17 @@ impl SingletonEntity for AgentNotificationsModel {}
 impl AgentNotificationsModel {
     pub(crate) fn new(ctx: &mut ModelContext<Self>) -> Self {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_model, move |me, event, ctx| {
+        ctx.subscribe_to_model(&history_model, move |me, _, event, ctx| {
             me.handle_history_event(event, ctx);
         });
 
         let cli_sessions_model = CLIAgentSessionsModel::handle(ctx);
-        ctx.subscribe_to_model(&cli_sessions_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&cli_sessions_model, |me, _, event, ctx| {
             me.handle_cli_agent_session_event(event, ctx);
         });
 
         let active_views_model = ActiveAgentViewsModel::handle(ctx);
-        ctx.subscribe_to_model(&active_views_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&active_views_model, |me, _, event, ctx| {
             me.handle_active_agent_views_changed(event, ctx);
         });
 
@@ -246,7 +246,7 @@ impl AgentNotificationsModel {
         }
 
         let BlocklistAIHistoryEvent::UpdatedConversationStatus {
-            terminal_view_id,
+            terminal_surface_id,
             conversation_id,
             // We shouldn't trigger toasts when restoring conversations on startup.
             update: ConversationStatusUpdate::Changed { .. },
@@ -272,7 +272,7 @@ impl AgentNotificationsModel {
                 &status,
                 *conversation_id,
                 latest_query,
-                *terminal_view_id,
+                *terminal_surface_id,
                 ctx,
             );
             // The new mailbox path handled the event — skip the legacy toast path below.
@@ -283,7 +283,7 @@ impl AgentNotificationsModel {
             return;
         }
 
-        if is_terminal_view_visible(*terminal_view_id, ctx) {
+        if is_terminal_view_visible(*terminal_surface_id, ctx) {
             return;
         }
 
@@ -296,7 +296,7 @@ impl AgentNotificationsModel {
         ctx.emit(AgentManagementEvent::ConversationNeedsAttention {
             window_id,
             tab_index,
-            terminal_view_id: *terminal_view_id,
+            terminal_view_id: *terminal_surface_id,
             conversation_id: *conversation_id,
         });
     }
@@ -326,11 +326,20 @@ impl AgentNotificationsModel {
         };
 
         match status {
-            // When the agent resumes its work, clear stale notifications.
-            ConversationStatus::InProgress => {
+            // When the agent resumes its work (or is automatically recovering from a
+            // transient failure), clear stale notifications.
+            ConversationStatus::InProgress | ConversationStatus::TransientError => {
                 self.remove_notification_by_source(origin, ctx);
             }
             ConversationStatus::Success => {
+                // Suppress the completion notification when a queued follow-up prompt will
+                // auto-send as soon as this conversation finishes. The conversation isn't
+                // really in a stopped state, so the notification would be noisy. Pending
+                // artifacts are left intact so they roll into the notification fired when the
+                // conversation eventually finishes with an empty queue.
+                if QueuedQueryModel::as_ref(ctx).has_autofireable_prompt(conversation_id) {
+                    return;
+                }
                 let artifacts = self.flush_pending_artifacts(conversation_id);
                 self.add_notification(
                     title,
@@ -384,6 +393,12 @@ impl AgentNotificationsModel {
                     metadata.branch,
                     ctx,
                 );
+            }
+            // Yielded conversations are still active; mirror the
+            // InProgress arm and clear any stale notification for this
+            // origin.
+            ConversationStatus::WaitingForEvents => {
+                self.remove_notification_by_source(origin, ctx);
             }
         }
     }
@@ -471,13 +486,22 @@ pub enum AgentManagementEvent {
 impl ConversationStatus {
     /// Returns true if the updating the conversation with this status should trigger some
     /// notification to the user.
+    ///
+    /// Exhaustive match so a new `ConversationStatus` variant forces a
+    /// deliberate decision about whether it should fire a notification.
     pub fn should_trigger_notification(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ConversationStatus::Success
-                | ConversationStatus::Blocked { .. }
-                | ConversationStatus::Error
-        )
+            | ConversationStatus::Blocked { .. }
+            | ConversationStatus::Error => true,
+            // Streaming hasn't reached a notable state; a recovering or
+            // yielded conversation is still active; user-cancellations are
+            // self-evident.
+            ConversationStatus::InProgress
+            | ConversationStatus::TransientError
+            | ConversationStatus::WaitingForEvents
+            | ConversationStatus::Cancelled => false,
+        }
     }
 }
 

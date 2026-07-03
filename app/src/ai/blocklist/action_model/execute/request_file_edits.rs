@@ -146,6 +146,9 @@ impl RequestFileEditsExecutor {
             return ActionExecution::InvalidAction;
         };
 
+        // TODO(surface-agnostic-file-edit-execution): non-GUI surfaces (e.g. the TUI) have no
+        // CodeDiffView, so file-edit tool calls are not executable here yet. The stacked
+        // surface-agnostic refactor routes execution through a shared PersistDiffModel instead.
         let Some(diff_view) = self.diff_views.get(id) else {
             log::warn!("Tried to execute a RequestFileEdits action without a diff view");
             return ActionExecution::NotReady;
@@ -170,7 +173,7 @@ impl RequestFileEditsExecutor {
         let (result_tx, result_rx) = oneshot::channel();
         let mut result_tx = Some(result_tx);
 
-        ctx.subscribe_to_view(diff_view, move |_me, event, ctx| match event {
+        ctx.subscribe_to_view(diff_view, move |_me, _, event, ctx| match event {
             CodeDiffViewEvent::Rejected => {
                 let Some(result_tx) = result_tx.take() else {
                     return;

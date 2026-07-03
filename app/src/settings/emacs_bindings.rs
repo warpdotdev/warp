@@ -16,6 +16,7 @@ define_settings_group!(EmacsBindingsSettings, settings: [
         default: BannerState::NotDismissed,
         supported_platforms: SupportedPlatforms::LINUX,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
 ]);

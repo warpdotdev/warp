@@ -21,7 +21,7 @@ use warpui_core::{
 };
 
 use super::OnboardingSlide;
-use crate::model::OnboardingStateModel;
+use crate::model::{NoAiConfirmationSource, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::visuals::{intention_terminal_visual, intention_visual};
 use crate::{OnboardingIntention, AI_FEATURES};
@@ -202,7 +202,7 @@ impl IntentionSlide {
         let header_row = {
             let label = appearance
                 .ui_builder()
-                .paragraph("Build faster with AI agents")
+                .paragraph("Build faster with agents")
                 .with_style(UiComponentStyles {
                     font_size: Some(16.),
                     font_weight: Some(Weight::Semibold),
@@ -240,7 +240,7 @@ impl IntentionSlide {
         };
 
         let description = FormattedTextElement::from_str(
-            "An agent-first experience with best in class terminal support. Get terminal and agent driven development AI features like:",
+            "Get AI features to accelerate terminal and agent-driven workflows:",
             appearance.ui_font_family(),
             14.,
         )
@@ -523,8 +523,14 @@ impl IntentionSlide {
     fn next(&mut self, ctx: &mut ViewContext<Self>) {
         self.onboarding_state.update(ctx, |model, ctx| {
             if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-                // Always advance to Customize slide; both intentions continue the flow.
-                model.next(ctx);
+                match model.intention() {
+                    // "Just use the terminal" confirms leaving AI behind before advancing.
+                    OnboardingIntention::Terminal => {
+                        model.request_no_ai_confirmation(NoAiConfirmationSource::Intention, ctx);
+                    }
+                    // Agent intention routes to the next step (the AI-setup fork).
+                    OnboardingIntention::AgentDrivenDevelopment => model.next(ctx),
+                }
             } else {
                 match model.intention() {
                     OnboardingIntention::Terminal => {

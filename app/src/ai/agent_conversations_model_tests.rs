@@ -40,6 +40,7 @@ use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
+use crate::test_util::settings::initialize_history_persistence_for_tests;
 use crate::workspace::WorkspaceAction;
 
 /// Creates a test task with specified creator UID and updated_at time
@@ -121,7 +122,7 @@ fn test_restored_conversation_emits_restored_kind() {
             model.handle_history_event(
                 &BlocklistAIHistoryEvent::UpdatedConversationStatus {
                     conversation_id: AIConversationId::new(),
-                    terminal_view_id: EntityId::new(),
+                    terminal_surface_id: EntityId::new(),
                     update: ConversationStatusUpdate::Restored,
                     new_status: ConversationStatus::Success,
                 },
@@ -146,7 +147,7 @@ fn test_status_transition_emits_status_set_with_filter_buckets() {
             model.handle_history_event(
                 &BlocklistAIHistoryEvent::UpdatedConversationStatus {
                     conversation_id: AIConversationId::new(),
-                    terminal_view_id: EntityId::new(),
+                    terminal_surface_id: EntityId::new(),
                     update: ConversationStatusUpdate::Changed {
                         prev_status: ConversationStatus::InProgress,
                     },
@@ -179,7 +180,7 @@ fn test_same_bucket_re_emission_emits_status_set_with_equal_filters() {
             model.handle_history_event(
                 &BlocklistAIHistoryEvent::UpdatedConversationStatus {
                     conversation_id: AIConversationId::new(),
-                    terminal_view_id: EntityId::new(),
+                    terminal_surface_id: EntityId::new(),
                     update: ConversationStatusUpdate::Changed {
                         prev_status: ConversationStatus::InProgress,
                     },
@@ -197,6 +198,87 @@ fn test_same_bucket_re_emission_emits_status_set_with_equal_filters() {
                 new_filter: StatusFilter::Working,
             }),
         );
+    });
+}
+
+#[test]
+fn test_title_update_refreshes_shadowing_task_title() {
+    App::test((), |mut app| async move {
+        let _interactive_management_guard =
+            FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
+        initialize_history_persistence_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(|_| ActiveAgentViewsModel::new());
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let agent_model = app.add_singleton_model(|_| create_test_model());
+        let captured = subscribe_to_conversation_updated(&mut app, &agent_model);
+
+        let terminal_view_id = EntityId::new();
+        let conversation_id = AIConversationId::new();
+        let server_token = "rename-token";
+        let task_id = make_uuid(3900);
+
+        let conversation = create_restored_conversation(
+            conversation_id,
+            "root-task",
+            AgentConversationData {
+                server_conversation_token: Some(server_token.to_string()),
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.apply_conversation_title(
+                conversation_id,
+                "Renamed conversation".to_string(),
+                ctx,
+            );
+        });
+
+        agent_model.update(&mut app, |model, _| {
+            let mut task = create_test_task(&task_id, "user-a", Utc::now());
+            task.title = "Old task title".to_string();
+            task.conversation_id = Some(server_token.to_string());
+            model.tasks.insert(task.task_id, task);
+        });
+
+        agent_model.update(&mut app, |model, ctx| {
+            model.handle_history_event(
+                &BlocklistAIHistoryEvent::UpdatedConversationTitle {
+                    terminal_surface_id: Some(terminal_view_id),
+                    conversation_id,
+                    title: "Renamed conversation".to_string(),
+                },
+                ctx,
+            );
+        });
+
+        assert_eq!(*captured.lock(), Some(ConversationUpdateKind::TitleChanged));
+        agent_model.read(&app, |model, ctx| {
+            let task_id: AmbientAgentTaskId = task_id.parse().unwrap();
+            assert_eq!(
+                model.get_task_data(&task_id).map(|task| task.title),
+                Some("Renamed conversation".to_string()),
+            );
+            let entry = model
+                .get_entry_by_id(&AgentConversationEntryId::AmbientRun(task_id), ctx)
+                .expect("task-backed entry should exist");
+            assert_eq!(entry.display.title, "Renamed conversation");
+        });
     });
 }
 
@@ -708,6 +790,7 @@ fn create_server_conversation_metadata(
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
+            context_window_segments: Vec::new(),
         },
         metadata: mock_server_metadata(),
         creator: None,
@@ -1439,7 +1522,7 @@ fn test_server_token_assignment_updates_copy_link_resolution() {
             model.handle_history_event(
                 &BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                     conversation_id,
-                    terminal_view_id,
+                    terminal_surface_id: terminal_view_id,
                 },
                 ctx,
             );

@@ -18,9 +18,10 @@ use crate::agent::action_result::{
     InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
     ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
     RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
-    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, SuggestNewConversationResult,
-    SuggestPromptResult, TransferShellCommandControlToUserResult, UploadArtifactResult,
-    UseComputerResult, WriteToLongRunningShellCommandResult,
+    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, StartRecordingResult,
+    StopRecordingResult, SuggestNewConversationResult, SuggestPromptResult,
+    TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
+    WaitForEventsResult, WriteToLongRunningShellCommandResult,
 };
 use crate::agent::{AIAgentCitation, FileLocations};
 use crate::diff_validation::ParsedDiff;
@@ -136,6 +137,20 @@ pub enum AIAgentActionType {
 
     RequestComputerUse(RequestComputerUseRequest),
 
+    /// AI requested to start recording a video of the computer-use session.
+    /// Capture configuration (frame rate, limits) is server-owned and arrives
+    /// on the tool call; the client applies it. `frame_rate` of 0 means unset.
+    StartRecording {
+        frame_rate: u32,
+        max_duration: Option<Duration>,
+        max_size_bytes: Option<u64>,
+    },
+
+    /// AI requested to stop an in-progress recording and publish the video.
+    StopRecording {
+        recording_id: String,
+    },
+
     // AI requested to read a skill.
     ReadSkill(ReadSkillRequest),
 
@@ -174,6 +189,17 @@ pub enum AIAgentActionType {
     /// `base_prompt + "\n\n" + agent_run_configs[i].prompt` (or just
     /// `base_prompt` when the per-agent `prompt` is empty).
     RunAgents(RunAgentsRequest),
+
+    /// Synthesized from a server-emitted Message::ToolCall::WaitForEvents;
+    /// dispatched by WaitForEventsExecutor.
+    WaitForEvents {
+        /// tool_call_id of the unresolved WaitForEvents call; used to
+        /// match inbound resume signals.
+        tool_call_id: String,
+        /// 0 means "unset" (prost flat-scalar convention); the executor
+        /// falls back to a default.
+        idle_timeout_seconds: i32,
+    },
 }
 
 /// Run-wide + per-agent configuration for a `RunAgents` tool call.
@@ -363,6 +389,12 @@ impl AIAgentActionType {
             Self::RequestComputerUse(_) => {
                 AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Cancelled)
             }
+            Self::StartRecording { .. } => {
+                AIAgentActionResultType::StartRecording(StartRecordingResult::Cancelled)
+            }
+            Self::StopRecording { .. } => {
+                AIAgentActionResultType::StopRecording(StopRecordingResult::Cancelled)
+            }
             Self::ReadSkill(_) => AIAgentActionResultType::ReadSkill(ReadSkillResult::Cancelled),
             Self::FetchConversation { .. } => {
                 AIAgentActionResultType::FetchConversation(FetchConversationResult::Cancelled)
@@ -384,6 +416,9 @@ impl AIAgentActionType {
                 AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Cancelled)
             }
             Self::RunAgents(_) => AIAgentActionResultType::RunAgents(RunAgentsResult::Cancelled),
+            Self::WaitForEvents { .. } => {
+                AIAgentActionResultType::WaitForEvents(WaitForEventsResult::Cancelled)
+            }
         }
     }
 
@@ -419,6 +454,8 @@ impl AIAgentActionType {
                 format!("Insert {} code review comments", comments.len())
             }
             Self::RequestComputerUse(_) => "Request computer use".to_string(),
+            Self::StartRecording { .. } => "Start recording".to_string(),
+            Self::StopRecording { .. } => "Stop recording".to_string(),
             Self::ReadSkill(_) => "Read skill".to_string(),
             Self::FetchConversation { .. } => "Fetch conversation".to_string(),
             Self::StartAgent { name, .. } => format!("Start agent: {name}"),
@@ -432,6 +469,7 @@ impl AIAgentActionType {
             Self::RunAgents(req) => {
                 format!("Orchestrate {} agent(s)", req.agent_run_configs.len())
             }
+            Self::WaitForEvents { .. } => "Wait for events".to_string(),
         }
     }
 }
@@ -580,6 +618,12 @@ impl Display for AIAgentActionType {
             AIAgentActionType::RequestComputerUse(req) => {
                 write!(f, "RequestComputerUse: {}", req.task_summary)
             }
+            AIAgentActionType::StartRecording { .. } => {
+                write!(f, "StartRecording")
+            }
+            AIAgentActionType::StopRecording { recording_id } => {
+                write!(f, "StopRecording: {recording_id}")
+            }
             AIAgentActionType::ReadSkill(req) => {
                 write!(f, "ReadSkill: {}", req.skill)
             }
@@ -612,6 +656,15 @@ impl Display for AIAgentActionType {
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "Orchestrate: summary='{}' agents=[{names}]", req.summary,)
+            }
+            AIAgentActionType::WaitForEvents {
+                tool_call_id,
+                idle_timeout_seconds,
+            } => {
+                write!(
+                    f,
+                    "WaitForEvents: tool_call_id={tool_call_id} idle_timeout_seconds={idle_timeout_seconds}"
+                )
             }
         }
     }
@@ -744,7 +797,8 @@ pub struct CreateDocumentsRequest {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct UseComputerRequest {
     pub action_summary: String,
-    pub actions: Vec<computer_use::Action>,
+    /// Each action carries the surface (screen or a specific window) it targets.
+    pub actions: Vec<computer_use::TargetedAction>,
     /// If set, a screenshot will be captured after the actions are executed.
     pub screenshot_params: Option<computer_use::ScreenshotParams>,
 }

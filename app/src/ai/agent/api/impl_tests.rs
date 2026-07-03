@@ -35,6 +35,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         should_redact_secrets: false,
         api_keys: None,
         custom_model_providers: None,
+        custom_model_routers: None,
         allow_use_of_warp_credits: false,
         autonomy_level: api::AutonomyLevel::Supervised,
         isolation_level: api::IsolationLevel::None,
@@ -86,8 +87,10 @@ fn api_keys_with_warp_credit_fallback_setting_preserves_existing_keys() {
             openai: String::new(),
             google: String::new(),
             open_router: String::new(),
+            grok_oauth_access_token: String::new(),
             allow_use_of_warp_credits: false,
             aws_credentials: None,
+            google_cloud_credentials: None,
         }),
         true,
     )

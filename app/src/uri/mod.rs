@@ -33,7 +33,9 @@ use crate::root_view::{
 };
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
-use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
+use crate::settings_view::{
+    settings_widget_deeplink_target, OpenTeamsSettingsModalArgs, SettingsSection,
+};
 use crate::tab_configs::TabConfig;
 use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
 use crate::util::openable_file_type::{
@@ -58,6 +60,20 @@ const DESKTOP_REDIRECT_URI_PATH: &str = "/desktop_redirect";
 /// against gallery titles in `autoinstall_from_gallery`.
 pub struct OpenMCPSettingsArgs {
     pub autoinstall: Option<String>,
+}
+
+/// Args for the `warp://settings` deeplink family, dispatched to the
+/// `root_view:open_settings_in_{existing,new}_window` actions.
+pub enum OpenSettingsArgs {
+    /// `warp://settings` — open a settings tab on the default page.
+    Default,
+    /// `warp://settings?q=<query>` — open settings with the search bar pre-filled.
+    Search { query: String },
+    /// `warp://settings?widget=<widget_id>` — open settings scrolled to a widget.
+    Widget {
+        page: SettingsSection,
+        widget_id: &'static str,
+    },
 }
 
 /// Source query parameter value indicating auth was initiated from cloud agent setup.
@@ -337,100 +353,133 @@ impl UriHost {
             }
             UriHost::Settings => {
                 // We support opening different settings pages through URI:
+                // - warp://settings - opens a settings tab on the default page
+                // - warp://settings?q={query} - opens settings with the search bar pre-filled
+                // - warp://settings?widget={widget_id} - opens settings scrolled to a widget
                 // - warp://settings/teams?invite={email} - opens team settings with invite modal
                 // - warp://settings/billing_and_usage - opens billing and usage settings page
                 // - warp://settings/environments - opens environments settings page
                 // - warp://settings/mcp - opens MCP servers settings page
                 // - warp://settings/platform - opens platform settings page
                 // - warp://settings/appearance - opens appearance settings page (themes, fonts, etc.)
+                // - warp://settings/warp_agent - opens the Warp Agent settings page (inference / API keys)
+                let query_string: HashMap<_, _> = url.query_pairs().collect();
+                // A bare `warp://settings` (or a trailing slash) yields an empty path
+                // segment; treat that as "no sub-page" so the query-param routing below
+                // handles it.
                 let settings_sub_page: Option<String> = url
                     .path_segments()
                     .into_iter()
                     .flatten()
                     .last()
+                    .filter(|s| !s.is_empty())
                     .map(|s| s.to_string());
-                let query_string: HashMap<_, _> = url.query_pairs().collect();
 
-                if let Some(settings_sub_page) = settings_sub_page {
-                    match settings_sub_page.as_str() {
-                        "teams" => {
-                            let invite_email = query_string.get("invite").map(|s| s.to_string());
-                            let args = OpenTeamsSettingsModalArgs { invite_email };
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_team_settings_with_email_invite_in_existing_window",
-                                "root_view:open_team_settings_with_email_invite_in_new_window",
-                                &args,
-                                ctx,
-                            );
-                        }
-                        "billing_and_usage" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::BillingAndUsage,
-                                ctx,
-                            );
-                        }
-                        "environments" => {
-                            // Notify that GitHub auth completed so views can refresh
-                            GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
-                                notifier.notify_auth_completed(ctx);
-                            });
+                match settings_sub_page.as_deref() {
+                    Some("teams") => {
+                        let invite_email = query_string.get("invite").map(|s| s.to_string());
+                        let args = OpenTeamsSettingsModalArgs { invite_email };
+                        dispatch_action_in_new_or_existing_window(
+                            primary_window_id,
+                            "root_view:open_team_settings_with_email_invite_in_existing_window",
+                            "root_view:open_team_settings_with_email_invite_in_new_window",
+                            &args,
+                            ctx,
+                        );
+                    }
+                    Some("environments") => {
+                        // Notify that GitHub auth completed so views can refresh
+                        GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
+                            notifier.notify_auth_completed(ctx);
+                        });
 
-                            // Open settings page unless auth was initiated from cloud setup
-                            // (cloud setup users should stay on their current page)
-                            let source = query_string.get("source").map(|s| s.as_ref());
-                            let skip_settings = source == Some(CLOUD_SETUP_SOURCE);
-                            if !skip_settings {
-                                dispatch_action_in_new_or_existing_window(
-                                    primary_window_id,
-                                    "root_view:open_settings_page_in_existing_window",
-                                    "root_view:open_settings_page_in_new_window",
-                                    &SettingsSection::CloudEnvironments,
-                                    ctx,
-                                );
-                            }
-                        }
-                        "mcp" => {
-                            // warp://settings/mcp?autoinstall=<name> auto-installs a gallery MCP server.
-                            // The value is matched case-insensitively against gallery titles.
-                            let autoinstall =
-                                query_string.get("autoinstall").map(|v| v.to_string());
-                            let args = OpenMCPSettingsArgs { autoinstall };
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_mcp_settings_in_existing_window",
-                                "root_view:open_mcp_settings_in_new_window",
-                                &args,
-                                ctx,
-                            );
-                        }
-                        "platform" => {
+                        // Open settings page unless auth was initiated from cloud setup
+                        // (cloud setup users should stay on their current page)
+                        let source = query_string.get("source").map(|s| s.as_ref());
+                        let skip_settings = source == Some(CLOUD_SETUP_SOURCE);
+                        if !skip_settings {
                             dispatch_action_in_new_or_existing_window(
                                 primary_window_id,
                                 "root_view:open_settings_page_in_existing_window",
                                 "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::OzCloudAPIKeys,
+                                &SettingsSection::CloudEnvironments,
                                 ctx,
                             );
-                        }
-                        "appearance" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::Appearance,
-                                ctx,
-                            );
-                        }
-                        _ => {
-                            log::warn!("Failed to open settings pane with uri={url}");
                         }
                     }
-                } else {
-                    log::warn!("Failed to open settings pane with uri={url}");
+                    Some("mcp") => {
+                        // warp://settings/mcp?autoinstall=<name> auto-installs a gallery MCP server.
+                        // The value is matched case-insensitively against gallery titles.
+                        let autoinstall = query_string.get("autoinstall").map(|v| v.to_string());
+                        let args = OpenMCPSettingsArgs { autoinstall };
+                        dispatch_action_in_new_or_existing_window(
+                            primary_window_id,
+                            "root_view:open_mcp_settings_in_existing_window",
+                            "root_view:open_mcp_settings_in_new_window",
+                            &args,
+                            ctx,
+                        );
+                    }
+                    // No special sub-page: route the bare host, the `q` (search) and
+                    // `widget` (scroll-to) query params, and the simple section
+                    // sub-pages (e.g. billing_and_usage, platform, appearance,
+                    // warp_agent) resolved via `settings_section_for_simple_subpage`.
+                    maybe_simple_subpage => {
+                        let simple_section =
+                            maybe_simple_subpage.and_then(settings_section_for_simple_subpage);
+                        // Pull the non-empty `q` search query out of the already
+                        // parsed pairs to pre-fill the settings search bar.
+                        let search_query = query_string
+                            .get("q")
+                            .map(|query| query.to_string())
+                            .filter(|query| !query.is_empty());
+                        let widget_target = query_string
+                            .get("widget")
+                            .and_then(|slug| settings_widget_deeplink_target(slug));
+
+                        if let Some((page, widget_id)) = widget_target {
+                            // `?widget=` scrolls to a specific widget; it takes
+                            // precedence over `?q=` since searching would filter the
+                            // target widget out of view.
+                            let args = OpenSettingsArgs::Widget { page, widget_id };
+                            dispatch_action_in_new_or_existing_window(
+                                primary_window_id,
+                                "root_view:open_settings_in_existing_window",
+                                "root_view:open_settings_in_new_window",
+                                &args,
+                                ctx,
+                            );
+                        } else if let Some(query) = search_query {
+                            let args = OpenSettingsArgs::Search { query };
+                            dispatch_action_in_new_or_existing_window(
+                                primary_window_id,
+                                "root_view:open_settings_in_existing_window",
+                                "root_view:open_settings_in_new_window",
+                                &args,
+                                ctx,
+                            );
+                        } else if let Some(section) = simple_section {
+                            dispatch_action_in_new_or_existing_window(
+                                primary_window_id,
+                                "root_view:open_settings_page_in_existing_window",
+                                "root_view:open_settings_page_in_new_window",
+                                &section,
+                                ctx,
+                            );
+                        } else if maybe_simple_subpage.is_none() {
+                            // Bare `warp://settings` opens the default settings page.
+                            let args = OpenSettingsArgs::Default;
+                            dispatch_action_in_new_or_existing_window(
+                                primary_window_id,
+                                "root_view:open_settings_in_existing_window",
+                                "root_view:open_settings_in_new_window",
+                                &args,
+                                ctx,
+                            );
+                        } else {
+                            log::warn!("Failed to open settings pane: unrecognized sub-page");
+                        }
+                    }
                 }
             }
             UriHost::Home => {
@@ -1156,13 +1205,8 @@ impl Action {
 /// Handles all incoming urls. These urls are file urls, auth urls for login,
 /// and team urls for opening team settings.
 pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
-    // Non-dogfood builds must never log the full URL here: URLs routed to this
-    // handler can carry secrets in their query string (for example, the
-    // Firebase `refresh_token` on `warp://auth/desktop_redirect?...`). Log
-    // only the non-sensitive components (scheme, host, path) on release
-    // channels; dogfood builds retain the full URL for local debugging.
     safe_info!(
-        safe: ("received url {}", safe_url_log_fields(url)),
+        safe: ("received url"),
         full: ("received url {:?}", &url)
     );
 
@@ -1587,6 +1631,16 @@ fn dispatch_action_in_new_or_existing_window<T: 'static>(
     }
 }
 
+fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection> {
+    match subpage {
+        "billing_and_usage" => Some(SettingsSection::BillingAndUsage),
+        "platform" => Some(SettingsSection::OzCloudAPIKeys),
+        "appearance" => Some(SettingsSection::Appearance),
+        "warp_agent" => Some(SettingsSection::WarpAgent),
+        _ => None,
+    }
+}
+
 /// Validates an incoming custom URI for security and returns the host.
 fn validate_custom_uri(url: &Url) -> Result<UriHost> {
     // For now the only scheme we support is `[scheme_name]://[host_str]/...
@@ -1629,28 +1683,6 @@ fn validate_custom_uri(url: &Url) -> Result<UriHost> {
     );
 
     Ok(host)
-}
-
-/// Formats the non-sensitive components of an incoming URL for logging on
-/// release channels.
-///
-/// The returned string contains only the URL's scheme, host, and path — never
-/// its query string, fragment, or userinfo component. URLs that reach
-/// [`handle_incoming_uri`] can carry secrets in their query (for example, the
-/// Firebase refresh token in `warp://auth/desktop_redirect?refresh_token=...`),
-/// so this helper exists to give [`safe_info!`] a redacted representation that
-/// still preserves enough signal for triage.
-///
-/// `url.host_str()` can return `None` for schemes that don't require a host
-/// (e.g. some `file://` URLs on certain platforms); the literal `-` is used
-/// as a placeholder in that case so the formatter never panics.
-fn safe_url_log_fields(url: &Url) -> String {
-    format!(
-        "scheme={} host={} path={}",
-        url.scheme(),
-        url.host_str().unwrap_or("-"),
-        url.path(),
-    )
 }
 
 fn decode_uuid_hex(hex: &str) -> Option<Vec<u8>> {

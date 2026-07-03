@@ -13,6 +13,7 @@ pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHa
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
 use telemetry::CliTelemetryEvent;
+use tracing::Instrument as _;
 use warp_cli::agent::{
     AgentCommand, AgentProfileCommand, Harness, OutputFormat, Prompt, RunAgentArgs,
 };
@@ -23,6 +24,7 @@ use warp_cli::federate::FederateCommand;
 use warp_cli::harness_support::{HarnessSupportCommand, ReportArtifactCommand, TaskStatus};
 use warp_cli::integration::IntegrationCommand;
 use warp_cli::mcp::MCPCommand;
+use warp_cli::memory_store::{MemoryCommand, MemoryStoreCommand};
 use warp_cli::model::ModelCommand;
 use warp_cli::provider::ProviderCommand;
 use warp_cli::schedule::ScheduleSubcommand;
@@ -66,7 +68,7 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::send_telemetry_sync_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot};
+use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
@@ -90,6 +92,7 @@ mod integration;
 mod integration_output;
 mod mcp;
 mod mcp_config;
+mod memory_store;
 mod model;
 mod oauth_flow;
 pub mod output;
@@ -119,6 +122,7 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
 }
 
 /// Run a Warp CLI command.
+#[tracing::instrument(name = "agent_sdk::run", skip_all, err, fields(tags.cloud_agent = true))]
 pub fn run(
     ctx: &mut AppContext,
     command: CliCommand,
@@ -147,6 +151,10 @@ fn dispatch_command(
         CliCommand::MCP(mcp_cmd) => mcp::run(ctx, global_options, mcp_cmd),
         CliCommand::Run(task_cmd) => run_task(ctx, global_options, task_cmd),
         CliCommand::Model(model_cmd) => model::run(ctx, global_options, model_cmd),
+        CliCommand::MemoryStore(memory_store_cmd) => {
+            memory_store::run(ctx, global_options, memory_store_cmd)
+        }
+        CliCommand::Memory(memory_cmd) => memory_store::run_memory(ctx, global_options, memory_cmd),
         CliCommand::Login => admin::login(ctx),
         CliCommand::Logout => admin::logout(ctx),
         CliCommand::Whoami => admin::whoami(ctx, global_options.output_format),
@@ -310,6 +318,9 @@ fn run_agent(
                     "--claude-auth-secret is only valid with --harness claude."
                 ));
             }
+            if args.runner.is_some() && !FeatureFlag::CloudRunners.is_enabled() {
+                return Err(anyhow::anyhow!("unexpected argument '--runner' found"));
+            }
             ambient::run_ambient_agent(ctx, args)
         }
         AgentCommand::Profile(sub) => profiles::run(ctx, global_options, sub),
@@ -357,6 +368,14 @@ fn build_merged_config_and_task(
     // Merge precedence: file < CLI < skill
     let file_merged = config_file::merge_with_precedence(loaded_file.as_ref(), Default::default());
 
+    // Runner support is gated. The `run` command has no `--runner` flag, but a
+    // config file can still set `runner_id`, so reject it when the flag is off.
+    if file_merged.runner_id.is_some() && !FeatureFlag::CloudRunners.is_enabled() {
+        return Err(anyhow::anyhow!(
+            "`runner_id` is set in the config file but runner support is not enabled"
+        ));
+    }
+
     // Skill provides base_prompt and optionally name
     let (skill_name, runtime_base_prompt) = match resolved_skill {
         Some(skill) => (Some(skill.name.clone()), Some(skill.instructions.clone())),
@@ -385,6 +404,7 @@ fn build_merged_config_and_task(
         // CLI name > skill name > file name
         name: args.name.clone().or(skill_name).or(file_merged.name),
         environment_id: args.environment.clone().or(file_merged.environment_id),
+        runner_id: file_merged.runner_id,
         model_id: oz_model,
         // Skill base_prompt takes precedence over file base_prompt
         base_prompt: runtime_base_prompt.clone().or(file_merged.base_prompt),
@@ -484,6 +504,7 @@ fn build_server_side_task(
     let config = AgentConfigSnapshot {
         name: args.name.clone().or(skill_name),
         environment_id: environment.clone(),
+        runner_id: None,
         model_id: model_id_string,
         base_prompt: None,
         mcp_servers: cli_mcp_servers,
@@ -594,6 +615,12 @@ impl warpui::Entity for AgentDriverRunner {
 impl warpui::SingletonEntity for AgentDriverRunner {}
 
 impl AgentDriverRunner {
+    #[tracing::instrument(skip_all, err, fields(
+        tags.cloud_agent = true,
+        args.sandboxed = args.sandboxed,
+        args.computer_use = args.computer_use.computer_use,
+        args.no_computer_use = args.computer_use.no_computer_use
+    ))]
     async fn setup_and_run_driver(
         foreground: ModelSpawner<Self>,
         args: RunAgentArgs,
@@ -809,6 +836,99 @@ impl AgentDriverRunner {
         Ok(())
     }
 
+    async fn fetch_task_git_credentials(
+        task_id_str: String,
+        ai_client: Arc<dyn AIClient>,
+    ) -> anyhow::Result<Vec<GitCredential>> {
+        let workload_token = warp_isolation_platform::issue_workload_token(Some(
+            std::time::Duration::from_secs(5 * 60),
+        ))
+        .await?
+        .token;
+        ai_client
+            .get_task_git_credentials(task_id_str, workload_token)
+            .await
+    }
+
+    async fn bootstrap_git_credentials_for_task(
+        foreground: &ModelSpawner<Self>,
+        task_id_str: &str,
+        args: &RunAgentArgs,
+    ) -> Result<(), AgentDriverError> {
+        if warp_isolation_platform::detect().is_none() && args.configure_git_credentials_with_github
+        {
+            foreground
+                .spawn(|_, _| {
+                    command::blocking::Command::new("gh")
+                        .args(["auth", "setup-git"])
+                        .spawn()
+                        .map_err(|err| {
+                            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                                "gh auth setup-git failed: {err:?}"
+                            ))
+                        })
+                })
+                .await?
+                .map(|_| ())?;
+            return Ok(());
+        }
+
+        if !FeatureFlag::GitCredentialRefresh.is_enabled() {
+            return Ok(());
+        }
+
+        if task_id_str.parse::<AmbientAgentTaskId>().is_err() {
+            log::debug!(
+                "Skipping git credentials bootstrap: could not parse task ID '{task_id_str}'"
+            );
+            return Ok(());
+        }
+
+        let (ai_client, task_id_str) = foreground
+            .spawn({
+                let task_id_str = task_id_str.to_string();
+                move |_, ctx| {
+                    let ai_client = ServerApiProvider::handle(ctx)
+                        .as_ref(ctx)
+                        .get_ai_client()
+                        .clone();
+                    (ai_client, task_id_str)
+                }
+            })
+            .await?;
+
+        let credentials = match Self::fetch_task_git_credentials(task_id_str, ai_client).await {
+            Ok(credentials) => credentials,
+            Err(err)
+                if err
+                    .downcast_ref::<IsolationPlatformError>()
+                    .is_some_and(|err| {
+                        matches!(err, IsolationPlatformError::NoIsolationPlatformDetected)
+                    }) =>
+            {
+                log::debug!("Skipping git credentials bootstrap: {err}");
+                return Ok(());
+            }
+            Err(err) => {
+                return Err(AgentDriverError::SkillResolutionFailed(format!(
+                    "Failed to fetch git credentials before skill resolution: {err:#}"
+                )));
+            }
+        };
+        if credentials.is_empty() {
+            log::debug!("No git credentials returned before skill resolution");
+            return Ok(());
+        }
+
+        driver::git_credentials::configure_git_credentials(&credentials).map_err(|err| {
+            AgentDriverError::SkillResolutionFailed(format!(
+                "Failed to write git credentials before skill resolution: {err:#}"
+            ))
+        })?;
+        log::info!("Git credentials configured before task setup");
+        Ok(())
+    }
+
     /// Resolve the skill spec from args, if one was provided.
     ///
     /// In sandboxed mode with a fully-qualified spec (org + repo), the repo is
@@ -881,6 +1001,9 @@ impl AgentDriverRunner {
         }
         .map_err(AgentDriverError::ConfigBuildFailed)?;
 
+        if let Some(task_id_str) = args.task_id.as_ref() {
+            Self::bootstrap_git_credentials_for_task(foreground, task_id_str, &args).await?;
+        }
         // Resolve the skill, if we have one
         let resolved_skill =
             Self::resolve_skill(foreground, &args, &working_dir, setup_events).await?;
@@ -927,6 +1050,8 @@ impl AgentDriverRunner {
                         .snapshot_script_timeout
                         .map(|duration| duration.into()),
                     skip_initial_turn: args.skip_initial_turn,
+                    strict_mcp_startup: args.strict_mcp_startup,
+                    mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
                 };
 
                 Ok((merged_config, task, driver_options))
@@ -1104,38 +1229,7 @@ impl AgentDriverRunner {
             .await
         };
 
-        // Fetch a fresh GitHub token from the server so the driver can configure git
-        // and gh credentials without relying on environment variable injection.
-        let git_creds_ai_client = ai_client.clone();
-        let git_creds_task_id = task_id_str.clone();
-        let git_credentials = async move {
-            if !FeatureFlag::GitCredentialRefresh.is_enabled() {
-                return Ok(vec![]);
-            }
-            let workload_token = match warp_isolation_platform::issue_workload_token(Some(
-                std::time::Duration::from_secs(5 * 60),
-            ))
-            .await
-            {
-                Ok(token) => token.token,
-                Err(e) => {
-                    // Not in an isolated environment — no workload token available.
-                    log::debug!("Skipping git credentials fetch: {e}");
-                    return Ok(vec![]);
-                }
-            };
-            git_creds_ai_client
-                .get_task_git_credentials(git_creds_task_id, workload_token)
-                .await
-        };
-
-        let (
-            secrets_result,
-            attachments_result,
-            task_metadata_result,
-            handoff_snapshot_result,
-            git_credentials_result,
-        ) = futures::join!(
+        let (secrets_result, attachments_result, task_metadata_result, handoff_snapshot_result) = futures::join!(
             task_secrets,
             driver::attachments::fetch_and_download_attachments(
                 ai_client.clone(),
@@ -1145,7 +1239,6 @@ impl AgentDriverRunner {
             ),
             task_metadata,
             handoff_snapshot,
-            git_credentials,
         );
 
         // Extract attachments_dir from successful result, log errors
@@ -1166,26 +1259,6 @@ impl AgentDriverRunner {
             Ok(None) => {}
             Err(e) => {
                 log::warn!("Failed to fetch handoff snapshot attachments: {e:#}");
-            }
-        }
-
-        if FeatureFlag::GitCredentialRefresh.is_enabled() {
-            match git_credentials_result {
-                Ok(credentials) if !credentials.is_empty() => {
-                    driver::git_credentials::setup_git_config(&credentials);
-                    driver::git_credentials::configure_git_identity(&credentials);
-                    if let Err(e) = driver::git_credentials::write_git_credentials(&credentials) {
-                        log::warn!("Failed to write git credentials: {e:#}");
-                    } else {
-                        log::info!("Git credentials configured from taskGitCredentials");
-                    }
-                }
-                Ok(_) => {
-                    log::debug!("No git credentials returned; skipping credential file setup");
-                }
-                Err(e) => {
-                    log::warn!("Failed to fetch git credentials: {e:#}");
-                }
             }
         }
 
@@ -1278,6 +1351,7 @@ impl AgentDriverRunner {
     /// wraps the returned payload (if any) in [`driver::ResumeOptions::ThirdParty`]; each harness
     /// owns its server call and error mapping. Returns `None` if a third-party harness has no
     /// resume payload to surface.
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, conversation_id = conversation_id))]
     async fn load_conversation_information(
         foreground: &ModelSpawner<Self>,
         conversation_id: String,
@@ -1339,6 +1413,7 @@ impl AgentDriverRunner {
     }
 
     /// Resolve the environment and store into `driver_options`.
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, ?environment_id))]
     async fn resolve_environment(
         foreground: &ModelSpawner<Self>,
         environment_id: Option<String>,
@@ -1382,6 +1457,7 @@ impl AgentDriverRunner {
     }
 
     /// Create the AgentDriver and start running the task.
+    #[tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
     fn create_and_run_driver(
         ctx: &mut AppContext,
         driver_options: driver::AgentDriverOptions,
@@ -1402,7 +1478,9 @@ impl AgentDriverRunner {
             if let Some(share_requests) = share_requests {
                 driver.add_share_requests(share_requests, ctx);
             }
-            let agent_future = driver.run(task, ctx);
+            let span =
+                tracing::info_span!("AgentDriver::run", tags.cloud_agent = true, ?task.model, ?task.harness);
+            let agent_future = driver.run(task, ctx).instrument(span);
 
             ctx.spawn(agent_future, |_, result, ctx| match result {
                 Ok(()) => {
@@ -1452,6 +1530,8 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Model(model_cmd) => match model_cmd {
             ModelCommand::List => true,
         },
+        CliCommand::MemoryStore(_) => true,
+        CliCommand::Memory(_) => true,
         CliCommand::Login => false,
         CliCommand::Logout => false,
         CliCommand::Whoami => true,
@@ -1546,6 +1626,8 @@ fn report_fatal_error(err: anyhow::Error, ctx: &mut AppContext) {
         let _ = write!(&mut message, "\n=> {cause}");
     }
 
+    tracing::event!(tracing::Level::ERROR, tags.cloud_agent = true, message);
+
     #[cfg(not(target_family = "wasm"))]
     {
         if let Ok(path) = log_file_path() {
@@ -1639,6 +1721,19 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             },
         },
         CliCommand::Model(ModelCommand::List) => CliTelemetryEvent::ModelList,
+        CliCommand::MemoryStore(memory_store_cmd) => match memory_store_cmd {
+            MemoryStoreCommand::List => CliTelemetryEvent::MemoryStoreList,
+            MemoryStoreCommand::Get(_) => CliTelemetryEvent::MemoryStoreGetStore,
+            MemoryStoreCommand::Update(_) => CliTelemetryEvent::MemoryStoreUpdateStore,
+            MemoryStoreCommand::ListStoreAgents(_) => CliTelemetryEvent::MemoryStoreListStoreAgents,
+        },
+        CliCommand::Memory(memory_cmd) => match memory_cmd {
+            MemoryCommand::List(_) => CliTelemetryEvent::MemoryStoreListMemories,
+            MemoryCommand::Create(_) => CliTelemetryEvent::MemoryStoreCreateMemory,
+            MemoryCommand::Update(_) => CliTelemetryEvent::MemoryStoreUpdateMemory,
+            MemoryCommand::Delete(_) => CliTelemetryEvent::MemoryStoreDeleteMemory,
+            MemoryCommand::Versions(_) => CliTelemetryEvent::MemoryStoreListVersions,
+        },
         CliCommand::Login => CliTelemetryEvent::Login,
         CliCommand::Logout => CliTelemetryEvent::Logout,
         CliCommand::Whoami => CliTelemetryEvent::Whoami,

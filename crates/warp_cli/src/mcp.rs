@@ -11,6 +11,14 @@ pub enum MCPCommand {
     List,
 }
 
+impl MCPCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            MCPCommand::List => "mcp list",
+        }
+    }
+}
+
 /// Represents an MCP server specification from CLI input.
 ///
 /// This is a lightweight representation - full parsing happens in the app layer

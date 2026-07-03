@@ -138,7 +138,7 @@ impl AgentToolbarItemKind {
             Self::NLDToggle => Some(Icon::NLD),
             Self::VoiceInput => Some(Icon::Microphone),
             Self::FileAttach => Some(Icon::Plus),
-            Self::ContextWindowUsage => Some(Icon::ConversationContext0),
+            Self::ContextWindowUsage => Some(Icon::ContextRemaining100),
             Self::FileExplorer => Some(Icon::FileCopy),
             Self::RichInput => Some(Icon::TextInput),
             Self::ShareSession => Some(Icon::Phone01),
@@ -154,7 +154,9 @@ impl AgentToolbarItemKind {
     /// Only items relevant to composing a cloud run are shown.
     pub(super) fn is_available_during_handoff_compose(&self) -> bool {
         match self {
-            Self::ContextChip(ContextChipKind::ShellGitBranch) => true,
+            Self::ContextChip(
+                ContextChipKind::ShellGitBranch | ContextChipKind::GitBranchStatus,
+            ) => true,
             Self::ModelSelector | Self::VoiceInput | Self::FileAttach => true,
             Self::ContextChip(_)
             | Self::NLDToggle

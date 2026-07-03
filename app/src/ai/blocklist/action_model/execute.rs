@@ -16,10 +16,13 @@ pub(super) mod search_codebase;
 pub(super) mod send_message;
 pub(super) mod shell_command;
 pub(super) mod start_agent;
+pub(super) mod start_recording;
+pub(super) mod stop_recording;
 pub(super) mod suggest_new_conversation;
 pub(super) mod suggest_prompt;
 pub(super) mod upload_artifact;
 pub(super) mod use_computer;
+pub(super) mod wait_for_events;
 
 use std::any::Any;
 use std::path::PathBuf;
@@ -61,11 +64,14 @@ pub use shell_command::{ShellCommandExecutor, ShellCommandExecutorEvent};
 pub use start_agent::{
     StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
 };
+use start_recording::StartRecordingExecutor;
+use stop_recording::StopRecordingExecutor;
 pub use suggest_new_conversation::NewConversationDecision;
 use suggest_new_conversation::SuggestNewConversationExecutor;
 pub use suggest_prompt::PromptSuggestionExecutor;
 use upload_artifact::UploadArtifactExecutor;
 use use_computer::UseComputerExecutor;
+use wait_for_events::WaitForEventsExecutor;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
@@ -85,10 +91,12 @@ use crate::ai::agent::{
     FileLocations, ServerOutputId,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 #[cfg(feature = "local_fs")]
 use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session};
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::shell::ShellType;
@@ -257,12 +265,15 @@ pub struct BlocklistAIActionExecutor {
     create_documents_executor: ModelHandle<CreateDocumentsExecutor>,
     use_computer_executor: ModelHandle<UseComputerExecutor>,
     request_computer_use_executor: ModelHandle<RequestComputerUseExecutor>,
+    start_recording_executor: ModelHandle<StartRecordingExecutor>,
+    stop_recording_executor: ModelHandle<StopRecordingExecutor>,
     read_skill_executor: ModelHandle<ReadSkillExecutor>,
     fetch_conversation_executor: ModelHandle<FetchConversationExecutor>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
     run_agents_executor: ModelHandle<RunAgentsExecutor>,
     send_message_executor: ModelHandle<SendMessageToAgentExecutor>,
     ask_user_question_executor: ModelHandle<AskUserQuestionExecutor>,
+    wait_for_events_executor: ModelHandle<WaitForEventsExecutor>,
     /// The actions currently executing asynchronously, keyed by action ID.
     /// We track them per action rather than as a single slot so multiple actions from the same
     /// parallel phase can complete independently.
@@ -323,7 +334,9 @@ impl BlocklistAIActionExecutor {
         let use_computer_executor = ctx.add_model(|_| UseComputerExecutor::new());
         let request_computer_use_executor =
             ctx.add_model(|_| RequestComputerUseExecutor::new(terminal_view_id));
-        let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new());
+        let start_recording_executor = ctx.add_model(|_| StartRecordingExecutor::new());
+        let stop_recording_executor = ctx.add_model(|_| StopRecordingExecutor::new());
+        let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new(active_session.clone()));
         let fetch_conversation_executor = ctx.add_model(|_| FetchConversationExecutor::new());
         let start_agent_executor = ctx.add_model(StartAgentExecutor::new);
         let run_agents_executor = ctx
@@ -331,6 +344,8 @@ impl BlocklistAIActionExecutor {
         let send_message_executor = ctx.add_model(|_| SendMessageToAgentExecutor::new());
         let ask_user_question_executor =
             ctx.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
+        let wait_for_events_executor =
+            ctx.add_model(|ctx| WaitForEventsExecutor::new(terminal_view_id, ctx));
         Self {
             shell_command_executor,
             read_files_executor,
@@ -348,6 +363,8 @@ impl BlocklistAIActionExecutor {
             create_documents_executor,
             use_computer_executor,
             request_computer_use_executor,
+            start_recording_executor,
+            stop_recording_executor,
             async_executing_actions: Default::default(),
             terminal_model,
             read_skill_executor,
@@ -356,6 +373,7 @@ impl BlocklistAIActionExecutor {
             run_agents_executor,
             send_message_executor,
             ask_user_question_executor,
+            wait_for_events_executor,
         }
     }
 
@@ -363,6 +381,29 @@ impl BlocklistAIActionExecutor {
         self.async_executing_actions
             .get(action_id)
             .map(|running| &running.action)
+    }
+
+    /// Returns the action_id of any running WaitForEvents action for the
+    /// given conversation. There is at most one (wait_for_events is
+    /// documented as exclusive within a turn).
+    pub(super) fn find_running_wait_for_events(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Option<AIAgentActionId> {
+        self.async_executing_actions
+            .iter()
+            .find_map(|(action_id, running)| {
+                if running.conversation_id == conversation_id
+                    && matches!(
+                        running.action.action,
+                        AIAgentActionType::WaitForEvents { .. }
+                    )
+                {
+                    Some(action_id.clone())
+                } else {
+                    None
+                }
+            })
     }
 
     pub fn shell_command_executor(&self) -> &ModelHandle<ShellCommandExecutor> {
@@ -512,6 +553,12 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::RequestComputerUse(_) => self
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::StartRecording { .. } => self
+                .start_recording_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::StopRecording { .. } => self
+                .stop_recording_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::ReadSkill(_) => self
                 .read_skill_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
@@ -529,6 +576,9 @@ impl BlocklistAIActionExecutor {
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::RunAgents(_) => self
                 .run_agents_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::WaitForEvents { .. } => self
+                .wait_for_events_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
         }
     }
@@ -696,6 +746,13 @@ impl BlocklistAIActionExecutor {
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
+            AIAgentActionType::StartRecording { .. } => self
+                .start_recording_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::StopRecording { .. } => self
+                .stop_recording_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx)),
             AIAgentActionType::ReadSkill(_) => self
                 .read_skill_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
@@ -717,6 +774,10 @@ impl BlocklistAIActionExecutor {
                 .into(),
             AIAgentActionType::RunAgents(_) => self
                 .run_agents_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::WaitForEvents { .. } => self
+                .wait_for_events_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
         };
@@ -822,6 +883,26 @@ impl BlocklistAIActionExecutor {
                 self.search_codebase_executor.update(ctx, |executor, ctx| {
                     executor.cancel_execution(&running.action.id, ctx);
                 });
+            } else if matches!(running.action.action, AIAgentActionType::RunAgents(..)) {
+                self.run_agents_executor.update(ctx, |executor, ctx| {
+                    executor.cancel_execution(&running.action.id, ctx);
+                });
+            } else if matches!(
+                running.action.action,
+                AIAgentActionType::StartRecording { .. }
+            ) {
+                RecordingController::handle(ctx).update(ctx, |controller, _| {
+                    controller.abort_start();
+                });
+            } else if let AIAgentActionType::WaitForEvents { tool_call_id, .. } =
+                &running.action.action
+            {
+                // Drop the executor's pending entry; the shared cancel
+                // path emits FinishedAction(Cancelled).
+                let tool_call_id = tool_call_id.clone();
+                self.wait_for_events_executor.update(ctx, |executor, _| {
+                    executor.cancel_execution(&tool_call_id);
+                });
             }
             ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
                 result: Arc::new(AIAgentActionResult {
@@ -909,6 +990,12 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::RequestComputerUse(_) => self
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            AIAgentActionType::StartRecording { .. } => self
+                .start_recording_executor
+                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            AIAgentActionType::StopRecording { .. } => self
+                .stop_recording_executor
+                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::ReadSkill(_) => self
                 .read_skill_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
@@ -926,6 +1013,9 @@ impl BlocklistAIActionExecutor {
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::RunAgents(_) => self
                 .run_agents_executor
+                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            AIAgentActionType::WaitForEvents { .. } => self
+                .wait_for_events_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
         }
     }
@@ -1211,14 +1301,26 @@ async fn read_binary_file_context(
     })
 }
 
+fn build_is_file_path_command(path: &str, shell_type: ShellType) -> String {
+    let escaped_path = shell_quote_arg(path, shell_type);
+    if shell_type == ShellType::PowerShell {
+        format!("if (Test-Path -PathType Leaf {escaped_path}) {{ exit 0 }} else {{ exit 1 }}")
+    } else {
+        format!("test -f {escaped_path}")
+    }
+}
+
+fn build_is_git_repository_command(absolute_path: &str, shell_type: ShellType) -> String {
+    format!(
+        "git -C {} rev-parse",
+        shell_quote_arg(absolute_path, shell_type)
+    )
+}
+
 /// Returns true if the given path is a regular file on the session's filesystem.
 /// Runs a shell command on the session so it works for both local and remote sessions.
 async fn is_file_path(path: &str, session: &Session) -> bool {
-    let command = if session.shell().shell_type() == ShellType::PowerShell {
-        format!("if (Test-Path -PathType Leaf \"{path}\") {{ exit 0 }} else {{ exit 1 }}")
-    } else {
-        format!("test -f \"{path}\"")
-    };
+    let command = build_is_file_path_command(path, session.shell().shell_type());
     session
         .execute_command(&command, None, None, ExecuteCommandOptions::default())
         .await
@@ -1228,7 +1330,7 @@ async fn is_file_path(path: &str, session: &Session) -> bool {
 
 /// Returns true if git is installed and the given path is in a git repository.
 async fn is_git_repository(absolute_path: &str, session: &Session) -> anyhow::Result<bool> {
-    let git_command = format!("git -C \"{absolute_path}\" rev-parse");
+    let git_command = build_is_git_repository_command(absolute_path, session.shell().shell_type());
     let command_output = session
         .execute_command(
             git_command.as_str(),

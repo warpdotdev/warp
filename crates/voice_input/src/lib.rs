@@ -203,6 +203,13 @@ impl VoiceInput {
             StartListeningError::Other(anyhow::anyhow!("Resampler construction failed: {e}"))
         })?;
 
+        // Some audio backends (notably ALSA on Linux) fire this error callback
+        // repeatedly in a tight loop when the input device wedges - e.g.
+        // `alsa::poll()` returning POLLERR after a device disconnect. Logging at
+        // error level on every invocation floods Sentry with millions of
+        // identical events, so only report the first error per session at error
+        // level and downgrade the rest to debug.
+        let mut has_logged_stream_error = false;
         let stream = input_device
             .build_input_stream(
                 &stream_config,
@@ -219,8 +226,13 @@ impl VoiceInput {
                     // This is blocking, but we aren't on the main thread.
                     let _ = warpui_core::r#async::block_on(audio_frame_tx.send(mono_samples));
                 },
-                |err| {
-                    log::error!("Error in voice input stream: {err}");
+                move |err| {
+                    if has_logged_stream_error {
+                        log::debug!("Error in voice input stream (suppressed repeat): {err}");
+                    } else {
+                        has_logged_stream_error = true;
+                        log::error!("Error in voice input stream: {err}");
+                    }
                 },
                 Some(STREAM_TIMEOUT),
             )

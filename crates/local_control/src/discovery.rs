@@ -17,17 +17,19 @@
 //! Before following a record, clients require the endpoint host to be exactly
 //! `127.0.0.1` and the broker filename to be derived from the instance ID. A
 //! discovery scan also rejects incompatible records, prunes dead PIDs, and
-//! performs an authenticated `app.ping` probe. When outside-Warp control is
-//! disabled, records contain neither an endpoint nor a broker reference.
+//! performs an authenticated `app.ping` probe. When Scripting is disabled,
+//! records contain neither an endpoint nor a broker reference.
 //!
 //! The owner-only directory, records, and broker sockets protect against other
 //! OS users. The broker's kernel-reported peer-UID check is the authoritative
 //! same-user check before credential issuance. Neither mechanism distinguishes
 //! trusted Warp code from arbitrary software already running as that user.
+use std::collections::HashSet;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 #[cfg(windows)]
@@ -38,6 +40,8 @@ use crate::protocol::{ActionMetadata, ControlError, ErrorCode, PROTOCOL_VERSION}
 
 const DISCOVERY_DIR_ENV: &str = "WARP_LOCAL_CONTROL_DISCOVERY_DIR";
 const BROKER_SOCKET_SUFFIX: &str = ".broker.sock";
+const TEMP_RECORD_SUFFIX: &str = ".json.tmp";
+const ORPHAN_SOCKET_GRACE_PERIOD: Duration = Duration::from_secs(60);
 
 /// Stable identifier for one running Warp instance.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -108,7 +112,6 @@ pub struct InstanceRecord {
     pub executable_path: Option<PathBuf>,
     pub endpoint: Option<ControlEndpoint>,
     pub credential_broker: Option<CredentialBrokerReference>,
-    pub outside_warp_control_enabled: bool,
     pub actions: Vec<ActionMetadata>,
 }
 
@@ -133,7 +136,6 @@ impl InstanceRecord {
             app_version,
             started_at: Utc::now(),
             executable_path: std::env::current_exe().ok(),
-            outside_warp_control_enabled: endpoint.is_some(),
             credential_broker,
             endpoint,
             actions,
@@ -147,13 +149,9 @@ impl InstanceRecord {
     /// from its instance ID. The broker and app bridge still authenticate and
     /// authorize the eventual request.
     pub fn validate_local_control_authority(&self) -> Result<(), ControlError> {
-        match (
-            self.outside_warp_control_enabled,
-            &self.endpoint,
-            &self.credential_broker,
-        ) {
-            (false, None, None) => Ok(()),
-            (true, Some(endpoint), Some(credential_broker))
+        match (&self.endpoint, &self.credential_broker) {
+            (None, None) => Ok(()),
+            (Some(endpoint), Some(credential_broker))
                 if endpoint.host == "127.0.0.1"
                     && credential_broker.socket_path
                         == broker_socket_filename(&self.instance_id) =>
@@ -173,7 +171,7 @@ impl InstanceRecord {
         let credential_broker = self.credential_broker.as_ref().ok_or_else(|| {
             ControlError::new(
                 ErrorCode::LocalControlDisabled,
-                "outside-Warp local control credential broker is disabled for this instance",
+                "local-control credential broker is disabled for this instance",
             )
         })?;
         Ok(discovery_dir().join(&credential_broker.socket_path))
@@ -243,23 +241,33 @@ fn write_record(path: &Path, record: &InstanceRecord) -> Result<(), ControlError
             err.to_string(),
         )
     })?;
-    fs::write(path, bytes).map_err(|err| {
+    let temp_path = path.with_extension("json.tmp");
+    fs::write(&temp_path, bytes).map_err(|err| {
         ControlError::with_details(
             ErrorCode::Internal,
-            "failed to write local-control discovery record",
+            "failed to write temporary local-control discovery record",
             err.to_string(),
         )
     })?;
-    set_private_permissions(path)?;
+    if let Err(error) = set_private_permissions(&temp_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    fs::rename(&temp_path, path).map_err(|err| {
+        let _ = fs::remove_file(&temp_path);
+        ControlError::with_details(
+            ErrorCode::Internal,
+            "failed to publish local-control discovery record",
+            err.to_string(),
+        )
+    })?;
     Ok(())
 }
 
 impl Drop for RegisteredInstance {
     // Drop-time cleanup is the best-effort fast path for graceful shutdown.
-    // `list_instances_from_dir` is the robust cleanup path: it treats records
-    // whose PID is no longer alive as stale, removes them, and ignores malformed
-    // or unreadable records so a crash can leave at most a temporary zombie
-    // reference that is pruned on the next discovery scan.
+    // `list_instances_from_dir` is the robust cleanup path: it removes stale
+    // records, matching broker sockets, and abandoned registry artifacts.
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
         if let Some(path) = &self.broker_socket_path {
@@ -280,51 +288,149 @@ pub fn discovery_dir() -> PathBuf {
     PathBuf::from(home).join(".warp").join("local-control")
 }
 
-/// Returns compatible live instances that pass an authenticated app ping.
+/// Returns compatible live instances from `channel` that pass an authenticated app ping.
 ///
 /// The ping follows the normal broker-to-HTTP flow and verifies the responding
 /// app's instance ID, so a live PID and parseable record alone are insufficient.
-pub fn list_instances() -> Vec<InstanceRecord> {
-    list_instances_from_dir(&discovery_dir())
+pub fn list_instances(channel: &str) -> Vec<InstanceRecord> {
+    let dir = discovery_dir();
+    list_instances_from_dir(&dir, channel)
         .into_iter()
-        .filter(|record| crate::client::probe_instance(record).is_ok())
+        .filter(|record| {
+            if crate::client::probe_instance(record).is_ok() {
+                return true;
+            }
+            if !is_pid_alive(record.pid) {
+                remove_instance_artifacts(&dir, &record.instance_id);
+            }
+            false
+        })
         .collect()
 }
 
-/// Parses structurally valid candidate records and prunes records with dead PIDs.
+/// Parses structurally valid candidate records from `channel` and prunes records with dead PIDs.
 ///
 /// This lower-level scan does not contact the advertised endpoint; callers that
 /// need invokable instances should use [`list_instances`] so candidates also
 /// pass the authenticated probe.
-pub fn list_instances_from_dir(dir: &Path) -> Vec<InstanceRecord> {
+pub fn list_instances_from_dir(dir: &Path, channel: &str) -> Vec<InstanceRecord> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut records = Vec::new();
+    let mut retained_broker_sockets = HashSet::new();
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
+        if !is_record_path(&path) {
+            continue;
+        }
         let contents = match fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(_) => {
+                remove_malformed_record_artifacts(dir, &path);
+                continue;
+            }
         };
         let record = match serde_json::from_str::<InstanceRecord>(&contents) {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(_) => {
+                remove_malformed_record_artifacts(dir, &path);
+                continue;
+            }
         };
+        if !is_pid_alive(record.pid) {
+            remove_instance_artifacts(dir, &record.instance_id);
+            continue;
+        }
+        if record.credential_broker.is_some() {
+            retained_broker_sockets.insert(broker_socket_filename(&record.instance_id));
+        }
         if record.protocol_version != PROTOCOL_VERSION {
+            continue;
+        }
+        if record.channel != channel {
             continue;
         }
         if record.validate_local_control_authority().is_err() {
             continue;
         }
-        if !is_pid_alive(record.pid) {
-            let _ = fs::remove_file(&path);
-            continue;
-        }
         records.push(record);
     }
+    sweep_orphan_broker_sockets(dir, &retained_broker_sockets, ORPHAN_SOCKET_GRACE_PERIOD);
+    sweep_abandoned_temp_records(dir, ORPHAN_SOCKET_GRACE_PERIOD);
     records.sort_by_key(|record| record.started_at);
     records
+}
+
+fn is_record_path(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()) == Some("json")
+}
+
+fn remove_malformed_record_artifacts(dir: &Path, path: &Path) {
+    let _ = fs::remove_file(path);
+    let Some(instance_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        return;
+    };
+    let _ = fs::remove_file(dir.join(format!("{instance_id}{BROKER_SOCKET_SUFFIX}")));
+}
+
+fn remove_instance_artifacts(dir: &Path, instance_id: &InstanceId) {
+    let _ = fs::remove_file(record_path(dir, instance_id));
+    let _ = fs::remove_file(dir.join(broker_socket_filename(instance_id)));
+}
+
+fn sweep_orphan_broker_sockets(
+    dir: &Path,
+    retained_broker_sockets: &HashSet<PathBuf>,
+    grace_period: Duration,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Some(filename) = path.file_name().and_then(|filename| filename.to_str()) else {
+            continue;
+        };
+        if !filename.ends_with(BROKER_SOCKET_SUFFIX)
+            || retained_broker_sockets.contains(Path::new(filename))
+        {
+            continue;
+        }
+        let Ok(age) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+            continue;
+        };
+        let Ok(age) = age.elapsed() else {
+            continue;
+        };
+        if age >= grace_period {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn sweep_abandoned_temp_records(dir: &Path, grace_period: Duration) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Some(filename) = path.file_name().and_then(|filename| filename.to_str()) else {
+            continue;
+        };
+        if !filename.ends_with(TEMP_RECORD_SUFFIX) {
+            continue;
+        }
+        let Ok(age) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+            continue;
+        };
+        let Ok(age) = age.elapsed() else {
+            continue;
+        };
+        if age >= grace_period {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 #[cfg(unix)]

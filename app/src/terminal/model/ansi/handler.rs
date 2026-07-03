@@ -15,8 +15,7 @@ use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::terminal::model::kitty::{KittyAction, KittyChunk, KittyResponse};
 use crate::terminal::model::selection::ScrollDelta;
-use crate::terminal::model::terminal_model::TmuxInstallationState;
-use crate::terminal::model::tmux::ControlModeEvent;
+use crate::terminal::model::session::SessionId;
 
 /// Trait to be implemented by model objects that handle pty output. The
 /// ansi::Performer (our pty output parser) delegates handling of specific
@@ -237,14 +236,30 @@ pub trait Handler {
     /// Report text area size in characters.
     fn text_area_size_chars<W: io::Write>(&mut self, _: &mut W);
 
+    /// Returns whether the given session_id is recognized as a client-generated
+    /// session. Used to validate DCS hook integrity: hooks carrying an
+    /// unrecognized session_id are rejected before dispatch. Defaults to false
+    /// so implementors must explicitly opt into accepting integrity-protected hooks.
+    fn is_registered_session(&self, _session_id: SessionId) -> bool {
+        false
+    }
+
+    /// Returns whether DCS hooks should require a registered session ID.
+    fn should_validate_dcs_hook_session_id(&self) -> bool {
+        true
+    }
+
     /// Callback for the Warp CommandFinished hook.
     fn command_finished(&mut self, _data: CommandFinishedValue) {}
 
     /// Process a prompt marker control sequence.
     fn prompt_marker(&mut self, _marker: PromptMarker) {}
 
-    /// Callback for the Warp precmd hook.
-    fn precmd(&mut self, _data: PrecmdValue) {}
+    /// Callback for a Warp precmd hook with completion metadata.
+    fn precmd_with_completion_metadata(&mut self, _data: PrecmdValue) {}
+
+    /// Callback for a prompt-only Warp precmd hook.
+    fn prompt_only_precmd(&mut self, _data: PromptMetadata) {}
 
     /// Update the active block's current working directory, independent of the
     /// prompt cycle. Invoked from OSC 7 (`\e]7;file://host/path`) so external
@@ -295,21 +310,9 @@ pub trait Handler {
     /// Otherwise, it's ignored.
     fn sourced_rc_file(&mut self, _data: SourcedRcFileForWarpValue) {}
 
-    /// Callback emitted during the initialization process for ssh sessions
-    fn init_ssh(&mut self, _data: InitSshValue) {}
-
     /// Callback emitted to notify the app that we're ready to complete an
     /// assisted auto-update.
     fn finish_update(&mut self, _data: FinishUpdateValue) {}
-
-    /// Callback emitted from the warpify_ssh_session script if it's discovered
-    /// that we can't warpify the remote session.
-    fn remote_warpification_is_unavailable(&mut self, _data: WarpificationUnavailableReason) {}
-
-    /// How tmux was installed.
-    fn notify_ssh_tmux_is_installed(&mut self, _tmux_installation: TmuxInstallationState) {}
-
-    fn tmux_install_failed(&mut self, _data: TmuxInstallFailedInfo) {}
 
     /// Callback to handle an "in-band command output start" OSC.
     ///
@@ -329,9 +332,6 @@ pub trait Handler {
 
     /// Hook that gets called upon receiving a "Reset Grid" OSC from ConPTY.
     fn on_reset_grid(&mut self) {}
-
-    /// tmux control mode event
-    fn tmux_control_mode_event(&mut self, _event: ControlModeEvent) {}
 
     /// Callback that tells the terminal that the shell is ready to receive
     /// the string to run completions for.

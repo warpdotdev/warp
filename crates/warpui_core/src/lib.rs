@@ -22,6 +22,8 @@ pub mod platform;
 pub mod prelude;
 pub mod presenter;
 pub mod rendering;
+#[cfg(feature = "tui")]
+pub mod runtime;
 pub mod scene;
 pub mod telemetry;
 #[cfg(test)]
@@ -41,18 +43,19 @@ pub use assets::AssetProvider;
 pub use clipboard::Clipboard;
 pub use elements::Element;
 pub use event::Event;
-use pathfinder_color::ColorU;
+pub use pathfinder_color as color;
+// Keep `geometry` as its own public module alias alongside `color`.
+pub use pathfinder_geometry as geometry;
 pub use presenter::{
     AfterLayoutContext, EventContext, LayoutContext, PaintContext, Presenter, SizeConstraint,
 };
 pub use scene::{ClipBounds, Scene};
 pub use zoom::ZoomFactor;
-pub use {pathfinder_color as color, pathfinder_geometry as geometry};
 
 pub use crate::core::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Gradient {
-    pub start: ColorU,
-    pub end: ColorU,
+    pub start: color::ColorU,
+    pub end: color::ColorU,
 }

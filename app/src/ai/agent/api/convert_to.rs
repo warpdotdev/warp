@@ -44,11 +44,6 @@ impl TryFrom<StaticQueryType> for api::request::input::query_with_canned_respons
                     api::request::input::query_with_canned_response::SomethingElse {},
                 ),
             ),
-            StaticQueryType::CustomOnboardingRequest => Ok(
-                api::request::input::query_with_canned_response::Type::CustomOnboardingRequest(
-                    api::request::input::query_with_canned_response::CustomOnboardingRequest {},
-                ),
-            ),
             StaticQueryType::EvaluationSuite => {
                 Err(anyhow::anyhow!("EvaluationSuite StaticQueryType not yet supported").into())
             }
@@ -688,6 +683,12 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::RequestComputerUse(request_computer_use_result) => {
                 Some(request_computer_use_result.try_into()?)
             }
+            AIAgentActionResultType::StartRecording(start_recording_result) => {
+                Some(start_recording_result.try_into()?)
+            }
+            AIAgentActionResultType::StopRecording(stop_recording_result) => {
+                Some(stop_recording_result.try_into()?)
+            }
             AIAgentActionResultType::FetchConversation(fetch_conversation_result) => {
                 Some(fetch_conversation_result.try_into()?)
             }
@@ -705,6 +706,9 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             }
             AIAgentActionResultType::RunAgents(orchestrate_result) => {
                 Some(orchestrate_result.try_into()?)
+            }
+            AIAgentActionResultType::WaitForEvents(wait_for_events_result) => {
+                Some(wait_for_events_result.try_into()?)
             }
         };
         Ok(

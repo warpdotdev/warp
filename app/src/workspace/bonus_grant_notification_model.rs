@@ -29,7 +29,7 @@ impl SingletonEntity for BonusGrantNotificationModel {}
 
 impl BonusGrantNotificationModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
             if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
                 me.check_for_new_bonus_grants(ctx);
             }

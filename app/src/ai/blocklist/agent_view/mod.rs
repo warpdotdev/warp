@@ -2,6 +2,7 @@ pub(crate) mod agent_input_footer;
 mod agent_message_bar;
 mod agent_view_block;
 mod controller;
+mod conversation_selection;
 mod ephemeral_message_model;
 mod inline_agent_view_header;
 // TODO: Move orchestration_conversation_links module import elsewhere.
@@ -18,6 +19,7 @@ pub use agent_input_footer::*;
 pub use agent_message_bar::*;
 pub use agent_view_block::*;
 pub use controller::*;
+pub(crate) use conversation_selection::AgentViewConversationSelection;
 pub use ephemeral_message_model::*;
 pub use inline_agent_view_header::*;
 pub use orchestration_pill_bar::{render_orchestration_breadcrumbs, OrchestrationPillBar};

@@ -7,6 +7,14 @@ pub enum ModelCommand {
     List,
 }
 
+impl ModelCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            ModelCommand::List => "model list",
+        }
+    }
+}
+
 /// Shared CLI args for selecting a base model.
 #[derive(Debug, Clone, Args, Default)]
 pub struct ModelArgs {

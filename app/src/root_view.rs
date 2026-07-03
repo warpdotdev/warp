@@ -18,8 +18,8 @@ use session_sharing_protocol::common::SessionId;
 use settings::Setting as _;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
+use warp_core::safe_error;
 use warp_core::user_preferences::GetUserPreferences as _;
-use warp_graphql::billing::StripeSubscriptionPlan;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Border, ChildAnchor, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
@@ -68,9 +68,7 @@ use crate::linear::LinearIssueWork;
 use crate::notebooks::manager::NotebookSource;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
-use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::experiments::is_free_user_no_ai_experiment_active;
 use crate::server::ids::SyncId;
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
@@ -88,7 +86,7 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::view::{cell_size_and_padding, TerminalAction};
 use crate::themes::onboarding_theme_picker_themes;
 use crate::themes::theme::{AnsiColorIdentifier, Blend, Fill, ThemeKind, WarpThemeConfig};
-use crate::uri::OpenMCPSettingsArgs;
+use crate::uri::{OpenMCPSettingsArgs, OpenSettingsArgs};
 use crate::util::bindings::{self, is_binding_pty_compliant};
 use crate::util::traffic_lights::{traffic_light_data, TrafficLightData, TrafficLightMouseStates};
 use crate::view_components::DismissibleToast;
@@ -387,6 +385,15 @@ pub fn init(app: &mut AppContext) {
     app.add_action(
         "root_view:open_settings_page_in_existing_window",
         RootView::open_settings_page_in_existing_window,
+    );
+
+    app.add_global_action(
+        "root_view:open_settings_in_new_window",
+        open_settings_in_new_window,
+    );
+    app.add_action(
+        "root_view:open_settings_in_existing_window",
+        RootView::open_settings_in_existing_window,
     );
 
     app.add_global_action(
@@ -978,6 +985,34 @@ fn open_settings_page_in_new_window(section: &SettingsSection, ctx: &mut AppCont
                 workspace_view_handle.id(),
                 &WorkspaceAction::ShowSettingsPage(*section),
             );
+        }
+    });
+}
+
+/// Maps a `warp://settings` deeplink to the workspace action that opens it.
+fn workspace_action_for_open_settings(args: &OpenSettingsArgs) -> WorkspaceAction {
+    match args {
+        OpenSettingsArgs::Default => WorkspaceAction::ShowSettings,
+        OpenSettingsArgs::Search { query } => WorkspaceAction::ShowSettingsPageWithSearch {
+            search_query: query.clone(),
+            section: None,
+        },
+        OpenSettingsArgs::Widget { page, widget_id } => WorkspaceAction::ScrollToSettingsWidget {
+            page: *page,
+            widget_id,
+        },
+    }
+}
+
+fn open_settings_in_new_window(args: &OpenSettingsArgs, ctx: &mut AppContext) {
+    let action = workspace_action_for_open_settings(args);
+    let root_handle = open_new_window_get_handles(None, ctx).1;
+    root_handle.update(ctx, |root_view, ctx| {
+        if let AuthOnboardingState::Terminal(workspace_view_handle) =
+            &root_view.auth_onboarding_state
+        {
+            let window_id = ctx.window_id();
+            ctx.dispatch_typed_action_for_view(window_id, workspace_view_handle.id(), &action);
         }
     });
 }
@@ -1904,12 +1939,6 @@ impl RootView {
         true
     }
 
-    fn build_plan_yearly_price_cents(ctx: &AppContext) -> Option<i32> {
-        PricingInfoModel::as_ref(ctx)
-            .plan_pricing(&StripeSubscriptionPlan::Build)
-            .map(|p| p.yearly_plan_price_per_month_usd_cents)
-    }
-
     fn create_agent_onboarding_view(
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<AgentOnboardingView> {
@@ -1926,8 +1955,6 @@ impl RootView {
                 .ai_autonomy_settings()
                 .has_any_overrides();
 
-            let agent_price_cents = Self::build_plan_yearly_price_cents(ctx);
-
             let auth_state = current_onboarding_auth_state(ctx);
 
             AgentOnboardingView::new(
@@ -1937,26 +1964,10 @@ impl RootView {
                 default_model_id,
                 workspace_enforces_autonomy,
                 FeatureFlag::AgentView.is_enabled(),
-                is_free_user_no_ai_experiment_active(ctx),
-                agent_price_cents,
                 auth_state,
                 ctx,
             )
         });
-
-        // Subscribe to pricing updates so the badge stays current.
-        let onboarding_view_for_pricing = onboarding_view.clone();
-        ctx.subscribe_to_model(
-            &PricingInfoModel::handle(ctx),
-            move |_, _, event, ctx| match event {
-                PricingInfoModelEvent::PricingInfoUpdated => {
-                    let cents = Self::build_plan_yearly_price_cents(ctx);
-                    onboarding_view_for_pricing.update(ctx, |view, ctx| {
-                        view.set_agent_price_cents(cents, ctx);
-                    });
-                }
-            },
-        );
 
         let onboarding_view_clone = onboarding_view.clone();
         ctx.subscribe_to_model(
@@ -1975,42 +1986,21 @@ impl RootView {
             },
         );
 
-        // Subscribe to workspace changes to update autonomy enforcement state and detect upgrades.
-        // TeamsChanged fires whenever the workspace/billing metadata poll returns, which is also
-        // when a free→paid upgrade would be reflected (customer_type changes).
+        // Subscribe to workspace changes to update autonomy enforcement state and auth/billing
+        // state (e.g. a free→paid upgrade reflected by the workspace/billing metadata poll).
         let onboarding_view_for_workspaces = onboarding_view.clone();
         ctx.subscribe_to_model(
             &UserWorkspaces::handle(ctx),
             move |_, user_workspaces, event, ctx| {
-                match event {
-                    UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess => {
-                        let workspace_enforces_autonomy = user_workspaces
-                            .as_ref(ctx)
-                            .ai_autonomy_settings()
-                            .has_any_overrides();
-                        onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
-                            onboarding_view
-                                .set_workspace_enforces_autonomy(workspace_enforces_autonomy, ctx);
-                        });
-                    }
-                    UserWorkspacesEvent::TeamsChanged => {
-                        let new_locked = is_free_user_no_ai_experiment_active(ctx);
-                        let was_locked = onboarding_view_for_workspaces
-                            .as_ref(ctx)
-                            .free_user_no_ai_experiment(ctx);
-                        if was_locked && !new_locked {
-                            // User upgraded — skip the intention slide.
-                            onboarding_view_for_workspaces.update(ctx, |view, ctx| {
-                                view.set_free_user_no_ai_experiment(false, ctx);
-                                view.advance_to_agent_step(ctx);
-                            });
-                        } else {
-                            onboarding_view_for_workspaces.update(ctx, |view, ctx| {
-                                view.set_free_user_no_ai_experiment(new_locked, ctx);
-                            });
-                        }
-                    }
-                    _ => {}
+                if matches!(event, UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess) {
+                    let workspace_enforces_autonomy = user_workspaces
+                        .as_ref(ctx)
+                        .ai_autonomy_settings()
+                        .has_any_overrides();
+                    onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
+                        onboarding_view
+                            .set_workspace_enforces_autonomy(workspace_enforces_autonomy, ctx);
+                    });
                 }
                 let auth_state = current_onboarding_auth_state(ctx);
                 onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
@@ -2106,8 +2096,9 @@ impl RootView {
                 };
                 let workspace = target.to_workspace(ctx);
                 // User opted out of login: apply locally (no cloud race).
+                // Skipping leaves the user without an account, so AI is disabled.
                 if let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() {
-                    apply_onboarding_settings(&selected_settings, ctx);
+                    apply_onboarding_settings(&selected_settings, false, ctx);
                 }
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
@@ -2177,30 +2168,36 @@ impl RootView {
                         .theme()
                         .name()
                         .unwrap_or_else(|| "Dark".to_string());
-                    let (use_vertical_tabs, intention) = match selected_settings {
-                        SelectedSettings::AgentDrivenDevelopment {
-                            ui_customization, ..
-                        } => (
-                            ui_customization
-                                .as_ref()
-                                .map(|c| c.use_vertical_tabs)
-                                .unwrap_or(true),
-                            OnboardingIntention::AgentDrivenDevelopment,
-                        ),
-                        SelectedSettings::Terminal {
-                            ui_customization, ..
-                        } => (
-                            ui_customization
-                                .as_ref()
-                                .map(|c| c.use_vertical_tabs)
-                                .unwrap_or(false),
-                            OnboardingIntention::Terminal,
-                        ),
-                    };
+                    let (use_vertical_tabs, intention, uses_third_party_agents) =
+                        match selected_settings {
+                            SelectedSettings::AgentDrivenDevelopment {
+                                ui_customization,
+                                agent_settings,
+                                ..
+                            } => (
+                                ui_customization
+                                    .as_ref()
+                                    .map(|c| c.use_vertical_tabs)
+                                    .unwrap_or(true),
+                                OnboardingIntention::AgentDrivenDevelopment,
+                                agent_settings.disable_oz,
+                            ),
+                            SelectedSettings::Terminal {
+                                ui_customization, ..
+                            } => (
+                                ui_customization
+                                    .as_ref()
+                                    .map(|c| c.use_vertical_tabs)
+                                    .unwrap_or(false),
+                                OnboardingIntention::Terminal,
+                                false,
+                            ),
+                        };
 
                     let login_slide_view = ctx.add_typed_action_view(|ctx| {
                         LoginSlideView::new(
                             ai_enabled,
+                            uses_third_party_agents,
                             &theme_name,
                             use_vertical_tabs,
                             intention,
@@ -2224,7 +2221,7 @@ impl RootView {
                     return;
                 }
 
-                apply_onboarding_settings(selected_settings, ctx);
+                apply_onboarding_settings(selected_settings, is_logged_in, ctx);
 
                 if is_logged_in {
                     AuthManager::handle(ctx)
@@ -2323,6 +2320,8 @@ impl RootView {
                 let login_slide_view = ctx.add_typed_action_view(|ctx| {
                     LoginSlideView::new(
                         ai_enabled,
+                        // Terminal intention is never the third-party-agent path.
+                        false,
                         &theme_name,
                         use_vertical_tabs,
                         OnboardingIntention::Terminal,
@@ -2371,6 +2370,9 @@ impl RootView {
                 let login_slide_view = ctx.add_typed_action_view(|ctx| {
                     LoginSlideView::new(
                         ai_enabled,
+                        // No agent setup choice has been made yet; default to the
+                        // Warp Agent login screen rather than the third-party copy.
+                        false,
                         &theme_name,
                         use_vertical_tabs,
                         // Existing-user login from the welcome slide happens before the user
@@ -2472,7 +2474,10 @@ impl RootView {
                 });
             }
             Err(error) => {
-                log::error!("Unable to parse AuthResult from url: {error}");
+                safe_error!(
+                    safe: ("Unable to parse AuthResult from url"),
+                    full: ("Unable to parse AuthResult from url: {error}")
+                );
                 self.auth_view.update(ctx, |view, ctx| {
                     view.last_login_failure_reason =
                         Some(LoginFailureReason::InvalidRedirectUrl { was_pasted: false });
@@ -2835,6 +2840,22 @@ impl RootView {
         true
     }
 
+    pub fn open_settings_in_existing_window(
+        &mut self,
+        args: &OpenSettingsArgs,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let window_id = ctx.window_id();
+        if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
+            let action = workspace_action_for_open_settings(args);
+            ctx.dispatch_typed_action_for_view(window_id, handle.id(), &action);
+            ctx.windows().show_window_and_focus_app(window_id);
+        } else {
+            log::error!("Auth not complete before trying to open settings");
+        }
+        true
+    }
+
     /// Opens the MCP servers settings page in an existing window, optionally triggering auto-install.
     /// Waits for `initial_load_complete` before opening so gallery data is available for autoinstall.
     pub fn open_mcp_settings_in_existing_window(
@@ -3011,7 +3032,8 @@ impl RootView {
                     if let Some(selected_settings) =
                         self.pending_post_auth_onboarding_settings.take()
                     {
-                        apply_onboarding_settings(&selected_settings, ctx);
+                        // Skipped login → no account → AI disabled.
+                        apply_onboarding_settings(&selected_settings, false, ctx);
                     }
                     self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                     ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
@@ -3216,7 +3238,8 @@ impl RootView {
         let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() else {
             return;
         };
-        apply_onboarding_settings(&selected_settings, ctx);
+        // Reached only after a successful login, so the user has an account.
+        apply_onboarding_settings(&selected_settings, true, ctx);
     }
 
     /// If onboarding stored a pending tutorial (because login was required first),

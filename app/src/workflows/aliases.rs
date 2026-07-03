@@ -18,6 +18,7 @@ define_settings_group!(WorkflowAliases, settings: [
         default: vec![],
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
         storage_key: "WorkflowAliases",
     }
@@ -39,7 +40,7 @@ pub struct WorkflowAlias {
 impl WorkflowAliases {
     /// Call once to subscribe to UpdateManager notifications that a workflow has been deleted.
     pub fn connect(&self, ctx: &mut ModelContext<Self>) {
-        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             let result = match event {
                 CloudModelEvent::ObjectTrashed {
                     type_and_id: CloudObjectTypeAndId::Workflow(server_id),

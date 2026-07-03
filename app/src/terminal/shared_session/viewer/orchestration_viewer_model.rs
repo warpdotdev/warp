@@ -103,12 +103,15 @@ impl OrchestrationViewerModel {
             // on `parent_task_id`; the streamer handles SSE open/teardown,
             // cold-start seed, and cursor persistence on our behalf.
             let streamer = OrchestrationEventStreamer::handle(ctx);
-            ctx.subscribe_to_model(&streamer, move |me, event, ctx| {
+            ctx.subscribe_to_model(&streamer, move |me, _, event, ctx| {
                 me.handle_streamer_event(event, ctx);
             });
-            ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
-                me.handle_history_event(event, ctx);
-            });
+            ctx.subscribe_to_model(
+                &BlocklistAIHistoryModel::handle(ctx),
+                |me, _, event, ctx| {
+                    me.handle_history_event(event, ctx);
+                },
+            );
 
             let model = Self {
                 parent_task_id,
@@ -130,10 +133,13 @@ impl OrchestrationViewerModel {
         // Legacy polling path. Kick to fast cadence on `AppendedExchange` so
         // follow-up input that spawns new children surfaces without waiting
         // for the next 30s idle poll.
-        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
-            me.maybe_kick_polling(event, ctx);
-            me.maybe_backfill_parent_agent_ids(event, ctx);
-        });
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, ctx| {
+                me.maybe_kick_polling(event, ctx);
+                me.maybe_backfill_parent_agent_ids(event, ctx);
+            },
+        );
 
         let mut model = Self {
             parent_task_id,
@@ -169,11 +175,13 @@ impl OrchestrationViewerModel {
 
         match event {
             BlocklistAIHistoryEvent::SetActiveConversation {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
-                terminal_view_id, ..
-            } if *terminal_view_id == self.terminal_view_id => {
+                terminal_surface_id,
+                ..
+            } if *terminal_surface_id == self.terminal_view_id => {
                 self.register_viewer_mode_consumer_if_possible(ctx);
             }
             _ => {}

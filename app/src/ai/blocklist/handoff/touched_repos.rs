@@ -375,13 +375,16 @@ fn extract_action_paths(
         | AIAgentActionType::CreateDocuments(_)
         | AIAgentActionType::UseComputer(_)
         | AIAgentActionType::RequestComputerUse(_)
+        | AIAgentActionType::StartRecording { .. }
+        | AIAgentActionType::StopRecording { .. }
         | AIAgentActionType::ReadSkill(_)
         | AIAgentActionType::FetchConversation { .. }
         | AIAgentActionType::StartAgent { .. }
         | AIAgentActionType::SendMessageToAgent { .. }
         | AIAgentActionType::TransferShellCommandControlToUser { .. }
         | AIAgentActionType::AskUserQuestion { .. }
-        | AIAgentActionType::RunAgents(_) => {}
+        | AIAgentActionType::RunAgents(_)
+        | AIAgentActionType::WaitForEvents { .. } => {}
     }
 }
 

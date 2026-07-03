@@ -19,6 +19,7 @@ thiserror.workspace = true
 tink-core = "0.3"
 tink-proto = "0.3"
 tink-hybrid = "0.3"
+tracing.workspace = true
 zeroize = "1.8"
 warpui_core.workspace = true
 warp_core.workspace = true

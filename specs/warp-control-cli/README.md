@@ -1,12 +1,6 @@
 # warpctrl operator README
 `warpctrl` is the provisional CLI entrypoint for controlling an already-running local Warp app instance. It is intended for scripts, demos, agent workflows, and developer automation that need to perform allowlisted Warp UI actions through the installed channel-specific Warp binary without launching the GUI.
-The first implementation slice is intentionally narrow:
-- discover compatible running Warp instances;
-- select one instance implicitly when unambiguous or explicitly with `--instance`;
-- request brokered scoped local-control credentials for the selected instance;
-- check app health and get protocol and build identity metadata with `warpctrl app ping` and `warpctrl app version`;
-- create a new terminal tab with `warpctrl tab create`.
-The local-control protocol and catalog are broader than this slice. Protocol requests for actions outside the implemented capability set fail with structured unsupported-action errors until their handlers land; command names that do not have a shipped CLI parser route use Clap's normal parser error behavior.
+The implemented command surface contains exactly 84 typed, allowlisted actions. All 84 actions execute after exact-action credential validation. Close actions flow through normal Warp close behavior, so existing app warnings remain authoritative. The Block, Auth, Drive, and History families are absent, and `input.insert` plus `input.replace` stage text without submitting it.
 ## Packaging model
 `warpctrl` should be packaged as an Oz-style wrapper script rather than a standalone Rust binary. The wrapper should resolve the installed channel-specific Warp executable and invoke it with the hidden `--warpctrl` control-mode flag:
 - `crates/local_control` owns discovery records, local authentication material, client transport, protocol envelopes, action names, and error types.
@@ -40,8 +34,8 @@ Installer helper creation and release-artifact wiring still need a later packagi
 ## End-to-end local test flow
 Use matching app and CLI bits from the same branch or release artifact so the protocol version and action catalog agree.
 1. Start Warp and leave at least one window open.
-2. Open **Settings > Scripting**. Local control is disabled by default. To run `warpctrl` from an external terminal or script in the current foundation slice, select **Enabled everywhere, including outside Warp**. Enabling scripting allows for programmatic and agentic control of Warp; refer to the docs for more info.
-3. Confirm that the local-control server registered the running process:
+2. Open **Settings > Scripting**. Local control is enabled by default on internal dogfood builds and disabled by default on public channels (Stable, Preview, OSS). Verify that the Scripting toggle is set to **Enabled**, and enable it if needed. Enabling scripting allows for programmatic and agentic control of Warp; refer to the docs for more info.
+3. Confirm that the local-control server registered the running same-channel process:
    ```bash
    warpctrl instance list
    ```
@@ -49,19 +43,20 @@ Use matching app and CLI bits from the same branch or release artifact so the pr
    ```bash
    warpctrl app ping
    warpctrl app version
+   warpctrl surface list
    ```
-5. If exactly one compatible instance is listed, create a new terminal tab:
+5. If exactly one compatible same-channel instance is listed, create a new terminal tab:
    ```bash
    warpctrl tab create
    ```
-6. If multiple compatible instances are listed, copy the desired `instance_id` and target it explicitly:
+6. If multiple compatible same-channel instances are listed, copy the desired `instance_id` and target it explicitly:
    ```bash
    warpctrl app ping --instance <instance_id>
    warpctrl app version --instance <instance_id>
    warpctrl tab create --instance <instance_id>
    ```
 7. Verify the running app receives focus for the selected instance and a new terminal tab appears according to Warp's normal new-tab placement behavior. The success response includes the created tab's opaque ID.
-8. In a future slice that implements `tab list`, inspect state before and after the mutation:
+8. Inspect state before and after the mutation:
    ```bash
    warpctrl tab list --instance <instance_id>
    ```
@@ -69,15 +64,16 @@ Expected failures:
 - `warpctrl instance list` with no running compatible app: exits zero with an empty list;
 - a command that needs a selected app when no compatible app is running: exits non-zero with a no-instance error;
 - multiple ambiguous instances: exits non-zero and asks for `--instance`;
+- an explicit instance or PID from another channel: exits non-zero with a no-instance error;
 - unsupported app build or stale discovery record: exits non-zero with a protocol, stale-target, or transport error;
-- `tab.create` not yet implemented by the running app bridge: exits non-zero with an unsupported-action error.
 ## Security model
 The local-control protocol is designed for same-user scripting, not cross-user or network access. The trust boundary is the local user account.
 - **Loopback-only listener.** Each Warp process binds its control server to `127.0.0.1` on an ephemeral port. The listener is not reachable from the network.
-- **Brokered scoped credentials.** Discovery records contain instance metadata, loopback control-endpoint information, and an instance-bound Unix-domain-socket broker reference only when the selected Scripting mode allows outside-Warp control. The broker authenticates the connecting OS user with kernel peer credentials before decoding the credential request or issuing an action-scoped credential. Records do not contain bearer tokens or reusable full-access credentials.
-- **Short-lived grants.** `warpctrl` requests an action-scoped credential over the owner-authenticated broker socket for the selected instance and invocation context, then presents that credential to `/v1/control`. Grants are instance-bound, expired entries are pruned, and the in-memory grant set is capped. Missing, invalid, expired, revoked, or wrong-instance credentials are rejected before request decoding. After decoding identifies the requested action, insufficient-scope credentials are rejected before selector resolution or handler dispatch.
-- **Protected local state.** The authoritative Scripting mode uses platform secure storage, never imports a value from ordinary or private preferences, and defaults to disabled when no valid protected value is available. On POSIX platforms, discovery records and broker sockets use owner-only permissions. On Windows, outside-Warp publication remains disabled until equivalent ACL and broker protections are implemented.
-- **Stale-record pruning.** On each `instance list` or implicit discovery call, records whose PID is no longer alive are deleted automatically. Candidates are also health-probed and accepted only when the live app reports the expected instance identity.
+- **Brokered scoped credentials.** Discovery records contain instance metadata, loopback control-endpoint information, and an instance-bound Unix-domain-socket broker reference when Scripting is enabled. The broker authenticates the connecting OS user with kernel peer credentials before decoding the credential request or issuing an action-scoped credential. Records do not contain bearer tokens or reusable full-access credentials.
+- **Short-lived grants.** `warpctrl` requests an action-scoped credential over the owner-authenticated broker socket for the selected instance, then presents that credential to `/v1/control`. Grants are instance-bound, expired entries are pruned, and the in-memory grant set is capped. Missing, invalid, expired, revoked, or wrong-instance credentials are rejected before request decoding. After decoding identifies the requested action, insufficient-scope credentials are rejected before selector resolution or handler dispatch.
+- **Protected local state.** The authoritative Scripting setting uses platform secure storage, never imports a value from ordinary or private preferences, and defaults to enabled only on internal dogfood channels (disabled by default on public channels). On POSIX platforms, discovery records and broker sockets use owner-only permissions. On Windows, local-control publication remains disabled until equivalent ACL and broker protections are implemented.
+- **Channel-scoped discovery.** Each channel-specific CLI considers only records from its own Warp channel. Listing, implicit selection, and explicit instance or PID selection cannot target another channel.
+- **Stale-record pruning.** On each `instance list` or implicit discovery call, same-channel records whose PID is no longer alive are deleted automatically. Candidates are also health-probed and accepted only when the live app reports the expected instance identity.
 - **No CORS.** The control endpoints do not set permissive CORS headers, so browser-origin JavaScript cannot read responses even if it guesses the port. The credential requirement provides a second layer since browsers cannot read the brokered credential material.
 ```mermaid
 sequenceDiagram
@@ -90,8 +86,8 @@ sequenceDiagram
     CLI->>FS: Read discovery records (user-only permissions / ACL)
     FS-->>CLI: instance_id, loopback endpoint, broker socket reference
     CLI->>CLI: Prune stale PIDs, select instance
-    CLI->>Broker: Connect to Unix socket<br/>action + context + instance
-    Broker->>Broker: Authenticate peer OS user before decode;<br/>check Settings > Scripting mode, context, scopes
+    CLI->>Broker: Connect to Unix socket<br/>exact action + selected instance
+    Broker->>Broker: Authenticate peer OS user before decode;<br/>check Scripting enabled + catalog action
     alt Disabled, invalid, or insufficient scope
         Broker-->>CLI: Structured denial
     else Grant allowed
@@ -105,12 +101,12 @@ sequenceDiagram
     end
 ```
 **Known limitations and future hardening:**
-- Windows outside-Warp local-control publication is disabled until discovery-record ACL creation and validation are implemented.
-- The current low-risk first slice permits reuse of an unexpired scoped grant. A replay policy is required before broader or higher-risk command families ship.
+- Windows local-control publication is disabled until discovery-record ACL creation and validation are implemented.
+- Unexpired exact-action credentials may be reused for their granted action. Close actions flow through normal Warp close behavior and may trigger existing app warnings.
 - Same-user malicious software can still invoke trusted wrappers or automate the desktop, so brokered credentials are least-privilege guardrails rather than a complete hostile same-user sandbox.
-- Once higher-risk handlers land, the same-user boundary becomes more sensitive. Consider per-request nonces, stricter platform secure-storage constraints, and stronger approval or policy gates.
+- Future catalog expansion should consider per-request nonces, stricter platform secure-storage constraints, and stronger approval or policy gates.
 ## Documentation review notes
 - Treat `warpctrl` as provisional executable naming until packaging signs off on final artifact aliases.
-- Keep examples scoped to discovery, app health, protocol and build identity metadata, and `tab create` until additional app-side handlers are implemented.
-- Do not document catalog commands as usable just because they exist in protocol enums or parser scaffolding; operator docs should distinguish implemented commands from planned allowlist entries.
+- Keep examples scoped to the authoritative 84-action catalog and explicitly call out that close actions use normal Warp close behavior.
+- Do not document excluded families or actions as usable just because internal app implementations exist.
 - Windows packaging may initially follow the existing helper-wrapper pattern. Update this README when that decision is final.

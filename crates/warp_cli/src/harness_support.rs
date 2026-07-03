@@ -14,6 +14,18 @@ pub struct HarnessSupportArgs {
     pub command: HarnessSupportCommand,
 }
 
+impl HarnessSupportCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            HarnessSupportCommand::Ping => "harness-support ping",
+            HarnessSupportCommand::ReportArtifact(_) => "harness-support report-artifact",
+            HarnessSupportCommand::NotifyUser(_) => "harness-support notify-user",
+            HarnessSupportCommand::FinishTask(_) => "harness-support finish-task",
+            HarnessSupportCommand::ReportShutdown(_) => "harness-support report-shutdown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Subcommand)]
 pub enum HarnessSupportCommand {
     /// Verify connectivity by fetching and displaying the current run.

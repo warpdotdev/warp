@@ -239,6 +239,20 @@ fn parse_pi_stop_notification() {
 }
 
 #[test]
+fn parse_droid_stop_notification() {
+    // Droid is already a known CLI agent, so structured OSC 777 events using
+    // `"agent":"droid"` should resolve through the existing command prefix
+    // parser without any Droid-specific parser logic.
+    let body = r#"{"v":1,"agent":"droid","event":"stop","session_id":"abc","cwd":"/tmp/proj","project":"proj","query":"write a haiku","response":"Memory is safe"}"#;
+    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+
+    assert_eq!(notif.agent, CLIAgent::Droid);
+    assert_eq!(notif.event, CLIAgentEventType::Stop);
+    assert_eq!(notif.payload.query.as_deref(), Some("write a haiku"));
+    assert_eq!(notif.payload.response.as_deref(), Some("Memory is safe"));
+}
+
+#[test]
 fn apply_event_preserves_input_session() {
     let input_state = CLIAgentInputState::Open {
         entrypoint: CLIAgentInputEntrypoint::CtrlG,
@@ -602,6 +616,34 @@ fn prompt_submit_clears_permission_scoped_state() {
         session.session_context.query.as_deref(),
         Some("next prompt")
     );
+    assert!(matches!(session.status, CLIAgentSessionStatus::InProgress));
+}
+
+#[test]
+fn tool_complete_clears_permission_scoped_state() {
+    // GH-11082: answering an AskUserQuestion emits only ToolComplete (the
+    // plugin sends no PermissionReplied for it), so the Blocked -> InProgress
+    // transition here must also clear the stale summary. Otherwise the tab
+    // title keeps showing "Wants to run AskUserQuestion: ..." until the next
+    // prompt or Stop.
+    let mut session = blocked_claude_session_with_permission_state();
+
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::ToolComplete,
+        session_id: Some("abc".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    session.apply_event(&event);
+
+    assert_eq!(session.session_context.summary, None);
+    assert_eq!(session.session_context.tool_name, None);
+    assert_eq!(session.session_context.tool_input_preview, None);
     assert!(matches!(session.status, CLIAgentSessionStatus::InProgress));
 }
 

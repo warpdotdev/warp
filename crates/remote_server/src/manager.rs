@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-#[cfg(not(target_family = "wasm"))]
-use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
@@ -28,7 +26,8 @@ use crate::codebase_index_proto::RemoteCodebaseIndexStatus;
 use crate::proto::{
     diff_state, get_diff_state_response, CodebaseIndexLimits, DiffMode, DiffState,
     DiffStateErrorValue, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot,
-    FileStatusInfo, GetDiffStateResponse, TextEdit,
+    FileStatusInfo, GetDiffStateResponse, GitOpDelta, GitStatusMetadata, PrInfo, RepositoryInfo,
+    TextEdit,
 };
 use crate::repo_metadata_proto::proto_load_repo_metadata_directory_response_to_update;
 #[cfg(not(target_family = "wasm"))]
@@ -39,7 +38,7 @@ use crate::setup::RemoteOs;
 use crate::setup::UnsupportedReason;
 use crate::setup::{PreinstallCheckResult, RemotePlatform, RemoteServerSetupState};
 #[cfg(not(target_family = "wasm"))]
-use crate::transport::Connection;
+use crate::transport::{Connection, ControlPath};
 use crate::transport::{Error, InstallSource, RemoteTransport};
 use crate::HostId;
 
@@ -70,7 +69,7 @@ struct ReconnectParams {
     transport: Arc<dyn RemoteTransport>,
     auth_context: Arc<RemoteServerAuthContext>,
     codebase_index_limits: Option<CodebaseIndexLimits>,
-    control_path: Option<PathBuf>,
+    control_path: ControlPath,
     identity_key: String,
 }
 #[cfg(not(target_family = "wasm"))]
@@ -135,6 +134,17 @@ pub enum RemoteServerOperation {
     DiscardFiles,
     GetBranches,
     UploadHandoffSnapshot,
+    CommitChain,
+    Push,
+    CreatePr,
+    GenerateCommitMessage,
+}
+
+/// Successful result of a commit chain: the final delta plus an optional PR.
+#[derive(Clone, Debug)]
+pub struct CommitChainSuccess {
+    pub delta: GitOpDelta,
+    pub pr_info: Option<PrInfo>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -273,6 +283,10 @@ fn client_event_kind(event: &ClientEvent) -> &'static str {
         ClientEvent::DiffStateSnapshotReceived { .. } => "diff_state_snapshot",
         ClientEvent::DiffStateMetadataUpdateReceived { .. } => "diff_state_metadata_update",
         ClientEvent::DiffStateFileDeltaReceived { .. } => "diff_state_file_delta",
+        ClientEvent::RemoteAgentContextSnapshotReceived { .. } => "remote_agent_context_snapshot",
+        ClientEvent::GitStatusPushReceived { .. } => "git_status_push",
+        ClientEvent::GitHubPrInfoPushReceived { .. } => "github_pr_info_push",
+        ClientEvent::GitHubRepositoryInfoPushReceived { .. } => "github_repository_info_push",
         ClientEvent::MessageDecodingError => "message_decoding_error",
     }
 }
@@ -303,12 +317,14 @@ pub struct RemoteCodebaseIndexStatusWithPath {
 /// unaffected by lingering `Arc<RemoteServerClient>` clones held
 /// elsewhere (e.g. the per-session command executor).
 ///
-/// They also optionally carry a `control_path` pointing at the SSH
-/// `ControlMaster` socket for this session. On explicit teardown
-/// (after the user's shell exits), `deregister_session` uses this to
-/// run `ssh -O exit`, forcing the master to terminate without waiting
-/// for half-closed multiplexed channels to finish cleanup on the
-/// remote side.
+/// They also carry a [`ControlPath`] identifying the SSH
+/// `ControlMaster` socket for this session and who owns the master. On
+/// explicit teardown (after the user's shell exits),
+/// `deregister_session` runs `ssh -O exit` against `WarpManaged`
+/// masters, forcing them to terminate without waiting for half-closed
+/// multiplexed channels to finish cleanup on the remote side.
+/// `UserOwned` masters (the SSH wrapper attached to a master the user
+/// already had running) are left untouched.
 #[derive(Debug)]
 pub enum RemoteSessionState {
     /// `connect_session` has been called; background task is starting the
@@ -324,7 +340,7 @@ pub enum RemoteSessionState {
         _child: async_process::Child,
         /// See type-level doc.
         #[cfg(not(target_family = "wasm"))]
-        control_path: Option<PathBuf>,
+        control_path: ControlPath,
         /// Tail buffer of the last N stderr lines from the proxy subprocess.
         #[cfg(not(target_family = "wasm"))]
         stderr_tail: crate::client::RemoteServerLog,
@@ -344,7 +360,7 @@ pub enum RemoteSessionState {
         _child: async_process::Child,
         /// See type-level doc.
         #[cfg(not(target_family = "wasm"))]
-        control_path: Option<PathBuf>,
+        control_path: ControlPath,
         /// Transport stored for reconnection after spontaneous disconnect.
         #[cfg(not(target_family = "wasm"))]
         transport: Arc<dyn RemoteTransport>,
@@ -354,14 +370,14 @@ pub enum RemoteSessionState {
     Reconnecting {
         attempt: u32,
         host_id: HostId,
-        control_path: Option<PathBuf>,
+        control_path: ControlPath,
     },
     /// The connection failed and the background task is briefly awaiting
     /// the child process's exit status before emitting the failure event.
     /// Preserves the `control_path` so `deregister_session` can still
     /// call `stop_control_master` if the user exits during this window.
     #[cfg(not(target_family = "wasm"))]
-    AwaitingExitStatus { control_path: Option<PathBuf> },
+    AwaitingExitStatus { control_path: ControlPath },
     /// Connection dropped (EOF/error from the reader task).
     Disconnected,
 }
@@ -450,6 +466,11 @@ pub enum RemoteServerManagerEvent {
     /// The last session for this host was disconnected or deregistered.
     /// Downstream features should tear down per-host models.
     HostDisconnected { host_id: HostId },
+    /// A newer full Agent Mode context snapshot published by the daemon host.
+    RemoteAgentContextSnapshot {
+        host_id: HostId,
+        snapshot: crate::proto::RemoteAgentContextSnapshot,
+    },
 
     // --- Repo metadata events (forwarded from ClientEvent push channel) ---
     /// Response to a `navigate_to_directory` request.
@@ -533,6 +554,68 @@ pub enum RemoteServerManagerEvent {
         result: Result<Vec<crate::proto::BranchInfo>, String>,
     },
 
+    // --- Git operations (commit / push / create-PR) ---
+    /// Response to a commit chain (commit + optional push + optional
+    /// create-PR). Carries proto types; the model converts to domain.
+    /// `host_id` + `repo_path` together identify the originating model, so a
+    /// response isn't applied to a same-path repo on a different host.
+    CommitChainResponse {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        result: Result<CommitChainSuccess, String>,
+    },
+    /// Response to a standalone push.
+    GitPushResponse {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        result: Result<GitOpDelta, String>,
+    },
+    /// Response to a standalone create-PR.
+    CreatePrResponse {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        result: Result<PrInfo, String>,
+    },
+    /// Response to a commit-message generation request (AI runs on the
+    /// daemon). `Ok` carries the generated message; `Err` the error string.
+    GenerateCommitMessageResponse {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        result: Result<String, String>,
+    },
+    /// Response to a committed-branch-files request (backs the Create PR
+    /// dialog's Changes box). Carries the committed per-file entries
+    /// (`merge_base(HEAD, main)..HEAD`) on success.
+    GetCommittedBranchFilesResponse {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        result: Result<Vec<crate::proto::FileChangeEntry>, String>,
+    },
+
+    // --- Git status events (forwarded from ClientEvent push channel) ---
+    /// An aggregate git status push (branch + diff stats) was pushed by the
+    /// server. Consumed by `RemoteGitRepoStatusModel` to drive the tab /
+    /// prompt chips for remote repositories.
+    GitStatusPushReceived {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        metadata: GitStatusMetadata,
+    },
+    /// PR info for the current branch was pushed by the server. Consumed by
+    /// `RemoteGitHubRepoModel` to drive PR chips for remote repositories.
+    GitHubPrInfoPushReceived {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        pr_info: Option<PrInfo>,
+    },
+    /// Repository name/owner info was pushed by the server. Consumed by
+    /// `RemoteGitHubRepoModel` to drive repository chips for remote repositories.
+    GitHubRepositoryInfoPushReceived {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        repository_info: Option<RepositoryInfo>,
+    },
+
     // --- Setup events ---
     /// Intermediate state change during the binary check/install flow.
     SetupStateChanged {
@@ -614,6 +697,7 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::GetBranchesResponse { session_id, .. } => Some(*session_id),
             RemoteServerManagerEvent::HostConnected { .. }
             | RemoteServerManagerEvent::HostDisconnected { .. }
+            | RemoteServerManagerEvent::RemoteAgentContextSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
@@ -625,7 +709,15 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::BufferConflictDetected { .. }
             | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
             | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
-            | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. } => None,
+            | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
+            | RemoteServerManagerEvent::CommitChainResponse { .. }
+            | RemoteServerManagerEvent::GitPushResponse { .. }
+            | RemoteServerManagerEvent::CreatePrResponse { .. }
+            | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
+            | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => None,
             RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
                 session_id: Some(session_id),
                 ..
@@ -659,6 +751,10 @@ pub enum HostRequestError {
     /// server-provided message verbatim so callers can surface it directly.
     #[error("{0}")]
     OperationFailed(String),
+    /// The request was cancelled client-side via
+    /// [`RemoteServerManager::abort_host_request`].
+    #[error("host request aborted")]
+    Aborted,
 }
 
 impl From<crate::client::ClientError> for HostRequestError {
@@ -710,6 +806,69 @@ impl PendingHostRequest {
     fn cancel_timeout(&self) {
         if let Some(abort) = &self.timeout_abort {
             abort.abort();
+        }
+    }
+}
+
+/// Parameters for a host-scoped remote ripgrep search.
+pub struct RipgrepSearchParams {
+    /// Effective ripgrep pattern after applying the caller's regex settings.
+    pub pattern: String,
+    /// Absolute roots to search on the remote host.
+    pub roots: Vec<StandardizedPath>,
+    /// Whether matching should ignore case.
+    pub ignore_case: bool,
+    /// Whether matching should span multiple lines.
+    pub multiline: bool,
+    /// Maximum number of matches requested from the remote host.
+    pub max_matches: u32,
+}
+
+/// A host-scoped remote ripgrep search registered synchronously with
+/// [`RemoteServerManager`], whose typed result can be awaited off-thread.
+///
+/// Synchronous registration is important for query cancellation: by the time
+/// this value is returned, [`RemoteServerManager::abort_host_request`] can
+/// always find the request instead of racing an asynchronously queued
+/// registration task.
+#[must_use = "pending remote searches must be awaited or aborted by request id"]
+pub struct PendingRipgrepSearch {
+    request_id: crate::protocol::RequestId,
+    response: oneshot::Receiver<Result<crate::proto::ServerMessage, HostRequestError>>,
+}
+
+impl PendingRipgrepSearch {
+    pub fn request_id(&self) -> &crate::protocol::RequestId {
+        &self.request_id
+    }
+
+    pub async fn result(self) -> Result<crate::proto::RipgrepSearchSuccess, HostRequestError> {
+        let msg = self
+            .response
+            .await
+            .map_err(|_| HostRequestError::AllSessionsDisconnected)??;
+        ripgrep_search_result(msg)
+    }
+}
+
+fn ripgrep_search_result(
+    msg: crate::proto::ServerMessage,
+) -> Result<crate::proto::RipgrepSearchSuccess, HostRequestError> {
+    match msg.message {
+        Some(crate::proto::server_message::Message::RipgrepSearchResponse(resp)) => {
+            match resp.result {
+                Some(crate::proto::ripgrep_search_response::Result::Success(success)) => {
+                    Ok(success)
+                }
+                Some(crate::proto::ripgrep_search_response::Result::Error(error)) => {
+                    Err(HostRequestError::OperationFailed(error.message))
+                }
+                None => Err(HostRequestError::UnexpectedResponse),
+            }
+        }
+        other => {
+            log::error!("Unexpected response variant for RipgrepSearch: {other:?}");
+            Err(HostRequestError::UnexpectedResponse)
         }
     }
 }
@@ -904,6 +1063,202 @@ impl HostRequestHandle {
         }
     }
 
+    // ── Code-review git operations ──────────────────────────────────
+    //
+    // Commit / push / create-PR / PR-info / commit-message generation. Routed
+    // host-scoped (via `self.send`) so they inherit `send_host_request`'s
+    // tracking, timeout, and writer-failure retry across sibling sessions. A
+    // nested `GitOpError` is surfaced as `HostRequestError::OperationFailed`
+    // so the raw git/gh message reaches the client's `user_facing_git_error`.
+
+    /// Runs the commit chain (commit, then optionally push, then optionally
+    /// create-PR) on the remote host in a single round trip, returning the
+    /// post-chain delta (refreshed unpushed commits + upstream) and any created
+    /// PR. The daemon sequences the underlying git / gh subprocesses host-local
+    /// (see `handle_git_commit_chain`), so the SSH link carries one request/response
+    /// instead of the 2–3 a client-side chain would send.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn git_commit_chain(
+        &self,
+        repo_path: &StandardizedPath,
+        mode: crate::proto::GitCommitChainMode,
+        message: String,
+        include_unstaged: bool,
+        branch: String,
+        autogenerate_pr_content: bool,
+    ) -> Result<(crate::proto::GitOpDelta, Option<crate::proto::PrInfo>), HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::GitCommitChain(
+                crate::proto::GitCommitChainRequest {
+                    repo_path: repo_path.to_string(),
+                    message,
+                    include_unstaged,
+                    branch,
+                    mode: mode as i32,
+                    autogenerate_pr_content,
+                },
+            ))
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GitCommitChainResponse(resp)) => {
+                match resp.result {
+                    Some(crate::proto::git_commit_chain_response::Result::Success(success)) => {
+                        Ok((success.delta.unwrap_or_default(), success.pr_info))
+                    }
+                    Some(crate::proto::git_commit_chain_response::Result::Error(e)) => {
+                        Err(HostRequestError::OperationFailed(e.message))
+                    }
+                    None => Err(HostRequestError::UnexpectedResponse),
+                }
+            }
+            other => {
+                log::error!("Unexpected response variant for CommitChain: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Pushes `branch` to origin (setting upstream) on the remote host,
+    /// returning the refreshed unpushed/upstream delta.
+    pub async fn git_push(
+        &self,
+        repo_path: &StandardizedPath,
+        branch: String,
+    ) -> Result<crate::proto::GitOpDelta, HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::GitPush(
+                crate::proto::GitPushRequest {
+                    repo_path: repo_path.to_string(),
+                    branch,
+                },
+            ))
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GitPushResponse(resp)) => match resp.result
+            {
+                Some(crate::proto::git_push_response::Result::Success(delta)) => Ok(delta),
+                Some(crate::proto::git_push_response::Result::Error(e)) => {
+                    Err(HostRequestError::OperationFailed(e.message))
+                }
+                None => Err(HostRequestError::UnexpectedResponse),
+            },
+            other => {
+                log::error!("Unexpected response variant for Push: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Creates a PR for the current branch on the remote host. When
+    /// `autogenerate_content` is set, the daemon AI-generates the title/body
+    /// (with a `gh pr create --fill` fallback) before running `gh pr create`.
+    pub async fn git_create_pr(
+        &self,
+        repo_path: &StandardizedPath,
+        branch: String,
+        autogenerate_content: bool,
+    ) -> Result<crate::proto::PrInfo, HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::GitCreatePr(
+                crate::proto::GitCreatePrRequest {
+                    repo_path: repo_path.to_string(),
+                    branch,
+                    autogenerate_content,
+                },
+            ))
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GitCreatePrResponse(resp)) => {
+                match resp.result {
+                    Some(crate::proto::git_create_pr_response::Result::Success(pr_info)) => {
+                        Ok(pr_info)
+                    }
+                    Some(crate::proto::git_create_pr_response::Result::Error(e)) => {
+                        Err(HostRequestError::OperationFailed(e.message))
+                    }
+                    None => Err(HostRequestError::UnexpectedResponse),
+                }
+            }
+            other => {
+                log::error!("Unexpected response variant for CreatePr: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Lists the committed branch files (`merge_base(HEAD, main)..HEAD`) for
+    /// the current branch on the remote host. Committed-only — excludes
+    /// uncommitted and untracked changes, so it matches what a PR would carry.
+    pub async fn git_get_committed_branch_files(
+        &self,
+        repo_path: &StandardizedPath,
+    ) -> Result<Vec<crate::proto::FileChangeEntry>, HostRequestError> {
+        let msg = self
+            .send(
+                crate::proto::host_scoped_request::Message::GitGetCommittedBranchFiles(
+                    crate::proto::GitGetCommittedBranchFilesRequest {
+                        repo_path: repo_path.to_string(),
+                    },
+                ),
+            )
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GitGetCommittedBranchFilesResponse(
+                resp,
+            )) => match resp.result {
+                Some(crate::proto::git_get_committed_branch_files_response::Result::Success(
+                    success,
+                )) => Ok(success.files),
+                Some(crate::proto::git_get_committed_branch_files_response::Result::Error(e)) => {
+                    Err(HostRequestError::OperationFailed(e.message))
+                }
+                None => Err(HostRequestError::UnexpectedResponse),
+            },
+            other => {
+                log::error!("Unexpected response variant for GetCommittedBranchFiles: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Generates a commit message via AI on the remote host (the daemon
+    /// computes the diff locally and calls the Warp content endpoint).
+    pub async fn git_generate_commit_message(
+        &self,
+        repo_path: &StandardizedPath,
+        include_unstaged: bool,
+        branch_name: String,
+    ) -> Result<String, HostRequestError> {
+        let msg = self
+            .send(
+                crate::proto::host_scoped_request::Message::GitGenerateCommitMessage(
+                    crate::proto::GitGenerateCommitMessageRequest {
+                        repo_path: repo_path.to_string(),
+                        include_unstaged,
+                        branch_name,
+                    },
+                ),
+            )
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GitGenerateCommitMessageResponse(resp)) => {
+                match resp.result {
+                    Some(crate::proto::git_generate_commit_message_response::Result::Message(
+                        m,
+                    )) => Ok(m),
+                    Some(crate::proto::git_generate_commit_message_response::Result::Error(e)) => {
+                        Err(HostRequestError::OperationFailed(e.message))
+                    }
+                    None => Err(HostRequestError::UnexpectedResponse),
+                }
+            }
+            other => {
+                log::error!("Unexpected response variant for GenerateCommitMessage: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
     /// Returns the `HostId` this handle targets.
     pub fn host_id(&self) -> &HostId {
         &self.host_id
@@ -974,6 +1329,8 @@ pub struct RemoteServerManager {
     /// `host_response_rx`, or failed when all sessions for the host
     /// disconnect.
     pending_host_requests: HashMap<crate::protocol::RequestId, PendingHostRequest>,
+    /// Highest Agent Mode context snapshot revision accepted for each connected host.
+    remote_agent_context_snapshot_revisions: HashMap<HostId, u64>,
     /// Background executor used to schedule host-scoped request timeouts.
     /// Only used off-wasm (timers and detached tasks aren't available on
     /// wasm), so the field is allowed to be dead there.
@@ -1000,6 +1357,7 @@ impl RemoteServerManager {
             session_platforms: HashMap::new(),
             codebase_index_limits: None,
             pending_host_requests: HashMap::new(),
+            remote_agent_context_snapshot_revisions: HashMap::new(),
             executor: ctx.background_executor().clone(),
         }
     }
@@ -1250,6 +1608,60 @@ impl RemoteServerManager {
         let _ = pending.result_tx.send(Err(HostRequestError::Timeout));
     }
 
+    /// Registers a remote ripgrep request synchronously and returns its typed
+    /// pending result. Global search uses this instead of `HostRequestHandle`
+    /// so query cancellation cannot race request registration.
+    pub fn start_ripgrep_search(
+        &mut self,
+        host_id: &HostId,
+        params: RipgrepSearchParams,
+    ) -> PendingRipgrepSearch {
+        let request_id = crate::protocol::RequestId::new();
+        let msg = crate::proto::ClientMessage::host_scoped(
+            request_id.to_string(),
+            crate::proto::host_scoped_request::Message::RipgrepSearch(
+                crate::proto::RipgrepSearchRequest {
+                    pattern: params.pattern,
+                    roots: params
+                        .roots
+                        .into_iter()
+                        .map(|path| path.to_string())
+                        .collect(),
+                    ignore_case: params.ignore_case,
+                    multiline: params.multiline,
+                    max_matches: params.max_matches,
+                },
+            ),
+        );
+        let response = self.send_host_request(host_id, msg);
+        PendingRipgrepSearch {
+            request_id,
+            response,
+        }
+    }
+
+    /// Aborts a pending host-scoped request: resolves the caller with
+    /// [`HostRequestError::Aborted`], cancels its timeout timer, and sends a
+    /// best-effort `Abort` notification so the daemon stops work. No-op if
+    /// the request already resolved (response arrived, timed out, or all
+    /// sessions disconnected).
+    pub fn abort_host_request(&mut self, request_id: &crate::protocol::RequestId) {
+        let Some(pending) = self.pending_host_requests.remove(request_id) else {
+            return;
+        };
+        pending.cancel_timeout();
+        log::info!(
+            "Aborting host-scoped request: host={} request_id={request_id}",
+            pending.host_id
+        );
+        // Best-effort daemon-side cancellation. The connection may already
+        // be gone, in which case this is a no-op.
+        if let Some(client) = self.client_for_host(&pending.host_id) {
+            client.abort_request(request_id);
+        }
+        let _ = pending.result_tx.send(Err(HostRequestError::Aborted));
+    }
+
     /// Convenience wrapper: constructs a `ClientMessage::host_scoped` from
     /// the inner message and dispatches via [`Self::send_host_request`].
     ///
@@ -1425,7 +1837,7 @@ impl RemoteServerManager {
                         Err(e) => {
                             if let Some(reason) = UnsupportedReason::from_transport_error(&e) {
                                 log::info!(
-                                    "Remote server platform is unsupported, falling back to legacy SSH: session={session_id:?}"
+                                    "Remote server platform is unsupported, falling back to the wrapper-only SSH flow: session={session_id:?}"
                                 );
                                 Self::emit_unsupported_preinstall_check(
                                     &spawner,
@@ -1469,7 +1881,7 @@ impl RemoteServerManager {
                             },
                         ) => {
                             log::info!(
-                                "Remote server preinstall check classified as unsupported, falling back to legacy SSH: session={session_id:?}"
+                                "Remote server preinstall check classified as unsupported, falling back to the wrapper-only SSH flow: session={session_id:?}"
                             );
                             Self::emit_unsupported_preinstall_check(
                                 &spawner, session_id, platform, preinstall,
@@ -1945,13 +2357,16 @@ impl RemoteServerManager {
     /// user's interactive ssh process and, without the explicit
     /// `-O exit`, it hangs waiting for remote-side cleanup of
     /// multiplexed channels (see [`crate::ssh::stop_control_master`]).
+    /// Sessions multiplexed through an external master carry
+    /// [`ControlPath::UserOwned`], so this step is skipped and the
+    /// user's master is left running.
     ///
     /// Mechanically:
     /// 1. Remove the session entry. Dropping the `RemoteSessionState`
     ///    drops the transport's owned `Child`, which SIGKILLs the
     ///    `ssh … remote-server-proxy` subprocess via `kill_on_drop`.
-    /// 2. If the session had a ControlMaster `control_path`, spawn a
-    ///    background task that runs `ssh -O exit` against it.
+    /// 2. If the session's `control_path` is [`ControlPath::WarpManaged`],
+    ///    spawn a background task that runs `ssh -O exit` against it.
     ///
     /// The `Child` is owned by the manager's state, *not* by
     /// `Arc<RemoteServerClient>`. Lingering `Arc` clones held elsewhere
@@ -1984,8 +2399,8 @@ impl RemoteServerManager {
         // `kill_on_drop`.
         let prev = self.sessions.remove(&session_id);
 
-        // Extract the ControlMaster socket path (if any) so we can
-        // force the master to exit below. Safe to do under the
+        // Extract the ControlMaster socket (if any) so we can force
+        // Warp-managed masters to exit below. Safe to do under the
         // "caller already observed ExitShell" assumption documented
         // above.
         #[cfg(not(target_family = "wasm"))]
@@ -1996,7 +2411,7 @@ impl RemoteServerManager {
                 control_path.clone()
             }
             Some(RemoteSessionState::Reconnecting { control_path, .. }) => control_path.clone(),
-            _ => None,
+            _ => ControlPath::None,
         };
 
         // Extract `host_id` from states that track a host connection.
@@ -2019,16 +2434,16 @@ impl RemoteServerManager {
         ctx.emit(RemoteServerManagerEvent::SessionDeregistered { session_id });
 
         // Force the local SSH ControlMaster to exit after teardown.
-        // Spawned detached because the ssh subcommand may take a moment
-        // to complete and we don't want to block the main thread on it.
+        // `stop_control_master` only acts on Warp-managed masters and
+        // leaves user-owned masters running. Spawned detached because
+        // the ssh subcommand may take a moment to complete and we don't
+        // want to block the main thread on it.
         #[cfg(not(target_family = "wasm"))]
-        if let Some(control_path) = control_path {
-            ctx.background_executor()
-                .spawn(async move {
-                    crate::ssh::stop_control_master(&control_path).await;
-                })
-                .detach();
-        }
+        ctx.background_executor()
+            .spawn(async move {
+                crate::ssh::stop_control_master(&control_path).await;
+            })
+            .detach();
     }
 
     /// Returns the client for this session, if connected.
@@ -2309,7 +2724,8 @@ impl RemoteServerManager {
                             HostRequestError::Timeout => RemoteServerErrorKind::Timeout,
                             HostRequestError::ServerError { .. }
                             | HostRequestError::OperationFailed(_) => RemoteServerErrorKind::ServerError,
-                            HostRequestError::UnexpectedResponse => RemoteServerErrorKind::Other,
+                            HostRequestError::UnexpectedResponse
+                            | HostRequestError::Aborted => RemoteServerErrorKind::Other,
                         };
                         let _ = spawner
                             .spawn(move |_me, ctx| {
@@ -2777,6 +3193,224 @@ impl RemoteServerManager {
             .detach();
     }
 
+    /// Runs a commit chain (commit + optional push + optional create-PR) on
+    /// the remote host and emits `CommitChainResponse` with the result.
+    #[allow(clippy::too_many_arguments)]
+    pub fn git_commit_chain(
+        &mut self,
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        mode: crate::proto::GitCommitChainMode,
+        message: String,
+        include_unstaged: bool,
+        branch: String,
+        autogenerate_pr_content: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let handle = self.host_request_handle(&host_id);
+
+        let repo_path_for_event = repo_path.clone();
+        let host_id_for_event = host_id.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                // Single round trip: the daemon runs commit (+ optional push +
+                // optional create-PR) host-local and returns the final delta
+                // plus any created PR (see `handle_git_commit_chain`).
+                let result = handle
+                    .git_commit_chain(
+                        &repo_path,
+                        mode,
+                        message,
+                        include_unstaged,
+                        branch,
+                        autogenerate_pr_content,
+                    )
+                    .await
+                    .map(|(delta, pr_info)| CommitChainSuccess { delta, pr_info })
+                    .map_err(|e| e.to_string());
+                let _ = spawner
+                    .spawn(move |_me, ctx| {
+                        ctx.emit(RemoteServerManagerEvent::CommitChainResponse {
+                            host_id: host_id_for_event,
+                            repo_path: repo_path_for_event,
+                            result,
+                        });
+                    })
+                    .await;
+            })
+            .detach();
+    }
+
+    /// Pushes the given branch on the remote host and emits
+    /// `GitPushResponse` with the refreshed delta.
+    pub fn git_push_branch(
+        &mut self,
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        branch: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let handle = self.host_request_handle(&host_id);
+
+        let repo_path_for_event = repo_path.clone();
+        let host_id_for_event = host_id.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                let result = handle
+                    .git_push(&repo_path, branch)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = spawner
+                    .spawn(move |_me, ctx| {
+                        ctx.emit(RemoteServerManagerEvent::GitPushResponse {
+                            host_id: host_id_for_event,
+                            repo_path: repo_path_for_event,
+                            result,
+                        });
+                    })
+                    .await;
+            })
+            .detach();
+    }
+
+    /// Creates a PR on the remote host and emits `CreatePrResponse`.
+    ///
+    /// When `autogenerate_content` is set, the daemon AI-generates the PR
+    /// title/body (with a `gh pr create --fill` fallback) before creating the PR.
+    #[allow(clippy::too_many_arguments)]
+    pub fn git_create_pr(
+        &mut self,
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        branch: String,
+        autogenerate_content: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let handle = self.host_request_handle(&host_id);
+
+        let repo_path_for_event = repo_path.clone();
+        let host_id_for_event = host_id.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                let result = handle
+                    .git_create_pr(&repo_path, branch, autogenerate_content)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = spawner
+                    .spawn(move |_me, ctx| {
+                        ctx.emit(RemoteServerManagerEvent::CreatePrResponse {
+                            host_id: host_id_for_event,
+                            repo_path: repo_path_for_event,
+                            result,
+                        });
+                    })
+                    .await;
+            })
+            .detach();
+    }
+
+    /// Generates a commit message via AI on the remote host and emits
+    /// `GenerateCommitMessageResponse` with the result.
+    pub fn git_generate_commit_message(
+        &mut self,
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        include_unstaged: bool,
+        branch_name: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let handle = self.host_request_handle(&host_id);
+
+        let repo_path_for_event = repo_path.clone();
+        let host_id_for_event = host_id.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                let result = handle
+                    .git_generate_commit_message(&repo_path, include_unstaged, branch_name)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = spawner
+                    .spawn(move |_me, ctx| {
+                        ctx.emit(RemoteServerManagerEvent::GenerateCommitMessageResponse {
+                            host_id: host_id_for_event,
+                            repo_path: repo_path_for_event,
+                            result,
+                        });
+                    })
+                    .await;
+            })
+            .detach();
+    }
+
+    /// Fetches the committed branch files (`merge_base(HEAD, main)..HEAD`) for
+    /// the current branch on the remote host and emits
+    /// `GetCommittedBranchFilesResponse` with the result.
+    pub fn git_get_committed_branch_files(
+        &mut self,
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let handle = self.host_request_handle(&host_id);
+
+        let repo_path_for_event = repo_path.clone();
+        let host_id_for_event = host_id.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                let result = handle
+                    .git_get_committed_branch_files(&repo_path)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = spawner
+                    .spawn(move |_me, ctx| {
+                        ctx.emit(RemoteServerManagerEvent::GetCommittedBranchFilesResponse {
+                            host_id: host_id_for_event,
+                            repo_path: repo_path_for_event,
+                            result,
+                        });
+                    })
+                    .await;
+            })
+            .detach();
+    }
+
+    /// Sends an `UpdateGitStatus` notification (fire-and-forget) to the
+    /// remote server for the given host.
+    pub fn update_git_status(&self, host_id: HostId, repo_path: &StandardizedPath) {
+        if let Some(client) = self.client_for_host(&host_id) {
+            client.update_git_status(repo_path);
+        } else {
+            log::debug!("Remote server update_git_status: no client for host={host_id}");
+        }
+    }
+
+    /// Sends an `UpdateGitHubPrInfo` notification (fire-and-forget) to the
+    /// remote server for the given host. The daemon's `GitHubRepoModel`
+    /// re-fetches PR info and broadcasts a `GitHubPrInfoPush`.
+    pub fn update_github_pr_info(&self, host_id: HostId, repo_path: &StandardizedPath) {
+        if let Some(client) = self.client_for_host(&host_id) {
+            client.update_github_pr_info(repo_path);
+        } else {
+            log::debug!("Remote server update_github_pr_info: no client for host={host_id}");
+        }
+    }
+
+    /// Sends an `UpdateGitHubRepoInfo` notification (fire-and-forget) to the
+    /// remote server for the given host. The daemon's `GitHubRepoModel`
+    /// re-fetches repository info and broadcasts a `GitHubRepositoryInfoPush`.
+    pub fn update_github_repo_info(&self, host_id: HostId, repo_path: &StandardizedPath) {
+        if let Some(client) = self.client_for_host(&host_id) {
+            client.update_github_repo_info(repo_path);
+        } else {
+            log::debug!("Remote server update_github_repo_info: no client for host={host_id}");
+        }
+    }
+
     /// Forwards a push event from the client event channel as a manager event.
     /// No-ops if the session is not in `Connected` state.
     #[cfg(not(target_family = "wasm"))]
@@ -2905,10 +3539,65 @@ impl RemoteServerManager {
                     delta,
                 });
             }
+            ClientEvent::RemoteAgentContextSnapshotReceived { snapshot } => {
+                if !self.accept_remote_agent_context_snapshot_revision(&host_id, snapshot.revision)
+                {
+                    return;
+                }
+                ctx.emit(RemoteServerManagerEvent::RemoteAgentContextSnapshot {
+                    host_id,
+                    snapshot,
+                });
+            }
+            ClientEvent::GitStatusPushReceived {
+                repo_path,
+                metadata,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::GitStatusPushReceived {
+                    host_id,
+                    repo_path,
+                    metadata,
+                });
+            }
+            ClientEvent::GitHubPrInfoPushReceived { repo_path, pr_info } => {
+                ctx.emit(RemoteServerManagerEvent::GitHubPrInfoPushReceived {
+                    host_id,
+                    repo_path,
+                    pr_info,
+                });
+            }
+            ClientEvent::GitHubRepositoryInfoPushReceived {
+                repo_path,
+                repository_info,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived {
+                    host_id,
+                    repo_path,
+                    repository_info,
+                });
+            }
             ClientEvent::Disconnected => {
                 // Handled by the drain loop's completion callback.
             }
         }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn accept_remote_agent_context_snapshot_revision(
+        &mut self,
+        host_id: &HostId,
+        revision: u64,
+    ) -> bool {
+        if self
+            .remote_agent_context_snapshot_revisions
+            .get(host_id)
+            .is_some_and(|current| *current >= revision)
+        {
+            return false;
+        }
+        self.remote_agent_context_snapshot_revisions
+            .insert(host_id.clone(), revision);
+        true
     }
 
     /// Transitions a session from `Initializing` to `Connected`. Stores the
@@ -3404,6 +4093,7 @@ impl RemoteServerManager {
     /// fails any pending host-scoped requests that targeted this host.
     fn handle_host_disconnected(&mut self, host_id: &HostId, ctx: &mut ModelContext<Self>) {
         if !self.host_to_sessions.contains_key(host_id) {
+            self.remote_agent_context_snapshot_revisions.remove(host_id);
             ctx.emit(RemoteServerManagerEvent::HostDisconnected {
                 host_id: host_id.clone(),
             });
@@ -3422,3 +4112,7 @@ impl RemoteServerManager {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "manager_tests.rs"]
+mod tests;

@@ -209,8 +209,11 @@ pub(crate) fn apply_selected_conversation_update(
                 view.ai_context_model().update(ctx, |context_model, ctx| {
                     if FeatureFlag::AgentView.is_enabled() {
                         // Check if we're already in an empty agent view to avoid feedback loop.
-                        let agent_view_state = agent_view_controller.as_ref(ctx).agent_view_state();
-                        if let Some(conversation_id) = agent_view_state.active_conversation_id() {
+                        if let Some(conversation_id) = agent_view_controller
+                            .as_ref(ctx)
+                            .agent_view_state()
+                            .active_conversation_id()
+                        {
                             let history_model = BlocklistAIHistoryModel::handle(ctx);
                             let is_empty = history_model
                                 .as_ref(ctx)
@@ -315,11 +318,13 @@ fn build_selected_conversation_update_agent_view_enabled(
     history_model: &ModelHandle<BlocklistAIHistoryModel>,
     ctx: &mut AppContext,
 ) -> Option<UniversalDeveloperInputContextUpdate> {
-    let agent_view_state = agent_view_controller.as_ref(ctx).agent_view_state();
-
-    let selected_conversation = if !agent_view_state.is_active() {
+    let agent_view_controller = agent_view_controller.as_ref(ctx);
+    let selected_conversation = if !agent_view_controller.is_active() {
         SelectedConversation::NoConversation
-    } else if let Some(conversation_id) = agent_view_state.active_conversation_id() {
+    } else if let Some(conversation_id) = agent_view_controller
+        .agent_view_state()
+        .active_conversation_id()
+    {
         let conversation = history_model.as_ref(ctx).conversation(&conversation_id);
         let server_token_opt = conversation
             .and_then(|c| c.server_conversation_token().cloned())

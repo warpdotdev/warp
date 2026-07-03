@@ -90,10 +90,10 @@ impl PassiveSuggestionsModel {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(model_event_dispatcher, |me, event, ctx| {
+        ctx.subscribe_to_model(model_event_dispatcher, |me, _, event, ctx| {
             me.handle_model_event(event, ctx);
         });
-        ctx.subscribe_to_model(&ai_controller, |me, event, _ctx| {
+        ctx.subscribe_to_model(&ai_controller, |me, _, event, _ctx| {
             me.handle_controller_event(event, _ctx);
         });
 

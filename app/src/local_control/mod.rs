@@ -26,8 +26,7 @@
 //!                                             |
 //!                                             v
 //!                           feature flag + Settings > Scripting gate
-//!                           + protocol + action metadata
-//!                           + invocation context + required proof
+//!                           + protocol + exact action metadata
 //!                                             |
 //!                                             v
 //!                           short-lived, instance-bound, action-scoped
@@ -51,15 +50,13 @@
 //! or wrong-instance credentials, and accidentally over-scoped credentials from
 //! invoking actions. The broker authenticates the OS account, not the calling
 //! application: malicious software already running as the same user remains
-//! outside this boundary. Verified inside-Warp terminal credentials remain
-//! future work until the app-issued proof broker is implemented.
+//! outside this boundary.
 //!
 //! The Settings > Scripting gates used here are local-only settings backed by
 //! Warp's secure storage provider.
 //!
 //! Discovery records never include raw bearer tokens: discovery only exposes
-//! endpoint metadata and credential broker references when outside-Warp control
-//! is enabled.
+//! endpoint metadata and credential broker references while Scripting is enabled.
 mod bridge;
 mod handlers;
 mod permissions;
@@ -98,6 +95,7 @@ use permissions::{ensure_action_allowed, ensure_protocol_version};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use warp_core::channel::ChannelState;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
+
 #[cfg(any(unix, test))]
 const MAX_ACTIVE_CREDENTIALS: usize = 128;
 
@@ -142,7 +140,7 @@ impl LocalControlServer {
         }
         ctx.subscribe_to_model(
             &crate::settings::LocalControlSettings::handle(ctx),
-            |server, _, ctx| {
+            |server, _, _, ctx| {
                 if let Err(error) = server.refresh_for_settings(ctx) {
                     log::warn!("Failed to refresh local-control server state: {error:#}");
                 }
@@ -151,20 +149,18 @@ impl LocalControlServer {
         server
     }
 
-    /// Starts, refreshes, or removes all outside-Warp publication as settings change.
+    /// Starts, refreshes, or removes local-control publication as settings change.
     fn refresh_for_settings(&mut self, ctx: &mut ModelContext<Self>) -> Result<(), ControlError> {
         if !permissions::warp_control_cli_enabled() {
-            self.stop();
+            self.stop(ctx);
             return Ok(());
         }
-        if !outside_warp_publication_supported() {
-            self.stop();
+        if !local_control_publication_supported() {
+            self.stop(ctx);
             return Ok(());
         }
-        let outside_warp_control_enabled =
-            crate::settings::LocalControlSettings::as_ref(ctx).outside_warp_control_enabled();
-        if !outside_warp_control_enabled {
-            self.stop();
+        if !crate::settings::LocalControlSettings::as_ref(ctx).is_enabled() {
+            self.stop(ctx);
             return Ok(());
         }
         if self._runtime.is_some() {
@@ -174,7 +170,7 @@ impl LocalControlServer {
     }
 
     /// Stops both listeners and removes the discovery record and broker socket.
-    fn stop(&mut self) {
+    fn stop(&mut self, _ctx: &mut ModelContext<Self>) {
         self.registered_instance = None;
         self.control_endpoint = None;
         self._runtime = None;
@@ -193,13 +189,13 @@ impl LocalControlServer {
             ));
         }
         ensure_feature_enabled()?;
-        if !outside_warp_publication_supported() {
+        if !local_control_publication_supported() {
             return Err(ControlError::new(
                 ErrorCode::LocalControlDisabled,
-                "outside-Warp local control is disabled until this platform enforces discovery-record ACLs",
+                "local control is disabled until this platform enforces discovery-record ACLs",
             ));
         }
-        if !crate::settings::LocalControlSettings::as_ref(ctx).outside_warp_control_enabled() {
+        if !crate::settings::LocalControlSettings::as_ref(ctx).is_enabled() {
             return Ok(());
         }
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -291,14 +287,14 @@ impl LocalControlServer {
 /// Builds routing metadata without embedding any bearer credential or secret.
 ///
 /// The endpoint and derived broker reference are published only while the
-/// protected outside-Warp setting permits clients to use them.
+/// protected Scripting setting permits clients to use them.
 fn discovery_record_for_settings(
     ctx: &ModelContext<LocalControlServer>,
     control_endpoint: ControlEndpoint,
 ) -> InstanceRecord {
-    let outside_warp_control_enabled =
-        crate::settings::LocalControlSettings::as_ref(ctx).outside_warp_control_enabled();
-    let endpoint = outside_warp_control_enabled.then_some(control_endpoint);
+    let endpoint = crate::settings::LocalControlSettings::as_ref(ctx)
+        .is_enabled()
+        .then_some(control_endpoint);
     InstanceRecord::for_current_process(
         endpoint,
         ChannelState::channel().to_string(),
@@ -458,7 +454,6 @@ async fn issue_credential(
 ) -> Result<ScopedCredential, ControlError> {
     ensure_feature_enabled()?;
     ensure_protocol_version(request.protocol_version)?;
-    let metadata = request.action.metadata();
     if !request.action.is_implemented() {
         return Err(ControlError::new(
             ErrorCode::UnsupportedAction,
@@ -468,25 +463,11 @@ async fn issue_credential(
             ),
         ));
     }
-    if !metadata
-        .allowed_invocation_contexts
-        .contains(&request.invocation_context)
-    {
-        return Err(ControlError::new(
-            ErrorCode::ExecutionContextNotAllowed,
-            format!(
-                "{} cannot run from the requested invocation context",
-                request.action.as_str()
-            ),
-        ));
-    }
-    request.verify_execution_context_proof()?;
     state
         .bridge_spawner
         .spawn({
             let action = request.action;
-            let invocation_context = request.invocation_context;
-            move |_, ctx| ensure_action_allowed(invocation_context, action, ctx)
+            move |_, ctx| ensure_action_allowed(action, ctx)
         })
         .await
         .map_err(|_| {
@@ -499,7 +480,6 @@ async fn issue_credential(
     let grant = CredentialGrant::new(
         state.instance_id.clone(),
         request.action,
-        request.invocation_context,
         Duration::minutes(5),
     );
     let mut credentials = state.credentials.lock().map_err(|_| {
@@ -659,7 +639,7 @@ fn lookup_credential(
     grant.verify_for_action(instance_id, grant.action)?;
     Ok(grant)
 }
-fn outside_warp_publication_supported() -> bool {
+fn local_control_publication_supported() -> bool {
     cfg!(not(target_os = "windows"))
 }
 
@@ -700,9 +680,7 @@ pub(crate) fn validate_loopback_headers(
 #[cfg(test)]
 pub(crate) use bridge::validate_request_authority;
 #[cfg(test)]
-pub(crate) use permissions::{
-    capabilities, ensure_settings_allow_action, outside_warp_control_enabled_for_settings,
-};
+pub(crate) use permissions::{capabilities, ensure_settings_allow_action};
 #[cfg(test)]
 pub(crate) use resolver::{
     require_active_window_id, resolve_index_from_ids, resolve_title_from_matches,

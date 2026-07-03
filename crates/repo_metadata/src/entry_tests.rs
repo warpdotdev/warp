@@ -399,6 +399,7 @@ fn standing_queries_report_skills_below_an_ignored_directory() {
                 force_included_paths: &[std::path::PathBuf::from(".agents/skills")],
                 budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
             },
+            false,
             &mut results,
             &definitions,
         ))
@@ -453,6 +454,7 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
                     force_included_paths: &[],
                     budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
                 },
+                false,
                 &mut results,
                 &definitions,
             ))
@@ -496,6 +498,7 @@ fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
                 force_included_paths: &[],
                 budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
             },
+            false,
             &mut results,
             &StandingQueryDefinitions::default(),
         ))
@@ -548,6 +551,7 @@ fn shallow_tree_expands_force_included_skill_branch_only() {
                 force_included_paths: &[std::path::PathBuf::from(".agents/skills")],
                 budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
             },
+            false,
             &mut results,
             &definitions,
         ))
