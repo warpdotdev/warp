@@ -380,7 +380,7 @@ struct FontKey {
 }
 
 pub struct TextLayoutSystem {
-    families: HashMap<FamilyId, Family>,
+    families: RwLock<HashMap<FamilyId, Family>>,
     /// The internal font database that stores all of our loaded fonts. Since internally,
     /// `cosmic_text` caches font selection, all of its functions to layout text are `&mut`.
     /// However, the `FontDB` trait for text layout is _immutable_ and cannot be easily changed to
@@ -435,7 +435,7 @@ impl FontDB {
         let font_ids = Vec1::try_from_vec(font_ids)?;
 
         let family_id = next_family_id();
-        self.text_layout_system.families.insert(
+        self.text_layout_system.families.write().insert(
             family_id,
             Family {
                 name: font_family.name,
@@ -629,8 +629,8 @@ impl TextLayoutSystem {
         let internal_id = internal_id
             .map(|id| format!("{id}"))
             .unwrap_or("None".to_string());
-        let family_name = self
-            .families
+        let families = self.families.read();
+        let family_name = families
             .values()
             .find(|family| family.font_ids.contains(&font_id))
             .map(|f| f.name.as_str())
@@ -845,6 +845,24 @@ impl TextLayoutSystem {
                         }
                     }
                     self.loaded_fonts.retain(|_, v| *v != font_id);
+                    let mut families = self.families.write();
+                    let mut empty_family_ids = Vec::new();
+                    for (family_id, family) in families.iter_mut() {
+                        let new_ids: Vec<FontId> = family
+                            .font_ids
+                            .iter()
+                            .copied()
+                            .filter(|id| *id != font_id)
+                            .collect();
+                        if new_ids.is_empty() {
+                            empty_family_ids.push(*family_id);
+                        } else {
+                            family.font_ids = Vec1::try_from_vec(new_ids).unwrap();
+                        }
+                    }
+                    for family_id in empty_family_ids {
+                        families.remove(&family_id);
+                    }
                 }
 
                 db.remove_face(db_id);
@@ -1437,15 +1455,15 @@ impl TextLayoutSystem {
     }
 
     fn load_family_name_from_id(&self, id: FamilyId) -> Option<String> {
-        self.families.get(&id).map(|family| family.name.to_owned())
+        self.families.read().get(&id).map(|family| family.name.to_owned())
     }
 
     fn select_font(&self, family_id: FamilyId, properties: Properties) -> FontId {
         match self.font_selections.entry((family_id, properties)) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
-                let family = self
-                    .families
+                let families = self.families.read();
+                let family = families
                     .get(&family_id)
                     .expect("Font family must exist");
 
@@ -1557,6 +1575,7 @@ impl TextLayoutSystem {
 
     fn family_id_for_name(&self, name: &str) -> Option<FamilyId> {
         self.families
+            .read()
             .iter()
             .find_map(|(family_id, family)| (family.name == name).then_some(*family_id))
     }
