@@ -860,10 +860,13 @@ impl TextLayoutSystem {
                             family.font_ids = Vec1::try_from_vec(new_ids).unwrap();
                         }
                     }
-                    for family_id in empty_family_ids {
+                    for &family_id in &empty_family_ids {
                         families.remove(&family_id);
                     }
                     drop(families);
+                    for &family_id in &empty_family_ids {
+                        self.font_selections.retain(|&(fid, _), _| fid != family_id);
+                    }
                     self.font_id_map.write().remove_by_right(&db_id);
                 }
 
@@ -1460,15 +1463,29 @@ impl TextLayoutSystem {
         self.families.read().get(&id).map(|family| family.name.to_owned())
     }
 
+    fn any_valid_font_id(&self) -> FontId {
+        if let Some(family) = self.families.read().values().next() {
+            return *family.font_ids.first();
+        }
+        self.font_id_map
+            .read()
+            .iter()
+            .next()
+            .map(|(font_id, _)| *font_id)
+            .expect("No fonts loaded")
+    }
+
     fn select_font(&self, family_id: FamilyId, properties: Properties) -> FontId {
         match self.font_selections.entry((family_id, properties)) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
                 let (family_name, first_font_id) = {
                     let families = self.families.read();
-                    let family = families
-                        .get(&family_id)
-                        .expect("Font family must exist");
+                    let Some(family) = families.get(&family_id) else {
+                        let fallback = self.any_valid_font_id();
+                        entry.insert(fallback);
+                        return fallback;
+                    };
                     (family.name.clone(), *family.font_ids.first())
                 };
 
