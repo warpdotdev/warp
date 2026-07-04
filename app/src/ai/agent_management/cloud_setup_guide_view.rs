@@ -118,8 +118,11 @@ impl CloudSetupGuideView {
         );
 
         let visit_oz_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Visit Oz", SecondaryTheme)
-                .on_click(|ctx| ctx.dispatch_typed_action(CloudSetupGuideAction::VisitOz))
+            ActionButton::new(
+                crate::menu_label("cloud_setup_guide.visit_oz_button", "Visit Oz"),
+                SecondaryTheme,
+            )
+            .on_click(|ctx| ctx.dispatch_typed_action(CloudSetupGuideAction::VisitOz))
         });
 
         Self {
@@ -146,7 +149,10 @@ impl CloudSetupGuideView {
         let mut header_container = Flex::column().with_spacing(8.);
 
         let title = Text::new(
-            "Getting started with Oz cloud agents",
+            crate::menu_label(
+                "cloud_setup_guide.title",
+                "Getting started with Oz cloud agents",
+            ),
             appearance.ui_font_family(),
             title_font_size,
         )
@@ -156,7 +162,10 @@ impl CloudSetupGuideView {
         header_container.add_child(title);
 
         let subtitle = Text::new(
-            "Start Oz cloud agents directly in Warp from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the Oz SDK or CLI.",
+            crate::menu_label(
+                "cloud_setup_guide.subtitle",
+                "Start Oz cloud agents directly in Warp from an integration (Linear, Slack), with an event (GitHub, built-in schedule), or programmatically with the Oz SDK or CLI.",
+            ),
             appearance.ui_font_family(),
             subtitle_font_size,
         )
@@ -168,7 +177,7 @@ impl CloudSetupGuideView {
         let docs_line = Flex::row()
             .with_child(
                 Text::new_inline(
-                    "Check out the ",
+                    crate::menu_label("cloud_setup_guide.docs_line_prefix", "Check out the "),
                     appearance.ui_font_family(),
                     subtitle_font_size,
                 )
@@ -179,7 +188,8 @@ impl CloudSetupGuideView {
                 appearance
                     .ui_builder()
                     .link(
-                        "Oz documentation".to_string(),
+                        crate::menu_label("cloud_setup_guide.docs_link_text", "Oz documentation")
+                            .to_string(),
                         None,
                         Some(Box::new(|ctx| {
                             ctx.dispatch_typed_action(CloudSetupGuideAction::OpenDocs {
@@ -197,7 +207,7 @@ impl CloudSetupGuideView {
             )
             .with_child(
                 Text::new_inline(
-                    " to learn more.",
+                    crate::menu_label("cloud_setup_guide.docs_line_suffix", " to learn more."),
                     appearance.ui_font_family(),
                     subtitle_font_size,
                 )
@@ -215,7 +225,10 @@ impl CloudSetupGuideView {
         let font_size = 16.;
 
         let text = Text::new_inline(
-            "Quick start: Visit oz.warp.dev for a UI-based setup experience.",
+            crate::menu_label(
+                "cloud_setup_guide.quick_start_banner",
+                "Quick start: Visit oz.warp.dev for a UI-based setup experience.",
+            ),
             appearance.ui_font_family(),
             font_size,
         )
@@ -249,7 +262,10 @@ impl CloudSetupGuideView {
         let font_size = 16.;
 
         Text::new(
-            "Manual setup: Create a Slack or Linear integration with the Oz CLI",
+            crate::menu_label(
+                "cloud_setup_guide.manual_setup_header",
+                "Manual setup: Create a Slack or Linear integration with the Oz CLI",
+            ),
             appearance.ui_font_family(),
             font_size,
         )
@@ -432,7 +448,7 @@ impl CloudSetupGuideView {
             .with_child(Self::render_step_number(1, appearance))
             .with_child(
                 Text::new(
-                    "Create an environment",
+                    crate::menu_label("cloud_setup_guide.step1_title", "Create an environment"),
                     appearance.ui_font_family(),
                     step_title_font_size,
                 )
@@ -444,7 +460,10 @@ impl CloudSetupGuideView {
 
         let description = Container::new(
             Text::new(
-                "First, set up an environment to create an integration.",
+                crate::menu_label(
+                    "cloud_setup_guide.step1_description",
+                    "First, set up an environment to create an integration.",
+                ),
                 appearance.ui_font_family(),
                 step_desc_font_size,
             )
@@ -455,8 +474,11 @@ impl CloudSetupGuideView {
         .finish();
 
         let sub_description = Container::new(Self::render_description_with_link(
-            "Use Warp's environment setup command to have an agent help you through it. ",
-            "Visit docs",
+            crate::menu_label(
+                "cloud_setup_guide.step1_sub_description_prefix",
+                "Use Warp's environment setup command to have an agent help you through it. ",
+            ),
+            crate::menu_label("cloud_setup_guide.step1_visit_docs_link", "Visit docs"),
             self.env_docs_link_mouse_state.clone(),
             SetupGuideDocs::Environment,
             appearance,
@@ -475,7 +497,10 @@ impl CloudSetupGuideView {
 
         let or_text = Container::new(
             Text::new(
-                "Or, supply your own existing docker image.",
+                crate::menu_label(
+                    "cloud_setup_guide.step1_or_text",
+                    "Or, supply your own existing docker image.",
+                ),
                 appearance.ui_font_family(),
                 step_desc_font_size,
             )
@@ -517,7 +542,7 @@ impl CloudSetupGuideView {
             .with_child(Self::render_step_number(2, appearance))
             .with_child(
                 Text::new(
-                    "Create an integration",
+                    crate::menu_label("cloud_setup_guide.step2_title", "Create an integration"),
                     appearance.ui_font_family(),
                     step_title_font_size,
                 )
@@ -528,8 +553,11 @@ impl CloudSetupGuideView {
             .finish();
 
         let sub_description = Container::new(Self::render_description_with_link(
-            "Integrate Slack or Linear to assign Warp's Agent tasks with @Warp. ",
-            "Visit docs",
+            crate::menu_label(
+                "cloud_setup_guide.step2_sub_description_prefix",
+                "Integrate Slack or Linear to assign Warp's Agent tasks with @Warp. ",
+            ),
+            crate::menu_label("cloud_setup_guide.step2_visit_docs_link", "Visit docs"),
             self.integration_docs_link_mouse_state.clone(),
             SetupGuideDocs::Integration,
             appearance,
