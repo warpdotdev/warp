@@ -133,8 +133,11 @@ fn get_pw_entry(buf: &mut [i8; 1024]) -> Option<Passwd<'_>> {
     };
     let entry = unsafe { entry.assume_init() };
 
-    if status < 0 {
-        log::warn!("getpwuid_r failed for uid {uid}; proceeding without a passwd entry");
+    // `getpwuid_r` returns 0 on success and a positive errno (e.g. `ERANGE`) on
+    // failure — it never returns a negative value — so compare against 0 rather
+    // than checking `< 0`, which would let real failures slip past this guard.
+    if status != 0 {
+        log::warn!("getpwuid_r failed for uid {uid} with status {status}; proceeding without a passwd entry");
         return None;
     }
 
