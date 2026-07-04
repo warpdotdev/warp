@@ -24,8 +24,8 @@ use crate::entry::{
 };
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
 use crate::local_model::{
-    FileTreeMutation, GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate,
-    RepositoryMetadataEvent, RootWatchMode,
+    BuildTaskKey, BuildTaskKind, FileTreeMutation, GetContentsArgs, IndexedRepoState,
+    LocalRepoMetadataModel, RepoUpdate, RepositoryMetadataEvent, RootWatchMode,
 };
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
@@ -71,6 +71,13 @@ fn empty_repo_state(repo_path: &StandardizedPath) -> FileTreeState {
     FileTreeState::new(root, Vec::new(), None)
 }
 
+fn build_task_key(
+    owner_repo_path: &StandardizedPath,
+    target_path: &StandardizedPath,
+) -> BuildTaskKey {
+    BuildTaskKey::new(owner_repo_path.clone(), target_path.clone())
+}
+
 async fn await_build_tasks_for_repo(
     app: &mut App,
     model_handle: &ModelHandle<LocalRepoMetadataModel>,
@@ -81,7 +88,7 @@ async fn await_build_tasks_for_repo(
             model
                 .build_tasks
                 .iter()
-                .filter(|(_, task)| &task.owner_repo_path == repo_path)
+                .filter(|(key, _)| &key.owner_repo_path == repo_path)
                 .map(|(_, task)| task.handle.future_id())
                 .collect::<Vec<_>>()
         });
@@ -267,12 +274,18 @@ fn remove_repository_aborts_and_drops_build_tasks() {
                 |_, _, _| {},
             );
             let future_id = handle.future_id();
-            model.track_build_task(repo_path.clone(), repo_path.clone(), handle);
+            model.track_build_task(
+                build_task_key(&repo_path, &repo_path),
+                BuildTaskKind::Index,
+                handle,
+            );
             future_id
         });
 
         model_handle.read(&app, |model, _ctx| {
-            assert!(model.build_tasks.contains_key(&repo_path));
+            assert!(model
+                .build_tasks
+                .contains_key(&build_task_key(&repo_path, &repo_path)));
         });
 
         model_handle.update(&mut app, |model, ctx| {
@@ -286,7 +299,9 @@ fn remove_repository_aborts_and_drops_build_tasks() {
             .await;
 
         model_handle.read(&app, |model, _ctx| {
-            assert!(!model.build_tasks.contains_key(&repo_path));
+            assert!(!model
+                .build_tasks
+                .contains_key(&build_task_key(&repo_path, &repo_path)));
         });
     });
 }
@@ -315,7 +330,11 @@ fn remove_repository_keeps_nested_repo_build_tasks() {
                 |_, _, _| {},
             );
             let future_id = handle.future_id();
-            model.track_build_task(nested_repo_path.clone(), nested_repo_path.clone(), handle);
+            model.track_build_task(
+                build_task_key(&nested_repo_path, &nested_repo_path),
+                BuildTaskKind::Index,
+                handle,
+            );
             future_id
         });
 
@@ -333,9 +352,8 @@ fn remove_repository_keeps_nested_repo_build_tasks() {
             ));
             let task = model
                 .build_tasks
-                .remove(&nested_repo_path)
+                .remove(&build_task_key(&nested_repo_path, &nested_repo_path))
                 .expect("nested repo build task should not be aborted by parent teardown");
-            assert_eq!(&task.owner_repo_path, &nested_repo_path);
             task.handle
         });
 
@@ -485,7 +503,8 @@ fn stale_build_future_id_does_not_finish_newer_task() {
                 |_, _, _| {},
             );
             let old_future_id = old_handle.future_id();
-            model.track_build_task(repo_path.clone(), repo_path.clone(), old_handle);
+            let task_key = build_task_key(&repo_path, &repo_path);
+            model.track_build_task(task_key.clone(), BuildTaskKind::Index, old_handle);
             model.abort_builds_for_repo(&repo_path);
 
             let new_handle = ctx.spawn(
@@ -495,19 +514,19 @@ fn stale_build_future_id_does_not_finish_newer_task() {
                 |_, _, _| {},
             );
             let new_future_id = new_handle.future_id();
-            model.track_build_task(repo_path.clone(), repo_path.clone(), new_handle);
+            model.track_build_task(task_key.clone(), BuildTaskKind::Index, new_handle);
 
             assert!(model
-                .finish_build_task(&repo_path, Some(old_future_id))
+                .finish_build_task(&task_key, Some(old_future_id))
                 .is_none());
             let task = model
                 .build_tasks
-                .get(&repo_path)
+                .get(&task_key)
                 .expect("newer task should remain tracked");
             assert_eq!(task.handle.future_id(), new_future_id);
 
             let task = model
-                .finish_build_task(&repo_path, Some(new_future_id))
+                .finish_build_task(&task_key, Some(new_future_id))
                 .expect("newer task should finish");
             task.handle.abort();
             (old_future_id, new_future_id)
@@ -1020,8 +1039,8 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                     );
                     let future_id = handle.future_id();
                     model.track_build_task(
-                        repo_root_for_index.clone(),
-                        repo_root_for_index.clone(),
+                        build_task_key(&repo_root_for_index, &repo_root_for_index),
+                        BuildTaskKind::Index,
                         handle,
                     );
                     future_id
@@ -1033,7 +1052,9 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                         model.repository_state(&repo_root_for_index),
                         Some(IndexedRepoState::Pending(_))
                     ));
-                    assert!(model.build_tasks.contains_key(&repo_root_for_index));
+                    assert!(model
+                        .build_tasks
+                        .contains_key(&build_task_key(&repo_root_for_index, &repo_root_for_index)));
                 });
 
                 model_handle.update(&mut app, |model, ctx| {
@@ -1056,7 +1077,9 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                     assert!(state
                         .entry
                         .contains(&StandardizedPath::try_from_local(&source_file).unwrap()));
-                    assert!(!model.build_tasks.contains_key(&repo_root_for_index));
+                    assert!(!model
+                        .build_tasks
+                        .contains_key(&build_task_key(&repo_root_for_index, &repo_root_for_index)));
                 });
             });
         },
@@ -2713,7 +2736,7 @@ fn load_directory_with_completion_coalesces_duplicate_inflight_load() {
                         .expect("duplicate load should wait for the in-flight task");
                     let task = model
                         .build_tasks
-                        .get(&sub)
+                        .get(&build_task_key(&root, &sub))
                         .expect("directory load should be tracked");
                     assert_eq!(task.completion_waiters.len(), 1);
                     (completion, duplicate_completion)
@@ -2726,9 +2749,90 @@ fn load_directory_with_completion_coalesces_duplicate_inflight_load() {
                 .expect("duplicate load should complete");
 
             model_handle.read(&app, |model, _ctx| {
-                assert!(!model.build_tasks.contains_key(&sub));
+                assert!(!model.build_tasks.contains_key(&build_task_key(&root, &sub)));
             });
         });
+    });
+}
+
+#[test]
+fn directory_load_coalescing_is_scoped_by_owner_and_kind() {
+    let parent_repo_path = StandardizedPath::try_new("/parent_repo").unwrap();
+    let nested_repo_path = StandardizedPath::try_new("/parent_repo/nested_repo").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_index_release_tx, index_release_rx) = oneshot::channel::<()>();
+        let (_load_release_tx, load_release_rx) = oneshot::channel::<()>();
+        let (index_future_id, load_future_id) = model_handle.update(&mut app, |model, ctx| {
+            let nested_index_key = build_task_key(&nested_repo_path, &nested_repo_path);
+            let parent_load_key = build_task_key(&parent_repo_path, &nested_repo_path);
+
+            let index_handle = ctx.spawn(
+                async move {
+                    let _ = index_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let index_future_id = index_handle.future_id();
+            model.track_build_task(nested_index_key.clone(), BuildTaskKind::Index, index_handle);
+
+            assert!(
+                model.subscribe_to_build_task(&parent_load_key).is_none(),
+                "a parent directory load must not subscribe to a nested repo index task"
+            );
+            assert!(
+                model.subscribe_to_build_task(&nested_index_key).is_none(),
+                "directory-load waiters must not subscribe to index tasks"
+            );
+
+            let load_handle = ctx.spawn(
+                async move {
+                    let _ = load_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let load_future_id = load_handle.future_id();
+            model.track_build_task(
+                parent_load_key.clone(),
+                BuildTaskKind::DirectoryLoad,
+                load_handle,
+            );
+
+            assert!(
+                model.subscribe_to_build_task(&parent_load_key).is_some(),
+                "matching directory-load tasks should still coalesce"
+            );
+            assert_eq!(
+                model
+                    .build_tasks
+                    .get(&parent_load_key)
+                    .expect("parent load task should be tracked")
+                    .completion_waiters
+                    .len(),
+                1
+            );
+
+            let index_task = model
+                .build_tasks
+                .remove(&nested_index_key)
+                .expect("nested index task should be tracked");
+            let load_task = model
+                .build_tasks
+                .remove(&parent_load_key)
+                .expect("parent load task should be tracked");
+            index_task.handle.abort();
+            load_task.handle.abort();
+
+            (index_future_id, load_future_id)
+        });
+
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(index_future_id))
+            .await;
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(load_future_id))
+            .await;
     });
 }
 
