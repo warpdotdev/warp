@@ -63,7 +63,9 @@ lazy_static! {
 /// Number of font faces in a font file (TTF or TTC).
 fn count_font_faces(data: &[u8]) -> usize {
     if data.len() >= 12 && &data[0..4] == b"ttcf" {
-        u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize
+        let header_count = u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        let max_from_data = data.len().saturating_sub(12) / 4;
+        header_count.min(max_from_data)
     } else {
         1
     }
@@ -714,16 +716,22 @@ impl TextLayoutSystem {
                 };
                 if let Source::File(path) = &face_info.source {
                     let key = (path.clone(), face_info.index);
-                    if !BIT7_CHECKED_FONTS.contains_key(&key) {
-                        let corrupted = font_store
-                            .db()
-                            .with_face_data(id, |data, fi| {
-                                has_reserved_bit7_in_glyph_flags(data, fi)
-                            })
-                            .unwrap_or(false);
-                        BIT7_CHECKED_FONTS.insert(key, !corrupted);
-                        if corrupted {
+                    match BIT7_CHECKED_FONTS.get(&key) {
+                        Some(clean) if !*clean => {
                             removed_ids.push(id);
+                        }
+                        Some(_) => {}
+                        None => {
+                            let corrupted = font_store
+                                .db()
+                                .with_face_data(id, |data, fi| {
+                                    has_reserved_bit7_in_glyph_flags(data, fi)
+                                })
+                                .unwrap_or(false);
+                            BIT7_CHECKED_FONTS.insert(key, !corrupted);
+                            if corrupted {
+                                removed_ids.push(id);
+                            }
                         }
                     }
                 }
