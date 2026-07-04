@@ -19,6 +19,7 @@ use std::sync::{OnceLock, RwLock};
 
 const DEFAULT_LOCALE: &str = "en";
 const RU_LOCALE: &str = "ru";
+const KO_LOCALE: &str = "ko";
 const ZH_CN_LOCALE: &str = "zh-CN";
 const LOCALES_DIR: &str = "bundled/locales";
 
@@ -45,12 +46,15 @@ pub fn init_locale() {
 ///
 /// Maps locale prefixes to supported locales:
 /// - `ru*` → Russian (`ru`)
+/// - `ko*` → Korean (`ko`)
 /// - `zh*` → Chinese (`zh-CN`) — NOTE: zh-CN locale file is not yet shipped;
 ///   the code path is forward-compatible and harmless.
 /// - anything else → English (`en`)
 pub fn set_locale(locale: &str) {
     let locale = if locale.starts_with("ru") {
         RU_LOCALE
+    } else if locale.starts_with("ko") {
+        KO_LOCALE
     } else if locale.starts_with("zh") {
         ZH_CN_LOCALE
     } else {
@@ -285,6 +289,10 @@ fn load_translations() -> Translations {
         include_str!("../../../resources/bundled/locales/ru.yml"),
         &mut translations,
     );
+    merge_locale_file(
+        include_str!("../../../resources/bundled/locales/ko.yml"),
+        &mut translations,
+    );
     translations
 }
 
@@ -353,6 +361,12 @@ mod tests {
     fn test_set_locale_ru() {
         set_locale("ru_RU.UTF-8");
         assert_eq!(current_locale(), "ru");
+    }
+
+    #[test]
+    fn test_set_locale_ko() {
+        set_locale("ko_KR.UTF-8");
+        assert_eq!(current_locale(), "ko");
     }
 
     #[test]
@@ -446,10 +460,49 @@ en:
     }
 
     #[test]
+    fn test_yaml_key_balance_en_equals_ko() {
+        let mut en_translations = Translations::new();
+        let mut ko_translations = Translations::new();
+
+        merge_locale_file(
+            include_str!("../../../resources/bundled/locales/en.yml"),
+            &mut en_translations,
+        );
+        merge_locale_file(
+            include_str!("../../../resources/bundled/locales/ko.yml"),
+            &mut ko_translations,
+        );
+
+        let en_keys: std::collections::BTreeSet<&String> = en_translations
+            .get("en")
+            .expect("en locale missing")
+            .keys()
+            .collect();
+        let ko_keys: std::collections::BTreeSet<&String> = ko_translations
+            .get("ko")
+            .expect("ko locale missing")
+            .keys()
+            .collect();
+
+        let en_only: Vec<_> = en_keys.difference(&ko_keys).collect();
+        let ko_only: Vec<_> = ko_keys.difference(&en_keys).collect();
+
+        assert!(
+            en_only.is_empty(),
+            "Keys in en.yml missing from ko.yml: {en_only:?}"
+        );
+        assert!(
+            ko_only.is_empty(),
+            "Keys in ko.yml missing from en.yml: {ko_only:?}"
+        );
+    }
+
+    #[test]
     fn test_yaml_no_key_collisions() {
         let en = include_str!("../../../resources/bundled/locales/en.yml");
         let ru = include_str!("../../../resources/bundled/locales/ru.yml");
-        for (raw, name) in [(en, "en.yml"), (ru, "ru.yml")] {
+        let ko = include_str!("../../../resources/bundled/locales/ko.yml");
+        for (raw, name) in [(en, "en.yml"), (ru, "ru.yml"), (ko, "ko.yml")] {
             let value: serde_yaml::Value = serde_yaml::from_str(raw).expect("invalid YAML");
             let mut collisions = Vec::new();
             walk_collisions(&[], &value, &mut collisions);
