@@ -637,6 +637,34 @@ impl std::error::Error for ResponseError {
     }
 }
 
+/// Appends as much of `chunk` to `buf` as fits within `max_bytes`, returning
+/// `true` once `buf` has reached `max_bytes` (so callers can stop reading).
+fn append_within_cap(buf: &mut Vec<u8>, chunk: &[u8], max_bytes: usize) -> bool {
+    let remaining = max_bytes.saturating_sub(buf.len());
+    if remaining == 0 {
+        return true;
+    }
+    let take = remaining.min(chunk.len());
+    buf.extend_from_slice(&chunk[..take]);
+    buf.len() >= max_bytes
+}
+
+/// Streams a response body, decoding at most `max_bytes` as lossy UTF-8.
+///
+/// The body is read incrementally and reading stops as soon as `max_bytes`
+/// have been buffered, so the full body is never held in memory at once.
+async fn read_body_capped_lossy(response: reqwest::Response, max_bytes: usize) -> String {
+    let mut stream = std::pin::pin!(response.bytes_stream());
+    let mut buf = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else { break };
+        if append_within_cap(&mut buf, chunk.as_ref(), max_bytes) {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 impl Response {
     pub async fn text(self) -> reqwest::Result<String> {
         cfg_if::cfg_if! {
@@ -644,6 +672,24 @@ impl Response {
                 self.0.text().await
             } else {
                 Compat::new(async { self.0.text().compat().await }).await
+            }
+        }
+    }
+
+    /// Reads at most `max_bytes` of the response body, decoded as lossy UTF-8.
+    ///
+    /// Unlike [`Self::text`], this streams the body and stops once `max_bytes`
+    /// have been read, so it never buffers the entire body in memory. Use this
+    /// for bodies that are only needed for diagnostics (e.g. the body of a
+    /// non-OK response used to build an error message), where an unbounded body
+    /// could otherwise cause a large memory spike. See APP-4821.
+    pub async fn text_capped(self, max_bytes: usize) -> String {
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                read_body_capped_lossy(self.0, max_bytes).await
+            } else {
+                Compat::new(async { read_body_capped_lossy(self.0, max_bytes).compat().await })
+                    .await
             }
         }
     }
@@ -792,5 +838,33 @@ mod origin_tests {
     fn third_party_origin_does_not_match() {
         let url = reqwest::Url::parse("https://evil.example.com/graphql/v2").unwrap();
         assert!(!is_warp_server_origin(&url));
+    }
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::append_within_cap;
+
+    #[test]
+    fn truncates_and_reports_cap_reached() {
+        let mut buf = Vec::new();
+        // A chunk that fits entirely leaves headroom and is not yet at the cap.
+        assert!(!append_within_cap(&mut buf, b"hello", 8));
+        assert_eq!(buf, b"hello");
+
+        // The next chunk is truncated to exactly reach the cap.
+        assert!(append_within_cap(&mut buf, b"world", 8));
+        assert_eq!(buf, b"hellowor");
+
+        // Once at the cap, further chunks are dropped entirely.
+        assert!(append_within_cap(&mut buf, b"!!!", 8));
+        assert_eq!(buf, b"hellowor");
+    }
+
+    #[test]
+    fn zero_cap_reads_nothing() {
+        let mut buf = Vec::new();
+        assert!(append_within_cap(&mut buf, b"data", 0));
+        assert!(buf.is_empty());
     }
 }
