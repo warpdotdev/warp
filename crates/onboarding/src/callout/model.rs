@@ -407,7 +407,10 @@ impl OnboardingCalloutModel {
             UniversalInputCalloutState::TalkToAgent
             | UniversalInputCalloutState::Complete(FinalState::Submit) => {
                 OnboardingQuery::AgentPrompt(
-                    "What tests exist in this repo, how are they structured, and what do they cover?"
+                    crate::menu_label(
+                        "onboarding.callout.sample_agent_question",
+                        "What tests exist in this repo, how are they structured, and what do they cover?",
+                    )
                         .to_string(),
                 )
             }
@@ -419,13 +422,22 @@ impl OnboardingCalloutModel {
         match state {
             AgentModalityCalloutState::Off => OnboardingQuery::None,
             AgentModalityCalloutState::TerminalMode => {
-                OnboardingQuery::TerminalCommand("Run a command...".to_string())
+                OnboardingQuery::TerminalCommand(
+                    crate::menu_label("onboarding.callout.run_command_placeholder", "Run a command...")
+                        .to_string(),
+                )
             }
             AgentModalityCalloutState::AgentMode => {
                 if self.has_project {
                     OnboardingQuery::AgentPrompt("/init".to_string())
                 } else {
-                    OnboardingQuery::AgentPrompt("Tell the agent what to build...".to_string())
+                    OnboardingQuery::AgentPrompt(
+                        crate::menu_label(
+                            "onboarding.callout.agent_prompt_placeholder",
+                            "Tell the agent what to build...",
+                        )
+                        .to_string(),
+                    )
                 }
             }
             // All completion states should return None so the input gets cleared

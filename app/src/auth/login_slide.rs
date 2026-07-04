@@ -4,7 +4,7 @@ use onboarding::components::feature_optout_dialog::{
     render_feature_optout_dialog, FeatureOptOutDialog,
 };
 use onboarding::slides::{layout, slide_content};
-use onboarding::{OnboardingIntention, WARP_DRIVE_FEATURES};
+use onboarding::OnboardingIntention;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
@@ -958,7 +958,7 @@ impl LoginSlideView {
             LoginPurpose::WarpDrive => (
                 "Are you sure you want to disable Warp Drive?",
                 "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:",
-                WARP_DRIVE_FEATURES,
+                onboarding::warp_drive_features(),
                 "Enable Warp Drive",
             ),
 LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => (

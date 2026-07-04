@@ -24,7 +24,7 @@ use super::OnboardingSlide;
 use crate::model::{NoAiConfirmationSource, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::visuals::{intention_terminal_visual, intention_visual};
-use crate::{OnboardingIntention, AI_FEATURES};
+use crate::OnboardingIntention;
 
 #[derive(Debug, Clone)]
 pub enum IntentionSlideAction {
@@ -257,7 +257,7 @@ impl IntentionSlide {
         .finish();
 
         let checklist = {
-            let items = AI_FEATURES;
+            let items = crate::ai_features();
             // When the agent card is selected, use the theme's green to match the
             // "Blended ANSI/green_fg" token in the design.
             let check_fill = if is_selected {
@@ -268,7 +268,7 @@ impl IntentionSlide {
             let mut col = Flex::column()
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_cross_axis_alignment(CrossAxisAlignment::Start);
-            for &item in items {
+            for item in items {
                 let icon_el = ConstrainedBox::new(Icon::Check.to_warpui_icon(check_fill).finish())
                     .with_width(16.)
                     .with_height(16.)
