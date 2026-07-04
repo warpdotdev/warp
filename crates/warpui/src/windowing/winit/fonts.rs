@@ -833,9 +833,9 @@ impl TextLayoutSystem {
             let mut font_store = self.font_store.write();
             let db = font_store.db_mut();
             for &db_id in &to_remove {
-                let mut font_id_map = self.font_id_map.write();
-                if let Some((font_id, _)) = font_id_map.remove_by_right(&db_id) {
-                    drop(font_id_map);
+                let font_id = self.font_id_map.read().get_by_right(&db_id).copied();
+
+                if let Some(font_id) = font_id {
                     self.font_selections.retain(|_, v| *v != font_id);
                     #[cfg(not(target_os = "windows"))]
                     {
@@ -863,6 +863,8 @@ impl TextLayoutSystem {
                     for family_id in empty_family_ids {
                         families.remove(&family_id);
                     }
+                    drop(families);
+                    self.font_id_map.write().remove_by_right(&db_id);
                 }
 
                 db.remove_face(db_id);
