@@ -385,7 +385,7 @@ impl OnboardingStateModel {
         self.set_step(OnboardingStep::Customize, ctx);
     }
 
-/// "Give me AI features": abort the opt-out. The only trigger is the
+    /// "Give me AI features": abort the opt-out. The only trigger is the
     /// intention slide's "Just use the terminal", which is an explicit request
     /// for AI, so route onto the AI path.
     pub(crate) fn cancel_no_ai(&mut self, ctx: &mut ModelContext<Self>) {

@@ -431,9 +431,7 @@ impl AiSetupSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(
-                    crate::menu_label("common.back", "Back").into(),
-                ),
+                content: button::Content::Label(crate::menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -448,9 +446,7 @@ impl AiSetupSlide {
         let next_button = self.next_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(
-                    crate::menu_label("common.next", "Next").into(),
-                ),
+                content: button::Content::Label(crate::menu_label("common.next", "Next").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),

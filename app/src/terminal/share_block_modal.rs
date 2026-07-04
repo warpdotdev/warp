@@ -214,8 +214,11 @@ impl ShareBlockModal {
 
         let embed_display_options = [
             (
-                crate::menu_label("terminal.share_block.command_and_output", "Command and Output")
-                    .to_string(),
+                crate::menu_label(
+                    "terminal.share_block.command_and_output",
+                    "Command and Output",
+                )
+                .to_string(),
                 DisplaySetting::CommandAndOutput,
             ),
             (
@@ -987,7 +990,10 @@ impl ShareBlockModal {
                 .finish();
             let show_prompt_description = appearance
                 .ui_builder()
-                .span(crate::menu_label("terminal.share_block.show_prompt", "Show prompt").to_string())
+                .span(
+                    crate::menu_label("terminal.share_block.show_prompt", "Show prompt")
+                        .to_string(),
+                )
                 .build()
                 .with_margin_left(2.)
                 .finish();

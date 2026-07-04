@@ -71,7 +71,10 @@ impl ScriptingSettingsPageView {
             vec![Box::new(LocalControlModeWidget)];
 
         Self {
-            page: PageType::new_uncategorized(widgets, Some(crate::menu_label("settings.scripting.title", "Scripting"))),
+            page: PageType::new_uncategorized(
+                widgets,
+                Some(crate::menu_label("settings.scripting.title", "Scripting")),
+            ),
             local_only_icon_tooltip_states: RefCell::new(HashMap::new()),
             local_control_mode_dropdown,
             #[cfg(target_os = "macos")]
@@ -263,13 +266,23 @@ impl SettingsWidget for WarpControlCliInstallWidget {
         };
 
         render_body_item::<ScriptingSettingsPageAction>(
-            crate::menu_label("settings.scripting.warp_control_cli_command", "Warp Control CLI command").into(),
+            crate::menu_label(
+                "settings.scripting.warp_control_cli_command",
+                "Warp Control CLI command",
+            )
+            .into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
             appearance,
             button,
-            Some(crate::menu_label("settings.scripting.warp_control_cli_description", "Install the warpctrl command for scripting Warp from your terminal.").to_owned()),
+            Some(
+                crate::menu_label(
+                    "settings.scripting.warp_control_cli_description",
+                    "Install the warpctrl command for scripting Warp from your terminal.",
+                )
+                .to_owned(),
+            ),
         )
     }
 }
@@ -300,7 +313,13 @@ impl SettingsWidget for LocalControlModeWidget {
             ToggleState::Enabled,
             appearance,
             ChildView::new(&view.local_control_mode_dropdown).finish(),
-            Some(crate::menu_label("settings.scripting.warpctrl_cli_description", "warpctrl allows for scripting Warp's UI. Use with care.").to_owned()),
+            Some(
+                crate::menu_label(
+                    "settings.scripting.warpctrl_cli_description",
+                    "warpctrl allows for scripting Warp's UI. Use with care.",
+                )
+                .to_owned(),
+            ),
         )
     }
 }

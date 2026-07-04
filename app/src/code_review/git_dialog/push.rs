@@ -184,10 +184,7 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        crate::menu_label(
-            "codereview.git_dialog.included_commits",
-            "Included commits",
-        ),
+        crate::menu_label("codereview.git_dialog.included_commits", "Included commits"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

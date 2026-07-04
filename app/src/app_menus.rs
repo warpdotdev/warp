@@ -39,58 +39,84 @@ use crate::{auth, report_if_error};
 
 type CheckmarkStatusGetter = dyn 'static + Fn(&mut AppContext) -> bool;
 
-
-fn enable_shell_debug_mode_menu_item_name() -> &'static str {
-    crate::menu_label("menu.enable_shell_debug_mode", "Enable Shell Debug Mode (-x) for New Sessions")
+/// `crate::menu_label` leaks a fresh string on every call, and these
+/// accessors run inside menu update closures invoked on every menu
+/// validation — cache the lookup once per process (locale is fixed at
+/// startup).
+macro_rules! cached_menu_label_fn {
+    ($name:ident, $key:expr, $fallback:expr) => {
+        fn $name() -> &'static str {
+            static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+            *LABEL.get_or_init(|| crate::menu_label($key, $fallback))
+        }
+    };
 }
 
-fn disable_shell_debug_mode_menu_item_name() -> &'static str {
-    crate::menu_label("menu.disable_shell_debug_mode", "Disable Shell Debug Mode (-x) for New Sessions")
-}
-
-fn enable_in_band_generators_menu_item_name() -> &'static str {
-    crate::menu_label("menu.enable_in_band_generators", "Enable In-band Generators for New Sessions")
-}
-
-fn disable_in_band_generators_menu_item_name() -> &'static str {
-    crate::menu_label("menu.disable_in_band_generators", "Disable in-band generators for new sessions")
-}
-
-fn enable_pty_recording() -> &'static str {
-    crate::menu_label("menu.enable_pty_recording", "Enable PTY Recording Mode (warp.pty.recording)")
-}
-
-fn disable_pty_recording() -> &'static str {
-    crate::menu_label("menu.disable_pty_recording", "Disable PTY Recording Mode (warp.pty.recording)")
-}
-
-fn show_bootstrap_block_menu_item_name() -> &'static str {
-    crate::menu_label("menu.show_init_block", "Show Initialization Block")
-}
-
-fn hide_bootstrap_block_menu_item_name() -> &'static str {
-    crate::menu_label("menu.hide_init_block", "Hide Initialization Block")
-}
-
-fn show_in_band_command_blocks_menu_item_name() -> &'static str {
-    crate::menu_label("menu.show_in_band_command_blocks", "Show In-band Command Blocks")
-}
-
-fn hide_in_band_command_blocks_menu_item_name() -> &'static str {
-    crate::menu_label("menu.hide_in_band_command_blocks", "Hide In-band Command Blocks")
-}
-
-fn show_ssh_command_blocks_menu_item_name() -> &'static str {
-    crate::menu_label("menu.show_ssh_blocks", "Show Warpified SSH Blocks")
-}
-
-fn hide_ssh_command_blocks_menu_item_name() -> &'static str {
-    crate::menu_label("menu.hide_ssh_blocks", "Hide Warpified SSH Blocks")
-}
-
-fn export_default_settings_csv_menu_item_name() -> &'static str {
-    crate::menu_label("menu.export_settings_csv", "Export Default Settings as CSV to home dir")
-}
+cached_menu_label_fn!(
+    enable_shell_debug_mode_menu_item_name,
+    "menu.enable_shell_debug_mode",
+    "Enable Shell Debug Mode (-x) for New Sessions"
+);
+cached_menu_label_fn!(
+    disable_shell_debug_mode_menu_item_name,
+    "menu.disable_shell_debug_mode",
+    "Disable Shell Debug Mode (-x) for New Sessions"
+);
+cached_menu_label_fn!(
+    enable_in_band_generators_menu_item_name,
+    "menu.enable_in_band_generators",
+    "Enable In-band Generators for New Sessions"
+);
+cached_menu_label_fn!(
+    disable_in_band_generators_menu_item_name,
+    "menu.disable_in_band_generators",
+    "Disable in-band generators for new sessions"
+);
+cached_menu_label_fn!(
+    enable_pty_recording,
+    "menu.enable_pty_recording",
+    "Enable PTY Recording Mode (warp.pty.recording)"
+);
+cached_menu_label_fn!(
+    disable_pty_recording,
+    "menu.disable_pty_recording",
+    "Disable PTY Recording Mode (warp.pty.recording)"
+);
+cached_menu_label_fn!(
+    show_bootstrap_block_menu_item_name,
+    "menu.show_init_block",
+    "Show Initialization Block"
+);
+cached_menu_label_fn!(
+    hide_bootstrap_block_menu_item_name,
+    "menu.hide_init_block",
+    "Hide Initialization Block"
+);
+cached_menu_label_fn!(
+    show_in_band_command_blocks_menu_item_name,
+    "menu.show_in_band_command_blocks",
+    "Show In-band Command Blocks"
+);
+cached_menu_label_fn!(
+    hide_in_band_command_blocks_menu_item_name,
+    "menu.hide_in_band_command_blocks",
+    "Hide In-band Command Blocks"
+);
+cached_menu_label_fn!(
+    show_ssh_command_blocks_menu_item_name,
+    "menu.show_ssh_blocks",
+    "Show Warpified SSH Blocks"
+);
+cached_menu_label_fn!(
+    hide_ssh_command_blocks_menu_item_name,
+    "menu.hide_ssh_blocks",
+    "Hide Warpified SSH Blocks"
+);
+cached_menu_label_fn!(
+    export_default_settings_csv_menu_item_name,
+    "menu.export_settings_csv",
+    "Export Default Settings as CSV to home dir"
+);
 
 const SETTINGS_CSV_FILE_NAME: &str = "warp_default_settings.csv";
 const MAX_RECENT_REPOS_IN_MENU: usize = 10;
@@ -882,7 +908,10 @@ fn debug_menu_items() -> Vec<MenuItem> {
         }
 
         debug_menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-            crate::menu_label("menu.manually_toggle_network", "Manually Toggle Network Status"),
+            crate::menu_label(
+                "menu.manually_toggle_network",
+                "Manually Toggle Network Status",
+            ),
             move |ctx| ctx.dispatch_global_action("workspace:toggle_debug_network_status", &()),
             no_updates,
             None,
@@ -960,9 +989,18 @@ fn make_new_help_menu() -> Menu {
         crate::menu_label("menu.help", "Help"),
         vec![
             feedback_menu_item(),
-            link_menu_item(crate::menu_label("menu.warp_documentation", "Warp Documentation..."), links::USER_DOCS_URL.into()),
-            link_menu_item(crate::menu_label("menu.github_issues", "GitHub Issues..."), links::GITHUB_ISSUES_URL.into()),
-            link_menu_item(crate::menu_label("menu.warp_slack_community", "Warp Slack Community..."), links::SLACK_URL.into()),
+            link_menu_item(
+                crate::menu_label("menu.warp_documentation", "Warp Documentation..."),
+                links::USER_DOCS_URL.into(),
+            ),
+            link_menu_item(
+                crate::menu_label("menu.github_issues", "GitHub Issues..."),
+                links::GITHUB_ISSUES_URL.into(),
+            ),
+            link_menu_item(
+                crate::menu_label("menu.warp_slack_community", "Warp Slack Community..."),
+                links::SLACK_URL.into(),
+            ),
         ],
     )
 }

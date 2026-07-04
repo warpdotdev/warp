@@ -141,7 +141,10 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             flags::COMPACT_MODE_CONTEXT_FLAG,
         ),
         ToggleSettingActionPair::new(
-            crate::menu_label("settings.appearance.toggle.themes_sync_os", "themes: sync with OS"),
+            crate::menu_label(
+                "settings.appearance.toggle.themes_sync_os",
+                "themes: sync with OS",
+            ),
             builder(SettingsAction::AppearancePageToggle(
                 AppearancePageAction::ToggleRespectSystemTheme,
             )),
@@ -187,7 +190,10 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
-            crate::menu_label("settings.appearance.toggle.block_dividers", "block dividers"),
+            crate::menu_label(
+                "settings.appearance.toggle.block_dividers",
+                "block dividers",
+            ),
             builder(SettingsAction::AppearancePageToggle(
                 AppearancePageAction::ToggleShowBlockDividers,
             )),
@@ -335,7 +341,10 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
-            crate::menu_label("settings.appearance.toggle.tab_indicators", "tab indicators"),
+            crate::menu_label(
+                "settings.appearance.toggle.tab_indicators",
+                "tab indicators",
+            ),
             builder(SettingsAction::AppearancePageToggle(
                 AppearancePageAction::ToggleTabIndicators,
             )),
@@ -1582,7 +1591,10 @@ impl AppearanceSettingsPageView {
         ));
 
         categories.push(Category::new(
-            crate::menu_label("settings.appearance.category.full_screen_apps", "Full-screen Apps"),
+            crate::menu_label(
+                "settings.appearance.category.full_screen_apps",
+                "Full-screen Apps",
+            ),
             vec![Box::new(AltScreenPaddingWidget::default())],
         ));
 
@@ -1713,14 +1725,12 @@ impl AppearanceSettingsPageView {
 
     fn app_icon_dropdown_item_label(val: AppIcon) -> &'static str {
         match val {
-            AppIcon::Aurora => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.aurora",
-                "Aurora",
-            ),
-            AppIcon::Default => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.default",
-                "Default",
-            ),
+            AppIcon::Aurora => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.aurora", "Aurora")
+            }
+            AppIcon::Default => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.default", "Default")
+            }
             AppIcon::Classic1 => crate::menu_label(
                 "settings.appearance.dropdown.app_icon.classic1",
                 "Classic 1",
@@ -1733,63 +1743,51 @@ impl AppearanceSettingsPageView {
                 "settings.appearance.dropdown.app_icon.classic3",
                 "Classic 3",
             ),
-            AppIcon::Comets => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.comets",
-                "Comets",
-            ),
+            AppIcon::Comets => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.comets", "Comets")
+            }
             AppIcon::GlassSky => crate::menu_label(
                 "settings.appearance.dropdown.app_icon.glass_sky",
                 "Glass Sky",
             ),
-            AppIcon::Glitch => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.glitch",
-                "Glitch",
-            ),
-            AppIcon::Cow => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.cow",
-                "Cow",
-            ),
-            AppIcon::Glow => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.glow",
-                "Glow",
-            ),
+            AppIcon::Glitch => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.glitch", "Glitch")
+            }
+            AppIcon::Cow => crate::menu_label("settings.appearance.dropdown.app_icon.cow", "Cow"),
+            AppIcon::Glow => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.glow", "Glow")
+            }
             AppIcon::Holographic => crate::menu_label(
                 "settings.appearance.dropdown.app_icon.holographic",
                 "Holographic",
             ),
-            AppIcon::Mono => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.mono",
-                "Mono",
-            ),
-            AppIcon::Neon => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.neon",
-                "Neon",
-            ),
-            AppIcon::Original => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.original",
-                "Original",
-            ),
+            AppIcon::Mono => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.mono", "Mono")
+            }
+            AppIcon::Neon => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.neon", "Neon")
+            }
+            AppIcon::Original => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.original", "Original")
+            }
             AppIcon::Starburst => crate::menu_label(
                 "settings.appearance.dropdown.app_icon.starburst",
                 "Starburst",
             ),
-            AppIcon::Sticker => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.sticker",
-                "Sticker",
-            ),
-            AppIcon::WarpOne => crate::menu_label(
-                "settings.appearance.dropdown.app_icon.warp_one",
-                "Warp 1",
-            ),
+            AppIcon::Sticker => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.sticker", "Sticker")
+            }
+            AppIcon::WarpOne => {
+                crate::menu_label("settings.appearance.dropdown.app_icon.warp_one", "Warp 1")
+            }
         }
     }
 
     fn thin_strokes_dropdown_item_label(val: ThinStrokes) -> &'static str {
         match val {
-            ThinStrokes::Never => crate::menu_label(
-                "settings.appearance.dropdown.thin_strokes.never",
-                "Never",
-            ),
+            ThinStrokes::Never => {
+                crate::menu_label("settings.appearance.dropdown.thin_strokes.never", "Never")
+            }
             ThinStrokes::OnLowDpiDisplays => crate::menu_label(
                 "settings.appearance.dropdown.thin_strokes.on_low_dpi",
                 "On low-DPI displays",
@@ -1798,10 +1796,9 @@ impl AppearanceSettingsPageView {
                 "settings.appearance.dropdown.thin_strokes.on_high_dpi",
                 "On high-DPI displays",
             ),
-            ThinStrokes::Always => crate::menu_label(
-                "settings.appearance.dropdown.thin_strokes.always",
-                "Always",
-            ),
+            ThinStrokes::Always => {
+                crate::menu_label("settings.appearance.dropdown.thin_strokes.always", "Always")
+            }
         }
     }
 
@@ -2930,18 +2927,15 @@ impl ThemeSelectWidget {
     ) -> Box<dyn Element> {
         let theme: WarpTheme = WarpConfig::as_ref(app).theme_config().theme(&theme_kind);
         let mode_ui_label = match theme_chooser_mode {
-            ThemeChooserMode::SystemLight => crate::menu_label(
-                "settings.appearance.theme_mode.light",
-                "Light",
-            ),
-            ThemeChooserMode::SystemDark => crate::menu_label(
-                "settings.appearance.theme_mode.dark",
-                "Dark",
-            ),
-            ThemeChooserMode::SystemAgnostic => crate::menu_label(
-                "settings.appearance.theme_mode.current",
-                "Current theme",
-            ),
+            ThemeChooserMode::SystemLight => {
+                crate::menu_label("settings.appearance.theme_mode.light", "Light")
+            }
+            ThemeChooserMode::SystemDark => {
+                crate::menu_label("settings.appearance.theme_mode.dark", "Dark")
+            }
+            ThemeChooserMode::SystemAgnostic => {
+                crate::menu_label("settings.appearance.theme_mode.current", "Current theme")
+            }
         };
 
         ConstrainedBox::new(
@@ -3294,8 +3288,7 @@ impl SettingsWidget for CustomWindowSizeWidget {
         if *window_settings.open_windows_at_custom_size.value() {
             column.add_child(
                 Container::new(render_body_item::<AppearancePageAction>(
-                    crate::menu_label("settings.appearance.label.columns", "Columns")
-                        .to_owned(),
+                    crate::menu_label("settings.appearance.label.columns", "Columns").to_owned(),
                     None,
                     // We show the local-only icon for this with the toggle, not the individual inputs.
                     LocalOnlyIconState::Hidden,
@@ -4015,8 +4008,7 @@ impl SettingsWidget for CompactModeWidget {
         );
 
         render_body_item::<AppearancePageAction>(
-            crate::menu_label("settings.appearance.label.compact_mode", "Compact mode")
-                .to_owned(),
+            crate::menu_label("settings.appearance.label.compact_mode", "Compact mode").to_owned(),
             None,
             LocalOnlyIconState::for_setting(
                 Spacing::storage_key(),
@@ -4201,11 +4193,8 @@ impl SettingsWidget for AIFontWidget {
             appearance
                 .ui_builder()
                 .span(
-                    crate::menu_label(
-                        "settings.appearance.label.match_terminal",
-                        "Match terminal",
-                    )
-                    .to_string(),
+                    crate::menu_label("settings.appearance.label.match_terminal", "Match terminal")
+                        .to_string(),
                 )
                 .build()
                 .with_margin_left(2.)
@@ -4341,11 +4330,8 @@ impl SettingsWidget for TerminalFontWidget {
         // Terminal Font
         let mut terminal_font = Flex::column();
         terminal_font.add_child(render_body_item_label::<AppearancePageAction>(
-            crate::menu_label(
-                "settings.appearance.label.terminal_font",
-                "Terminal font",
-            )
-            .to_string(),
+            crate::menu_label("settings.appearance.label.terminal_font", "Terminal font")
+                .to_string(),
             None,
             None,
             LocalOnlyIconState::for_setting(
@@ -4442,11 +4428,8 @@ impl SettingsWidget for TerminalFontWidget {
             appearance
                 .ui_builder()
                 .label(
-                    crate::menu_label(
-                        "settings.appearance.label.font_size_px",
-                        "Font size (px)",
-                    )
-                    .to_string(),
+                    crate::menu_label("settings.appearance.label.font_size_px", "Font size (px)")
+                        .to_string(),
                 )
                 .with_style(UiComponentStyles {
                     margin: Some(Coords {
@@ -4627,7 +4610,10 @@ impl SettingsWidget for ThinStrokesWidget {
     ) -> Box<dyn Element> {
         render_dropdown_item(
             appearance,
-            crate::menu_label("settings.appearance.label.use_thin_strokes", "Use thin strokes"),
+            crate::menu_label(
+                "settings.appearance.label.use_thin_strokes",
+                "Use thin strokes",
+            ),
             None,
             None,
             LocalOnlyIconState::for_setting(

@@ -107,7 +107,10 @@ impl AiAccessSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph(crate::menu_label("onboarding.ai_access.choose_how", "Get AI access"))
+            .paragraph(crate::menu_label(
+                "onboarding.ai_access.choose_how",
+                "Get AI access",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -220,7 +223,10 @@ impl AiAccessSlide {
 
         let label = appearance
             .ui_builder()
-            .paragraph(crate::menu_label("onboarding.ai_access.subscription", "Subscription"))
+            .paragraph(crate::menu_label(
+                "onboarding.ai_access.subscription",
+                "Subscription",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(16.),
                 font_weight: Some(Weight::Semibold),
@@ -234,7 +240,10 @@ impl AiAccessSlide {
             let green = theme.ansi_fg_green();
             let badge_text = appearance
                 .ui_builder()
-                .paragraph(crate::menu_label("onboarding.ai_access.best_value", "Best value"))
+                .paragraph(crate::menu_label(
+                    "onboarding.ai_access.best_value",
+                    "Best value",
+                ))
                 .with_style(UiComponentStyles {
                     font_size: Some(12.),
                     font_weight: Some(Weight::Normal),
@@ -305,7 +314,10 @@ impl AiAccessSlide {
 
         let label = appearance
             .ui_builder()
-            .paragraph(crate::menu_label("onboarding.ai_access.set_up_later_label", "Set up later"))
+            .paragraph(crate::menu_label(
+                "onboarding.ai_access.set_up_later_label",
+                "Set up later",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(16.),
                 font_weight: Some(Weight::Semibold),
@@ -474,9 +486,9 @@ impl AiAccessSlide {
                 Container::new(
                     ui_builder
                         .span(crate::menu_label(
-                        "onboarding.ai_access.auth_prompt_bar.browser_not_launched_prefix",
-                        "If your browser hasn't launched, ",
-                    ))
+                            "onboarding.ai_access.auth_prompt_bar.browser_not_launched_prefix",
+                            "If your browser hasn't launched, ",
+                        ))
                         .with_style(text_styles)
                         .build()
                         .finish(),

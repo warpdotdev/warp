@@ -53,11 +53,11 @@ impl CustomRouterView {
                 SecondaryTheme,
             )
             .with_icon(Icon::File)
-                .with_size(ButtonSize::Small)
-                .with_height(HEADER_BUTTON_HEIGHT)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CustomRouterViewAction::OpenFile);
-                })
+            .with_size(ButtonSize::Small)
+            .with_height(HEADER_BUTTON_HEIGHT)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(CustomRouterViewAction::OpenFile);
+            })
         });
         open_file_button.update(ctx, |button, ctx| {
             button.set_disabled(router.source_path.is_none(), ctx);
@@ -77,13 +77,16 @@ impl CustomRouterView {
         });
 
         let delete_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new(crate::menu_label("common.delete", "Delete"), DangerSecondaryTheme)
-                .with_icon(Icon::Trash)
-                .with_size(ButtonSize::Small)
-                .with_height(HEADER_BUTTON_HEIGHT)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CustomRouterViewAction::Delete);
-                })
+            ActionButton::new(
+                crate::menu_label("common.delete", "Delete"),
+                DangerSecondaryTheme,
+            )
+            .with_icon(Icon::Trash)
+            .with_size(ButtonSize::Small)
+            .with_height(HEADER_BUTTON_HEIGHT)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(CustomRouterViewAction::Delete);
+            })
         });
         delete_button.update(ctx, |button, ctx| {
             button.set_disabled(!is_any_ai_enabled, ctx);
@@ -318,11 +321,8 @@ fn render_targets_row(
             let rule_count = p.rules.len();
             if rule_count > 0 {
                 let label = if rule_count == 1 {
-                    crate::menu_label(
-                        "settings.custom_router.view.rules_count_one",
-                        "1 rule",
-                    )
-                    .to_string()
+                    crate::menu_label("settings.custom_router.view.rules_count_one", "1 rule")
+                        .to_string()
                 } else {
                     i18n::interpolate(
                         crate::menu_label(

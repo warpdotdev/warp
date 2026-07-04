@@ -865,7 +865,7 @@ impl AgentInputFooter {
             cli_transcription_handle: None,
             v2_model_selector,
             prompt_cache_expiry_timer_handle: None,
-prompt_cache_expired: false,
+            prompt_cache_expired: false,
         };
         me.sync_fast_forward_button(ctx);
         me.sync_remote_control_button(ctx);

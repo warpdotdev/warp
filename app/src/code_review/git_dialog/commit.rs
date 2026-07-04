@@ -409,7 +409,10 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     let autogenerate_pr_content = should_send_git_ops_ai_request(ctx);
 
     me.set_loading(
-        crate::menu_label("codereview.git_dialog.loading.committing", "Committing\u{2026}"),
+        crate::menu_label(
+            "codereview.git_dialog.loading.committing",
+            "Committing\u{2026}",
+        ),
         ctx,
     );
 
@@ -590,10 +593,7 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
     .finish();
 
     let include_label = Text::new(
-        crate::menu_label(
-            "codereview.git_dialog.include_unstaged",
-            "Include unstaged",
-        ),
+        crate::menu_label("codereview.git_dialog.include_unstaged", "Include unstaged"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

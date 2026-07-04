@@ -416,7 +416,11 @@ impl AgentOnboardingView {
             appearance,
             button::Params {
                 content: button::Content::Label(
-                    crate::menu_label("onboarding.agent.give_me_ai_features", "Give me AI features").into(),
+                    crate::menu_label(
+                        "onboarding.agent.give_me_ai_features",
+                        "Give me AI features",
+                    )
+                    .into(),
                 ),
                 theme: &button::themes::Naked,
                 options: button::Options {

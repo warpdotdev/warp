@@ -116,7 +116,10 @@ const CREATOR_AVATAR_FONT_SIZE: f32 = 10.;
 // ── i18n helpers ──────────────────────────────────────────────────────
 // Converted from `const` to `fn` so translation can happen at runtime.
 fn session_expired_text() -> &'static str {
-    crate::menu_label("agent.session_expired.tooltip", "Sessions expire after one week and cannot be opened.")
+    crate::menu_label(
+        "agent.session_expired.tooltip",
+        "Sessions expire after one week and cannot be opened.",
+    )
 }
 
 pub fn init(app: &mut AppContext) {
@@ -228,7 +231,10 @@ impl AgentManagementView {
         let all_filter_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new(crate::menu_label("agent.filter.all", "All"), NakedTheme)
                 .with_size(ButtonSize::Small)
-                .with_tooltip(crate::menu_label("agent.filter.all.tooltip", "View your agent tasks plus all shared team tasks"))
+                .with_tooltip(crate::menu_label(
+                    "agent.filter.all.tooltip",
+                    "View your agent tasks plus all shared team tasks",
+                ))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(AgentManagementViewAction::SetOwnerFilter(
                         OwnerFilter::All,
@@ -237,14 +243,20 @@ impl AgentManagementView {
         });
 
         let personal_filter_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new(crate::menu_label("agent.filter.personal", "Personal"), NakedTheme)
-                .with_size(ButtonSize::Small)
-                .with_tooltip(crate::menu_label("agent.filter.personal.tooltip", "View agent tasks you created"))
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentManagementViewAction::SetOwnerFilter(
-                        OwnerFilter::PersonalOnly,
-                    ))
-                })
+            ActionButton::new(
+                crate::menu_label("agent.filter.personal", "Personal"),
+                NakedTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .with_tooltip(crate::menu_label(
+                "agent.filter.personal.tooltip",
+                "View agent tasks you created",
+            ))
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentManagementViewAction::SetOwnerFilter(
+                    OwnerFilter::PersonalOnly,
+                ))
+            })
         });
 
         let setup_guide_button = CompactibleActionButton::new(
@@ -258,12 +270,13 @@ impl AgentManagementView {
         );
 
         let view_agents_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new(crate::menu_label("agent.view_agents", "View Agents"), NakedTheme)
-                .with_size(ButtonSize::Small)
-                .with_icon(Icon::ArrowLeft)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentManagementViewAction::ToggleSetupGuide)
-                })
+            ActionButton::new(
+                crate::menu_label("agent.view_agents", "View Agents"),
+                NakedTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .with_icon(Icon::ArrowLeft)
+            .on_click(|ctx| ctx.dispatch_typed_action(AgentManagementViewAction::ToggleSetupGuide))
         });
 
         // Set up dropdowns
@@ -276,20 +289,22 @@ impl AgentManagementView {
         let creator_dropdown = ctx.add_typed_action_view(Self::create_creator_dropdown);
 
         let no_filter_results_button = ctx.add_typed_action_view(move |_ctx| {
-            ActionButton::new(crate::menu_label("agent.clear_filters", "Clear filters"), SecondaryTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(move |ctx| {
-                    ctx.dispatch_typed_action(AgentManagementViewAction::ClearFilters)
-                })
+            ActionButton::new(
+                crate::menu_label("agent.clear_filters", "Clear filters"),
+                SecondaryTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(move |ctx| ctx.dispatch_typed_action(AgentManagementViewAction::ClearFilters))
         });
 
         let clear_all_filters_button = ctx.add_typed_action_view(move |_ctx| {
-            ActionButton::new(crate::menu_label("agent.clear_all", "Clear all"), NakedTheme)
-                .with_icon(Icon::X)
-                .with_size(ButtonSize::Small)
-                .on_click(move |ctx| {
-                    ctx.dispatch_typed_action(AgentManagementViewAction::ClearFilters)
-                })
+            ActionButton::new(
+                crate::menu_label("agent.clear_all", "Clear all"),
+                NakedTheme,
+            )
+            .with_icon(Icon::X)
+            .with_size(ButtonSize::Small)
+            .on_click(move |ctx| ctx.dispatch_typed_action(AgentManagementViewAction::ClearFilters))
         });
 
         let cloud_setup_guide_view = ctx.add_typed_action_view(CloudSetupGuideView::new);
@@ -315,7 +330,8 @@ impl AgentManagementView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text(crate::menu_label("agent.search_placeholder", "Search"), ctx);
+            editor
+                .set_placeholder_text(crate::menu_label("agent.search_placeholder", "Search"), ctx);
             editor
         });
         ctx.subscribe_to_view(&search_editor, |me, _handle, event, ctx| {
@@ -491,7 +507,11 @@ impl AgentManagementView {
         };
 
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, crate::menu_label("agent.filter.status", "Status"), ctx);
+        Self::setup_filter_menu(
+            &mut dropdown,
+            crate::menu_label("agent.filter.status", "Status"),
+            ctx,
+        );
 
         // Use this helper to make dropdown items with status icons
         let make_status_option =
@@ -536,7 +556,11 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, crate::menu_label("agent.filter.source", "Source"), ctx);
+        Self::setup_filter_menu(
+            &mut dropdown,
+            crate::menu_label("agent.filter.source", "Source"),
+            ctx,
+        );
         // Set a max height so we can fit all of the source options without scrolling
         dropdown.set_menu_max_height(200., ctx);
 
@@ -565,11 +589,10 @@ impl AgentManagementView {
         }
 
         let mut items = vec![MenuItem::Item(
-            MenuItemFields::new(crate::menu_label("agent.filter.all", "All")).with_on_select_action(
-                DropdownAction::select_action_and_close(
+            MenuItemFields::new(crate::menu_label("agent.filter.all", "All"))
+                .with_on_select_action(DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetSourceFilter(SourceFilter::All),
-                ),
-            ),
+                )),
         )];
         for source in sources {
             items.push(MenuItem::Item(
@@ -600,29 +623,40 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, crate::menu_label("agent.filter.created", "Created on"), ctx);
+        Self::setup_filter_menu(
+            &mut dropdown,
+            crate::menu_label("agent.filter.created", "Created on"),
+            ctx,
+        );
 
         let items = vec![
-            MenuItem::Item(MenuItemFields::new(crate::menu_label("agent.filter.all", "All")).with_on_select_action(
-                DropdownAction::select_action_and_close(
-                    AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::All),
-                ),
-            )),
-            MenuItem::Item(MenuItemFields::new(crate::menu_label("agent.filter.last_24_hours", "Last 24 hours")).with_on_select_action(
-                DropdownAction::select_action_and_close(
+            MenuItem::Item(
+                MenuItemFields::new(crate::menu_label("agent.filter.all", "All"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
+                        AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::All),
+                    )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::menu_label(
+                    "agent.filter.last_24_hours",
+                    "Last 24 hours",
+                ))
+                .with_on_select_action(DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::Last24Hours),
-                ),
-            )),
-            MenuItem::Item(MenuItemFields::new(crate::menu_label("agent.filter.past_3_days", "Past 3 days")).with_on_select_action(
-                DropdownAction::select_action_and_close(
-                    AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::Past3Days),
-                ),
-            )),
-            MenuItem::Item(MenuItemFields::new(crate::menu_label("agent.filter.last_week", "Last week")).with_on_select_action(
-                DropdownAction::select_action_and_close(
-                    AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::LastWeek),
-                ),
-            )),
+                )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::menu_label("agent.filter.past_3_days", "Past 3 days"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
+                        AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::Past3Days),
+                    )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::menu_label("agent.filter.last_week", "Last week"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
+                        AgentManagementViewAction::SetCreatedOnFilter(CreatedOnFilter::LastWeek),
+                    )),
+            ),
         ];
 
         dropdown.set_rich_items(items, ctx);
@@ -634,34 +668,46 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, crate::menu_label("agent.filter.has_artifact", "Has artifact"), ctx);
+        Self::setup_filter_menu(
+            &mut dropdown,
+            crate::menu_label("agent.filter.has_artifact", "Has artifact"),
+            ctx,
+        );
 
         let items = vec![
-            MenuItem::Item(MenuItemFields::new(crate::menu_label("agent.filter.all", "All")).with_on_select_action(
-                DropdownAction::select_action_and_close(
-                    AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::All),
-                ),
-            )),
-            MenuItem::Item(MenuItemFields::new(crate::menu_label("agent.filter.pull_request", "Pull Request")).with_on_select_action(
-                DropdownAction::select_action_and_close(
+            MenuItem::Item(
+                MenuItemFields::new(crate::menu_label("agent.filter.all", "All"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
+                        AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::All),
+                    )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::menu_label(
+                    "agent.filter.pull_request",
+                    "Pull Request",
+                ))
+                .with_on_select_action(DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::PullRequest),
-                ),
-            )),
-            MenuItem::Item(MenuItemFields::new(crate::menu_label("agent.filter.plan", "Plan")).with_on_select_action(
-                DropdownAction::select_action_and_close(
-                    AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::Plan),
-                ),
-            )),
-            MenuItem::Item(MenuItemFields::new(crate::menu_label("agent.filter.screenshot", "Screenshot")).with_on_select_action(
-                DropdownAction::select_action_and_close(
-                    AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::Screenshot),
-                ),
-            )),
-            MenuItem::Item(MenuItemFields::new(crate::menu_label("agent.filter.file", "File")).with_on_select_action(
-                DropdownAction::select_action_and_close(
-                    AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::File),
-                ),
-            )),
+                )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::menu_label("agent.filter.plan", "Plan"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
+                        AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::Plan),
+                    )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::menu_label("agent.filter.screenshot", "Screenshot"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
+                        AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::Screenshot),
+                    )),
+            ),
+            MenuItem::Item(
+                MenuItemFields::new(crate::menu_label("agent.filter.file", "File"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
+                        AgentManagementViewAction::SetArtifactFilter(ArtifactFilter::File),
+                    )),
+            ),
         ];
 
         dropdown.set_rich_items(items, ctx);
@@ -673,7 +719,11 @@ impl AgentManagementView {
         ctx: &mut ViewContext<Dropdown<AgentManagementViewAction>>,
     ) -> Dropdown<AgentManagementViewAction> {
         let mut dropdown = Dropdown::new(ctx);
-        Self::setup_filter_menu(&mut dropdown, crate::menu_label("agent.filter.harness", "Harness"), ctx);
+        Self::setup_filter_menu(
+            &mut dropdown,
+            crate::menu_label("agent.filter.harness", "Harness"),
+            ctx,
+        );
 
         let items = Self::build_harness_dropdown_items(ctx);
         dropdown.set_rich_items(items, ctx);
@@ -683,11 +733,10 @@ impl AgentManagementView {
 
     fn build_harness_dropdown_items(app: &AppContext) -> Vec<MenuItem<DropdownAction>> {
         let mut items = vec![MenuItem::Item(
-            MenuItemFields::new(crate::menu_label("agent.filter.all", "All")).with_on_select_action(
-                DropdownAction::select_action_and_close(
+            MenuItemFields::new(crate::menu_label("agent.filter.all", "All"))
+                .with_on_select_action(DropdownAction::select_action_and_close(
                     AgentManagementViewAction::SetHarnessFilter(HarnessFilter::All),
-                ),
-            ),
+                )),
         )];
 
         let availability = HarnessAvailabilityModel::as_ref(app);
@@ -711,7 +760,11 @@ impl AgentManagementView {
         ctx: &mut ViewContext<FilterableDropdown<AgentManagementViewAction>>,
     ) -> FilterableDropdown<AgentManagementViewAction> {
         let mut dropdown = FilterableDropdown::new(ctx);
-        Self::setup_searchable_filter_menu(&mut dropdown, crate::menu_label("agent.filter.environment", "Environment"), ctx);
+        Self::setup_searchable_filter_menu(
+            &mut dropdown,
+            crate::menu_label("agent.filter.environment", "Environment"),
+            ctx,
+        );
 
         // Keep the button compact when a specific environment ID is selected by abbreviating the
         // displayed ID. (The dropdown menu still shows the full ID.)
@@ -738,7 +791,11 @@ impl AgentManagementView {
         ctx: &mut ViewContext<FilterableDropdown<AgentManagementViewAction>>,
     ) -> FilterableDropdown<AgentManagementViewAction> {
         let mut dropdown = FilterableDropdown::new(ctx);
-        Self::setup_searchable_filter_menu(&mut dropdown, crate::menu_label("agent.filter.created_by", "Created by"), ctx);
+        Self::setup_searchable_filter_menu(
+            &mut dropdown,
+            crate::menu_label("agent.filter.created_by", "Created by"),
+            ctx,
+        );
         dropdown
     }
 
@@ -781,28 +838,30 @@ impl AgentManagementView {
         let envs = model.get_all_environment_ids_and_names(ctx);
 
         let selected_name = match &self.filters.environment {
-            EnvironmentFilter::All => Some(crate::menu_label("agent.filter.all", "All").to_string()),
-            EnvironmentFilter::NoEnvironment => Some(crate::menu_label("agent.filter.none", "None").to_string()),
+            EnvironmentFilter::All => {
+                Some(crate::menu_label("agent.filter.all", "All").to_string())
+            }
+            EnvironmentFilter::NoEnvironment => {
+                Some(crate::menu_label("agent.filter.none", "None").to_string())
+            }
             EnvironmentFilter::Specific(id) => envs.get(id).cloned(),
         };
 
         self.environment_dropdown.update(ctx, |dropdown, ctx| {
             let mut items = vec![MenuItem::Item(
-                MenuItemFields::new(crate::menu_label("agent.filter.all", "All")).with_on_select_action(
-                    DropdownAction::select_action_and_close(
+                MenuItemFields::new(crate::menu_label("agent.filter.all", "All"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
                         AgentManagementViewAction::SetEnvironmentFilter(EnvironmentFilter::All),
-                    ),
-                ),
+                    )),
             )];
 
             items.push(MenuItem::Item(
-                MenuItemFields::new(crate::menu_label("agent.filter.none", "None")).with_on_select_action(
-                    DropdownAction::select_action_and_close(
+                MenuItemFields::new(crate::menu_label("agent.filter.none", "None"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
                         AgentManagementViewAction::SetEnvironmentFilter(
                             EnvironmentFilter::NoEnvironment,
                         ),
-                    ),
-                ),
+                    )),
             ));
 
             let mut sorted_envs: Vec<_> = envs.into_iter().collect();
@@ -835,11 +894,10 @@ impl AgentManagementView {
         };
         self.creator_dropdown.update(ctx, |dropdown, ctx| {
             let mut items = vec![MenuItem::Item(
-                MenuItemFields::new(crate::menu_label("agent.filter.all", "All")).with_on_select_action(
-                    DropdownAction::select_action_and_close(
+                MenuItemFields::new(crate::menu_label("agent.filter.all", "All"))
+                    .with_on_select_action(DropdownAction::select_action_and_close(
                         AgentManagementViewAction::SetCreatorFilter(CreatorFilter::All),
-                    ),
-                ),
+                    )),
             )];
             for (name, uid) in creators {
                 items.push(MenuItem::Item(
@@ -1220,7 +1278,10 @@ impl AgentManagementView {
 
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::default(crate::menu_label("agent.copied_branch_name", "Copied branch name").to_string());
+                    let toast = DismissibleToast::default(
+                        crate::menu_label("agent.copied_branch_name", "Copied branch name")
+                            .to_string(),
+                    );
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
@@ -1514,8 +1575,14 @@ impl AgentManagementView {
 
         // Early return if session is available - no status label rendered
         let (label_text, tooltip_text_opt) = match session_status {
-            SessionStatus::Expired => (crate::menu_label("agent.session_expired", "Session expired"), Some(session_expired_text())),
-            SessionStatus::Unavailable => (crate::menu_label("agent.no_session", "No session available"), None),
+            SessionStatus::Expired => (
+                crate::menu_label("agent.session_expired", "Session expired"),
+                Some(session_expired_text()),
+            ),
+            SessionStatus::Unavailable => (
+                crate::menu_label("agent.no_session", "No session available"),
+                None,
+            ),
             SessionStatus::Available => return Empty::new().finish(),
         };
 
@@ -1743,12 +1810,10 @@ impl AgentManagementView {
         let time_str = format_approx_duration_from_now_utc(entry.display.last_updated);
         let time_text = Text::new_inline(time_str, font_family, font_size)
             .with_color(theme.nonactive_ui_text_color().into());
-        let creator_name = entry
-            .display
-            .creator
-            .name
-            .clone()
-            .unwrap_or_else(|| crate::menu_label("agent.creator_unknown", "Unknown").to_string());
+        let creator_name =
+            entry.display.creator.name.clone().unwrap_or_else(|| {
+                crate::menu_label("agent.creator_unknown", "Unknown").to_string()
+            });
         let avatar = Self::render_avatar_with_tooltip(
             &creator_name,
             appearance,
@@ -2014,7 +2079,10 @@ impl AgentManagementView {
             let mut stack = Stack::new().with_child(loading_icon);
             if mouse_state.is_hovered() {
                 let tooltip = ui_builder
-                    .tool_tip(String::from(crate::menu_label("agent.loading_cloud_runs", "Loading cloud agent runs")))
+                    .tool_tip(String::from(crate::menu_label(
+                        "agent.loading_cloud_runs",
+                        "Loading cloud agent runs",
+                    )))
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(

@@ -694,13 +694,13 @@ impl AgentSlide {
             ui_font_family,
             14.0,
         )
-            .with_color(title_color)
-            .with_style(Properties {
-                weight: Weight::Normal,
-                ..Default::default()
-            })
-            .with_line_height_ratio(1.0)
-            .finish();
+        .with_color(title_color)
+        .with_style(Properties {
+            weight: Weight::Normal,
+            ..Default::default()
+        })
+        .with_line_height_ratio(1.0)
+        .finish();
 
         let subtitle_el = Text::new(
             crate::menu_label(
@@ -832,9 +832,7 @@ impl AgentSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(
-                    crate::menu_label("common.back", "Back").into(),
-                ),
+                content: button::Content::Label(crate::menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -849,9 +847,7 @@ impl AgentSlide {
         let next_button = self.next_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(
-                    crate::menu_label("common.next", "Next").into(),
-                ),
+                content: button::Content::Label(crate::menu_label("common.next", "Next").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),

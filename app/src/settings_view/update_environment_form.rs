@@ -256,14 +256,32 @@ pub struct EnvironmentFormCopy {
 impl EnvironmentFormCopy {
     pub fn orchestration_modal() -> Self {
         Self {
-            name_placeholder: crate::menu_label("settings.update_environment_form.name_placeholder_orchestration", "e.g., dev-env"),
-            repos_placeholder_authed: crate::menu_label("settings.update_environment_form.repos_placeholder_browse", "Browse GitHub repos..."),
+            name_placeholder: crate::menu_label(
+                "settings.update_environment_form.name_placeholder_orchestration",
+                "e.g., dev-env",
+            ),
+            repos_placeholder_authed: crate::menu_label(
+                "settings.update_environment_form.repos_placeholder_browse",
+                "Browse GitHub repos...",
+            ),
             repos_placeholder_unauthed: repos_placeholder_unauthed(),
-            docker_image_label: crate::menu_label("settings.update_environment_form.docker_image_label", "Docker image"),
-            docker_image_placeholder: crate::menu_label("settings.update_environment_form.docker_image_placeholder_short", "e.g., node:20-alpine"),
+            docker_image_label: crate::menu_label(
+                "settings.update_environment_form.docker_image_label",
+                "Docker image",
+            ),
+            docker_image_placeholder: crate::menu_label(
+                "settings.update_environment_form.docker_image_placeholder_short",
+                "e.g., node:20-alpine",
+            ),
             description_placeholder: description_placeholder(),
-            setup_commands_placeholder: crate::menu_label("settings.update_environment_form.setup_commands_placeholder_short", "e.g., node start"),
-            setup_commands_helper: crate::menu_label("settings.update_environment_form.setup_commands_helper_short", "Press Enter or click the submit button to add each command."),
+            setup_commands_placeholder: crate::menu_label(
+                "settings.update_environment_form.setup_commands_placeholder_short",
+                "e.g., node start",
+            ),
+            setup_commands_helper: crate::menu_label(
+                "settings.update_environment_form.setup_commands_helper_short",
+                "Press Enter or click the submit button to add each command.",
+            ),
             show_description_character_count: false,
         }
     }
@@ -363,13 +381,22 @@ pub struct UpdateEnvironmentForm {
 const DESCRIPTION_MAX_CHARS: usize = 240;
 // ── i18n helpers ──────────────────────────────────────────────────────
 fn description_placeholder() -> &'static str {
-    crate::menu_label("settings.update_environment_form.description_placeholder", "e.g., this environment is for all front end focused agents")
+    crate::menu_label(
+        "settings.update_environment_form.description_placeholder",
+        "e.g., this environment is for all front end focused agents",
+    )
 }
 fn repos_placeholder_authed() -> &'static str {
-    crate::menu_label("settings.update_environment_form.repos_placeholder_authed", "Enter repos (owner/repo format)")
+    crate::menu_label(
+        "settings.update_environment_form.repos_placeholder_authed",
+        "Enter repos (owner/repo format)",
+    )
 }
 fn repos_placeholder_unauthed() -> &'static str {
-    crate::menu_label("settings.update_environment_form.repos_placeholder_unauthed", "Paste repo URL(s)")
+    crate::menu_label(
+        "settings.update_environment_form.repos_placeholder_unauthed",
+        "Paste repo URL(s)",
+    )
 }
 const FORM_FIELD_SPACING: f32 = 20.;
 const FORM_LABEL_SPACING: f32 = 6.;
@@ -477,17 +504,24 @@ impl UpdateEnvironmentForm {
         });
 
         let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(crate::menu_label("settings.update_environment_form.delete_environment", "Delete environment"), DangerSecondaryTheme)
-                .with_icon(Icon::Trash)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Delete);
-                })
+            ActionButton::new(
+                crate::menu_label(
+                    "settings.update_environment_form.delete_environment",
+                    "Delete environment",
+                ),
+                DangerSecondaryTheme,
+            )
+            .with_icon(Icon::Trash)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Delete);
+            })
         });
 
         let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(crate::menu_label("common.cancel", "Cancel"), SecondaryTheme).on_click(|ctx| {
-                ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Cancel);
-            })
+            ActionButton::new(crate::menu_label("common.cancel", "Cancel"), SecondaryTheme)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Cancel);
+                })
         });
         // Set up editor subscriptions
         ctx.subscribe_to_view(&name_editor, |me, _, event, ctx| match event {
@@ -839,9 +873,15 @@ impl UpdateEnvironmentForm {
     fn update_submit_button_label(&mut self, ctx: &mut ViewContext<Self>) {
         let button_text = match (&self.mode, self.show_header) {
             (EnvironmentFormMode::Create, true) => crate::menu_label("common.create", "Create"),
-            (EnvironmentFormMode::Create, false) => crate::menu_label("settings.update_environment_form.create_environment", "Create environment"),
+            (EnvironmentFormMode::Create, false) => crate::menu_label(
+                "settings.update_environment_form.create_environment",
+                "Create environment",
+            ),
             (EnvironmentFormMode::Edit { .. }, true) => crate::menu_label("common.save", "Save"),
-            (EnvironmentFormMode::Edit { .. }, false) => crate::menu_label("settings.update_environment_form.save_environment", "Save environment"),
+            (EnvironmentFormMode::Edit { .. }, false) => crate::menu_label(
+                "settings.update_environment_form.save_environment",
+                "Save environment",
+            ),
         };
         self.submit_button.update(ctx, |button, ctx| {
             button.set_label(button_text, ctx);
@@ -1361,16 +1401,22 @@ impl UpdateEnvironmentForm {
                     }
                     Ok(UserGithubInfoResult::Unknown) => {
                         me.github_dropdown_state.load_error_message = Some(
-                            crate::menu_label("settings.update_environment_form.load_repos_error", "Couldn't load GitHub repos. You can paste repo URL(s), or retry.")
-                                .to_string(),
+                            crate::menu_label(
+                                "settings.update_environment_form.load_repos_error",
+                                "Couldn't load GitHub repos. You can paste repo URL(s), or retry.",
+                            )
+                            .to_string(),
                         );
                         me.update_repos_input_placeholder(ctx);
                     }
                     Err(e) => {
                         debug!("Failed to load GitHub repos: {e}");
                         me.github_dropdown_state.load_error_message = Some(
-                            crate::menu_label("settings.update_environment_form.load_repos_error", "Couldn't load GitHub repos. You can paste repo URL(s), or retry.")
-                                .to_string(),
+                            crate::menu_label(
+                                "settings.update_environment_form.load_repos_error",
+                                "Couldn't load GitHub repos. You can paste repo URL(s), or retry.",
+                            )
+                            .to_string(),
                         );
                         me.update_repos_input_placeholder(ctx);
                     }
@@ -1659,9 +1705,16 @@ impl UpdateEnvironmentForm {
                         theme.active_ui_text_color()
                     };
 
-                    Text::new_inline(crate::menu_label("settings.update_environment_form.share_with_team", "Share with team"), font_family, font_size)
-                        .with_color(color.into())
-                        .finish()
+                    Text::new_inline(
+                        crate::menu_label(
+                            "settings.update_environment_form.share_with_team",
+                            "Share with team",
+                        ),
+                        font_family,
+                        font_size,
+                    )
+                    .with_color(color.into())
+                    .finish()
                 },
             )
             .with_cursor(Cursor::PointingHand)
@@ -1741,8 +1794,20 @@ impl UpdateEnvironmentForm {
 
     fn render_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let (title, button_handle) = match &self.mode {
-            EnvironmentFormMode::Create => (crate::menu_label("settings.update_environment_form.create_environment", "Create environment"), &self.submit_button),
-            EnvironmentFormMode::Edit { .. } => (crate::menu_label("settings.update_environment_form.edit_environment", "Edit environment"), &self.submit_button),
+            EnvironmentFormMode::Create => (
+                crate::menu_label(
+                    "settings.update_environment_form.create_environment",
+                    "Create environment",
+                ),
+                &self.submit_button,
+            ),
+            EnvironmentFormMode::Edit { .. } => (
+                crate::menu_label(
+                    "settings.update_environment_form.edit_environment",
+                    "Edit environment",
+                ),
+                &self.submit_button,
+            ),
         };
 
         let submit_actions = || self.render_submit_actions(appearance, app, button_handle);
@@ -1868,7 +1933,10 @@ impl UpdateEnvironmentForm {
             .with_spacing(FORM_LABEL_SPACING);
 
         field.add_child(Self::render_form_label(
-            crate::menu_label("settings.update_environment_form.setup_commands_label", "Setup command(s)"),
+            crate::menu_label(
+                "settings.update_environment_form.setup_commands_label",
+                "Setup command(s)",
+            ),
             false,
             appearance,
         ));
@@ -1939,7 +2007,10 @@ impl UpdateEnvironmentForm {
 
         field.add_child(
             Text::new(
-                crate::menu_label("settings.update_environment_form.description_label", "Description"),
+                crate::menu_label(
+                    "settings.update_environment_form.description_label",
+                    "Description",
+                ),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -1972,9 +2043,16 @@ impl UpdateEnvironmentForm {
                 .chars()
                 .count();
             let count_text = i18n::interpolate(
-                crate::menu_label("settings.update_environment_form.characters_count", "{count} / {max} characters"),
-                &[("count", char_count.to_string()), ("max", DESCRIPTION_MAX_CHARS.to_string())],
-            ).into_owned();
+                crate::menu_label(
+                    "settings.update_environment_form.characters_count",
+                    "{count} / {max} characters",
+                ),
+                &[
+                    ("count", char_count.to_string()),
+                    ("max", DESCRIPTION_MAX_CHARS.to_string()),
+                ],
+            )
+            .into_owned();
             field.add_child(
                 Text::new(
                     count_text,
@@ -2035,7 +2113,10 @@ impl UpdateEnvironmentForm {
                     .with_child(
                         Container::new(
                             Text::new(
-                                crate::menu_label("settings.update_environment_form.loading", "Loading..."),
+                                crate::menu_label(
+                                    "settings.update_environment_form.loading",
+                                    "Loading...",
+                                ),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -2124,7 +2205,10 @@ impl UpdateEnvironmentForm {
                         )
                         .with_child(
                             Text::new(
-                                crate::menu_label("settings.update_environment_form.auth_with_github", "Auth with GitHub"),
+                                crate::menu_label(
+                                    "settings.update_environment_form.auth_with_github",
+                                    "Auth with GitHub",
+                                ),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -2172,7 +2256,13 @@ impl UpdateEnvironmentForm {
             .github_dropdown_state
             .load_error_message
             .clone()
-            .unwrap_or_else(|| { crate::menu_label("settings.update_environment_form.load_repositories_failed", "Failed to load GitHub repositories").to_string() });
+            .unwrap_or_else(|| {
+                crate::menu_label(
+                    "settings.update_environment_form.load_repositories_failed",
+                    "Failed to load GitHub repositories",
+                )
+                .to_string()
+            });
 
         let mut field = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -2481,7 +2571,10 @@ impl UpdateEnvironmentForm {
     fn render_repo_helper_text_row(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let helper = Text::new(
-            crate::menu_label("settings.update_environment_form.repos_helper", "Type owner/repo and press Enter to add, or select from dropdown."),
+            crate::menu_label(
+                "settings.update_environment_form.repos_helper",
+                "Type owner/repo and press Enter to add, or select from dropdown.",
+            ),
             appearance.ui_font_family(),
             appearance.ui_font_size() * 0.85,
         )
@@ -2507,7 +2600,10 @@ impl UpdateEnvironmentForm {
             // Plain text part
             text_row.add_child(
                 Text::new(
-                    crate::menu_label("settings.update_environment_form.missing_repo", "Missing a repo?"),
+                    crate::menu_label(
+                        "settings.update_environment_form.missing_repo",
+                        "Missing a repo?",
+                    ),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() * 0.85,
                 )
@@ -2525,7 +2621,10 @@ impl UpdateEnvironmentForm {
                         theme.accent()
                     };
                     Text::new(
-                        crate::menu_label("settings.update_environment_form.configure_access", "Configure access on GitHub"),
+                        crate::menu_label(
+                            "settings.update_environment_form.configure_access",
+                            "Configure access on GitHub",
+                        ),
                         appearance.ui_font_family(),
                         appearance.ui_font_size() * 0.85,
                     )
@@ -2694,7 +2793,10 @@ impl UpdateEnvironmentForm {
             content.add_child(
                 Container::new(
                     Text::new(
-                        crate::menu_label("settings.update_environment_form.no_repositories", "No repositories found"),
+                        crate::menu_label(
+                            "settings.update_environment_form.no_repositories",
+                            "No repositories found",
+                        ),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
@@ -2979,7 +3081,13 @@ impl UpdateEnvironmentForm {
                 let ui_builder = appearance.ui_builder().clone();
                 move || {
                     ui_builder
-                        .tool_tip(crate::menu_label("settings.update_environment_form.open_image_at", "Open image at {url}").replace("{url}", &docker_hub_url))
+                        .tool_tip(
+                            crate::menu_label(
+                                "settings.update_environment_form.open_image_at",
+                                "Open image at {url}",
+                            )
+                            .replace("{url}", &docker_hub_url),
+                        )
                         .build()
                         .finish()
                 }
@@ -3105,10 +3213,16 @@ impl UpdateEnvironmentForm {
         let button_text = if is_loading {
             crate::menu_label("settings.update_environment_form.generating", "Generating…")
         } else {
-            crate::menu_label("settings.update_environment_form.suggest_image", "Suggest image")
+            crate::menu_label(
+                "settings.update_environment_form.suggest_image",
+                "Suggest image",
+            )
         };
 
-        let tooltip_text = crate::menu_label("settings.update_environment_form.suggest_image_tooltip", "Warp will suggest a Docker image based on your selected repositories.");
+        let tooltip_text = crate::menu_label(
+            "settings.update_environment_form.suggest_image_tooltip",
+            "Warp will suggest a Docker image based on your selected repositories.",
+        );
 
         let button = Hoverable::new(
             self.suggest_image_button_mouse_state.clone(),
@@ -3227,16 +3341,20 @@ impl UpdateEnvironmentForm {
                 let auth_url_with_next = self.auth_url_with_next(auth_url);
                 let action = UpdateEnvironmentFormAction::OpenUrl(auth_url_with_next);
                 let button = WarningBoxButtonConfig::new(
-                    crate::menu_label("settings.update_environment_form.authenticate", "Authenticate"),
+                    crate::menu_label(
+                        "settings.update_environment_form.authenticate",
+                        "Authenticate",
+                    ),
                     self.suggest_image_auth_button_mouse_state.clone(),
                     move |ctx| {
                         ctx.dispatch_typed_action(action.clone());
                     },
                 );
                 Some(render_warning_box(
-                    WarningBoxConfig::new(
-                        crate::menu_label("settings.update_environment_form.suggest_image_auth_required", "You need to grant access to your GitHub repos to suggest a Docker image"),
-                    )
+                    WarningBoxConfig::new(crate::menu_label(
+                        "settings.update_environment_form.suggest_image_auth_required",
+                        "You need to grant access to your GitHub repos to suggest a Docker image",
+                    ))
                     .with_width(self.field_max_width)
                     .with_button(button),
                     appearance,
@@ -3261,7 +3379,10 @@ impl UpdateEnvironmentForm {
     ) -> Box<dyn Element> {
         let action = UpdateEnvironmentFormAction::LaunchAgentForSelectedRepos;
         let button = WarningBoxButtonConfig::new(
-            crate::menu_label("settings.update_environment_form.launch_agent", "Launch agent"),
+            crate::menu_label(
+                "settings.update_environment_form.launch_agent",
+                "Launch agent",
+            ),
             self.suggest_image_launch_agent_button_mouse_state.clone(),
             move |ctx| {
                 ctx.dispatch_typed_action(action.clone());

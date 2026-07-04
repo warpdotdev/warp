@@ -124,7 +124,10 @@ impl ProjectSlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph(crate::menu_label("onboarding.project.title", "Open a project"))
+            .paragraph(crate::menu_label(
+                "onboarding.project.title",
+                "Open a project",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -286,9 +289,7 @@ impl ProjectSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(
-                    crate::menu_label("common.back", "Back").into(),
-                ),
+                content: button::Content::Label(crate::menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {

@@ -45,10 +45,7 @@ use crate::view_components::FilterableDropdown;
 
 /// Header title for the router editor pane.
 pub fn header_text() -> &'static str {
-    crate::menu_label(
-        "settings.custom_router.editor.header",
-        "Router Editor",
-    )
+    crate::menu_label("settings.custom_router.editor.header", "Router Editor")
 }
 
 const EDITOR_CONTENT_WIDTH: f32 = 340.;
@@ -360,10 +357,7 @@ impl CustomRouterEditorView {
         });
         let add_rule_button = ctx.add_typed_action_view(|_| {
             ActionButton::new(
-                crate::menu_label(
-                    "settings.custom_router.editor.add_rule",
-                    "+ Add rule",
-                ),
+                crate::menu_label("settings.custom_router.editor.add_rule", "+ Add rule"),
                 SecondaryTheme,
             )
             .with_size(ButtonSize::Small)
@@ -790,10 +784,7 @@ impl CustomRouterEditorView {
         if !self.prompt_rules.is_empty() {
             column.add_child(
                 Container::new(Self::section_label(
-                    crate::menu_label(
-                        "settings.custom_router.editor.rules_section",
-                        "Rules",
-                    ),
+                    crate::menu_label("settings.custom_router.editor.rules_section", "Rules"),
                     appearance,
                 ))
                 .with_margin_top(12.)

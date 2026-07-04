@@ -40,32 +40,35 @@ pub use callout::{OnboardingCalloutView, OnboardingKeybindings};
 /// Shared by the intention slide's agent card checklist and the login slide's
 /// skip-login confirmation dialog so the two always stay in sync.
 pub fn ai_features() -> [&'static str; 6] {
-    [
-        menu_label(
-            "onboarding.ai_features.frontier_models",
-            "Use frontier and open-weight models with Warp Agent",
-        ),
-        menu_label(
-            "onboarding.ai_features.cloud_handoff",
-            "Hand off agent work to cloud agents",
-        ),
-        menu_label(
-            "onboarding.ai_features.auto_fix",
-            "Automatically diagnose and fix terminal errors",
-        ),
-        menu_label(
-            "onboarding.ai_features.agentic_control",
-            "Agentic control of long-running commands and TUIs",
-        ),
-        menu_label(
-            "onboarding.ai_features.code_review",
-            "Review code diffs and send comments directly to agents",
-        ),
-        menu_label(
-            "onboarding.ai_features.remote_control",
-            "Remote control for Claude Code, Codex, and other agents",
-        ),
-    ]
+    static FEATURES: std::sync::OnceLock<[&'static str; 6]> = std::sync::OnceLock::new();
+    *FEATURES.get_or_init(|| {
+        [
+            menu_label(
+                "onboarding.ai_features.frontier_models",
+                "Use frontier and open-weight models with Warp Agent",
+            ),
+            menu_label(
+                "onboarding.ai_features.cloud_handoff",
+                "Hand off agent work to cloud agents",
+            ),
+            menu_label(
+                "onboarding.ai_features.auto_fix",
+                "Automatically diagnose and fix terminal errors",
+            ),
+            menu_label(
+                "onboarding.ai_features.agentic_control",
+                "Agentic control of long-running commands and TUIs",
+            ),
+            menu_label(
+                "onboarding.ai_features.code_review",
+                "Review code diffs and send comments directly to agents",
+            ),
+            menu_label(
+                "onboarding.ai_features.remote_control",
+                "Remote control for Claude Code, Codex, and other agents",
+            ),
+        ]
+    })
 }
 
 /// User-facing names of the Warp Drive features enabled when the terminal
@@ -73,13 +76,18 @@ pub fn ai_features() -> [&'static str; 6] {
 /// skip-login confirmation dialog so the list stays in sync with any future
 /// surfaces that need it.
 pub fn warp_drive_features() -> &'static [&'static str] {
-    Box::leak(Box::new([
-        menu_label("onboarding.warp_drive_features.warp_drive", "Warp Drive"),
-        menu_label(
-            "onboarding.warp_drive_features.session_sharing",
-            "Session Sharing",
-        ),
-    ]))
+    static FEATURES: std::sync::OnceLock<[&'static str; 2]> = std::sync::OnceLock::new();
+    FEATURES
+        .get_or_init(|| {
+            [
+                menu_label("onboarding.warp_drive_features.warp_drive", "Warp Drive"),
+                menu_label(
+                    "onboarding.warp_drive_features.session_sharing",
+                    "Session Sharing",
+                ),
+            ]
+        })
+        .as_slice()
 }
 
 cfg_if::cfg_if! {

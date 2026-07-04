@@ -494,7 +494,7 @@ ko:
   "settings.appearance.toggle.focus_follows_mouse": "포커스가 마우스를 따라감"
   "settings.appearance.toggle.hide_code_review_button_in_tab_bar": "탭 바에서 코드 리뷰 버튼 숨기기"
   "settings.appearance.toggle.jump_to_bottom_of_block_button": "\"블록 맨 아래로 이동\" 버튼"
-  "settings.appearance.toggle.latest_prompt_conversation_title": "탭 이름에 최근 사용자 프롬프트를 대화 제목으로 사용"
+  "settings.appearance.toggle.latest_prompt_conversation_title": "탭 이름에 최신 사용자 프롬프트를 대화 제목으로 사용"
   "settings.appearance.toggle.ligature_rendering": "합자(리거처) 렌더링"
   "settings.appearance.toggle.notebook_font_match_terminal": "노트북 폰트 크기를 터미널 폰트 크기와 일치"
   "settings.appearance.toggle.open_new_windows_custom_size": "새 윈도우를 사용자 지정 크기로 열기"

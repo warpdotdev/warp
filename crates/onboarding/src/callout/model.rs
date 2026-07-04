@@ -18,6 +18,36 @@ pub enum FinalState {
     BackToTerminal,
 }
 
+fn sample_agent_question() -> &'static str {
+    static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    *LABEL.get_or_init(|| {
+        crate::menu_label(
+            "onboarding.callout.sample_agent_question",
+            "What tests exist in this repo, how are they structured, and what do they cover?",
+        )
+    })
+}
+
+fn run_command_placeholder() -> &'static str {
+    static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    *LABEL.get_or_init(|| {
+        crate::menu_label(
+            "onboarding.callout.run_command_placeholder",
+            "Run a command...",
+        )
+    })
+}
+
+fn agent_prompt_placeholder() -> &'static str {
+    static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    *LABEL.get_or_init(|| {
+        crate::menu_label(
+            "onboarding.callout.agent_prompt_placeholder",
+            "Tell the agent what to build...",
+        )
+    })
+}
+
 impl std::fmt::Display for FinalState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -406,13 +436,7 @@ impl OnboardingCalloutModel {
             }
             UniversalInputCalloutState::TalkToAgent
             | UniversalInputCalloutState::Complete(FinalState::Submit) => {
-                OnboardingQuery::AgentPrompt(
-                    crate::menu_label(
-                        "onboarding.callout.sample_agent_question",
-                        "What tests exist in this repo, how are they structured, and what do they cover?",
-                    )
-                        .to_string(),
-                )
+                OnboardingQuery::AgentPrompt(sample_agent_question().to_string())
             }
             UniversalInputCalloutState::Complete(_) => OnboardingQuery::None,
         }
@@ -422,22 +446,13 @@ impl OnboardingCalloutModel {
         match state {
             AgentModalityCalloutState::Off => OnboardingQuery::None,
             AgentModalityCalloutState::TerminalMode => {
-                OnboardingQuery::TerminalCommand(
-                    crate::menu_label("onboarding.callout.run_command_placeholder", "Run a command...")
-                        .to_string(),
-                )
+                OnboardingQuery::TerminalCommand(run_command_placeholder().to_string())
             }
             AgentModalityCalloutState::AgentMode => {
                 if self.has_project {
                     OnboardingQuery::AgentPrompt("/init".to_string())
                 } else {
-                    OnboardingQuery::AgentPrompt(
-                        crate::menu_label(
-                            "onboarding.callout.agent_prompt_placeholder",
-                            "Tell the agent what to build...",
-                        )
-                        .to_string(),
-                    )
+                    OnboardingQuery::AgentPrompt(agent_prompt_placeholder().to_string())
                 }
             }
             // All completion states should return None so the input gets cleared

@@ -795,10 +795,7 @@ impl GitDialog {
                         "Publish branch",
                     )
                 } else {
-                    crate::menu_label(
-                        "codereview.git_dialog.title.push_changes",
-                        "Push changes",
-                    )
+                    crate::menu_label("codereview.git_dialog.title.push_changes", "Push changes")
                 }
             }
             GitDialogMode::CreatePr(_) => crate::menu_label(

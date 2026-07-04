@@ -83,7 +83,10 @@ impl IntentionSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph(crate::menu_label("onboarding.intention.title", "Welcome to Warp"))
+            .paragraph(crate::menu_label(
+                "onboarding.intention.title",
+                "Welcome to Warp",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -403,9 +406,7 @@ impl IntentionSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(
-                    crate::menu_label("common.back", "Back").into(),
-                ),
+                content: button::Content::Label(crate::menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {

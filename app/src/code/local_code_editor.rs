@@ -1962,12 +1962,18 @@ impl LocalCodeEditorView {
     /// Creates menu items for the context menu
     fn context_menu_items(&self) -> Vec<MenuItem<LocalCodeEditorAction>> {
         vec![
-            MenuItemFields::new(crate::menu_label("code.go_to_definition", "Go to definition"))
-                .with_on_select_action(LocalCodeEditorAction::GotoDefinition)
-                .into_item(),
-            MenuItemFields::new(crate::menu_label("code.find_references_action", "Find references"))
-                .with_on_select_action(LocalCodeEditorAction::FindReferences)
-                .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "code.go_to_definition",
+                "Go to definition",
+            ))
+            .with_on_select_action(LocalCodeEditorAction::GotoDefinition)
+            .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "code.find_references_action",
+                "Find references",
+            ))
+            .with_on_select_action(LocalCodeEditorAction::FindReferences)
+            .into_item(),
         ]
     }
 
@@ -2395,7 +2401,10 @@ pub fn render_unsaved_changes_banner(
             Shrinkable::new(
                 1.,
                 Text::new(
-                    crate::menu_label("code.file_has_saved_changes", "This file has saved changes that are not reflected here."),
+                    crate::menu_label(
+                        "code.file_has_saved_changes",
+                        "This file has saved changes that are not reflected here.",
+                    ),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -2413,7 +2422,9 @@ pub fn render_unsaved_changes_banner(
             appearance
                 .ui_builder()
                 .button(ButtonVariant::Text, discard_mouse_state)
-                .with_text_label(crate::menu_label("code.discard_this_version", "Discard this version").into())
+                .with_text_label(
+                    crate::menu_label("code.discard_this_version", "Discard this version").into(),
+                )
                 .with_style(UiComponentStyles {
                     height: Some(24.),
                     padding: Some(Coords {

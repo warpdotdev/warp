@@ -198,34 +198,41 @@ impl PrivacyPageView {
         });
 
         let add_regex_modal_view = ctx.add_typed_action_view(|ctx| {
-            Modal::new(Some(crate::menu_label("settings.privacy.add_regex_pattern", "Add regex pattern").to_string()), add_regex_body, ctx)
-                .with_modal_style(UiComponentStyles {
-                    width: Some(600.),
-                    height: Some(400.),
-                    ..Default::default()
-                })
-                .with_header_style(UiComponentStyles {
-                    padding: Some(Coords {
-                        top: 24.,
-                        bottom: 0.,
-                        left: 24.,
-                        right: 24.,
-                    }),
-                    font_size: Some(16.),
-                    font_weight: Some(Weight::Bold),
-                    ..Default::default()
-                })
-                .with_body_style(UiComponentStyles {
-                    padding: Some(Coords {
-                        top: 0.,
-                        bottom: 24.,
-                        left: 24.,
-                        right: 24.,
-                    }),
-                    ..Default::default()
-                })
-                .with_background_opacity(100)
-                .with_dismiss_on_click()
+            Modal::new(
+                Some(
+                    crate::menu_label("settings.privacy.add_regex_pattern", "Add regex pattern")
+                        .to_string(),
+                ),
+                add_regex_body,
+                ctx,
+            )
+            .with_modal_style(UiComponentStyles {
+                width: Some(600.),
+                height: Some(400.),
+                ..Default::default()
+            })
+            .with_header_style(UiComponentStyles {
+                padding: Some(Coords {
+                    top: 24.,
+                    bottom: 0.,
+                    left: 24.,
+                    right: 24.,
+                }),
+                font_size: Some(16.),
+                font_weight: Some(Weight::Bold),
+                ..Default::default()
+            })
+            .with_body_style(UiComponentStyles {
+                padding: Some(Coords {
+                    top: 0.,
+                    bottom: 24.,
+                    left: 24.,
+                    right: 24.,
+                }),
+                ..Default::default()
+            })
+            .with_background_opacity(100)
+            .with_dismiss_on_click()
         });
         ctx.subscribe_to_view(&add_regex_modal_view, |me, _, event, ctx| {
             me.handle_modal_event(event, ctx);
@@ -828,10 +835,16 @@ impl SecretRedactionWidget {
 
         if is_enterprise_tab_active {
             row.add_child(Shrinkable::new(1., Empty::new().finish()).finish());
-            row.add_child(self.render_info(
-                crate::menu_label("settings.privacy.enterprise_secret_redaction_locked", "Enterprise secret redaction cannot be modified.").to_string(),
-                appearance,
-            ));
+            row.add_child(
+                self.render_info(
+                    crate::menu_label(
+                        "settings.privacy.enterprise_secret_redaction_locked",
+                        "Enterprise secret redaction cannot be modified.",
+                    )
+                    .to_string(),
+                    appearance,
+                ),
+            );
         }
 
         Container::new(row.finish())
@@ -948,7 +961,10 @@ impl SecretRedactionWidget {
 
         if enterprise_regex_list.is_empty() {
             return ui_builder
-                .paragraph(crate::menu_label("settings.privacy.no_enterprise_regexes", "No enterprise regexes have been configured by your organization."))
+                .paragraph(crate::menu_label(
+                    "settings.privacy.no_enterprise_regexes",
+                    "No enterprise regexes have been configured by your organization.",
+                ))
                 .with_style(UiComponentStyles {
                     font_color: Some(description_text_color),
                     ..Default::default()
@@ -1048,7 +1064,11 @@ impl SecretRedactionWidget {
                         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .with_child(
-                            self.render_section_title(crate::menu_label("settings.privacy.recommended", "Recommended").to_string(), appearance),
+                            self.render_section_title(
+                                crate::menu_label("settings.privacy.recommended", "Recommended")
+                                    .to_string(),
+                                appearance,
+                            ),
                         )
                         .with_child(
                             Container::new(
@@ -1058,7 +1078,8 @@ impl SecretRedactionWidget {
                                         self.add_all_button_mouse_state.clone(),
                                     )
                                     .with_text_and_icon_label(Self::add_button(
-                                        crate::menu_label("settings.privacy.add_all", "Add all"), appearance,
+                                        crate::menu_label("settings.privacy.add_all", "Add all"),
+                                        appearance,
                                     ))
                                     .with_style(Self::add_button_style())
                                     .build()
@@ -1216,7 +1237,11 @@ impl SettingsWidget for SecretRedactionWidget {
                 .with_child(
                     Shrinkable::new(
                         1.0,
-                        render_sub_header(appearance, safe_mode_title(), Some(local_only_icon_state)),
+                        render_sub_header(
+                            appearance,
+                            safe_mode_title(),
+                            Some(local_only_icon_state),
+                        ),
                     )
                     .finish(),
                 )
@@ -1224,7 +1249,11 @@ impl SettingsWidget for SecretRedactionWidget {
                     Container::new({
                         if is_enterprise_enabled {
                             self.render_info(
-                                crate::menu_label("settings.privacy.enabled_by_organization", "Enabled by your organization.").to_string(),
+                                crate::menu_label(
+                                    "settings.privacy.enabled_by_organization",
+                                    "Enabled by your organization.",
+                                )
+                                .to_string(),
                                 appearance,
                             )
                         } else {
@@ -1277,7 +1306,11 @@ impl SettingsWidget for SecretRedactionWidget {
 
             // Create the label with local-only icon if needed
             let label_with_icon = super::settings_page::render_dropdown_item_label(
-                crate::menu_label("settings.privacy.secret_visual_redaction_mode", "Secret visual redaction mode").to_string(),
+                crate::menu_label(
+                    "settings.privacy.secret_visual_redaction_mode",
+                    "Secret visual redaction mode",
+                )
+                .to_string(),
                 None,
                 local_only_icon_state,
                 None,
@@ -1362,7 +1395,10 @@ impl SettingsWidget for SecretRedactionWidget {
                                 ButtonVariant::Secondary,
                                 self.add_regex_button_mouse_state.clone(),
                             )
-                            .with_text_and_icon_label(Self::add_button(crate::menu_label("settings.privacy.add_regex", "Add regex"), appearance))
+                            .with_text_and_icon_label(Self::add_button(
+                                crate::menu_label("settings.privacy.add_regex", "Add regex"),
+                                appearance,
+                            ))
                             .with_style(Self::add_button_style())
                             .build()
                             .on_click(move |ctx, _, _| {
@@ -1550,7 +1586,11 @@ impl SettingsWidget for AppAnalyticsWidget {
         } else {
             switch
                 .with_tooltip(TooltipConfig {
-                    text: crate::menu_label("settings.privacy.managed_by_organization", "This setting is managed by your organization.").to_string(),
+                    text: crate::menu_label(
+                        "settings.privacy.managed_by_organization",
+                        "This setting is managed by your organization.",
+                    )
+                    .to_string(),
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -1585,7 +1625,11 @@ impl SettingsWidget for AppAnalyticsWidget {
             Align::new(
                 ui_builder
                     .link(
-                        crate::menu_label("settings.privacy.read_more_about_data_use", "Read more about Warp's use of data").into(),
+                        crate::menu_label(
+                            "settings.privacy.read_more_about_data_use",
+                            "Read more about Warp's use of data",
+                        )
+                        .into(),
                         Some(TELEMETRY_DOCS_URL.into()),
                         None,
                         self.docs_link_mouse_state.clone(),
@@ -1635,7 +1679,8 @@ impl SettingsWidget for CrashReportsWidget {
         let privacy_settings = PrivacySettings::as_ref(app);
         Flex::column()
             .with_child(render_body_item::<PrivacyPageAction>(
-                crate::menu_label("settings.privacy.send_crash_reports", "Send crash reports").into(),
+                crate::menu_label("settings.privacy.send_crash_reports", "Send crash reports")
+                    .into(),
                 None,
                 // Crash report state is always synced to cloud, so no need to show local only icon.
                 LocalOnlyIconState::Hidden,
@@ -1653,9 +1698,10 @@ impl SettingsWidget for CrashReportsWidget {
             ))
             .with_child(
                 ui_builder
-                    .paragraph(
-                        crate::menu_label("settings.privacy.send_crash_reports_description", "Crash reports assist with debugging and stability improvements."),
-                    )
+                    .paragraph(crate::menu_label(
+                        "settings.privacy.send_crash_reports_description",
+                        "Crash reports assist with debugging and stability improvements.",
+                    ))
                     .with_style(UiComponentStyles {
                         font_color: Some(
                             appearance
@@ -1738,7 +1784,11 @@ impl SettingsWidget for CloudConversationStorageWidget {
         } else {
             switch
                 .with_tooltip(TooltipConfig {
-                    text: crate::menu_label("settings.privacy.managed_by_organization", "This setting is managed by your organization.").to_string(),
+                    text: crate::menu_label(
+                        "settings.privacy.managed_by_organization",
+                        "This setting is managed by your organization.",
+                    )
+                    .to_string(),
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()

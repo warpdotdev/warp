@@ -147,7 +147,10 @@ impl CustomizeUISlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph(crate::menu_label("onboarding.customize.title", "Customize your Warp"))
+            .paragraph(crate::menu_label(
+                "onboarding.customize.title",
+                "Customize your Warp",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -226,10 +229,7 @@ impl CustomizeUISlide {
                 is_expanded: is_selected,
                 is_left_selected: ui.use_vertical_tabs,
                 left_label: crate::menu_label("onboarding.customize.tab_vertical", "Vertical"),
-                right_label: crate::menu_label(
-                    "onboarding.customize.tab_horizontal",
-                    "Horizontal",
-                ),
+                right_label: crate::menu_label("onboarding.customize.tab_horizontal", "Horizontal"),
                 card_mouse_state: self.tab_styling_mouse_state.clone(),
                 on_expand: Box::new(|ctx, _, _| {
                     ctx.dispatch_typed_action(CustomizeSlideAction::SelectSettingCard {
@@ -355,10 +355,7 @@ impl CustomizeUISlide {
         render_toggle_card(
             appearance,
             ToggleCardSpec {
-                title: crate::menu_label(
-                    "onboarding.customize.tools_panel_title",
-                    "Tools panel",
-                ),
+                title: crate::menu_label("onboarding.customize.tools_panel_title", "Tools panel"),
                 is_expanded: is_selected,
                 is_left_selected: ui.tools_panel_enabled(&intention),
                 left_label: crate::menu_label("common.enabled", "Enabled"),
@@ -396,10 +393,7 @@ impl CustomizeUISlide {
         render_toggle_card(
             appearance,
             ToggleCardSpec {
-                title: crate::menu_label(
-                    "onboarding.customize.code_review_title",
-                    "Code review",
-                ),
+                title: crate::menu_label("onboarding.customize.code_review_title", "Code review"),
                 is_expanded: is_selected,
                 is_left_selected: ui.show_code_review_button,
                 left_label: crate::menu_label("common.enabled", "Enabled"),
@@ -433,9 +427,7 @@ impl CustomizeUISlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(
-                    crate::menu_label("common.back", "Back").into(),
-                ),
+                content: button::Content::Label(crate::menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -450,9 +442,7 @@ impl CustomizeUISlide {
         let next_button = self.next_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(
-                    crate::menu_label("common.next", "Next").into(),
-                ),
+                content: button::Content::Label(crate::menu_label("common.next", "Next").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),
