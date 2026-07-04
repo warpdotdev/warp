@@ -1462,10 +1462,13 @@ impl TextLayoutSystem {
         match self.font_selections.entry((family_id, properties)) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
-                let families = self.families.read();
-                let family = families
-                    .get(&family_id)
-                    .expect("Font family must exist");
+                let (family_name, first_font_id) = {
+                    let families = self.families.read();
+                    let family = families
+                        .get(&family_id)
+                        .expect("Font family must exist");
+                    (family.name.clone(), *family.font_ids.first())
+                };
 
                 let weight = match properties.weight {
                     Weight::Thin => fontdb::Weight::THIN,
@@ -1483,7 +1486,7 @@ impl TextLayoutSystem {
                     Style::Italic => fontdb::Style::Italic,
                 };
                 let best_match = self.font_store.read().db().query(&Query {
-                    families: &[fontdb::Family::Name(family.name.as_str())],
+                    families: &[fontdb::Family::Name(family_name.as_str())],
                     weight,
                     stretch: Default::default(),
                     style,
@@ -1491,9 +1494,9 @@ impl TextLayoutSystem {
 
                 let best_match =
                     best_match.and_then(|id| self.font_id_map.read().get_by_right(&id).copied());
-                let best_match = best_match.unwrap_or(*family.font_ids.first());
+                let best_match = best_match.unwrap_or(first_font_id);
 
-                self.load_fallback_fonts(best_match, family.name.as_str(), properties);
+                self.load_fallback_fonts(best_match, &family_name, properties);
 
                 *entry.insert(best_match)
             }
