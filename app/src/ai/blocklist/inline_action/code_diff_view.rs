@@ -9,7 +9,6 @@ use ai::diff_validation::{
     SearchAndReplace, V4AHunk,
 };
 use anyhow::Result;
-use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use lazy_static::lazy_static;
@@ -58,7 +57,7 @@ use crate::ai::blocklist::action_model::{
     MalformedFinalLineProxyEvent, RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent,
 };
 use crate::ai::blocklist::diff_storage::{
-    DiffStorageView, PendingFileState, RegisteredDiffStorage, SavingDiffs, UpdatedFileState,
+    DiffSaveState, DiffStorageView, PendingFileState, RegisteredDiffStorage, UpdatedFileState,
 };
 use crate::ai::blocklist::diff_types::{changed_lines_from_op, DiffSessionType, FileDiff};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
@@ -336,20 +335,17 @@ struct PendingDiff {
     tab_handle: MouseStateHandle,
 }
 
-/// Executor-registered [`RegisteredDiffStorage`] over a GUI [`CodeDiffView`].
-///
-/// Holds a weak handle so the executor never keeps a dead review view alive; a
-/// dead view at execute time fails recoverably.
-pub struct GuiDiffStorage(pub WeakViewHandle<CodeDiffView>);
-
-impl RegisteredDiffStorage for GuiDiffStorage {
+/// The GUI review surface registers as a weak handle so the executor never
+/// keeps a dead review view alive; a dead view at execute time fails
+/// recoverably.
+impl RegisteredDiffStorage for WeakViewHandle<CodeDiffView> {
     fn set_candidate_diffs(
         &self,
         diffs: Vec<FileDiff>,
         session_type: DiffSessionType,
         app: &mut AppContext,
     ) {
-        let Some(view) = self.0.upgrade(app) else {
+        let Some(view) = self.upgrade(app) else {
             return;
         };
         view.update(app, |view, ctx| {
@@ -358,16 +354,8 @@ impl RegisteredDiffStorage for GuiDiffStorage {
         });
     }
 
-    /// The GUI never relinquishes its diffs; they live in its editor buffers.
-    fn take_candidate_diffs(
-        &self,
-        _app: &mut AppContext,
-    ) -> Option<(Vec<FileDiff>, DiffSessionType)> {
-        None
-    }
-
     fn accept_and_save(&self, app: &mut AppContext) -> BoxFuture<'static, RequestFileEditsResult> {
-        let Some(view) = self.0.upgrade(app) else {
+        let Some(view) = self.upgrade(app) else {
             log::warn!("RequestFileEdits review view vanished before execute");
             return futures::future::ready(RequestFileEditsResult::DiffApplicationFailed {
                 error: "The review surface holding these edits no longer exists".to_string(),
@@ -420,11 +408,8 @@ pub struct CodeDiffView {
     session_platform: Option<SessionPlatform>,
     /// Whether diffs target local disk or a remote host.
     diff_session_type: DiffSessionType,
-    /// Per-file save/diff progress for an in-flight accept (shared
-    /// [`DiffStorageView`] flow).
-    saving_diffs: Option<SavingDiffs>,
-    /// Result delivery for an in-flight accept.
-    save_result_tx: Option<oneshot::Sender<RequestFileEditsResult>>,
+    /// In-flight accept progress (shared [`DiffStorageView`] flow).
+    save_state: DiffSaveState,
 }
 
 impl CodeDiffView {
@@ -646,10 +631,9 @@ impl CodeDiffView {
                                 me.state = CodeDiffState::Rejected;
                                 me.should_expand_when_complete = false;
                             } else if status.is_success() {
-                                // Terminal success without this view having saved
-                                // (e.g. the headless fallback executed before this
-                                // view registered): stop offering Accept for edits
-                                // that already executed.
+                                // Terminal success that didn't flow through this
+                                // view's save (e.g. a restored conversation whose
+                                // edits already executed): stop offering Accept.
                                 me.state = CodeDiffState::Accepted;
                                 me.minimize(ctx);
                             }
@@ -868,8 +852,7 @@ impl CodeDiffView {
             should_show_speedbump,
             session_platform,
             diff_session_type: DiffSessionType::Local,
-            saving_diffs: None,
-            save_result_tx: None,
+            save_state: DiffSaveState::default(),
         }
     }
 
@@ -1058,7 +1041,7 @@ impl CodeDiffView {
     /// Revert all changes by replacing file contents with the base version.
     /// For newly created files, this deletes them instead.
     fn revert_changes(&mut self, ctx: &mut ViewContext<Self>) {
-        if !matches!(self.state, CodeDiffState::Accepted) || self.saving_diffs.is_some() {
+        if !matches!(self.state, CodeDiffState::Accepted) || self.save_state.is_saving() {
             log::warn!(
                 "Attempted to revert changes when not in a settled Accepted state - actual state: {:?}",
                 self.state
@@ -2951,12 +2934,8 @@ pub fn convert_file_edits_to_file_diffs(
 }
 
 impl DiffStorageView for CodeDiffView {
-    fn saving_diffs_mut(&mut self) -> &mut Option<SavingDiffs> {
-        &mut self.saving_diffs
-    }
-
-    fn result_tx_mut(&mut self) -> &mut Option<oneshot::Sender<RequestFileEditsResult>> {
-        &mut self.save_result_tx
+    fn save_state_mut(&mut self) -> &mut DiffSaveState {
+        &mut self.save_state
     }
 
     fn pending_diff_count(&self) -> usize {

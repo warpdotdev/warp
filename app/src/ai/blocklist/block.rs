@@ -72,7 +72,7 @@ use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEdi
 use super::code_block::CodeSnippetButtonHandles;
 use super::controller::ClientIdentifiers;
 use super::inline_action::code_diff_view::{
-    CodeDiffState, CodeDiffView, CodeDiffViewAction, CodeDiffViewEvent, GuiDiffStorage,
+    CodeDiffState, CodeDiffView, CodeDiffViewAction, CodeDiffViewEvent,
 };
 use super::inline_action::requested_action::{CTRL_C_KEYSTROKE, ENTER_KEYSTROKE};
 use super::inline_action::requested_command_attribution::is_command_copied_from_document;
@@ -3180,13 +3180,16 @@ impl AIBlock {
                 diff_view.set_candidate_diffs(file_diffs, ctx);
             });
         } else {
-            // Register the review view as the action's diff storage. The
-            // executor seeds it with diffs when preprocess resolves — or
-            // immediately, taking them over from the headless placeholder, if
-            // they already have.
-            let storage = Box::new(GuiDiffStorage(view.downgrade()));
-            executor.update(ctx, |executor, ctx| {
-                executor.register_requested_edits(action_id, storage, ctx);
+            // Register the review view as the action's diff storage: the
+            // executor seeds it with the resolved diffs when preprocess
+            // completes and drives its save at execute time.
+            //
+            // View-only (shared-session viewer) diffs must not be registered:
+            // registration wires the view into the persistence flow, and a
+            // spectator's view must never become the surface that writes the
+            // edits to disk.
+            executor.update(ctx, |executor, _| {
+                executor.register_requested_edits(action_id, Box::new(view.downgrade()));
             });
         }
 
@@ -3195,7 +3198,7 @@ impl AIBlock {
             match event {
                 CodeDiffViewEvent::TryAccept => {
                     // The executor drives the save through the registered
-                    // `GuiDiffStorage` at execute time, pulling the (possibly
+                    // diff storage at execute time, pulling the (possibly
                     // edited) final content from the view's editor buffers.
                     view.update(ctx, |view, ctx| view.send_malformed_line_telemetry(ctx));
                     me.action_model.update(ctx, |action_model, ctx| {

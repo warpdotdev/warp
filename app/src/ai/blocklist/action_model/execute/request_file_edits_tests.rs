@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use ai::diff_validation::DiffType;
+use ai::diff_validation::{AIRequestedCodeDiff, DiffType};
 use async_channel::unbounded;
 use futures::FutureExt;
 use warpui::{App, AppContext, EntityId};
@@ -14,17 +14,13 @@ use crate::terminal::model_events::ModelEventDispatcher;
 /// Shared observable state for a [`TestStorage`].
 struct TestStorageState {
     diffs: RefCell<Option<(Vec<FileDiff>, DiffSessionType)>>,
-    /// Whether `take_candidate_diffs` hands the diffs over (headless-placeholder
-    /// behavior) or keeps them (review-surface behavior).
-    relinquishes: bool,
     accepted: Cell<bool>,
 }
 
 impl TestStorageState {
-    fn new(relinquishes: bool) -> Rc<Self> {
+    fn new() -> Rc<Self> {
         Rc::new(Self {
             diffs: RefCell::new(None),
-            relinquishes,
             accepted: Cell::new(false),
         })
     }
@@ -41,17 +37,6 @@ impl RegisteredDiffStorage for TestStorage {
         _app: &mut AppContext,
     ) {
         *self.0.diffs.borrow_mut() = Some((diffs, session_type));
-    }
-
-    fn take_candidate_diffs(
-        &self,
-        _app: &mut AppContext,
-    ) -> Option<(Vec<FileDiff>, DiffSessionType)> {
-        if self.0.relinquishes {
-            self.0.diffs.borrow_mut().take()
-        } else {
-            None
-        }
     }
 
     fn accept_and_save(&self, _app: &mut AppContext) -> BoxFuture<'static, RequestFileEditsResult> {
@@ -78,26 +63,16 @@ fn add_executor(app: &mut App) -> ModelHandle<RequestFileEditsExecutor> {
     app.add_model(|ctx| RequestFileEditsExecutor::new(active_session, EntityId::new(), ctx))
 }
 
-/// Builds a prepared diff creating `/tmp/x.rs`.
-fn test_diff() -> FileDiff {
-    FileDiff::new(
-        String::new(),
-        "/tmp/x.rs".to_owned(),
-        DiffType::creation("fn main() {}\n".to_owned()),
-    )
-}
-
 /// Registers a `TestStorage` for `action_id` and returns its observable state.
 fn register_storage(
     app: &mut App,
     executor: &ModelHandle<RequestFileEditsExecutor>,
     action_id: &AIAgentActionId,
-    relinquishes: bool,
 ) -> Rc<TestStorageState> {
-    let state = TestStorageState::new(relinquishes);
+    let state = TestStorageState::new();
     let storage = Box::new(TestStorage(state.clone()));
-    executor.update(app, |executor, ctx| {
-        executor.register_requested_edits(action_id, storage, ctx);
+    executor.update(app, |executor, _| {
+        executor.register_requested_edits(action_id, storage);
     });
     state
 }
@@ -137,45 +112,32 @@ fn execute(
 }
 
 #[test]
-fn register_hands_prepared_diffs_to_new_surface() {
+fn on_diffs_applied_seeds_registered_storage() {
     App::test((), |mut app| async move {
         let executor = add_executor(&mut app);
         let action_id = AIAgentActionId::from("edit-1".to_owned());
+        let storage = register_storage(&mut app, &executor, &action_id);
 
-        // A placeholder holding prepared diffs relinquishes them to a
-        // registering review surface.
-        let placeholder = register_storage(&mut app, &executor, &action_id, true);
-        *placeholder.diffs.borrow_mut() = Some((vec![test_diff()], DiffSessionType::Local));
+        let (tx, _rx) = oneshot::channel();
+        executor.update(&mut app, |executor, ctx| {
+            executor.on_diffs_applied(
+                Ok(vec![AIRequestedCodeDiff {
+                    file_name: "/tmp/x.rs".to_owned(),
+                    diff_type: DiffType::creation("fn main() {}\n".to_owned()),
+                    failures: None,
+                    original_content: String::new(),
+                }]),
+                action_id.clone(),
+                tx,
+                ctx,
+            );
+        });
 
-        let surface = register_storage(&mut app, &executor, &action_id, false);
-        let seeded = surface.diffs.borrow_mut().take();
-        let (diffs, session_type) = seeded.expect("surface should be seeded with the diffs");
+        let seeded = storage.diffs.borrow_mut().take();
+        let (diffs, session_type) = seeded.expect("registered storage should be seeded");
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].file_path(), "/tmp/x.rs");
         assert!(matches!(session_type, DiffSessionType::Local));
-        assert!(placeholder.diffs.borrow().is_none());
-    });
-}
-
-#[test]
-fn register_keeps_owner_that_does_not_relinquish() {
-    App::test((), |mut app| async move {
-        let executor = add_executor(&mut app);
-        let action_id = AIAgentActionId::from("edit-1".to_owned());
-
-        // A review surface owns the entry and never relinquishes.
-        let owner = register_storage(&mut app, &executor, &action_id, false);
-        *owner.diffs.borrow_mut() = Some((vec![test_diff()], DiffSessionType::Local));
-
-        let late = register_storage(&mut app, &executor, &action_id, false);
-        assert!(late.diffs.borrow().is_none());
-
-        // The original owner still serves execution.
-        app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
-        let execution = execute(&mut app, &executor, &action_id);
-        assert!(matches!(execution, AnyActionExecution::Async { .. }));
-        assert!(owner.accepted.get());
-        assert!(!late.accepted.get());
     });
 }
 
@@ -185,7 +147,7 @@ fn execute_accepts_through_registered_storage() {
         app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let executor = add_executor(&mut app);
         let action_id = AIAgentActionId::from("edit-1".to_owned());
-        let storage = register_storage(&mut app, &executor, &action_id, false);
+        let storage = register_storage(&mut app, &executor, &action_id);
 
         let execution = execute(&mut app, &executor, &action_id);
 
@@ -194,7 +156,7 @@ fn execute_accepts_through_registered_storage() {
         // The entry stays registered until the action's terminal result
         // funnels through `discard_pending`.
         executor.update(&mut app, |executor, _| {
-            assert!(executor.pending_file_edits.contains_key(&action_id));
+            assert!(executor.diff_storages.contains_key(&action_id));
         });
     });
 }
@@ -205,10 +167,9 @@ fn execute_reports_preprocess_failure() {
         let executor = add_executor(&mut app);
         let action_id = AIAgentActionId::from("edit-failed".to_owned());
         executor.update(&mut app, |executor, _| {
-            executor.pending_file_edits.insert(
-                action_id.clone(),
-                PendingFileEdits::Failed(vec1![DiffApplicationError::EmptyDiff]),
-            );
+            executor
+                .diff_application_failures
+                .insert(action_id.clone(), vec1![DiffApplicationError::EmptyDiff]);
         });
 
         let execution = execute(&mut app, &executor, &action_id);
@@ -241,21 +202,20 @@ fn discard_pending_drops_state_in_any_state() {
 
         // Registered storage entry (e.g. rejected during review).
         let storage_id = AIAgentActionId::from("edit-storage".to_owned());
-        register_storage(&mut app, &executor, &storage_id, false);
+        register_storage(&mut app, &executor, &storage_id);
         executor.update(&mut app, |executor, _| {
             executor.discard_pending(&storage_id);
-            assert!(!executor.pending_file_edits.contains_key(&storage_id));
+            assert!(!executor.diff_storages.contains_key(&storage_id));
         });
 
         // Failed entry (diff application failed during preprocess).
         let failed_id = AIAgentActionId::from("edit-failed".to_owned());
         executor.update(&mut app, |executor, _| {
-            executor.pending_file_edits.insert(
-                failed_id.clone(),
-                PendingFileEdits::Failed(vec1![DiffApplicationError::EmptyDiff]),
-            );
+            executor
+                .diff_application_failures
+                .insert(failed_id.clone(), vec1![DiffApplicationError::EmptyDiff]);
             executor.discard_pending(&failed_id);
-            assert!(!executor.pending_file_edits.contains_key(&failed_id));
+            assert!(!executor.diff_application_failures.contains_key(&failed_id));
         });
     });
 }

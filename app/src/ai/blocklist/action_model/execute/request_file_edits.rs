@@ -30,9 +30,7 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
     AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, RequestFileEditsResult,
 };
-use crate::ai::blocklist::diff_storage::{
-    HeadlessDiffStorage, HeadlessDiffStorageModel, RegisteredDiffStorage,
-};
+use crate::ai::blocklist::diff_storage::RegisteredDiffStorage;
 use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff};
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestedEditResolution};
 use crate::ai::paths::host_native_absolute_path;
@@ -40,21 +38,13 @@ use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
 use crate::{safe_warn, BlocklistAIHistoryModel};
 
-/// Per-action state carried from `preprocess_action` to `execute`.
-enum PendingFileEdits {
-    /// The storage surface that owns the diffs while the action is pending.
-    /// Registered by a review surface (GUI/TUI), or a headless placeholder
-    /// created by the executor when diffs resolve with no surface registered.
-    Storage(Box<dyn RegisteredDiffStorage>),
-    /// Diff application failed during preprocess; `execute` reports it to the LLM.
-    Failed(Vec1<DiffApplicationError>),
-}
-
 pub struct RequestFileEditsExecutor {
     active_session: ModelHandle<ActiveSession>,
     apply_diff_model: ModelHandle<ApplyDiffModel>,
-    /// Per-action state produced by preprocess and consumed by execute.
-    pending_file_edits: HashMap<AIAgentActionId, PendingFileEdits>,
+    /// The registered diff storage surface for each pending action.
+    diff_storages: HashMap<AIAgentActionId, Box<dyn RegisteredDiffStorage>>,
+    /// Set of action IDs where diff application failed.
+    diff_application_failures: HashMap<AIAgentActionId, Vec1<DiffApplicationError>>,
     terminal_view_id: EntityId,
 }
 
@@ -68,7 +58,8 @@ impl RequestFileEditsExecutor {
         Self {
             active_session,
             apply_diff_model,
-            pending_file_edits: HashMap::new(),
+            diff_storages: HashMap::new(),
+            diff_application_failures: HashMap::new(),
             terminal_view_id,
         }
     }
@@ -111,10 +102,10 @@ impl RequestFileEditsExecutor {
         // from the LLM.
         // If we don't do this, a failed diff application will block execution of the entire AI conversation
         // without any possibility of recovery.
-        if matches!(
-            self.pending_file_edits.get(&input.action.id),
-            Some(PendingFileEdits::Failed(_))
-        ) {
+        if self
+            .diff_application_failures
+            .contains_key(&input.action.id)
+        {
             return true;
         }
 
@@ -123,40 +114,22 @@ impl RequestFileEditsExecutor {
             .is_allowed()
     }
 
-    /// Registers the storage surface that owns an action's diffs.
-    ///
-    /// May be called before or after preprocess resolves the diffs: when a
-    /// placeholder storage (the headless fallback) already holds prepared
-    /// diffs, they are handed to the newly registered surface. An existing
-    /// storage that does not relinquish its diffs (a review surface, or a
-    /// placeholder already saving) stays registered and the new registration
-    /// is dropped.
+    /// Registers the diff storage surface that handles a RequestFileEdits action.
+    /// Note this MUST be called before `execute` or `preprocess_action` is invoked in
+    /// order for the necessary state to be set to handle the action.
     pub fn register_requested_edits(
         &mut self,
         action_id: &AIAgentActionId,
         storage: Box<dyn RegisteredDiffStorage>,
-        ctx: &mut ModelContext<Self>,
     ) {
-        match self.pending_file_edits.get(action_id) {
-            None => {
-                self.pending_file_edits
-                    .insert(action_id.clone(), PendingFileEdits::Storage(storage));
-            }
-            Some(PendingFileEdits::Storage(existing)) => {
-                if let Some((diffs, session_type)) = existing.take_candidate_diffs(ctx) {
-                    storage.set_candidate_diffs(diffs, session_type, ctx);
-                    self.pending_file_edits
-                        .insert(action_id.clone(), PendingFileEdits::Storage(storage));
-                }
-            }
-            Some(PendingFileEdits::Failed(_)) => {}
-        }
+        self.diff_storages.insert(action_id.clone(), storage);
     }
 
     /// Drops any per-action state for a cancelled or rejected action so
     /// prepared file contents don't outlive the action.
     pub(super) fn discard_pending(&mut self, action_id: &AIAgentActionId) {
-        self.pending_file_edits.remove(action_id);
+        self.diff_storages.remove(action_id);
+        self.diff_application_failures.remove(action_id);
     }
 
     pub(super) fn execute(
@@ -177,24 +150,23 @@ impl RequestFileEditsExecutor {
             return ActionExecution::InvalidAction;
         };
 
-        let result_future = match self.pending_file_edits.get(id) {
-            // The storage surface persists its (possibly user-edited) diffs and
-            // resolves with the assembled result. The entry stays registered
-            // until the action's terminal result funnels through
-            // `discard_pending`.
-            Some(PendingFileEdits::Storage(storage)) => storage.accept_and_save(ctx),
-            Some(PendingFileEdits::Failed(errors)) => {
-                return ActionExecution::Sync(AIAgentActionResultType::RequestFileEdits(
-                    RequestFileEditsResult::DiffApplicationFailed {
-                        error: DiffApplicationError::error_for_conversation(errors),
-                    },
-                ));
-            }
-            None => {
-                log::warn!("Tried to execute a RequestFileEdits action without prepared diffs");
-                return ActionExecution::NotReady;
-            }
+        // If diff application failed, early exit.
+        if let Some(errors) = self.diff_application_failures.remove(id) {
+            return ActionExecution::Sync(AIAgentActionResultType::RequestFileEdits(
+                RequestFileEditsResult::DiffApplicationFailed {
+                    error: DiffApplicationError::error_for_conversation(&errors),
+                },
+            ));
+        }
+
+        // The storage surface persists its (possibly user-edited) diffs and
+        // resolves with the assembled result. The entry stays registered until
+        // the action's terminal result funnels through `discard_pending`.
+        let Some(storage) = self.diff_storages.get(id) else {
+            log::warn!("Tried to execute a RequestFileEdits action without a registered storage");
+            return ActionExecution::NotReady;
         };
+        let result_future = storage.accept_and_save(ctx);
 
         let identifiers = self
             .generate_ai_identifiers(&input.conversation_id, id, ctx)
@@ -298,15 +270,20 @@ impl RequestFileEditsExecutor {
     ) {
         tx.send(()).ok();
 
+        let Some(storage) = self.diff_storages.get(&id) else {
+            log::warn!(
+                "Tried to apply diffs for a RequestFileEdits action without a registered storage"
+            );
+            return;
+        };
+
         let applied_diffs = match applied_diffs {
             Ok(diffs) if !diffs.is_empty() => diffs,
             Ok(_) => {
                 // We didn't generate any diffs--consider this a failure.
                 log::warn!("No diffs generated");
-                self.pending_file_edits.insert(
-                    id,
-                    PendingFileEdits::Failed(vec1![DiffApplicationError::EmptyDiff]),
-                );
+                self.diff_application_failures
+                    .insert(id, vec1![DiffApplicationError::EmptyDiff]);
                 return;
             }
             Err(err) => {
@@ -314,8 +291,7 @@ impl RequestFileEditsExecutor {
                     safe: ("Failed to generate diffs"),
                     full: ("Failed to generate diffs {err:?}")
                 );
-                self.pending_file_edits
-                    .insert(id, PendingFileEdits::Failed(err));
+                self.diff_application_failures.insert(id, err);
                 return;
             }
         };
@@ -335,38 +311,20 @@ impl RequestFileEditsExecutor {
                 &shell_launch_data,
                 &current_working_directory,
             );
-            diffs.push(FileDiff::new(diff.original_content, path, diff.diff_type));
+            let file_diff = FileDiff::new(diff.original_content, path, diff.diff_type);
+            diffs.push(file_diff);
         }
 
-        // Seed the registered storage surface with the resolved diffs; when no
-        // surface has registered yet (autoexecution racing view creation, or a
-        // headless conversation), create the headless placeholder so the action
-        // stays executable. A surface registering later takes the diffs over
-        // via `register_requested_edits`.
-        let session_type = self.resolve_diff_session_type(ctx);
-        match self.pending_file_edits.get(&id) {
-            Some(PendingFileEdits::Storage(storage)) => {
-                storage.set_candidate_diffs(diffs, session_type, ctx);
-            }
-            Some(PendingFileEdits::Failed(_)) | None => {
-                let model =
-                    ctx.add_model(|ctx| HeadlessDiffStorageModel::new(diffs, session_type, ctx));
-                self.pending_file_edits.insert(
-                    id,
-                    PendingFileEdits::Storage(Box::new(HeadlessDiffStorage(model))),
-                );
-            }
-        }
-    }
-
-    /// Resolves whether file writes target the local filesystem or a remote host.
-    fn resolve_diff_session_type(&self, ctx: &mut ModelContext<Self>) -> DiffSessionType {
-        match self.active_session.as_ref(ctx).session_type(ctx) {
+        // Set the session type so save/delete/create routes through the
+        // correct FileModel backend.
+        let diff_session_type = match self.active_session.as_ref(ctx).session_type(ctx) {
             Some(SessionType::WarpifiedRemote {
                 host_id: Some(host_id),
             }) => DiffSessionType::Remote(host_id.clone()),
             _ => DiffSessionType::Local,
-        }
+        };
+
+        storage.set_candidate_diffs(diffs, diff_session_type, ctx);
     }
 
     fn generate_ai_identifiers(

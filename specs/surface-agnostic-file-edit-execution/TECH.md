@@ -10,7 +10,58 @@ On master the GUI view owns the whole persistence flow: `CodeDiffView::accept_an
 
 ## Goal
 
-Make file-edit tool calls executable on any surface (GUI, TUI, headless) by keeping master's surface-owned persistence flow but expressing its shared parts as a trait, so the GUI `CodeDiffView`, the up-stack TUI diff view, and a headless fallback all run the same save-completion and result-assembly code.
+Make file-edit tool calls executable on any surface (GUI, and the up-stack TUI) by keeping master's surface-owned persistence flow but expressing its shared parts as a trait, so every surface runs the same save-completion and result-assembly code. Every surface must register its diff storage with the executor before the action's diffs resolve — the same contract master had with the GUI view — so the executor's flow stays exactly master's, just behind a surface-agnostic interface.
+
+## Flow
+
+Old flow (master) — executor is bound to the concrete GUI view, and result assembly is split between the view (event payload) and the executor (subscription handler):
+
+```text
+output complete ──> AIBlock creates CodeDiffView
+                    └─ register_requested_edits(ViewHandle<CodeDiffView>)
+preprocess ──> on_diffs_applied ──> diff_views[id].set_candidate_diffs()
+
+User Accept ──> TryAccept ──> executor::execute(id)
+  ├─ subscribe_to_view(diff_view)  ◄──────────────────┐ SavedAcceptedDiffs /
+  └─ diff_view.accept_and_save()                     │ Rejected events
+        │  state = Accepted(Some(SavingDiffs))       │
+        ▼                                            │
+     per file: InlineDiffView save + diff compute    │
+     (tracked inside CodeDiffState)                  │
+        │                                            │
+     all done => emit SavedAcceptedDiffs{diff,       │
+     updated_files, file_contents, ...} ─────────────┘
+        │
+        ▼
+executor's event handler assembles
+RequestFileEditsResult + telemetry ──> LLM
+```
+
+New flow — identical shape, but the executor talks to the surface-agnostic interface, and persistence + result assembly live entirely in `diff_storage.rs`:
+
+```text
+output complete ──> surface creates its review storage
+                    └─ register_requested_edits(Box<dyn RegisteredDiffStorage>)
+preprocess ──> on_diffs_applied ──> diff_storages[id].set_candidate_diffs()
+
+User Accept ──> TryAccept ──> executor::execute(id)
+  └─ diff_storages[id].accept_and_save()      [RegisteredDiffStorage]
+        │  (handle upgrade/update)
+        ▼
+     DiffStorageView::accept_and_save          [shared, provided]
+       ├─ save_state.begin(count) ──> returns result future ──┐
+       └─ start_saving()          [surface-specific:          │
+            GUI: editor buffers / InlineDiffView;              │
+            TUI (up-stack): FileModel write dispatch]          │
+        │                                                     │
+     callbacks: handle_file_saved / handle_diff_computed      │
+        │                                                     │
+     try_finish ──> assemble_result(progress,                 │
+                    pending_file_state()) ──> send ───────────┘
+        │
+        ▼
+ActionExecution::new_async(future) ──> telemetry ──> LLM
+```
 
 ## Design
 
@@ -18,8 +69,10 @@ Make file-edit tool calls executable on any surface (GUI, TUI, headless) by keep
 
 Implemented by every surface that stores pending diffs. Required methods are state accessors — the fields live on each impl, since traits cannot hold state — plus the surface-specific write kickoff. Provided methods are the shared save-completion flow:
 
-- Required: `saving_diffs_mut` (per-file progress), `result_tx_mut` (result delivery channel), `pending_diff_count`, `pending_file_state` (per-file report state: reported paths, changed lines, final contents, user-edit flags), and `start_saving` (the write kickoff).
-- Provided: `accept_and_save` (creates a oneshot, sizes `SavingDiffs`, calls `start_saving`, returns the receiver as a `BoxFuture<RequestFileEditsResult>`), `handle_file_saved` / `handle_diff_computed` (record per-file completion), `fail_saving`, and `try_finish` (when every file is saved and its result diff computed, assembles the result and sends it).
+- Required: `save_state_mut` (the in-flight accept's [`DiffSaveState`]), `pending_diff_count`, `pending_file_state` (per-file report state: reported paths, changed lines, final contents, user-edit flags), and `start_saving` (the write kickoff — the hook `accept_and_save` invokes, never called by callers directly).
+- Provided: `accept_and_save` (the sole entry point: begins tracking, calls `start_saving`, returns a `BoxFuture<RequestFileEditsResult>`), `handle_file_saved` / `handle_diff_computed` (record per-file completion), and `try_finish` (when every file is saved and its result diff computed, assembles the result and sends it).
+
+`DiffSaveState` encapsulates the in-flight accept: per-file progress (`SavingDiffs`) plus the result-delivery oneshot, with private fields so surfaces cannot reach into the channel. Each surface stores one and exposes it via `save_state_mut`; only `is_saving` is public (revert guards).
 
 `try_finish` is master's `try_emit_diffs_saved` relocated to shared code: it combines the per-file `DiffResult`s into the unified diff, builds updated/deleted file state from `pending_file_state` (`updated_file_contexts_from_content_map`), and maps save errors to `DiffApplicationFailed`. Delivery through the stored oneshot replaces master's `SavedAcceptedDiffs` event + executor subscription. Dropping a surface mid-save drops the sender, resolving the future with `Cancelled`.
 
@@ -27,36 +80,25 @@ Implemented by every surface that stores pending diffs. Required methods are sta
 
 ### The `RegisteredDiffStorage` trait
 
-The executor-facing handle over a registered surface. GUI `ViewHandle`s and model `ModelHandle`s share no common handle type, so each surface registers a thin wrapper that delegates through its own handle:
+The executor-facing handle over a registered surface. GUI `ViewHandle`s and model `ModelHandle`s share no common handle type, so each surface's handle type implements this directly, delegating to its entity's `DiffStorageView`:
 
 - `set_candidate_diffs(diffs, session_type, app)` — preprocess pushes resolved diffs into the surface.
-- `take_candidate_diffs(app)` — hands diffs back out so a newly registered surface can take over; `None` when this storage keeps ownership.
 - `accept_and_save(app)` — persists everything, resolving with the result for the LLM.
 
-`GuiDiffStorage(WeakViewHandle<CodeDiffView>)` (`code_diff_view.rs`) upgrades and delegates; a dead view at execute time resolves `DiffApplicationFailed` recoverably. It flips the view to `Accepted` (`mark_accepted_for_save`) as persistence kicks off, then runs the trait's `accept_and_save`. It never relinquishes diffs — they live in the view's editor buffers.
-
-### `HeadlessDiffStorageModel`
-
-GUI-less `DiffStorageView`: plain diff storage with no review UI, created by the executor when diffs resolve with no registered surface (autoexecution racing view creation, or headless/TUI-driven conversations), so file edits stay executable everywhere. Its `start_saving` derives each file's final content by applying the diff's deltas to the base (`final_content_from_op` / `apply_deltas_to_content`), decides the actual write once via `PersistAction` (`Write` / `Rename` — local only, remote renames fall back to an in-place write reported at the original path / `Delete`), dispatches through `FileModel` (`register_file_path`/`register_remote_file` → `save`/`rename_and_save`/`delete` → `unsubscribe`), computes a `similar`-based `DiffResult` immediately, and forwards its own `FileModel` save events into the shared flow. `headless_file_outcome` derives the reported outcome from the same `PersistAction` as the dispatch, so report and write cannot drift. On wasm, `start_saving` fails the batch (`file editing is not supported in this environment`).
-
-This model is also the template the up-stack TUI diff storage builds on.
+The GUI impl is on `WeakViewHandle<CodeDiffView>` (`code_diff_view.rs`): it upgrades and delegates, so the executor never keeps a dead review view alive; a dead view at execute time resolves `DiffApplicationFailed` recoverably. It flips the view to `Accepted` (`mark_accepted_for_save`) as persistence kicks off, then runs the trait's `accept_and_save`.
 
 ### Executor (`request_file_edits.rs`)
 
-Per-action state is a registry:
+Per-action state keeps master's two-field shape:
 
-```rust
-enum PendingFileEdits {
-    Storage(Box<dyn RegisteredDiffStorage>),
-    Failed(Vec1<DiffApplicationError>),
-}
-```
+- `diff_storages: HashMap<AIAgentActionId, Box<dyn RegisteredDiffStorage>>` — master's `diff_views`, with the storage interface in place of the concrete GUI view handle.
+- `diff_application_failures: HashMap<AIAgentActionId, Vec1<DiffApplicationError>>` — unchanged.
 
-- `register_requested_edits(action_id, storage)` may be called before or after preprocess resolves. When a placeholder storage already holds prepared diffs, they are handed to the newly registered surface via `take_candidate_diffs`/`set_candidate_diffs`; an owner that does not relinquish (a review surface, or a placeholder already saving) stays registered.
-- `on_diffs_applied` seeds the registered storage with the resolved diffs, or creates the headless placeholder when none is registered. Failures insert `Failed`.
-- `execute`: `Storage` → `storage.accept_and_save(ctx)` wrapped in `ActionExecution::new_async` with the `EditResolved` accept telemetry; `Failed` → `DiffApplicationFailed`; no entry → `NotReady` (only reachable before preprocess resolves).
-- Cleanup: every terminal outcome funnels through the action model's `handle_action_result` → `discard_action_state` → `discard_pending`, which drops the registry entry (and with it the headless model or GUI weak wrapper), so prepared content never outlives its action.
-- `should_autoexecute` allows continue-on-failure for `Failed` entries, unchanged.
+- `register_requested_edits(action_id, storage)` is a plain insert and MUST be called before `preprocess_action` or `execute` (master's contract, now stated for every surface).
+- `on_diffs_applied` seeds the registered storage with the resolved diffs; with none registered it warns and drops them (master behavior). Failures insert into `diff_application_failures`.
+- `execute`: failures → `DiffApplicationFailed`; otherwise `storage.accept_and_save(ctx)` wrapped in `ActionExecution::new_async` with the `EditResolved` accept telemetry; no entry → `NotReady`.
+- Cleanup: every terminal outcome funnels through the action model's `handle_action_result` → `discard_action_state` → `discard_pending`, which drops both maps' entries, so prepared content never outlives its action.
+- `should_autoexecute` allows continue-on-failure for failed diff application, unchanged.
 
 ### GUI (`code_diff_view.rs`, `block.rs`, `inline_diff.rs`)
 
@@ -64,8 +106,8 @@ enum PendingFileEdits {
 
 - `start_saving` drives `InlineDiffView::accept_and_save_diff` per file (compute result diff + save editor content through `FileModel`); completions arrive via the per-file `FileSaved`/`FailedToSave`/`DiffAccepted` subscriptions, which forward into `handle_file_saved`/`handle_diff_computed` by index. The GUI's result diff stays editor-computed, as on master; save failures surface master's per-file toasts.
 - `pending_file_state` is master's result extraction behind the accessor: final content from the editor buffers (possibly user-edited), changed lines from editor state, rename/delete bookkeeping.
-- `saving_diffs` and `save_result_tx` are view fields; `CodeDiffState::Accepted` is payloadless. Revert requires a settled accept (`Accepted` with no in-flight save).
-- `block.rs` registers `GuiDiffStorage(view.downgrade())` with the executor at view creation (`handle_requested_edit_complete`); registration order relative to preprocess no longer matters. On `TryAccept` the block emits malformed-line telemetry and calls `execute_action`, as before. View-only sessions still populate payload diffs directly and never register.
+- `save_state: DiffSaveState` is a view field; `CodeDiffState::Accepted` is payloadless. Revert requires a settled accept (`Accepted` with no in-flight save).
+- `block.rs` registers `Box::new(view.downgrade())` with the executor at view creation (`handle_requested_edit_complete`), upholding the register-before-preprocess contract exactly as master did. On `TryAccept` the block emits malformed-line telemetry and calls `execute_action`, as before. View-only sessions still populate payload diffs directly and never register — a spectator's view must never become the surface that writes edits to disk.
 
 ### Passive path (`terminal/view.rs`)
 
@@ -73,19 +115,19 @@ enum PendingFileEdits {
 
 ### TUI surface (up-stack)
 
-The TUI surface registers its own storage through `register_requested_edits`: a diff-storage model shaped like `HeadlessDiffStorageModel` plus display state, reusing the trait's provided flow and the shared `FileModel` dispatch helpers. `FileDiff::line_stats` (in `diff_types.rs`) exists for its summary rendering.
+The TUI surface registers its own storage through `register_requested_edits` for every `RequestFileEdits` action — including auto-approved edits with no review UI — upholding the same registration contract as the GUI. Its headless persistence (final-content derivation from diff deltas, `FileModel` write dispatch, `similar`-based result diffs) lives up-stack with that surface. `FileDiff::line_stats` (in `diff_types.rs`) exists for its summary rendering.
 
 ## Boundaries
 
 - The review surface's state is the only resident copy of diff content while under review; the executor holds only erased storage handles (weak, for the GUI).
 - The resolve side (`ApplyDiffModel`) is unchanged.
 - Revert stays GUI-local via `InlineDiffView::restore_diff_base`.
-- Result diffs are editor-computed on the GUI (master behavior) and `similar`-based on headless/TUI surfaces; the divergence is accepted.
+- A surface that fails to register before diffs resolve leaves the action unexecutable (`NotReady`), as on master; the registration contract is upheld by each surface at action-arrival time.
 
 ## Testing and validation
 
-- Shared-flow tests exercise the provided trait methods through `HeadlessDiffStorageModel` (`app/src/ai/blocklist/diff_storage_tests.rs`): create/update/delete/rename write-through and reported results, save failure → `DiffApplicationFailed`, delta application, remote-rename fallback reporting, and `take_candidate_diffs` ownership rules.
-- Executor tests cover the registry lifecycle (`request_file_edits_tests.rs`): placeholder→surface diff handoff, non-relinquishing owners, execution through the registered storage, preprocess failure reporting, `NotReady` without prepared diffs, and `discard_pending`.
+- Shared-flow tests exercise the provided trait methods through a minimal test surface (`app/src/ai/blocklist/diff_storage_tests.rs`): result assembly on success, save failure → `DiffApplicationFailed`, deleted-file reporting, and the context-fragment extraction.
+- Executor tests cover the registry lifecycle (`request_file_edits_tests.rs`): preprocess seeding of the registered storage, execution through the registered storage, preprocess failure reporting, `NotReady` without a registered storage, and `discard_pending`.
 
 ```bash
 cargo nextest run -p warp diff_storage request_file_edits
