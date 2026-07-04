@@ -47,7 +47,7 @@ macro_rules! cached_menu_label_fn {
     ($name:ident, $key:expr, $fallback:expr) => {
         fn $name() -> &'static str {
             static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-            *LABEL.get_or_init(|| crate::menu_label($key, $fallback))
+            LABEL.get_or_init(|| crate::menu_label($key, $fallback))
         }
     };
 }

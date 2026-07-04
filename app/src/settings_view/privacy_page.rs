@@ -1463,7 +1463,11 @@ impl AppAnalyticsWidget {
             let background_color = appearance.theme().accent();
 
             let badge = Container::new(
-                Text::new_inline("ZDR", appearance.ui_font_family(), CONTENT_FONT_SIZE - 2.)
+                Text::new_inline(
+                    crate::menu_label("settings.privacy.zdr_badge_label", "ZDR"),
+                    appearance.ui_font_family(),
+                    CONTENT_FONT_SIZE - 2.,
+                )
                     .with_color(theme.active_ui_text_color().into())
                     .finish(),
             )
@@ -2045,7 +2049,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 ) {
     let mut toggle_binding_pairs = vec![
         ToggleSettingActionPair::new(
-            "app analytics",
+            crate::menu_label("settings.privacy.toggle.app_analytics", "app analytics"),
             builder(SettingsAction::PrivacyPageToggle(
                 PrivacyPageAction::ToggleTelemetry,
             )),
@@ -2053,7 +2057,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             flags::TELEMETRY_FLAG,
         ),
         ToggleSettingActionPair::new(
-            "crash reporting",
+            crate::menu_label("settings.privacy.toggle.crash_reporting", "crash reporting"),
             builder(SettingsAction::PrivacyPageToggle(
                 PrivacyPageAction::ToggleCrashReporting,
             )),
@@ -2063,7 +2067,10 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     ];
 
     toggle_binding_pairs.push(ToggleSettingActionPair::new(
-        "secret redaction",
+        crate::menu_label(
+            "settings.privacy.toggle.secret_redaction",
+            "secret redaction",
+        ),
         builder(SettingsAction::PrivacyPageToggle(
             PrivacyPageAction::ToggleSafeMode,
         )),
@@ -2073,7 +2080,10 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
-            "cloud AI conversation storage",
+            crate::menu_label(
+                "settings.privacy.toggle.cloud_ai_conversation_storage",
+                "cloud AI conversation storage",
+            ),
             builder(SettingsAction::PrivacyPageToggle(
                 PrivacyPageAction::ToggleCloudConversationStorage,
             )),

@@ -21,33 +21,19 @@ use crate::util::file::external_editor::{EditorSettings, SUPPORTED_EDITORS};
 use crate::view_components::{Dropdown, DropdownItem};
 use crate::{report_if_error, send_telemetry_from_ctx};
 
+// ── i18n helpers ──────────────────────────────────────────────────────
+// Converted from `const` to `fn` so translation can happen at runtime.
 fn tabbed_file_viewer_toggle_header() -> &'static str {
-    crate::menu_label("settings.code_page.tabbed_editor_header", "Group files into single editor pane")
+    crate::menu_label(
+        "settings.external_editor.group_files_title",
+        "Group files into single editor pane",
+    )
 }
 fn tabbed_file_viewer_toggle_description() -> &'static str {
-    crate::menu_label("settings.code_page.tabbed_editor_desc", "When this setting is on, any files opened in the same tab will be automatically grouped into a single editor pane.")
-}
-
-fn layout_split_pane() -> &'static str {
-    crate::menu_label("settings.code_page.layout_split_pane", "Split Pane")
-}
-fn layout_new_tab() -> &'static str {
-    crate::menu_label("settings.code_page.layout_new_tab", "New Tab")
-}
-fn editor_default_app() -> &'static str {
-    crate::menu_label("settings.code_page.editor_default_app", "Default App")
-}
-fn choose_editor_file_links() -> &'static str {
-    crate::menu_label("settings.code_page.choose_editor_file_links", "Choose an editor to open file links")
-}
-fn choose_editor_code_panels() -> &'static str {
-    crate::menu_label("settings.code_page.choose_editor_code_panels", "Choose an editor to open files from the code review panel, project explorer, and global search")
-}
-fn choose_layout() -> &'static str {
-    crate::menu_label("settings.code_page.choose_layout", "Choose a layout to open files in Warp")
-}
-fn prefer_markdown_viewer_label() -> &'static str {
-    crate::menu_label("settings.code_page.prefer_markdown_viewer", "Open Markdown files in Warp's Markdown Viewer by default")
+    crate::menu_label(
+        "settings.external_editor.group_files_description",
+        "When this setting is on, any files opened in the same tab will be automatically grouped into a single editor pane.",
+    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -143,7 +129,7 @@ impl ExternalEditorView {
         dropdown: &mut Dropdown<ExternalEditorAction>,
         ctx: &mut ViewContext<Dropdown<ExternalEditorAction>>,
     ) {
-        let default_option_text = layout_split_pane();
+        let default_option_text = crate::menu_label("settings.ai.split_pane", "Split Pane");
         let default_app = DropdownItem::new(
             default_option_text,
             ExternalEditorAction::SetLayout(EditorLayout::SplitPane),
@@ -151,14 +137,15 @@ impl ExternalEditorView {
 
         let mut items = vec![default_app];
         items.push(DropdownItem::new(
-            layout_new_tab(),
+            crate::menu_label("settings.ai.new_tab", "New Tab"),
             ExternalEditorAction::SetLayout(EditorLayout::NewTab),
         ));
 
         dropdown.set_items(items, ctx);
         match layout_to_open_files {
             EditorLayout::SplitPane => dropdown.set_selected_by_name(default_option_text, ctx),
-            EditorLayout::NewTab => dropdown.set_selected_by_name(layout_new_tab(), ctx),
+            EditorLayout::NewTab => dropdown
+                .set_selected_by_name(crate::menu_label("settings.ai.new_tab", "New Tab"), ctx),
         };
     }
 
@@ -168,7 +155,8 @@ impl ExternalEditorView {
         mut make_action: impl FnMut(EditorChoice) -> ExternalEditorAction,
         ctx: &mut ViewContext<Dropdown<ExternalEditorAction>>,
     ) {
-        let default_option_text = editor_default_app();
+        let default_option_text =
+            crate::menu_label("settings.external_editor.default_app", "Default App");
         let default_app = DropdownItem::new(
             default_option_text,
             make_action(EditorChoice::SystemDefault),
@@ -302,7 +290,10 @@ impl View for ExternalEditorView {
 
         let default_editor = render_dropdown_item(
             appearance,
-            choose_editor_file_links(),
+            crate::menu_label(
+                "settings.external_editor.choose_editor_file_links",
+                "Choose an editor to open file links",
+            ),
             None,
             None,
             LocalOnlyIconState::for_setting(
@@ -317,7 +308,10 @@ impl View for ExternalEditorView {
 
         let code_panels_editor = render_dropdown_item(
             appearance,
-            choose_editor_code_panels(),
+            crate::menu_label(
+                "settings.external_editor.choose_editor_code_panels",
+                "Choose an editor to open files from the code review panel, project explorer, and global search",
+            ),
             None,
             None,
             LocalOnlyIconState::for_setting(
@@ -332,7 +326,10 @@ impl View for ExternalEditorView {
 
         let default_layout = render_dropdown_item(
             appearance,
-            choose_layout(),
+            crate::menu_label(
+                "settings.external_editor.choose_layout",
+                "Choose a layout to open files in Warp",
+            ),
             None,
             None,
             LocalOnlyIconState::for_setting(
@@ -380,7 +377,11 @@ impl View for ExternalEditorView {
         }
 
         column.add_child(render_body_item::<ExternalEditorAction>(
-            prefer_markdown_viewer_label().to_string(),
+            crate::menu_label(
+                "settings.external_editor.markdown_viewer_default",
+                "Open Markdown files in Warp's Markdown Viewer by default",
+            )
+            .to_string(),
             Some(AdditionalInfo {
                 mouse_state: self.markdown_viewer_mouse_state.clone(),
                 on_click_action: Some(ExternalEditorAction::OpenUrl(

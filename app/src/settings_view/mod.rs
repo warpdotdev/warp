@@ -174,9 +174,13 @@ pub(super) fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let chip_color = theme.sub_text_color(theme.surface_3()).into_solid();
     Container::new(
-        Text::new_inline("BETA", appearance.ui_font_family(), 10.)
-            .with_color(chip_color)
-            .finish(),
+        Text::new_inline(
+            crate::menu_label("settings.main.beta_chip_label", "BETA"),
+            appearance.ui_font_family(),
+            10.,
+        )
+        .with_color(chip_color)
+        .finish(),
     )
     .with_background(theme.surface_3())
     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
@@ -373,6 +377,64 @@ impl SettingsSection {
     /// The ordered list of Cloud platform subpage sections.
     pub fn cloud_platform_subpages() -> &'static [Self] {
         &[Self::CloudEnvironments, Self::OzCloudAPIKeys]
+    }
+
+    /// Localized label for this section as shown in the settings sidebar.
+    ///
+    /// Kept intentionally separate from `Display`/`FromStr` above: those two
+    /// are stable save/restore identifiers (settings persistence, deeplinks)
+    /// and must never be translated, whereas this is purely a rendering
+    /// concern for the nav rail.
+    pub fn sidebar_label(&self) -> &'static str {
+        match self {
+            SettingsSection::About => crate::menu_label("settings.about", "About"),
+            SettingsSection::Account => crate::menu_label("settings.account", "Account"),
+            SettingsSection::MCPServers => crate::menu_label("settings.mcp_servers", "MCP Servers"),
+            SettingsSection::BillingAndUsage => {
+                crate::menu_label("settings.billing_and_usage.title", "Billing and usage")
+            }
+            SettingsSection::Appearance => {
+                crate::menu_label("settings.appearance.title", "Appearance")
+            }
+            SettingsSection::Features => crate::menu_label("settings.features.title", "Features"),
+            SettingsSection::Keybindings => {
+                crate::menu_label("settings.keyboard_shortcuts", "Keyboard shortcuts")
+            }
+            SettingsSection::Privacy => crate::menu_label("settings.privacy.title", "Privacy"),
+            SettingsSection::Referrals => crate::menu_label("settings.referrals", "Referrals"),
+            SettingsSection::Scripting => {
+                crate::menu_label("settings.scripting.title", "Scripting")
+            }
+            SettingsSection::SharedBlocks => {
+                crate::menu_label("settings.shared_blocks", "Shared blocks")
+            }
+            SettingsSection::Teams => crate::menu_label("settings.teams.title", "Teams"),
+            SettingsSection::WarpDrive => crate::menu_label("settings.warp_drive", "Warp Drive"),
+            SettingsSection::Warpify => crate::menu_label("settings.warpify", "Warpify"),
+            SettingsSection::AI => crate::menu_label("settings.ai.title", "AI"),
+            SettingsSection::WarpAgent => crate::menu_label("settings.warp_agent", "Warp Agent"),
+            SettingsSection::AgentProfiles => crate::menu_label("settings.profiles", "Profiles"),
+            SettingsSection::AgentMCPServers => {
+                crate::menu_label("settings.mcp_servers_lower", "MCP servers")
+            }
+            SettingsSection::Knowledge => crate::menu_label("settings.knowledge", "Knowledge"),
+            SettingsSection::ThirdPartyCLIAgents => {
+                crate::menu_label("settings.third_party_cli_agents", "Third party CLI agents")
+            }
+            SettingsSection::Code => crate::menu_label("settings.code", "Code"),
+            SettingsSection::CodeIndexing => {
+                crate::menu_label("settings.indexing_and_projects", "Indexing and projects")
+            }
+            SettingsSection::EditorAndCodeReview => {
+                crate::menu_label("settings.editor_and_code_review", "Editor and Code Review")
+            }
+            SettingsSection::CloudEnvironments => {
+                crate::menu_label("settings.environments", "Environments")
+            }
+            SettingsSection::OzCloudAPIKeys => {
+                crate::menu_label("settings.oz_cloud_api_keys", "Oz Cloud API Keys")
+            }
+        }
     }
 }
 
@@ -1147,7 +1209,9 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new(page: Option<SettingsSection>, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(crate::menu_label("settings.pane_menu.settings_title", "Settings")));
+        let pane_configuration = ctx.add_model(|_ctx| {
+            PaneConfiguration::new(crate::menu_label("workspace.settings", "Settings"))
+        });
 
         let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
         // Main settings page with accounts info
@@ -1286,7 +1350,7 @@ impl SettingsView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(crate::menu_label("common.search", "Search"), ctx);
             editor
         });
 
@@ -1333,19 +1397,19 @@ impl SettingsView {
         let mut nav_items = vec![
             SettingsNavItem::Page(SettingsSection::Account),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Agents",
+                crate::menu_label("settings.ai.agents", "Agents"),
                 SettingsSection::ai_subpages().to_vec(),
             )),
             SettingsNavItem::Page(SettingsSection::BillingAndUsage),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Code",
+                crate::menu_label("settings.code", "Code"),
                 vec![
                     SettingsSection::CodeIndexing,
                     SettingsSection::EditorAndCodeReview,
                 ],
             )),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Cloud platform",
+                crate::menu_label("settings.section.cloud_platform", "Cloud platform"),
                 vec![
                     SettingsSection::CloudEnvironments,
                     SettingsSection::OzCloudAPIKeys,
@@ -1665,34 +1729,46 @@ impl SettingsView {
 
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend(vec![
-                MenuItemFields::new(crate::menu_label("settings.pane_menu.split_right", "Split pane right"))
-                    .with_on_select_action(SettingsAction::Split(Direction::Right))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "pane_group:add_right",
-                        ctx,
-                    ))
-                    .into_item(),
-                MenuItemFields::new(crate::menu_label("settings.pane_menu.split_left", "Split pane left"))
-                    .with_on_select_action(SettingsAction::Split(Direction::Left))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "pane_group:add_left",
-                        ctx,
-                    ))
-                    .into_item(),
-                MenuItemFields::new(crate::menu_label("settings.pane_menu.split_down", "Split pane down"))
-                    .with_on_select_action(SettingsAction::Split(Direction::Down))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "pane_group:add_down",
-                        ctx,
-                    ))
-                    .into_item(),
-                MenuItemFields::new(crate::menu_label("settings.pane_menu.split_up", "Split pane up"))
-                    .with_on_select_action(SettingsAction::Split(Direction::Up))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "pane_group:add_up",
-                        ctx,
-                    ))
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "terminal.context_menu.split_pane_right",
+                    "Split pane right",
+                ))
+                .with_on_select_action(SettingsAction::Split(Direction::Right))
+                .with_key_shortcut_label(keybinding_name_to_display_string(
+                    "pane_group:add_right",
+                    ctx,
+                ))
+                .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "terminal.context_menu.split_pane_left",
+                    "Split pane left",
+                ))
+                .with_on_select_action(SettingsAction::Split(Direction::Left))
+                .with_key_shortcut_label(keybinding_name_to_display_string(
+                    "pane_group:add_left",
+                    ctx,
+                ))
+                .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "terminal.context_menu.split_pane_down",
+                    "Split pane down",
+                ))
+                .with_on_select_action(SettingsAction::Split(Direction::Down))
+                .with_key_shortcut_label(keybinding_name_to_display_string(
+                    "pane_group:add_down",
+                    ctx,
+                ))
+                .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "terminal.context_menu.split_pane_up",
+                    "Split pane up",
+                ))
+                .with_on_select_action(SettingsAction::Split(Direction::Up))
+                .with_key_shortcut_label(keybinding_name_to_display_string(
+                    "pane_group:add_up",
+                    ctx,
+                ))
+                .into_item(),
             ]);
         }
 
@@ -1715,13 +1791,16 @@ impl SettingsView {
             );
 
             items.push(
-                MenuItemFields::new(crate::menu_label("settings.pane_menu.close_pane", "Close pane"))
-                    .with_on_select_action(SettingsAction::Close)
-                    .with_key_shortcut_label(
-                        custom_tag_to_keystroke(CustomAction::CloseCurrentSession.into())
-                            .map(|keystroke| keystroke.displayed()),
-                    )
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "terminal.context_menu.close_pane",
+                    "Close pane",
+                ))
+                .with_on_select_action(SettingsAction::Close)
+                .with_key_shortcut_label(
+                    custom_tag_to_keystroke(CustomAction::CloseCurrentSession.into())
+                        .map(|keystroke| keystroke.displayed()),
+                )
+                .into_item(),
             );
         }
 
@@ -2407,7 +2486,10 @@ impl SettingsView {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_children([
                         Text::new(
-                            "No settings match your search.",
+                            crate::menu_label(
+                                "settings.main.search_zero_state_title",
+                                "No settings match your search.",
+                            ),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -2415,7 +2497,10 @@ impl SettingsView {
                         .with_color(theme.sub_text_color(theme.background()).into_solid())
                         .finish(),
                         Text::new(
-                            "You may want to try using different keywords or checking for any possible typos.",
+                            crate::menu_label(
+                                "settings.main.search_zero_state_subtitle",
+                                "You may want to try using different keywords or checking for any possible typos.",
+                            ),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -2834,7 +2919,7 @@ impl BackingView for SettingsView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("Settings")
+        view::HeaderContent::simple(crate::menu_label("workspace.settings", "Settings"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

@@ -37,17 +37,16 @@ pub struct RemoveCustomEndpointConfirmationDialog {
 impl RemoveCustomEndpointConfirmationDialog {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(crate::menu_label("common.cancel", "Cancel"), NakedTheme).on_click(|ctx| {
-                ctx.dispatch_typed_action(RemoveCustomEndpointConfirmationDialogAction::Cancel);
-            })
+            ActionButton::new(crate::menu_label("common.cancel", "Cancel"), NakedTheme).on_click(
+                |ctx| {
+                    ctx.dispatch_typed_action(RemoveCustomEndpointConfirmationDialogAction::Cancel);
+                },
+            )
         });
 
         let confirm_button = ctx.add_typed_action_view(|_| {
             ActionButton::new(
-                crate::menu_label(
-                    "settings.modals.remove_endpoint.confirm",
-                    "Remove endpoint",
-                ),
+                crate::menu_label("settings.ai.remove_endpoint_button", "Remove endpoint"),
                 DangerPrimaryTheme,
             )
             .on_click(|ctx| {
@@ -106,7 +105,11 @@ impl View for RemoveCustomEndpointConfirmationDialog {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let description = "Are you sure you want to remove this endpoint? You won't be able to use its models in your agent sessions moving forward.".to_string();
+        let description = crate::menu_label(
+            "settings.ai.remove_endpoint_confirmation",
+            "Are you sure you want to remove this endpoint? You won't be able to use its models in your agent sessions moving forward.",
+        )
+        .to_string();
 
         let endpoint_title = Text::new_inline(
             self.endpoint_name.clone(),
@@ -137,7 +140,7 @@ impl View for RemoveCustomEndpointConfirmationDialog {
         .finish();
 
         let dialog = Dialog::new(
-            "Remove endpoint?".to_string(),
+            crate::menu_label("settings.ai.remove_endpoint_title", "Remove endpoint?").to_string(),
             Some(description),
             dialog_styles(appearance),
         )

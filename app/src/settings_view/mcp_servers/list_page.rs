@@ -69,10 +69,6 @@ use crate::workspace::Workspace;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::ToastStack;
 
-fn description_text() -> &'static str {
-    crate::menu_label("settings.mcp_servers.description", "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ")
-}
-
 #[derive(Debug, Clone)]
 pub enum MCPServersListPageViewEvent {
     Add,
@@ -95,64 +91,6 @@ pub enum MCPServersListPageViewEvent {
 pub enum MCPServersListPageViewAction {
     Add,
     ToggleFileBasedMcp,
-}
-
-fn empty_state_text() -> &'static str {
-    crate::menu_label("settings.mcp_servers.empty_state", "Once you add a MCP server, it will be shown here.")
-}
-fn no_search_results_text() -> &'static str {
-    crate::menu_label("settings.mcp_servers.no_search_results", "No search results found")
-}
-fn search_placeholder() -> &'static str {
-    crate::menu_label("settings.mcp_servers.search_placeholder", "Search MCP Servers")
-}
-fn add_button() -> &'static str {
-    crate::menu_label("settings.mcp_servers.add_button", "Add")
-}
-fn card_available_to_install() -> &'static str {
-    crate::menu_label("settings.mcp_servers.card_available_to_install", "Available to install")
-}
-fn toast_server_updated() -> &'static str {
-    crate::menu_label("settings.mcp_servers.toast_server_updated", "MCP server updated")
-}
-fn file_based_toggle_label() -> &'static str {
-    crate::menu_label("settings.mcp_servers.file_based_toggle_label", "Auto-spawn servers from third-party agents")
-}
-fn file_based_description() -> &'static str {
-    crate::menu_label("settings.mcp_servers.file_based_description", "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually in the \"Detected from\" sections below. ")
-}
-fn file_based_learn_more_link() -> &'static str {
-    crate::menu_label("settings.mcp_servers.file_based_learn_more_link", "See supported providers.")
-}
-fn learn_more_link() -> &'static str {
-    crate::menu_label("settings.mcp_servers.learn_more_link", "Learn more.")
-}
-fn section_my_mcps() -> &'static str {
-    crate::menu_label("settings.mcp_servers.section_my_mcps", "My MCPs")
-}
-fn section_shared_no_team() -> &'static str {
-    crate::menu_label("settings.mcp_servers.section_shared_no_team", "Shared by Warp and from other devices")
-}
-fn section_shared_from_warp() -> &'static str {
-    crate::menu_label("settings.mcp_servers.section_shared_from_warp", "Shared from Warp")
-}
-fn card_detected_from_config() -> &'static str {
-    crate::menu_label("settings.mcp_servers.card_detected_from_config", "Detected from config file")
-}
-fn chip_shared_by_team_member() -> &'static str {
-    crate::menu_label("settings.mcp_servers.chip_shared_by_team_member", "Shared by a team member")
-}
-fn chip_from_another_device() -> &'static str {
-    crate::menu_label("settings.mcp_servers.chip_from_another_device", "From another device")
-}
-fn section_shared_with_team_template() -> &'static str {
-    crate::menu_label("settings.mcp_servers.section_shared_with_team", "Shared by Warp and {}")
-}
-fn section_detected_from_provider_template() -> &'static str {
-    crate::menu_label("settings.mcp_servers.section_detected_from_provider", "Detected from {}")
-}
-fn chip_shared_by_creator_template() -> &'static str {
-    crate::menu_label("settings.mcp_servers.chip_shared_by_creator", "Shared by: {}")
 }
 
 pub struct MCPServersListPageView {
@@ -278,14 +216,20 @@ impl MCPServersListPageView {
 
         search_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
-            editor.set_placeholder_text(search_placeholder(), ctx);
+            editor.set_placeholder_text(
+                crate::menu_label("settings.mcp_servers_page.search", "Search MCP Servers"),
+                ctx,
+            );
         });
         let search_bar = ctx.add_typed_action_view(|_| SearchBar::new(search_editor.clone()));
 
         let add_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(add_button(), NakedTheme)
-                .with_icon(Icon::Plus)
-                .on_click(|ctx| ctx.dispatch_typed_action(MCPServersListPageViewAction::Add))
+            ActionButton::new(
+                crate::menu_label("settings.mcp_servers_page.add", "Add"),
+                NakedTheme,
+            )
+            .with_icon(Icon::Plus)
+            .on_click(|ctx| ctx.dispatch_typed_action(MCPServersListPageViewAction::Add))
         });
 
         let mut me = Self {
@@ -421,10 +365,15 @@ impl MCPServersListPageView {
         let server_card = ServerCardView::new(
             item_id,
             template.name.clone(),
-            template
-                .description
-                .clone()
-                .or_else(|| Some(card_available_to_install().to_string())),
+            template.description.clone().or_else(|| {
+                Some(
+                    crate::menu_label(
+                        "settings.mcp_servers_page.available_to_install",
+                        "Available to install",
+                    )
+                    .to_string(),
+                )
+            }),
             None, // Templates can never have tools
             None, // Templates cannot have an error
             title_chip_text.into_iter().collect(),
@@ -892,7 +841,13 @@ impl MCPServersListPageView {
                 // Show the toast that the server updated, even though we don't update the cloud template in this case
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::success(String::from(toast_server_updated()));
+                    let toast = DismissibleToast::success(
+                        crate::menu_label(
+                            "settings.mcp_servers_page.update_success",
+                            "MCP server updated",
+                        )
+                        .to_string(),
+                    );
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
@@ -1160,7 +1115,11 @@ impl MCPServersListPageView {
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
 
         let label = render_body_item_label::<MCPServersListPageViewAction>(
-            file_based_toggle_label().to_string(),
+            crate::menu_label(
+                "settings.mcp_servers_page.auto_spawn_label",
+                "Auto-spawn servers from third-party agents",
+            )
+            .to_string(),
             None,
             None,
             LocalOnlyIconState::Hidden,
@@ -1193,8 +1152,17 @@ impl MCPServersListPageView {
             Vec<FormattedTextFragment>,
         > = std::sync::LazyLock::new(|| {
             vec![
-                FormattedTextFragment::plain_text(file_based_description()),
-                FormattedTextFragment::hyperlink(file_based_learn_more_link(),
+                FormattedTextFragment::plain_text(
+                    crate::menu_label(
+                        "settings.mcp_servers_page.auto_spawn_description",
+                        "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually in the \"Detected from\" sections below. ",
+                    ),
+                ),
+                FormattedTextFragment::hyperlink(
+                    crate::menu_label(
+                        "settings.mcp_servers_page.see_supported_providers",
+                        "See supported providers.",
+                    ),
                     "https://docs.warp.dev/agent-platform/capabilities/mcp#file-based-mcp-servers",
                 ),
             ]
@@ -1230,8 +1198,12 @@ impl MCPServersListPageView {
 
     fn render_page_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let description_fragments = vec![
-            FormattedTextFragment::plain_text(description_text()),
-            FormattedTextFragment::hyperlink(learn_more_link(),
+            FormattedTextFragment::plain_text(crate::menu_label(
+                "settings.mcp_servers_page.description",
+                "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ",
+            )),
+            FormattedTextFragment::hyperlink(
+                crate::menu_label("settings.mcp_servers_page.learn_more", "Learn more."),
                 "https://docs.warp.dev/agent-platform/capabilities/mcp",
             ),
         ];
@@ -1315,7 +1287,7 @@ impl MCPServersListPageView {
 
                 if !owned_server_cards.is_empty() {
                     page.add_child(self.render_server_cards_section(
-                        section_my_mcps(),
+                        crate::menu_label("settings.mcp_servers_page.my_mcps", "My MCPs"),
                         &owned_server_cards,
                         appearance,
                         app,
@@ -1327,8 +1299,19 @@ impl MCPServersListPageView {
                         .current_team()
                         .map(|team| team.name.clone());
                     let shared_by_text = match team_name {
-                        Some(name) => section_shared_with_team_template().replace("{}", &name),
-                        None => section_shared_no_team().to_string(),
+                        Some(name) => i18n::interpolate(
+                            crate::menu_label(
+                                "settings.mcp_servers_page.shared_by_warp_and_team",
+                                "Shared by Warp and {name}",
+                            ),
+                            &[("name", name)],
+                        )
+                        .into_owned(),
+                        None => crate::menu_label(
+                            "settings.mcp_servers_page.shared_by_warp_and_devices",
+                            "Shared by Warp and from other devices",
+                        )
+                        .to_string(),
                     };
 
                     page.add_child(self.render_server_cards_section(
@@ -1339,7 +1322,10 @@ impl MCPServersListPageView {
                     ));
                 } else if !filtered_gallery_cards.is_empty() {
                     page.add_child(self.render_server_cards_section(
-                        section_shared_from_warp(),
+                        crate::menu_label(
+                            "settings.mcp_servers_page.shared_from_warp",
+                            "Shared from Warp",
+                        ),
                         &filtered_gallery_cards,
                         appearance,
                         app,
@@ -1348,7 +1334,14 @@ impl MCPServersListPageView {
 
                 // Render one section per provider (e.g. "Detected from Claude").
                 for (provider, cards) in &filtered_file_based_cards {
-                    let section_title = section_detected_from_provider_template().replace("{}", &provider.display_name());
+                    let section_title = i18n::interpolate(
+                        crate::menu_label(
+                            "settings.mcp_servers_page.detected_from",
+                            "Detected from {provider}",
+                        ),
+                        &[("provider", provider.display_name().to_string())],
+                    )
+                    .into_owned();
                     page.add_child(self.render_server_cards_section(
                         &section_title,
                         cards,
@@ -1544,7 +1537,13 @@ impl MCPServersListPageView {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .wrappable_text(empty_state_text(), true)
+                                .wrappable_text(
+                                    crate::menu_label(
+                                        "settings.mcp_servers_page.empty_state",
+                                        "Once you add a MCP server, it will be shown here.",
+                                    ),
+                                    true,
+                                )
                                 .with_style(style::description_text(appearance))
                                 .build()
                                 .finish(),
@@ -1575,7 +1574,13 @@ impl MCPServersListPageView {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .wrappable_text(no_search_results_text(), true)
+                                .wrappable_text(
+                                    crate::menu_label(
+                                        "settings.mcp_servers_page.no_search_results",
+                                        "No search results found",
+                                    ),
+                                    true,
+                                )
                                 .with_style(style::description_text(appearance))
                                 .build()
                                 .finish(),
@@ -1685,7 +1690,15 @@ impl MCPServersListPageView {
                     .templatable_mcp_server()
                     .description
                     .clone()
-                    .or_else(|| Some(card_detected_from_config().to_string())),
+                    .or_else(|| {
+                        Some(
+                            crate::menu_label(
+                                "settings.mcp_servers_page.detected_from_config",
+                                "Detected from config file",
+                            )
+                            .to_string(),
+                        )
+                    }),
                 None, // tools only available when running
                 None, // no error when not yet started
                 title_chips,
@@ -1819,11 +1832,26 @@ impl MCPServersListPageView {
 
                 if is_shared {
                     match creator {
-                        Some(creator) => Some(TitleChip::text(chip_shared_by_creator_template().replace("{}", &creator))),
-                        None => Some(TitleChip::text(chip_shared_by_team_member())),
+                        Some(creator) => Some(TitleChip::text(
+                            i18n::interpolate(
+                                crate::menu_label(
+                                    "settings.mcp_servers_page.shared_by_creator",
+                                    "Shared by: {creator}",
+                                ),
+                                &[("creator", creator)],
+                            )
+                            .into_owned(),
+                        )),
+                        None => Some(TitleChip::text(crate::menu_label(
+                            "settings.mcp_servers_page.shared_by_team",
+                            "Shared by a team member",
+                        ))),
                     }
                 } else if matches!(item_id, ServerCardItemId::TemplatableMCP(_)) {
-                    Some(TitleChip::text(chip_from_another_device()))
+                    Some(TitleChip::text(crate::menu_label(
+                        "settings.mcp_servers_page.from_another_device",
+                        "From another device",
+                    )))
                 } else {
                     None
                 }

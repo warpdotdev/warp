@@ -20,7 +20,7 @@ pub enum FinalState {
 
 fn sample_agent_question() -> &'static str {
     static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-    *LABEL.get_or_init(|| {
+    LABEL.get_or_init(|| {
         crate::menu_label(
             "onboarding.callout.sample_agent_question",
             "What tests exist in this repo, how are they structured, and what do they cover?",
@@ -30,7 +30,7 @@ fn sample_agent_question() -> &'static str {
 
 fn run_command_placeholder() -> &'static str {
     static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-    *LABEL.get_or_init(|| {
+    LABEL.get_or_init(|| {
         crate::menu_label(
             "onboarding.callout.run_command_placeholder",
             "Run a command...",
@@ -40,7 +40,7 @@ fn run_command_placeholder() -> &'static str {
 
 fn agent_prompt_placeholder() -> &'static str {
     static LABEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-    *LABEL.get_or_init(|| {
+    LABEL.get_or_init(|| {
         crate::menu_label(
             "onboarding.callout.agent_prompt_placeholder",
             "Tell the agent what to build...",

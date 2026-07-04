@@ -116,7 +116,7 @@ impl HandoffEnvironmentCreationModal {
                     log::error!("Unable to create environment: not logged in");
                     ctx.emit(HandoffEnvironmentCreationModalEvent::CreationFailed {
                         error_message: crate::menu_label(
-                            "settings.modals.handoff.not_logged_in",
+                            "settings.environments.handoff_modal.not_logged_in",
                             "Not logged in",
                         )
                         .to_string(),
@@ -199,7 +199,7 @@ impl HandoffEnvironmentCreationModal {
 
         let dialog = Dialog::new(
             crate::menu_label(
-                "settings.modals.agent_assisted.create_environment",
+                "settings.update_environment_form.create_environment",
                 "Create environment",
             )
             .to_string(),

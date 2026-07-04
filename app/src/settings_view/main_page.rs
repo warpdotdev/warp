@@ -295,7 +295,10 @@ impl MainSettingsPageView {
 
         widgets.push(Box::new(LogoutWidget::default()));
 
-        let page = PageType::new_uncategorized(widgets, Some("Account"));
+        let page = PageType::new_uncategorized(
+            widgets,
+            Some(crate::menu_label("settings.account", "Account")),
+        );
 
         MainSettingsPageView { page, auth_state }
     }
@@ -348,7 +351,7 @@ impl AccountWidget {
                 self.ui_state_handles.anonymous_user_sign_up_button.clone(),
             )
             .with_style(button_styles)
-            .with_text_label(crate::menu_label("settings.account.sign_up", "Sign up").to_owned())
+            .with_text_label(crate::menu_label("workspace.sign_up", "Sign up").to_owned())
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(MainPageAction::SignupAnonymousUser);
@@ -360,7 +363,10 @@ impl AccountWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::End);
         let current_user_id = auth_state.user_id().unwrap_or_default();
 
-        plan_info.add_child(render_customer_type_badge(appearance, crate::menu_label("settings.account.free_plan", "Free").into()));
+        plan_info.add_child(render_customer_type_badge(
+            appearance,
+            crate::menu_label("settings.billing_and_usage.free", "Free").into(),
+        ));
         plan_info.add_child(
             Container::new(
                 appearance
@@ -372,7 +378,7 @@ impl AccountWidget {
                     .with_text_and_icon_label(
                         TextAndIcon::new(
                             TextAndIconAlignment::IconFirst,
-                            "Compare plans",
+                            crate::menu_label("settings.ai.compare_plans", "Compare plans"),
                             Icon::CoinsStacked.to_warpui_icon(appearance.theme().accent()),
                             MainAxisSize::Min,
                             MainAxisAlignment::Center,
@@ -508,7 +514,11 @@ impl AccountWidget {
                         appearance
                             .ui_builder()
                             .link(
-                                crate::menu_label("settings.account.contact_support", "Contact support").into(),
+                                crate::menu_label(
+                                    "settings.teams.contact_support",
+                                    "Contact support",
+                                )
+                                .into(),
                                 Some("mailto:support@warp.dev".into()),
                                 None,
                                 self.ui_state_handles.enterprise_contact_us_link.clone(),
@@ -525,7 +535,11 @@ impl AccountWidget {
                             appearance
                                 .ui_builder()
                                 .link(
-                                    crate::menu_label("settings.account.manage_billing", "Manage billing").into(),
+                                    crate::menu_label(
+                                        "settings.teams.manage_billing",
+                                        "Manage billing",
+                                    )
+                                    .into(),
                                     None,
                                     Some(Box::new(move |ctx| {
                                         ctx.dispatch_typed_action(
@@ -547,14 +561,14 @@ impl AccountWidget {
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                         let description = match team.billing_metadata.customer_type {
                             CustomerType::Prosumer => crate::menu_label(
-                                "settings.account.upgrade_to_turbo",
+                                "settings.teams.upgrade_to_turbo_plan",
                                 "Upgrade to Turbo plan",
                             ),
                             CustomerType::Turbo => crate::menu_label(
-                                "settings.account.upgrade_to_lightspeed",
+                                "settings.teams.upgrade_to_lightspeed_plan",
                                 "Upgrade to Lightspeed plan",
                             ),
-                            _ => crate::menu_label("settings.account.compare_plans", "Compare plans"),
+                            _ => crate::menu_label("settings.ai.compare_plans", "Compare plans"),
                         };
                         let team_uid = team.uid;
                         plan_info.add_child(
@@ -580,14 +594,17 @@ impl AccountWidget {
                 }
             }
         } else {
-            let plan_badge_child = render_customer_type_badge(appearance, crate::menu_label("settings.account.free_plan", "Free").into());
+            let plan_badge_child = render_customer_type_badge(
+                appearance,
+                crate::menu_label("settings.billing_and_usage.free", "Free").into(),
+            );
             plan_info.add_child(plan_badge_child);
 
             plan_info.add_child(
                 appearance
                     .ui_builder()
                     .link(
-                        crate::menu_label("settings.account.compare_plans", "Compare plans").into(),
+                        crate::menu_label("settings.ai.compare_plans", "Compare plans").into(),
                         None,
                         Some(Box::new(move |ctx| {
                             ctx.dispatch_typed_action(MainPageAction::Upgrade {
@@ -717,7 +734,7 @@ impl SettingsWidget for SettingsSyncWidget {
         };
 
         Container::new(render_body_item::<MainPageAction>(
-            crate::menu_label("settings.account.settings_sync", "Settings sync").to_string(),
+            crate::menu_label("settings.main.settings_sync", "Settings sync").to_string(),
             Some(label_info),
             // Cloud prefs are always synced, so no need to show the local-only icon.
             LocalOnlyIconState::Hidden,
@@ -798,13 +815,13 @@ impl SettingsWidget for EarnRewardsWidget {
             self.render_row(
                 appearance,
                 crate::menu_label(
-                    "settings.account.referral_cta",
+                    "settings.main.earn_rewards_cta",
                     "Earn rewards by sharing Warp with friends & colleagues",
                 ),
                 appearance
                     .ui_builder()
                     .link(
-                        crate::menu_label("settings.account.refer_a_friend", "Refer a friend").into(),
+                        crate::menu_label("settings.main.refer_a_friend", "Refer a friend").into(),
                         None,
                         Some(Box::new(move |ctx| {
                             ctx.dispatch_typed_action(WorkspaceAction::ShowReferralSettingsPage);
@@ -854,12 +871,12 @@ impl VersionInfoWidget {
                 match autoupdate::get_update_state(app) {
                     AutoupdateStage::NoUpdateAvailable => (
                         Some(StatusContent {
-                            text: crate::menu_label("updates.up_to_date", "Up to date"),
+                            text: crate::menu_label("settings.main.up_to_date", "Up to date"),
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
                             text: crate::menu_label(
-                                "updates.check_for_updates",
+                                "workspace.binding.check_for_updates",
                                 "Check for updates",
                             ),
                             action: MainPageAction::CheckForUpdate,
@@ -868,7 +885,7 @@ impl VersionInfoWidget {
                     AutoupdateStage::CheckingForUpdate => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "updates.checking",
+                                "settings.main.checking_for_update",
                                 "checking for update...",
                             ),
                             color: faded_text_color,
@@ -878,7 +895,7 @@ impl VersionInfoWidget {
                     AutoupdateStage::DownloadingUpdate => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "updates.downloading",
+                                "settings.main.downloading_update",
                                 "downloading update...",
                             ),
                             color: faded_text_color,
@@ -888,19 +905,19 @@ impl VersionInfoWidget {
                     AutoupdateStage::UpdateReady { .. } => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "updates.update_available",
+                                "settings.main.update_available",
                                 "Update available",
                             ),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: crate::menu_label("updates.relaunch", "Relaunch Warp"),
+                            text: crate::menu_label("settings.main.relaunch_warp", "Relaunch Warp"),
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::Updating { .. } => (
                         Some(StatusContent {
-                            text: crate::menu_label("updates.updating", "Updating..."),
+                            text: crate::menu_label("settings.main.updating", "Updating..."),
                             color: faded_text_color,
                         }),
                         None,
@@ -908,27 +925,27 @@ impl VersionInfoWidget {
                     AutoupdateStage::UpdatedPendingRestart { .. } => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "updates.installed",
+                                "settings.main.installed_update",
                                 "Installed update",
                             ),
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: crate::menu_label("updates.relaunch", "Relaunch Warp"),
+                            text: crate::menu_label("settings.main.relaunch_warp", "Relaunch Warp"),
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "updates.cant_install",
+                                "settings.main.update_failed_to_install",
                                 "A new version of Warp is available but can't be installed",
                             ),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
                             text: crate::menu_label(
-                                "updates.update_manually",
+                                "workspace.update_warp_manually",
                                 "Update Warp manually",
                             ),
                             // note: the handler for this action is a no-op
@@ -938,14 +955,14 @@ impl VersionInfoWidget {
                     AutoupdateStage::UnableToLaunchNewVersion { .. } => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "updates.cant_launch",
+                                "settings.main.update_failed_to_launch",
                                 "A new version of Warp is installed but can't be launched.",
                             ),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
                             text: crate::menu_label(
-                                "updates.update_manually",
+                                "workspace.update_warp_manually",
                                 "Update Warp manually",
                             ),
                             // note: the handler for this action is a no-op
@@ -964,7 +981,7 @@ impl VersionInfoWidget {
                     1.0,
                     Align::new(
                         Text::new_inline(
-                            crate::menu_label("settings.account.version", "Version").to_string(),
+                            crate::menu_label("settings.main.version_label", "Version").to_string(),
                             appearance.ui_font_family(),
                             REGULAR_TEXT_FONT_SIZE,
                         )
@@ -1092,7 +1109,7 @@ impl LogoutWidget {
         appearance
             .ui_builder()
             .button(ButtonVariant::Secondary, self.mouse_state.clone())
-            .with_text_label(crate::menu_label("settings.account.log_out", "Log out").into())
+            .with_text_label(crate::menu_label("workspace.log_out", "Log out").into())
             .with_style(UiComponentStyles {
                 font_size: Some(14.),
                 padding: Some(Coords::uniform(8.).left(32.).right(32.)),

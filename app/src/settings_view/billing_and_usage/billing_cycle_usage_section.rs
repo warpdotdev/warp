@@ -383,10 +383,14 @@ impl BillingCycleUsageSectionView {
             .with_main_axis_size(MainAxisSize::Max);
 
         row.add_child(
-            Text::new_inline("Usage", appearance.ui_font_family(), HEADER_FONT_SIZE)
-                .with_style(Properties::default().weight(Weight::Bold))
-                .with_color(theme.active_ui_text_color().into())
-                .finish(),
+            Text::new_inline(
+                crate::menu_label("settings.billing_and_usage.usage_section", "Usage"),
+                appearance.ui_font_family(),
+                HEADER_FONT_SIZE,
+            )
+            .with_style(Properties::default().weight(Weight::Bold))
+            .with_color(theme.active_ui_text_color().into())
+            .finish(),
         );
 
         let mut right_side = Flex::row()
@@ -446,10 +450,12 @@ impl BillingCycleUsageSectionView {
             return None;
         }
         let theme = appearance.theme();
-        let reset_str = AIRequestUsageModel::as_ref(app)
+        let formatted_time = AIRequestUsageModel::as_ref(app)
             .next_refresh_time_local()
-            .format("Resets %b %d, %-I:%M %p")
+            .format("%b %d, %-I:%M %p")
             .to_string();
+        let reset_str = crate::menu_label("settings.billing_and_usage.resets_at", "Resets {time}")
+            .replace("{time}", &formatted_time);
         Some(
             Text::new_inline(
                 reset_str,
@@ -724,28 +730,46 @@ fn visibility_cta_for(
 ) -> Option<(&'static str, &'static str, BillingCycleUsageAction, Icon)> {
     match granularity {
         UsageVisibilityGranularity::OwnOnly => Some((
-            "Upgrade to Build",
-            "to see team-level credit usage.",
+            crate::menu_label("openwarp_launch.upgrade_to_build", "Upgrade to Build"),
+            crate::menu_label(
+                "settings.billing_and_usage.cta_see_team_level_usage",
+                "to see team-level credit usage.",
+            ),
             BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         UsageVisibilityGranularity::TeamAggregate => Some((
-            "Upgrade to Business",
-            "to see per-user credit attribution.",
+            crate::menu_label("settings.teams.upgrade_to_business", "Upgrade to Business"),
+            crate::menu_label(
+                "settings.billing_and_usage.cta_see_per_user_attribution",
+                "to see per-user credit attribution.",
+            ),
             BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         UsageVisibilityGranularity::PerUserTotals => Some((
-            "Upgrade to Enterprise",
-            "to see fine-grained credit attribution and set per-user spend limits.",
+            crate::menu_label(
+                "settings.billing_and_usage.upgrade_to_enterprise",
+                "Upgrade to Enterprise",
+            ),
+            crate::menu_label(
+                "settings.billing_and_usage.cta_see_fine_grained_attribution",
+                "to see fine-grained credit attribution and set per-user spend limits.",
+            ),
             BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         // FullBreakdown viewers already have full visibility; nudge them to
         // the admin panel where per-user spend limits actually get configured.
         UsageVisibilityGranularity::FullBreakdown => Some((
-            "Open the admin panel",
-            "to set per-user spend limits.",
+            crate::menu_label(
+                "settings.billing_and_usage.open_the_admin_panel",
+                "Open the admin panel",
+            ),
+            crate::menu_label(
+                "settings.billing_and_usage.cta_set_per_user_spend_limits",
+                "to set per-user spend limits.",
+            ),
             BillingCycleUsageAction::OpenAdminPanel,
             Icon::Users,
         )),
@@ -754,11 +778,29 @@ fn visibility_cta_for(
 
 fn legend_style_for(cost_type: AiCreditsUsageAndCostType) -> (ColorU, &'static str) {
     match cost_type {
-        AiCreditsUsageAndCostType::BaseLimit => (BASE_CREDITS_DOT_COLOR, "Base"),
-        AiCreditsUsageAndCostType::BonusGrant => (BONUS_CREDITS_DOT_COLOR, "Add-ons"),
-        AiCreditsUsageAndCostType::Payg => (PAYG_CREDITS_DOT_COLOR, "Pay-as-you-go"),
-        AiCreditsUsageAndCostType::AmbientBonusGrant => (AMBIENT_CREDITS_DOT_COLOR, "Cloud-only"),
-        AiCreditsUsageAndCostType::Aggregate => (AGGREGATE_CREDITS_DOT_COLOR, "Combined"),
+        AiCreditsUsageAndCostType::BaseLimit => (
+            BASE_CREDITS_DOT_COLOR,
+            crate::menu_label("settings.billing_and_usage.cost_type_base", "Base"),
+        ),
+        AiCreditsUsageAndCostType::BonusGrant => (
+            BONUS_CREDITS_DOT_COLOR,
+            crate::menu_label("settings.billing_and_usage.cost_type_addons", "Add-ons"),
+        ),
+        AiCreditsUsageAndCostType::Payg => (
+            PAYG_CREDITS_DOT_COLOR,
+            crate::menu_label("settings.billing_and_usage.cost_type_payg", "Pay-as-you-go"),
+        ),
+        AiCreditsUsageAndCostType::AmbientBonusGrant => (
+            AMBIENT_CREDITS_DOT_COLOR,
+            crate::menu_label(
+                "settings.billing_and_usage.cost_type_cloud_only",
+                "Cloud-only",
+            ),
+        ),
+        AiCreditsUsageAndCostType::Aggregate => (
+            AGGREGATE_CREDITS_DOT_COLOR,
+            crate::menu_label("settings.billing_and_usage.cost_type_combined", "Combined"),
+        ),
         AiCreditsUsageAndCostType::Other(_) => (BASE_CREDITS_DOT_COLOR, ""),
     }
 }
@@ -766,8 +808,11 @@ fn legend_style_for(cost_type: AiCreditsUsageAndCostType) -> (ColorU, &'static s
 fn render_aggregate_legend_tooltip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text = Text::new_inline(
-        "Other team members' usage across add-on, pay-as-you-go, and cloud-only credits."
-            .to_string(),
+        crate::menu_label(
+            "settings.billing_and_usage.aggregate_legend_tooltip",
+            "Other team members' usage across add-on, pay-as-you-go, and cloud-only credits.",
+        )
+        .to_string(),
         appearance.ui_font_family(),
         12.,
     )

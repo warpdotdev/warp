@@ -57,22 +57,34 @@ impl From<&DestructiveMCPConfirmationDialogVariant>
     fn from(variant: &DestructiveMCPConfirmationDialogVariant) -> Self {
         match *variant {
             DestructiveMCPConfirmationDialogVariant::DeleteLocal => DestructiveMCPConfirmationDialogDisplayOptions::new(
-                "Delete MCP server?".to_string(),
-                "This will uninstall and remove this MCP server from all your devices.".to_string(),
-                "Delete MCP".to_string(),
-                "Cancel".to_string(),
+                crate::menu_label("settings.mcp_servers_page.delete_local_title", "Delete MCP server?").to_string(),
+                crate::menu_label(
+                    "settings.mcp_servers_page.delete_local_description",
+                    "This will uninstall and remove this MCP server from all your devices.",
+                )
+                .to_string(),
+                crate::menu_label("settings.mcp_servers_page.delete_mcp", "Delete MCP").to_string(),
+                crate::menu_label("common.cancel", "Cancel").to_string(),
             ),
             DestructiveMCPConfirmationDialogVariant::DeleteShared => DestructiveMCPConfirmationDialogDisplayOptions::new(
-                "Delete shared MCP server?".to_string(),
-                "This will not only delete this MCP server for yourself, but also uninstall and remove this MCP server from Warp and across all of your teammates' devices.".to_string(),
-                "Delete MCP".to_string(),
-                "Cancel".to_string(),
+                crate::menu_label("settings.mcp_servers_page.delete_shared_title", "Delete shared MCP server?").to_string(),
+                crate::menu_label(
+                    "settings.mcp_servers_page.delete_shared_description",
+                    "This will not only delete this MCP server for yourself, but also uninstall and remove this MCP server from Warp and across all of your teammates' devices.",
+                )
+                .to_string(),
+                crate::menu_label("settings.mcp_servers_page.delete_mcp", "Delete MCP").to_string(),
+                crate::menu_label("common.cancel", "Cancel").to_string(),
             ),
             DestructiveMCPConfirmationDialogVariant::Unshare => DestructiveMCPConfirmationDialogDisplayOptions::new(
-                "Remove shared MCP server from team?".to_string(),
-                "This will uninstall and remove this MCP server from Warp and across all of your teammates' devices.".to_string(),
-                "Remove from team".to_string(),
-                "Cancel".to_string(),
+                crate::menu_label("settings.mcp_servers_page.unshare_title", "Remove shared MCP server from team?").to_string(),
+                crate::menu_label(
+                    "settings.mcp_servers_page.unshare_description",
+                    "This will uninstall and remove this MCP server from Warp and across all of your teammates' devices.",
+                )
+                .to_string(),
+                crate::menu_label("settings.mcp_servers_page.remove_from_team", "Remove from team").to_string(),
+                crate::menu_label("common.cancel", "Cancel").to_string(),
             ),
         }
     }

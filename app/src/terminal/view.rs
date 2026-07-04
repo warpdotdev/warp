@@ -15940,6 +15940,7 @@ impl TerminalView {
         self.enter_agent_view_after_pending_commands = false;
     }
 
+    #[cfg(not(target_family = "wasm"))]
     /// Start a timer so that we can detect when a session does not bootstrap in a timely manner
     fn start_bootstrap_timer(&self, duration: Duration, ctx: &mut ViewContext<Self>) {
         let _ = ctx.spawn(

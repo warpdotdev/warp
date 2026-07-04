@@ -52,7 +52,13 @@ impl AddRegexModal {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("e.g. \"Google API Key\"", ctx);
+            editor.set_placeholder_text(
+                crate::menu_label(
+                    "settings.privacy.regex_name_placeholder",
+                    "e.g. \"Google API Key\"",
+                ),
+                ctx,
+            );
             editor
         });
 
@@ -191,7 +197,7 @@ impl View for AddRegexModal {
         let is_submit_enabled = !pattern_text.trim().is_empty() && is_valid_regex;
 
         let name_label = Text::new(
-            "Name (optional)",
+            crate::menu_label("settings.privacy.regex_name_label", "Name (optional)"),
             appearance.ui_font_family(),
             LABEL_FONT_SIZE,
         )
@@ -199,7 +205,7 @@ impl View for AddRegexModal {
         .finish();
 
         let regex_label = Text::new(
-            "Regex pattern",
+            crate::menu_label("settings.privacy.regex_pattern_label", "Regex pattern"),
             appearance.ui_font_family(),
             LABEL_FONT_SIZE,
         )
@@ -218,7 +224,9 @@ impl View for AddRegexModal {
                 ButtonVariant::Accent,
                 self.submit_button_mouse_state.clone(),
             )
-            .with_text_label("Add regex".to_string())
+            .with_text_label(
+                crate::menu_label("settings.privacy.add_regex", "Add regex").to_string(),
+            )
             .with_style(button_style);
 
         if !is_submit_enabled {
@@ -233,7 +241,7 @@ impl View for AddRegexModal {
                     1.,
                     Container::new(if !is_valid_regex && !pattern_text.trim().is_empty() {
                         Text::new(
-                            "Invalid regex",
+                            crate::menu_label("settings.privacy.invalid_regex", "Invalid regex"),
                             appearance.ui_font_family(),
                             LABEL_FONT_SIZE,
                         )
@@ -259,7 +267,7 @@ impl View for AddRegexModal {
                         ButtonVariant::Secondary,
                         self.cancel_button_mouse_state.clone(),
                     )
-                    .with_text_label("Cancel".to_string())
+                    .with_text_label(crate::menu_label("common.cancel", "Cancel").to_string())
                     .with_style(button_style)
                     .build()
                     .on_click(move |ctx, _, _| {
