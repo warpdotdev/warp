@@ -53,6 +53,7 @@ use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
 use crate::terminal::shared_session::sharer::network::Network;
 use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionStatus};
 use crate::terminal::shell::ShellName;
+use crate::terminal::terminal_manager::BlockSpacing;
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
@@ -60,8 +61,24 @@ use crate::terminal::writeable_pty::terminal_manager_util::{
 };
 use crate::terminal::writeable_pty::{self, Message, PtyIntentEvent, TerminalSurface};
 use crate::terminal::{
-    terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo,
+    terminal_manager, BlockPadding, ShellLaunchData, ShellLaunchState, SizeInfo,
     TerminalManager as TerminalManagerTrait, TerminalModel, PTY_READS_BROADCAST_CHANNEL_SIZE,
+};
+
+/// Block spacing for TUI-owned terminal surfaces. The TUI renders whole rows,
+/// so the GUI's fractional pixel-derived padding would ceil into several blank
+/// rows per block; instead, use exactly one blank row above each block, no
+/// reserved Warp-prompt height, and no memory-stats footer row (the TUI
+/// renders neither the Warp prompt nor the debug memory-stats overlay).
+const TUI_BLOCK_SPACING: BlockSpacing = BlockSpacing {
+    block_padding: BlockPadding {
+        padding_top: 1.0,
+        command_padding_top: 0.0,
+        middle: 0.0,
+        bottom: 0.0,
+    },
+    warp_prompt_height_lines: 0.0,
+    show_memory_stats: false,
 };
 
 type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
@@ -194,6 +211,7 @@ impl<S> TerminalManager<S> {
             initial_size,
             model_event_sender,
             chosen_shell,
+            None, /* block_spacing */
             ctx,
             create_surface,
             |manager| Box::new(manager),
@@ -231,6 +249,7 @@ impl<S> TerminalManager<S> {
             initial_size,
             model_event_sender,
             chosen_shell,
+            Some(TUI_BLOCK_SPACING),
             ctx,
             create_surface,
             |manager| Box::new(TuiTerminalManager(manager)),
@@ -248,6 +267,7 @@ impl<S> TerminalManager<S> {
         initial_size: Vector2F,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
+        block_spacing: Option<BlockSpacing>,
         ctx: &mut AppContext,
         create_surface: impl FnOnce(
             TerminalSurfaceInit,
@@ -311,6 +331,7 @@ impl<S> TerminalManager<S> {
                     .map(|wsl_name_or_shell_starter| wsl_name_or_shell_starter.name())
                     .unwrap_or(ShellName::LessDescriptive("Shell".to_owned())),
             },
+            block_spacing,
             ctx,
         );
         let colors = model.colors();

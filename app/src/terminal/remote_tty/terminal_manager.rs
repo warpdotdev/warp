@@ -86,6 +86,7 @@ impl TerminalManager {
                 display_name: ShellName::blank(),
                 shell_type: ShellType::Zsh,
             },
+            None, /* block_spacing */
             ctx,
         );
 

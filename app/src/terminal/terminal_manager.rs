@@ -13,7 +13,7 @@ use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
 use super::view::{create_size_info_for_blocklist, WARP_PROMPT_HEIGHT_LINES};
-use super::{color, ShellLaunchState, SizeInfo, TerminalModel};
+use super::{color, BlockPadding, ShellLaunchState, SizeInfo, TerminalModel};
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::appearance::Appearance;
@@ -41,6 +41,17 @@ pub trait TerminalManager: Any {
 
 impl warpui::Entity for Box<dyn TerminalManager> {
     type Event = ();
+}
+
+/// Spacing baked into block heights: the per-block padding, the height
+/// reserved for the rendered Warp prompt (in lines), and whether blocks
+/// reserve a footer row for the debug memory-stats overlay. Frontends whose
+/// rendering differs from the GUI blocklist (e.g. the row-based TUI) pass
+/// their own spacing when creating the terminal model.
+pub(super) struct BlockSpacing {
+    pub(super) block_padding: BlockPadding,
+    pub(super) warp_prompt_height_lines: f32,
+    pub(super) show_memory_stats: bool,
 }
 
 pub(super) fn compute_block_size(initial_size: Vector2F, ctx: &mut AppContext) -> BlockSize {
@@ -72,6 +83,9 @@ pub(super) fn compute_block_size(initial_size: Vector2F, ctx: &mut AppContext) -
 }
 
 /// Creates a [`TerminalModel`], the source of truth for the session's state.
+///
+/// `block_spacing` overrides the GUI-derived spacing baked into block heights;
+/// pass `None` to use the GUI blocklist's spacing.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn create_terminal_model(
     startup_directory: Option<PathBuf>,
@@ -79,6 +93,7 @@ pub(super) fn create_terminal_model(
     initial_size: Vector2F,
     channel_event_proxy: ChannelEventListener,
     shell_state: ShellLaunchState,
+    block_spacing: Option<BlockSpacing>,
     ctx: &mut AppContext,
 ) -> TerminalModel {
     let (should_show_bootstrap_block, should_show_in_band_command_blocks) = {
@@ -88,12 +103,19 @@ pub(super) fn create_terminal_model(
             *settings.should_show_in_band_command_blocks.value(),
         )
     };
-    let show_memory_stats = DebugSettings::as_ref(ctx).should_show_memory_stats();
+    let show_memory_stats = match &block_spacing {
+        Some(block_spacing) => block_spacing.show_memory_stats,
+        None => DebugSettings::as_ref(ctx).should_show_memory_stats(),
+    };
     let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
     let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
     let is_inverted = input_mode.is_inverted_blocklist();
 
-    let sizes = compute_block_size(initial_size, ctx);
+    let mut sizes = compute_block_size(initial_size, ctx);
+    if let Some(block_spacing) = block_spacing {
+        sizes.block_padding = block_spacing.block_padding;
+        sizes.warp_prompt_height_lines = block_spacing.warp_prompt_height_lines;
+    }
 
     let obfuscate_secrets = get_secret_obfuscation_mode(ctx);
     let is_ai_ugc_telemetry_enabled =
