@@ -23,7 +23,7 @@ use cosmic_text::{
     Align, Attrs, AttrsList, BidiParagraphs, LayoutGlyph, LayoutLine, ShapeLine, Shaping, Wrap,
 };
 use dashmap::mapref::entry::Entry;
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use fontdb::Source;
 use itertools::Itertools;
 use parking_lot::RwLock;
@@ -48,9 +48,12 @@ use crate::rendering::GlyphConfig;
 use crate::text_layout::{CaretPosition, ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
 
 lazy_static! {
-    /// Global cache of per-file bit7 glyph corruption check results.
-    /// `true` = clean, `false` = has reserved bit 7 set on simple glyph flags.
-    static ref BIT7_CHECKED_FONTS: DashMap<PathBuf, bool> = DashMap::new();
+    /// Global cache of per-face bit7 glyph corruption check results.
+    /// Key: (path, face_index), value: `true` = clean, `false` = corrupted.
+    static ref BIT7_CHECKED_FONTS: DashMap<(PathBuf, u32), bool> = DashMap::new();
+
+    /// Paths whose every face has been scanned by the background scanner.
+    static ref SCANNED_PATHS: DashSet<PathBuf> = DashSet::new();
 
     /// Paths that the background scanner found corrupted, pending removal from fontdb.
     static ref PENDING_CORRUPTED_FONTS: std::sync::Mutex<Vec<PathBuf>> =
@@ -193,9 +196,10 @@ fn has_reserved_bit7_in_glyph_flags(data: &[u8], face_index: u32) -> bool {
 }
 
 /// Lazily initializes the background font scanner thread and returns a sender.
-/// The scanner reads font files from disk, checks for bit7 glyph corruption,
-/// and caches results in `BIT7_CHECKED_FONTS`. Corrupted paths are queued
-/// for removal from fontdb by `TextLayoutSystem::drain_corrupted_fonts`.
+/// The scanner reads font files from disk, checks for bit7 glyph corruption
+/// in every face, and caches per-face results in `BIT7_CHECKED_FONTS`.
+/// Corrupted paths are queued for removal from fontdb by
+/// `TextLayoutSystem::drain_corrupted_fonts`.
 fn background_scan_tx() -> &'static std::sync::mpsc::Sender<PathBuf> {
     static TX: std::sync::OnceLock<std::sync::mpsc::Sender<PathBuf>> = std::sync::OnceLock::new();
     TX.get_or_init(|| {
@@ -203,7 +207,11 @@ fn background_scan_tx() -> &'static std::sync::mpsc::Sender<PathBuf> {
         std::thread::Builder::new()
             .name("font-bit7-scanner".into())
             .spawn(move || {
+                let mut scanned = std::collections::HashSet::<PathBuf>::new();
                 while let Ok(path) = rx.recv() {
+                    if !scanned.insert(path.clone()) {
+                        continue;
+                    }
                     let data = match std::fs::read(&path) {
                         Ok(d) => d,
                         Err(_) => continue,
@@ -211,12 +219,12 @@ fn background_scan_tx() -> &'static std::sync::mpsc::Sender<PathBuf> {
                     let num_faces = count_font_faces(&data);
                     let mut any_corrupted = false;
                     for face_index in 0..num_faces {
-                        if has_reserved_bit7_in_glyph_flags(&data, face_index as u32) {
-                            any_corrupted = true;
-                            break;
-                        }
+                        let index = face_index as u32;
+                        let corrupted = has_reserved_bit7_in_glyph_flags(&data, index);
+                        BIT7_CHECKED_FONTS.insert((path.clone(), index), !corrupted);
+                        any_corrupted |= corrupted;
                     }
-                    BIT7_CHECKED_FONTS.insert(path.clone(), !any_corrupted);
+                    SCANNED_PATHS.insert(path.clone());
                     if any_corrupted {
                         log::warn!(
                             "Background font scan: found corrupted font at {}",
@@ -660,21 +668,24 @@ impl TextLayoutSystem {
         }
 
         if let Source::File(path) = &source {
-            if BIT7_CHECKED_FONTS.get(path).is_some_and(|r| !*r) {
+            if BIT7_CHECKED_FONTS
+                .get(&(path.clone(), index))
+                .is_some_and(|r| !*r)
+            {
                 log::info!(
-                    "bit7 glyph flag scan: skipped (cached corrupted), path={}",
-                    path.display()
+                    "bit7 glyph flag scan: skipped (cached corrupted), path={}, index={index}",
+                    path.display(),
                 );
-                bail!("Font source has corrupted glyphs (bit 7 set on simple glyph flags)");
+                bail!("Font face has corrupted glyphs (bit 7 set on simple glyph flags)");
             }
         }
 
         // Remove any faces from fontdb that the background scanner found corrupted.
         self.drain_corrupted_fonts();
 
-        // Queue a background scan for uncached file-based fonts.
+        // Queue a background scan for paths not yet fully scanned.
         if let Source::File(path) = &source {
-            if !BIT7_CHECKED_FONTS.contains_key(path) {
+            if !SCANNED_PATHS.contains(path) {
                 background_scan_tx().send(path.clone()).ok();
             }
         }
@@ -691,6 +702,48 @@ impl TextLayoutSystem {
 
         if fontdb_ids.is_empty() {
             bail!("Loaded a font source that corresponds to 0 font faces")
+        }
+
+        // Sync check: verify all uncached faces using fontdb's data, removing corrupted ones.
+        let mut removed_ids = Vec::new();
+        {
+            let font_store = self.font_store.read();
+            for &id in &fontdb_ids {
+                let Some(face_info) = font_store.db().face(id) else {
+                    continue;
+                };
+                if let Source::File(path) = &face_info.source {
+                    let key = (path.clone(), face_info.index);
+                    if !BIT7_CHECKED_FONTS.contains_key(&key) {
+                        let corrupted = font_store
+                            .db()
+                            .with_face_data(id, |data, fi| {
+                                has_reserved_bit7_in_glyph_flags(data, fi)
+                            })
+                            .unwrap_or(false);
+                        BIT7_CHECKED_FONTS.insert(key, !corrupted);
+                        if corrupted {
+                            removed_ids.push(id);
+                        }
+                    }
+                }
+            }
+        }
+        if !removed_ids.is_empty() {
+            let mut font_store = self.font_store.write();
+            let db = font_store.db_mut();
+            for &id in &removed_ids {
+                db.remove_face(id);
+            }
+        }
+
+        let fontdb_ids: Vec<fontdb::ID> = fontdb_ids
+            .into_iter()
+            .filter(|id| !removed_ids.contains(id))
+            .collect();
+
+        if fontdb_ids.is_empty() {
+            bail!("All font faces in the source are corrupted");
         }
 
         let mut font_id_to_return = None;
@@ -731,7 +784,8 @@ impl TextLayoutSystem {
     /// Drains all pending corrupted font paths from the background scanner queue
     /// and removes the corresponding faces from this instance's fontdb, cleaning
     /// up all associated maps (`font_id_map`, `loaded_fonts`, `font_selections`,
-    /// and `fallback_fonts`).
+    /// and `fallback_fonts`). Only removes faces that the per-face cache marks
+    /// as corrupted, so clean siblings in a TTC are not affected.
     fn drain_corrupted_fonts(&self) {
         let paths: Vec<PathBuf> = PENDING_CORRUPTED_FONTS.lock().unwrap().drain(..).collect();
         if paths.is_empty() {
@@ -739,26 +793,38 @@ impl TextLayoutSystem {
         }
 
         for path in &paths {
-            let mut font_store = self.font_store.write();
-            let db = font_store.db_mut();
-
-            let ids: Vec<fontdb::ID> = db
+            let faces: Vec<(fontdb::ID, u32)> = self
+                .font_store
+                .read()
+                .db()
                 .faces()
                 .filter(|f| matches!(&f.source, Source::File(p) if p == path))
-                .map(|f| f.id)
+                .map(|f| (f.id, f.index))
                 .collect();
 
-            if ids.is_empty() {
+            let to_remove: Vec<fontdb::ID> = faces
+                .into_iter()
+                .filter(|(_, face_index)| {
+                    BIT7_CHECKED_FONTS
+                        .get(&(path.clone(), *face_index))
+                        .is_some_and(|v| !*v)
+                })
+                .map(|(id, _)| id)
+                .collect();
+
+            if to_remove.is_empty() {
                 continue;
             }
 
             log::info!(
                 "Removing {} corrupted face(s) for {}",
-                ids.len(),
+                to_remove.len(),
                 path.display(),
             );
 
-            for &db_id in &ids {
+            let mut font_store = self.font_store.write();
+            let db = font_store.db_mut();
+            for &db_id in &to_remove {
                 let mut font_id_map = self.font_id_map.write();
                 if let Some((font_id, _)) = font_id_map.remove_by_right(&db_id) {
                     drop(font_id_map);
