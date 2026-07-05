@@ -349,6 +349,8 @@ pub enum CustomLspRepoStatus {
 
 A parallel function `custom_lsp_repo_status(repo_root: &Path, name: &str, ctx: &mut ModelContext<Self>) -> CustomLspRepoStatus` lives next to the existing built-in `lsp_repo_status` (around `persisted_workspace.rs:1171`).
 
+**How `EnablementState` maps to `CustomLspRepoStatus` (product.md invariant 14).** Customs reuse `EnablementState` unchanged, including the memory-only `Suggested` variant: when a custom descriptor first matches a file in a workspace, the workspace's custom map gets a `Suggested` entry — the same candidate-detection insert built-ins use (`persisted_workspace.rs:591`), never persisted to SQLite. `custom_lsp_repo_status` maps `Yes` → `Enabled` (→ `Ready` once the footer subscribes to a live server) and both `Suggested` and `No` → `Disabled`. `Disabled` is what drives the footer's Enable affordance — the custom analog of `DisabledAndInstalled` for built-ins (v1 assumes a configured custom is installed; there is no install probe, invariant 26). The `Suggested`/`No` distinction stays in the map, not the status enum: `Suggested` vanishes on restart (re-detected on the next matching file open), while `No` — written only by the explicit disable actions in the footer dropdown and settings code page — persists across restarts per invariant 14.
+
 **Footer dispatch.** `app/src/code/footer.rs` (1992 lines total) dispatches "is this slot built-in or custom?" once at render time and enters one of two code paths:
 
 - `compute_status_message()` (lines 1536-1657) — split via the kind check at the top
@@ -372,7 +374,7 @@ CREATE TABLE workspace_language_server (
 );
 ```
 
-Built-in rows: `kind = 'BuiltIn'`, `language_server_name` = serialized `LSPServerType` variant name (`"RustAnalyzer"`, `"GoPls"`, etc.). Custom rows: `kind = 'Custom'`, `language_server_name = descriptor.name` (e.g. `"ruby-lsp"`). The `(workspace_id, kind, language_server_name)` triple is the effective key — built-in and custom rows occupy disjoint subspaces, so a custom can carry the same string as a built-in variant name without an on-disk conflict. A custom may share a built-in's name (the by-name override, product.md invariant 3); the `kind` triple keeps its enable/decline rows disjoint from the built-in's even when the names coincide.
+Built-in rows: `kind = 'BuiltIn'`, `language_server_name` = serialized `LSPServerType` variant name (`"RustAnalyzer"`, `"GoPls"`, etc.). Custom rows: `kind = 'Custom'`, `language_server_name = descriptor.name` (e.g. `"ruby-lsp"`). The `(workspace_id, kind, language_server_name)` triple is the effective key — built-in and custom rows occupy disjoint subspaces, so a custom can carry the same string as a built-in variant name without an on-disk conflict. A custom may share a built-in's name (the by-name override, product.md invariant 3); the `kind` triple keeps its enable/disable rows disjoint from the built-in's even when the names coincide.
 
 **Persistence event shape.** Application code writes enablement state by emitting one of two `ModelEvent` variants on `app/src/persistence/mod.rs`. The existing built-in path stays untouched:
 
@@ -412,6 +414,7 @@ The in-memory cache on `Workspace` (`persisted_workspace.rs:127-130`) — curren
 - Remove the custom `.rs` entry from settings → running custom keeps running (invariant 19); next `.rs` file open in a *new* workspace routes back to built-in rust-analyzer
 - Edit a running custom's `args` in settings.toml → no restart
 - Open a `.zig` file with no matching custom entry and no built-in → footer shows the existing "Language support is unavailable" state (invariant 9)
+- Ignore the Enable affordance for a matched custom → nothing persisted (`Suggested` stays memory-only), affordance reappears after restart; explicitly disable an enabled custom via the footer dropdown → `No` persists across restarts and the settings code page can re-enable (invariant 14)
 
 Covers invariants 3, 4, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19.
 

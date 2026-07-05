@@ -68,9 +68,9 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 
 13. Accepting the prompt persists the choice: that server is automatically enabled for that workspace root on subsequent file opens in the same session and across restarts.
 
-14. Declining the prompt persists for the session: the server is not launched and the prompt does not reappear for that workspace root until the next app launch. v1 has no in-app surface to re-enable a declined server before the next app launch; restart the app to be re-prompted (see non-goal 31).
+14. There is no decline action on the prompt — it is a passive affordance, matching today's built-in behavior. Not accepting it leaves the server un-enabled for the session only (nothing is persisted); the affordance remains available whenever a matching file is open in that workspace, and reappears after restart. Separately, a user can **explicitly disable** an enabled server via the footer status dropdown or the settings code page, exactly as for built-ins today: that choice persists across restarts and is reversed through those same surfaces.
 
-15. If the user has multiple Warp windows open on the same workspace root, accepting or declining the prompt in one window applies to all of them. A single server process is shared across windows on the same root, consistent with today's built-in behavior.
+15. If the user has multiple Warp windows open on the same workspace root, enabling or disabling a server in one window applies to all of them. A single server process is shared across windows on the same root, consistent with today's built-in behavior.
 
 ### Server lifecycle
 
@@ -125,7 +125,7 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 
 30. v1 does not support merging a custom entry's `initialization_options` or other fields into a built-in server's configuration. A custom entry whose `filetypes` overlap a built-in language fully replaces the built-in server for those filetypes (see invariant 3). Users who want to tune a built-in server's behavior must define a complete custom entry that supplies its own `command`, `args`, and other fields.
 
-31. v1 does not ship a dedicated inspection or management surface (command-palette action, settings sub-page, or status-dropdown extension) for listing which servers are configured and running, resetting per-workspace enable/decline state, or restarting a server for a workspace root. The footer's existing per-workspace Enable button and status dropdown carry over from today's built-in flow and apply to custom servers too; a richer inspection/management surface is deferred to a future release.
+31. v1 does not ship a dedicated inspection or management surface (command-palette action, settings sub-page, or status-dropdown extension) for listing which servers are configured and running, resetting per-workspace enable/disable state, or restarting a server for a workspace root. The footer's existing per-workspace Enable button and status dropdown carry over from today's built-in flow and apply to custom servers too; a richer inspection/management surface is deferred to a future release.
 
 ### Logging and redaction
 
