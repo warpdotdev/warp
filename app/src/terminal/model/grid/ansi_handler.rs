@@ -145,7 +145,9 @@ struct PendingIndicCluster {
 /// total allocation waste under one cell instead of accumulating roughly
 /// half a cell of `ceil()` rounding slack per cluster (see the Phase 12
 /// execution log in the Telugu variable-width-cells plan for the diagnosed
-/// numbers).
+/// numbers). Phase 13 additionally uses it to CARRY the whole word to the
+/// next line when it would otherwise split mid-word at the wrap boundary
+/// -- see `GridHandler::carry_indic_word`.
 #[derive(Clone, Debug, Default)]
 struct IndicWordAccumulator {
     /// Sum of every already-flushed cluster's real natural (unquantized)
@@ -164,6 +166,46 @@ struct IndicWordAccumulator {
     /// simpler and more robust than enumerating every cursor-movement call
     /// site that should reset it (most of which don't flush today).
     expected_point: Point,
+    /// Where this word's first cluster was written. Used to decide whether
+    /// the word can still be carried whole to the next line (only if it
+    /// started on the row the wrap is about to happen on -- a word that
+    /// already spans a previous carry, or was continued from an earlier
+    /// row some other way, is left alone).
+    word_start_point: Point,
+    /// Every cluster flushed so far in this word, in order, as (text,
+    /// natural width in px) -- enough to replay the word through the
+    /// normal cumulative-allocation flush math at a new position if it
+    /// needs to be carried to the next line. Natural px (not the
+    /// allocated span) is recorded so replay reproduces spans
+    /// deterministically via the same math, rather than needing a separate
+    /// proof that reused spans stay valid at column 0.
+    clusters: Vec<(String, f32)>,
+}
+
+impl IndicWordAccumulator {
+    /// Whether this word can be moved whole to the start of the next line
+    /// instead of splitting at `cursor_point` -- see
+    /// `GridHandler::carry_indic_word`. All of:
+    /// - the word has at least one already-flushed cluster (a word that's
+    ///   never been continued has nothing to carry -- its lone triggering
+    ///   cluster just gets today's independent-measurement mid-word split,
+    ///   which is the correct existing behaviour for a single overlong
+    ///   cluster),
+    /// - it started on the row the wrap is about to happen on (not carried
+    ///   there itself, and not resumed from some other row),
+    /// - it didn't start at column 0 (a word already at the start of a row
+    ///   that still doesn't fit cannot be moved anywhere -- and this also
+    ///   guarantees termination: a carried word restarts at column 0, so
+    ///   the same word can never be carried a second time),
+    /// - the whole word (already-allocated cells plus the new cluster's
+    ///   own independent span) fits within one line.
+    fn can_carry(&self, cursor_row: usize, columns: usize, new_cluster_independent_span: u8) -> bool {
+        !self.clusters.is_empty()
+            && self.word_start_point.row == cursor_row
+            && self.word_start_point.col > 0
+            && (self.cum_allocated_cells as usize + new_cluster_independent_span as usize)
+                <= columns
+    }
 }
 
 impl State {
@@ -1541,6 +1583,21 @@ impl GridHandler {
     /// A_{k-1})` gives `A_k = A_{k-1} + span_k >= ceil(N_k/cw)` by
     /// induction (the `max(1, _)` floor only ever adds cells, never removes
     /// them), so `A_k * cw >= N_k` holds for every prefix.
+    ///
+    /// When the cumulative span WOULD wrap, this also tries to carry the
+    /// whole in-progress word to the next line instead of splitting it
+    /// mid-word at the boundary -- see `carry_indic_word` and
+    /// `IndicWordAccumulator::can_carry`. This matters because apps that
+    /// pre-wrap their own output at word boundaries (Claude Code via Ink's
+    /// wrap-ansi, Codex CLI via ratatui/textwrap) compute width with the
+    /// universal wcwidth/UAX#11 convention -- one column per Indic
+    /// syllable cluster, zero for combining marks -- so a line they
+    /// believe fits can overflow our real (2-8 cell) allocation and get
+    /// split by the terminal itself, which those apps never expect (they
+    /// pass `hard: false` to their own wrapper specifically because they
+    /// assume the terminal never needs to). See the Phase 13 execution log
+    /// in the Telugu variable-width-cells plan for the researched
+    /// citations.
     fn flush_pending_indic_cluster(&mut self) {
         let Some(pending) = self.ansi_handler_state.pending_indic_cluster.take() else {
             return;
@@ -1565,7 +1622,10 @@ impl GridHandler {
             .indic_word_accumulator
             .take()
             .filter(|acc| acc.expected_point == cursor_point && !cursor_needs_wrap)
-            .unwrap_or_default();
+            .unwrap_or_else(|| IndicWordAccumulator {
+                word_start_point: cursor_point,
+                ..Default::default()
+            });
 
         let cumulative_span =
             Self::quantize_indic_span(acc.cum_natural_px + natural_width_px, acc.cum_allocated_cells, cell_width_px);
@@ -1575,16 +1635,38 @@ impl GridHandler {
         // fresh run the renderer anchors at column 0 of the next line --
         // fall back to measuring this cluster independently (exactly as if
         // it started a brand-new word) so the wrap decision itself is made
-        // the same way it always was, and start the new line's word fresh.
-        // An independent span is always >= the cumulative one (the
-        // cumulative formula can only ever allocate the same or fewer
-        // cells for one cluster), so this fallback is always safe -- it
-        // can only make wrapping MORE conservative, never less.
+        // the same way it always was. An independent span is always >= the
+        // cumulative one (the cumulative formula can only ever allocate
+        // the same or fewer cells for one cluster), so this fallback is
+        // always safe -- it can only make wrapping MORE conservative,
+        // never less.
         let will_wrap =
             cursor_needs_wrap || cursor_point.col + cumulative_span as usize > self.columns();
+        let independent_span = Self::quantize_indic_span(natural_width_px, 0, cell_width_px);
+
         let span = if will_wrap {
-            acc = IndicWordAccumulator::default();
-            Self::quantize_indic_span(natural_width_px, 0, cell_width_px)
+            let carry_eligible = self.ansi_handler_state.mode.contains(TermMode::LINE_WRAP)
+                && !self.ansi_handler_state.mode.contains(TermMode::INSERT)
+                && !self.ansi_handler_state.is_alt_screen
+                && acc.can_carry(cursor_point.row, self.columns(), independent_span);
+
+            if carry_eligible {
+                acc = self.carry_indic_word(acc);
+                // The word now sits at a new position (start of the next
+                // line); recompute against the replayed accumulator's
+                // (identical, by construction) cumulative state.
+                Self::quantize_indic_span(
+                    acc.cum_natural_px + natural_width_px,
+                    acc.cum_allocated_cells,
+                    cell_width_px,
+                )
+            } else {
+                acc = IndicWordAccumulator {
+                    word_start_point: self.grid.cursor_point(),
+                    ..Default::default()
+                };
+                independent_span
+            }
         } else {
             cumulative_span
         };
@@ -1593,8 +1675,91 @@ impl GridHandler {
 
         acc.cum_natural_px += natural_width_px;
         acc.cum_allocated_cells += span as u16;
+        acc.clusters.push((pending.text, natural_width_px));
         acc.expected_point = self.grid.cursor_point();
         self.ansi_handler_state.indic_word_accumulator = Some(acc);
+    }
+
+    /// Moves an entire in-progress Indic word (`acc`, whose eligibility was
+    /// already checked via `IndicWordAccumulator::can_carry`) to the start
+    /// of the next line, instead of letting it split mid-word where it
+    /// currently sits. Erases the word's already-written cells on the
+    /// current row, marks the new end-of-line boundary with `WRAPLINE` (so
+    /// copy/paste and resize treat the two rows as one logical line, and
+    /// the erased blank tail is excluded from both -- `Row::line_length`
+    /// stops at the last non-default cell, which lands exactly on the
+    /// WRAPLINE cell once the tail is blanked), advances to the next line
+    /// via the existing `wrapline()` (which also handles scroll-region-
+    /// bottom scrolling, synchronously, before this function's caller does
+    /// anything else), and replays every recorded cluster through the
+    /// normal cumulative-allocation flush math at the new position --
+    /// reproducing identical spans deterministically, so the allocated
+    /// width >= natural width invariant holds there exactly as it does for
+    /// any freshly-started word.
+    ///
+    /// Returns the new accumulator, reflecting the replayed word at its new
+    /// position. Never loops: a carried word always restarts at column 0
+    /// (`can_carry` requires `word_start_point.col > 0`), so this can never
+    /// fire twice for the same word.
+    fn carry_indic_word(&mut self, acc: IndicWordAccumulator) -> IndicWordAccumulator {
+        let row = acc.word_start_point.row;
+        let erase_start = acc.word_start_point.col;
+        let cursor_point = self.grid.cursor_point();
+        let cursor_needs_wrap = self.grid.cursor().input_needs_wrap;
+        let erase_end = if cursor_needs_wrap {
+            cursor_point.col + 1
+        } else {
+            cursor_point.col
+        };
+
+        let bg = self.grid.cursor().template.bg;
+        {
+            let grid_row = &mut self.grid[row][..];
+            let erase_end = erase_end.min(grid_row.len());
+            for col in erase_start..erase_end {
+                grid_row[col] = bg.into();
+            }
+        }
+
+        // Place WRAPLINE on the cell just before the word (its column-0
+        // predecessor -- typically the joining space) rather than the
+        // row's physical last cell, so the now-blank erased tail is
+        // excluded from `line_length`'s reverse scan and from copy/paste.
+        // Walk back to a wide/Indic cluster's base if that predecessor is
+        // one of its spacers, so the flag lands on a cell `line_length`
+        // will actually stop scanning at.
+        let mut wrapline_col = erase_start.saturating_sub(1);
+        {
+            let grid_row = &self.grid[row][..];
+            if grid_row[wrapline_col].flags.contains(Flags::WIDE_CHAR_SPACER) {
+                if let Some((base, _)) = Self::find_cluster_span(grid_row, wrapline_col) {
+                    wrapline_col = base;
+                }
+            }
+        }
+        self.update_cursor(|cursor| {
+            cursor.point.col = wrapline_col;
+            cursor.input_needs_wrap = false;
+        });
+        self.wrapline();
+
+        let cell_width_px = self.ansi_handler_state.cell_width_px;
+        let mut replayed = IndicWordAccumulator {
+            word_start_point: self.grid.cursor_point(),
+            ..Default::default()
+        };
+        for (text, natural_px) in &acc.clusters {
+            let span = Self::quantize_indic_span(
+                replayed.cum_natural_px + natural_px,
+                replayed.cum_allocated_cells,
+                cell_width_px,
+            );
+            self.write_grapheme_cluster(text, span as usize);
+            replayed.cum_natural_px += natural_px;
+            replayed.cum_allocated_cells += span as u16;
+        }
+        replayed.clusters = acc.clusters;
+        replayed
     }
 
     /// `ceil(cumulative_natural_px / cell_width_px) - already_allocated_cells`,

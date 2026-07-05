@@ -1319,6 +1319,226 @@ fn test_resize_reflows_variable_width_span_as_one_unit_not_split() {
     );
 }
 
+/// Phase 13 (Telugu variable-width-cells plan): apps that pre-wrap their own
+/// output at word boundaries (Claude Code, Codex CLI) assume the universal
+/// one-column-per-syllable width convention, so a Telugu word they believe
+/// fits can overflow our real (multi-cell) allocation and get split by the
+/// terminal itself -- these tests cover the word-carry mechanism that moves
+/// the whole word to the next line instead of splitting it mid-word.
+mod indic_word_carry_tests {
+    use super::*;
+
+    /// "క్ష" and "ప్ర" are each real 3-codepoint Indic clusters (consonant +
+    /// virama + consonant); `FixedWidthMeasurer` reports span 3 for each.
+    const CLUSTER_1: &str = "క్ష";
+    const CLUSTER_2: &str = "ప్ర";
+
+    #[test]
+    fn two_cluster_word_carries_whole_to_next_line_on_wrap() {
+        // 8 columns: "aaa" (cols 0-2) leaves 5 remaining. CLUSTER_1 (span 3)
+        // fits at cols 3-5; CLUSTER_2 (span 3) would need cols 6-8, which
+        // doesn't fit (only col 6-7 remain) -- triggering carry.
+        let mut grid =
+            GridHandler::new_for_test_with_measurer(3, 8, std::sync::Arc::new(FixedWidthMeasurer));
+        for c in "aaa".chars() {
+            grid.input(c);
+        }
+        for c in CLUSTER_1.chars().chain(CLUSTER_2.chars()) {
+            grid.input(c);
+        }
+        grid.input('X'); // Flushes CLUSTER_2 and triggers the carry decision.
+
+        let row0 = grid.row(0).expect("row 0 exists");
+        assert_eq!(row0.get(0).map(|c| c.c), Some('a'));
+        assert_eq!(row0.get(1).map(|c| c.c), Some('a'));
+        assert_eq!(row0.get(2).map(|c| c.c), Some('a'));
+        for col in 3..8 {
+            assert_eq!(
+                row0.get(col).map(|c| c.c),
+                Some(cell::DEFAULT_CHAR),
+                "col {col} should be erased once the word carries away"
+            );
+        }
+        assert!(
+            row0.get(2).unwrap().flags.contains(Flags::WRAPLINE),
+            "WRAPLINE should mark the boundary right before the carried word"
+        );
+
+        let row1 = grid.row(1).expect("row 1 exists");
+        let base1 = row1.get(0).expect("row 1 should hold the carried word");
+        assert_eq!(base1.span(), 3);
+        assert_eq!(base1.raw_content(), CharOrStr::Str(CLUSTER_1));
+        let base2 = row1.get(3).expect("second cluster of the carried word");
+        assert_eq!(base2.span(), 3);
+        assert_eq!(base2.raw_content(), CharOrStr::Str(CLUSTER_2));
+        assert_eq!(
+            row1.get(6).map(|c| c.c),
+            Some('X'),
+            "the triggering char continues right after the carried word"
+        );
+    }
+
+    #[test]
+    fn word_exactly_filling_remaining_columns_does_not_carry() {
+        // 6 columns: "aaa" (0-2) leaves exactly 3 remaining -- CLUSTER_1
+        // (span 3) fits exactly, no wrap, no carry.
+        let mut grid =
+            GridHandler::new_for_test_with_measurer(3, 6, std::sync::Arc::new(FixedWidthMeasurer));
+        for c in "aaa".chars() {
+            grid.input(c);
+        }
+        for c in CLUSTER_1.chars() {
+            grid.input(c);
+        }
+        grid.input('X');
+
+        let row0 = grid.row(0).expect("row 0 exists");
+        let base = row0.get(3).expect("cluster written in place");
+        assert_eq!(base.span(), 3);
+        assert_eq!(base.raw_content(), CharOrStr::Str(CLUSTER_1));
+        assert!(
+            !row0.get(2).unwrap().flags.contains(Flags::WRAPLINE),
+            "no carry should have happened, so no WRAPLINE boundary was inserted early"
+        );
+        // 'X' wrapped to the next row (row was exactly full), independent of carry.
+        let row1 = grid.row(1).expect("row 1 exists");
+        assert_eq!(row1.get(0).map(|c| c.c), Some('X'));
+    }
+
+    #[test]
+    fn word_wider_than_full_row_falls_back_to_mid_word_split() {
+        // 4 columns total is narrower than CLUSTER_1 + CLUSTER_2 combined
+        // (6 cells) -- carry's `can_carry` requires the word to fit in one
+        // full line, so this must fall back to today's independent-span
+        // mid-word split, and must not loop.
+        let mut grid =
+            GridHandler::new_for_test_with_measurer(3, 4, std::sync::Arc::new(FixedWidthMeasurer));
+        for c in CLUSTER_1.chars().chain(CLUSTER_2.chars()) {
+            grid.input(c);
+        }
+        grid.input('X');
+
+        // CLUSTER_1 (span 3) fits at cols 0-2; CLUSTER_2 must split/wrap on
+        // its own via the existing LEADING_WIDE_CHAR_SPACER mechanism.
+        let row0 = grid.row(0).expect("row 0 exists");
+        let base1 = row0.get(0).expect("first cluster written in place");
+        assert_eq!(base1.span(), 3);
+        assert_eq!(base1.raw_content(), CharOrStr::Str(CLUSTER_1));
+        assert!(
+            row0
+                .get(3)
+                .is_some_and(|c| c.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)),
+            "CLUSTER_2 doesn't fit in row 0's last column, so it should wrap via the \
+             existing placeholder mechanism, not carry (word is too wide for one line)"
+        );
+        let row1 = grid.row(1).expect("row 1 exists");
+        let base2 = row1.get(0).expect("second cluster wrapped to row 1");
+        assert_eq!(base2.span(), 3);
+        assert_eq!(base2.raw_content(), CharOrStr::Str(CLUSTER_2));
+    }
+
+    #[test]
+    fn cursor_motion_mid_word_disables_carry() {
+        let mut grid =
+            GridHandler::new_for_test_with_measurer(3, 8, std::sync::Arc::new(FixedWidthMeasurer));
+        for c in "aaa".chars() {
+            grid.input(c);
+        }
+        for c in CLUSTER_1.chars() {
+            grid.input(c);
+        }
+        // A cursor jump breaks the accumulator's continuity -- the second
+        // cluster starts a brand-new (empty) word, so `can_carry` (which
+        // requires a non-empty accumulator) can never fire for it.
+        grid.goto(VisibleRow(0), 6);
+        for c in CLUSTER_2.chars() {
+            grid.input(c);
+        }
+        grid.input('X');
+
+        let row0 = grid.row(0).expect("row 0 exists");
+        assert!(
+            !row0.get(2).unwrap().flags.contains(Flags::WRAPLINE),
+            "no carry should occur once cursor motion has broken word continuity"
+        );
+    }
+
+    #[test]
+    fn carried_word_round_trips_through_bounds_to_string_with_no_injected_chars() {
+        let mut grid =
+            GridHandler::new_for_test_with_measurer(3, 8, std::sync::Arc::new(FixedWidthMeasurer));
+        for c in "aaa".chars() {
+            grid.input(c);
+        }
+        for c in CLUSTER_1.chars().chain(CLUSTER_2.chars()) {
+            grid.input(c);
+        }
+        grid.input('X');
+        grid.on_finish_byte_processing(&crate::terminal::model::ansi::ProcessorInput::new(&[]));
+
+        let text = grid.bounds_to_string(
+            Point::new(0, 0),
+            Point::new(1, 6),
+            false,
+            crate::terminal::model::secrets::RespectObfuscatedSecrets::No,
+            false,
+            crate::terminal::model::grid::RespectDisplayedOutput::No,
+        );
+        assert_eq!(
+            text,
+            format!("aaa{CLUSTER_1}{CLUSTER_2}X"),
+            "the carried word must reconstruct with no injected spaces or newline"
+        );
+    }
+
+    #[test]
+    fn alt_screen_disables_carry() {
+        let size_info = crate::terminal::SizeInfo::new_without_font_metrics(3, 8);
+        let mut grid = GridHandler::new(
+            size_info,
+            0,
+            crate::terminal::event_listener::ChannelEventListener::new_for_test(),
+            true, // is_alt_screen
+            ObfuscateSecrets::No,
+            crate::terminal::model::grid::grid_handler::PerformResetGridChecks::No,
+            std::sync::Arc::new(FixedWidthMeasurer),
+        );
+        for c in "aaa".chars() {
+            grid.input(c);
+        }
+        for c in CLUSTER_1.chars().chain(CLUSTER_2.chars()) {
+            grid.input(c);
+        }
+        grid.input('X');
+
+        let row0 = grid.row(0).expect("row 0 exists");
+        assert!(
+            !row0.get(2).unwrap().flags.contains(Flags::WRAPLINE),
+            "carry must be disabled on the alt screen -- full-screen apps manage their own layout"
+        );
+    }
+
+    #[test]
+    fn insert_mode_disables_carry() {
+        let mut grid =
+            GridHandler::new_for_test_with_measurer(3, 8, std::sync::Arc::new(FixedWidthMeasurer));
+        grid.set_mode(crate::terminal::model::ansi::Mode::Insert);
+        for c in "aaa".chars() {
+            grid.input(c);
+        }
+        for c in CLUSTER_1.chars().chain(CLUSTER_2.chars()) {
+            grid.input(c);
+        }
+        grid.input('X');
+
+        let row0 = grid.row(0).expect("row 0 exists");
+        assert!(
+            !row0.get(2).unwrap().flags.contains(Flags::WRAPLINE),
+            "carry must be disabled in insert mode -- replaying clusters there would shift cells nonsensically"
+        );
+    }
+}
+
 fn cell(c: char) -> Cell {
     let mut cell = Cell::default();
     cell.c = c;
