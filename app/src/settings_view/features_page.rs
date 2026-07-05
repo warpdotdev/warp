@@ -3007,18 +3007,42 @@ impl FeaturesPageView {
         }
 
         let categories = vec![
-            Category::new("General", general_widgets),
-            Category::new("Session", session_widgets),
-            Category::new("Keys", keys_widgets),
-            Category::new("Text Editing", text_editing_widgets),
-            Category::new("Terminal Input", editor_widgets),
-            Category::new("Terminal", terminal_widgets),
-            Category::new("Notifications", notifications_widgets),
+            Category::new(
+                crate::menu_label("settings.features.category.general", "General"),
+                general_widgets,
+            ),
+            Category::new(
+                crate::menu_label("settings.features.category.session", "Session"),
+                session_widgets,
+            ),
+            Category::new(
+                crate::menu_label("settings.features.category.keys", "Keys"),
+                keys_widgets,
+            ),
+            Category::new(
+                crate::menu_label("settings.features.category.text_editing", "Text Editing"),
+                text_editing_widgets,
+            ),
+            Category::new(
+                crate::menu_label("settings.features.category.terminal_input", "Terminal Input"),
+                editor_widgets,
+            ),
+            Category::new(
+                crate::menu_label("settings.features.category.terminal", "Terminal"),
+                terminal_widgets,
+            ),
+            Category::new(
+                crate::menu_label("settings.features.category.notifications", "Notifications"),
+                notifications_widgets,
+            ),
             Category::new(
                 "Workflows",
                 vec![Box::new(WorkflowsInCommandSearch::default())],
             ),
-            Category::new("System", system_widgets),
+            Category::new(
+                crate::menu_label("settings.features.category.system", "System"),
+                system_widgets,
+            ),
         ];
 
         PageType::new_categorized(categories, None)

@@ -982,6 +982,15 @@ en:
     command_column: "Command"
 
   settings.features:
+    category:
+      general: "General"
+      session: "Session"
+      keys: "Keys"
+      text_editing: "Text Editing"
+      terminal_input: "Terminal Input"
+      terminal: "Terminal"
+      notifications: "Notifications"
+      system: "System"
     left_option_meta: "Left Option key is Meta"
     right_option_meta: "Right Option key is Meta"
     left_alt_meta: "Left Alt key is Meta"
@@ -1309,6 +1318,12 @@ en:
     theme_picker:
       title: "Choose a theme"
   settings.ai:
+    add_router: "+ Add router"
+    connect: "Connect"
+    connecting: "Connecting..."
+    disconnect: "Disconnect"
+    use_your: "Use your"
+    copy_url: "Copy URL"
     next_command_description: "Let AI suggest the next command to run based on your command history, outputs, and common workflows."
     prompt_suggestions_description: "Let AI suggest natural language prompts, as inline banners in the input, based on recent commands and their outputs."
     suggested_code_banners_description: "Let AI suggest code diffs and queries as inline banners in the blocklist, based on recent commands and their outputs."

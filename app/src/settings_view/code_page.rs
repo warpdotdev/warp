@@ -113,8 +113,14 @@ impl CodeSubpage {
 
     pub fn title(&self) -> &'static str {
         match self {
-            Self::Indexing => "Codebase Indexing",
-            Self::EditorAndCodeReview => "Editor and Code Review",
+            Self::Indexing => crate::menu_label(
+                "settings.code_page.indexing_subpage_title",
+                "Codebase Indexing",
+            ),
+            Self::EditorAndCodeReview => crate::menu_label(
+                "settings.code_page.editor_subpage_title",
+                "Editor and Code Review",
+            ),
         }
     }
 }
@@ -329,8 +335,11 @@ impl CodeSettingsPageView {
         });
 
         let manual_add_directory_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Index new folder", SecondaryTheme)
-                .with_icon(Icon::FindAll)
+            ActionButton::new(
+                crate::menu_label("settings.code_page.index_new_folder", "Index new folder"),
+                SecondaryTheme,
+            )
+            .with_icon(Icon::FindAll)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CodeSettingsPageAction::ManualAddDirectory);
                 })
@@ -375,8 +384,20 @@ impl CodeSettingsPageView {
                 Box::new(FormatOnSaveToggleWidget::default()),
             ]);
             let categories = vec![
-                Category::new("Codebase Indexing", codebase_indexing_widgets),
-                Category::new("Code Editor and Review", code_editor_review_widgets),
+                Category::new(
+                    crate::menu_label(
+                        "settings.code_page.indexing_subpage_title",
+                        "Codebase Indexing",
+                    ),
+                    codebase_indexing_widgets,
+                ),
+                Category::new(
+                    crate::menu_label(
+                        "settings.code_page.editor_subpage_title",
+                        "Code Editor and Review",
+                    ),
+                    code_editor_review_widgets,
+                ),
             ];
             PageType::new_categorized(categories, None)
         } else {
@@ -426,8 +447,11 @@ impl CodeSettingsPageView {
             // or the full categorized page when subpage is None.
             if let Some(subpage) = subpage {
                 let manual_add_directory_button = ctx.add_typed_action_view(|_| {
-                    ActionButton::new("Index new folder", SecondaryTheme)
-                        .with_icon(Icon::FindAll)
+                    ActionButton::new(
+                        crate::menu_label("settings.code_page.index_new_folder", "Index new folder"),
+                        SecondaryTheme,
+                    )
+                    .with_icon(Icon::FindAll)
                         .on_click(|ctx| {
                             ctx.dispatch_typed_action(CodeSettingsPageAction::ManualAddDirectory);
                         })
@@ -477,8 +501,11 @@ impl CodeSettingsPageView {
     fn build_full_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
         if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
             let manual_add_directory_button = ctx.add_typed_action_view(|_| {
-                ActionButton::new("Index new folder", SecondaryTheme)
-                    .with_icon(Icon::FindAll)
+                ActionButton::new(
+                    crate::menu_label("settings.code_page.index_new_folder", "Index new folder"),
+                    SecondaryTheme,
+                )
+                .with_icon(Icon::FindAll)
                     .on_click(|ctx| {
                         ctx.dispatch_typed_action(CodeSettingsPageAction::ManualAddDirectory);
                     })
@@ -511,14 +538,29 @@ impl CodeSettingsPageView {
                 Box::new(FormatOnSaveToggleWidget::default()),
             ]);
             let categories = vec![
-                Category::new("Codebase Indexing", codebase_indexing_widgets),
-                Category::new("Code Editor and Review", code_editor_review_widgets),
+                Category::new(
+                    crate::menu_label(
+                        "settings.code_page.indexing_subpage_title",
+                        "Codebase Indexing",
+                    ),
+                    codebase_indexing_widgets,
+                ),
+                Category::new(
+                    crate::menu_label(
+                        "settings.code_page.editor_subpage_title",
+                        "Code Editor and Review",
+                    ),
+                    code_editor_review_widgets,
+                ),
             ];
             PageType::new_categorized(categories, None)
         } else {
             let manual_add_directory_button = ctx.add_typed_action_view(|_| {
-                ActionButton::new("Index new folder", SecondaryTheme)
-                    .with_icon(Icon::FindAll)
+                ActionButton::new(
+                    crate::menu_label("settings.code_page.index_new_folder", "Index new folder"),
+                    SecondaryTheme,
+                )
+                .with_icon(Icon::FindAll)
                     .on_click(|ctx| {
                         ctx.dispatch_typed_action(CodeSettingsPageAction::ManualAddDirectory);
                     })

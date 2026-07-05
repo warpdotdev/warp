@@ -1721,7 +1721,7 @@ impl AISettingsPageView {
         let router_views = Self::create_router_views(ctx);
         #[cfg(feature = "local_fs")]
         let add_router_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("+ Add router", SecondaryTheme)
+            ActionButton::new(crate::menu_label("settings.ai.add_router", "+ Add router"), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(AISettingsPageAction::OpenAddCustomRouter);
@@ -2641,7 +2641,7 @@ impl AISettingsPageView {
             )
             .with_object_id(CONNECT_TOAST_OBJECT_ID.to_string())
             .with_link(
-                ToastLink::new("Copy URL".to_string())
+                ToastLink::new(crate::menu_label("settings.ai.copy_url", "Copy URL").to_string())
                     .with_onclick_action(WorkspaceAction::CopyTextToClipboard(authorize_url)),
             );
             toast_stack.add_persistent_toast(toast, window_id, ctx);
@@ -8260,20 +8260,20 @@ impl ApiKeysWidget {
         });
 
         let grok_connect_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Connect", SecondaryTheme)
+            ActionButton::new(crate::menu_label("settings.ai.connect", "Connect"), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(AISettingsPageAction::ConnectGrokSubscription);
                 })
         });
         let grok_connecting_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Connecting", SecondaryTheme).with_size(ButtonSize::Small)
+            ActionButton::new(crate::menu_label("settings.ai.connecting", "Connecting"), SecondaryTheme).with_size(ButtonSize::Small)
         });
         grok_connecting_button.update(ctx, |button, ctx| {
             button.set_disabled(true, ctx);
         });
         let grok_disconnect_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Disconnect", DangerSecondaryTheme)
+            ActionButton::new(crate::menu_label("settings.ai.disconnect", "Disconnect"), DangerSecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(AISettingsPageAction::DisconnectGrokSubscription);
@@ -8586,7 +8586,7 @@ impl ApiKeysWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(4.)
             .with_child(
-                Text::new_inline("Use your", appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                Text::new_inline(crate::menu_label("settings.ai.use_your", "Use your"), appearance.ui_font_family(), CONTENT_FONT_SIZE)
                     .with_color(text_color.into())
                     .finish(),
             )

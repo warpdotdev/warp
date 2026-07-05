@@ -982,6 +982,15 @@ ru:
     command_column: "Команда"
 
   settings.features:
+    category:
+      general: "Общие"
+      session: "Сессия"
+      keys: "Клавиши"
+      text_editing: "Редактирование текста"
+      terminal_input: "Ввод терминала"
+      terminal: "Терминал"
+      notifications: "Уведомления"
+      system: "Система"
     left_option_meta: "Левая Option — Meta"
     right_option_meta: "Правая Option — Meta"
     left_alt_meta: "Левый Alt — Meta"
@@ -1309,6 +1318,12 @@ ru:
     theme_picker:
       title: "Выберите тему"
   settings.ai:
+    add_router: "+ Добавить роутер"
+    connect: "Подключить"
+    connecting: "Подключение…"
+    disconnect: "Отключить"
+    use_your: "Используйте свой"
+    copy_url: "Скопировать URL"
     next_command_description: "Позволяет AI предлагать следующую команду на основе истории команд, выводов и популярных рабочих процессов."
     prompt_suggestions_description: "Позволяет AI предлагать подсказки на естественном языке в виде баннеров в поле ввода на основе последних команд и их выводов."
     suggested_code_banners_description: "Позволяет AI предлагать диффы кода и запросы в виде баннеров в списке блоков на основе последних команд и их выводов."
