@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use signal_hook_mio::v1_0::Signals;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_core::safe_error;
 use warpui::{AppContext, SingletonEntity};
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
@@ -103,13 +104,8 @@ struct Passwd<'a> {
     dir: &'a str,
 }
 
-/// Return a `Passwd` struct with pointers into the provided buf, or `None` when
-/// the current uid has no password-database entry or the lookup fails.
-///
-/// `getpwuid_r` reports a null result (with status 0) when the current uid isn't
-/// resolvable — e.g. on centrally-managed hosts (SSSD/LDAP/AD) where accounts
-/// aren't in the local passwd DB. Callers must treat that as "no passwd info"
-/// and fall back rather than assuming an entry always exists.
+/// Return a `Passwd` struct with pointers into the provided buf, or `None` when the current uid
+/// has no password-database entry or the lookup fails.
 ///
 /// # Unsafety
 ///
@@ -133,16 +129,19 @@ fn get_pw_entry(buf: &mut [i8; 1024]) -> Option<Passwd<'_>> {
     };
     let entry = unsafe { entry.assume_init() };
 
-    // `getpwuid_r` returns 0 on success and a positive errno (e.g. `ERANGE`) on
-    // failure — it never returns a negative value — so compare against 0 rather
-    // than checking `< 0`, which would let real failures slip past this guard.
     if status != 0 {
-        log::warn!("getpwuid_r failed for uid {uid} with status {status}; proceeding without a passwd entry");
+        safe_error!(
+            safe: ("passwd entry lookup failed for uid {uid} with status {status}"),
+            full: ("passwd entry lookup failed")
+        );
         return None;
     }
 
     if res.is_null() {
-        log::warn!("no passwd entry for uid {uid}; proceeding without a passwd entry");
+        safe_error!(
+            safe: ("passwd entry lookup failed for uid {uid}"),
+            full: ("passwd entry lookup failed")
+        );
         return None;
     }
 
@@ -250,8 +249,7 @@ fn build_host_shell_command(
 
     // Support an overridden home directory for integration tests, which
     // should execute in a more hermetic environment than one where the home
-    // directory contains whatever happens to already exist there. Fall back to
-    // the passwd entry's home dir, then `/`, when neither is available.
+    // directory contains whatever happens to already exist there.
     let home_dir = std::env::var("HOME")
         .ok()
         .or_else(|| pw.as_ref().map(|pw| pw.dir.to_owned()))
@@ -264,8 +262,7 @@ fn build_host_shell_command(
     // calls to close() might close a random fd. In practice this caused hangs
     // in the tests. Therefore we do NOT set stdin, stdout, stderr here; instead we
     // do it in the pre_exec hook.
-    // Setup shell environment. Use the passwd entry's user name when present,
-    // otherwise fall back to the ambient $USER/$LOGNAME; skip if unknown.
+    // Setup shell environment.
     if let Some(user_name) = pw
         .as_ref()
         .map(|pw| pw.name.to_owned())
