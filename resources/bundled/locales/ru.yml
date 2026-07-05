@@ -1895,6 +1895,15 @@ ru:
   settings.about:
     copyright: "© Warp, 2026"
 
+  # ── Меню панелей ──
+  settings.pane_menu:
+    settings_title: "Настройки"
+    split_right: "Разделить панель справа"
+    split_left: "Разделить панель слева"
+    split_down: "Разделить панель вниз"
+    split_up: "Разделить панель вверх"
+    close_pane: "Закрыть панель"
+
   # ── LSP ──
   lsp:
     open_logs: "Открыть логи"

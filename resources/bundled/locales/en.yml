@@ -1895,6 +1895,15 @@ en:
   settings.about:
     copyright: "Copyright 2026 Warp"
 
+  # ── Pane Menu ──
+  settings.pane_menu:
+    settings_title: "Settings"
+    split_right: "Split pane right"
+    split_left: "Split pane left"
+    split_down: "Split pane down"
+    split_up: "Split pane up"
+    close_pane: "Close pane"
+
   # ── LSP ──
   lsp:
     open_logs: "Open logs"
