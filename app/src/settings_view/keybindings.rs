@@ -321,7 +321,7 @@ impl KeybindingRow {
 
         let press_new_shortcut_text = render_text(
             crate::menu_label(
-                "settings.keybindings.press_new_shortcut",
+                "settings.keybindings.press_new",
                 "Press new keyboard shortcut",
             ),
             None,
@@ -423,7 +423,7 @@ impl KeybindingRow {
                     .clone(),
                 |state| {
                     render_button(
-                        crate::menu_label("common.default", "Default"),
+                        crate::menu_label("settings.keybindings.reset", "Default"),
                         appearance,
                         self.get_button_text_color(appearance, state),
                     )
@@ -450,7 +450,7 @@ impl KeybindingRow {
                         )
                         .finish()
                     } else {
-                        render_button("Cancel", appearance, cancel_button_color)
+                        render_button(crate::menu_label("common.cancel", "Cancel"), appearance, cancel_button_color)
                     }
                 },
             )
@@ -1117,7 +1117,7 @@ impl SettingsWidget for KeybindingsWidget {
         let subheader = render_sub_header(
             appearance,
             crate::menu_label(
-                "settings.keybindings.configure_shortcuts",
+                "settings.keybindings.configure",
                 "Configure keyboard shortcuts",
             ),
             local_only_icon_state,
@@ -1129,7 +1129,7 @@ impl SettingsWidget for KeybindingsWidget {
             .with_child(description)
             .with_child(render_columns(
                 Container::new(render_text(
-                    crate::menu_label("settings.keybindings.command", "Command"),
+                    crate::menu_label("settings.keybindings.command_column", "Command"),
                     Some(UiComponentStyles {
                         font_size: Some(appearance.ui_font_size() + FONT_DELTA),
                         ..Default::default()

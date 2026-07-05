@@ -974,15 +974,12 @@ en:
     conflict_warning: "This shortcut conflicts with other keybinds"
     reset: "Default"
     press_new: "Press new keyboard shortcut"
-    press_new_shortcut: "Press new keyboard shortcut"
     add_custom: "Add your own custom keybindings to existing actions below."
     use_prefix: "Use"
     reference_suffix: "to reference these keybindings in a side pane at anytime."
     configure: "Configure keyboard shortcuts"
-    configure_shortcuts: "Configure keyboard shortcuts"
     not_synced: "Keyboard shortcuts are not synced to the cloud"
     command_column: "Command"
-    command: "Command"
 
   settings.features:
     category:
@@ -1088,7 +1085,6 @@ en:
     working_directory: "Working directory for new sessions"
     graphics_backend: "Preferred graphics backend"
     current_backend: "Current backend:"
-    default: "Default"
     keybinding: "Keybinding"
     click_to_set_hotkey: "Click to set global hotkey"
     outline_codebase_symbols: "Outline codebase symbols for '@' context menu"
@@ -1124,7 +1120,6 @@ en:
     close: "Close"
     copy: "Copy"
     create: "Create"
-    default: "Default"
     delete: "Delete"
     disabled: "Disabled"
     dismiss: "Dismiss"
