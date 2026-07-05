@@ -82,6 +82,8 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 
 17. The LSP `initialize` request sends the resolved workspace root as a `workspaceFolders` entry and passes the **substituted** `initialization_options` (per invariant 5 — string leaves go through placeholder substitution; non-string values pass through unchanged) when provided. Warp does not restructure the value's shape.
 
+    `initialization_options` is the **only** configuration channel in v1. Warp does not advertise the `workspace/configuration` client capability and does not send `workspace/didChangeConfiguration`, so custom servers must accept all of their configuration at initialize time; anything a server would normally pull via `workspace/configuration` falls back to that server's own defaults. This matches how Warp's built-in servers are configured today.
+
 18. If `command` cannot be found on `PATH` (and is not an absolute path), or if the launch fails (non-zero exit before initialization, missing executable bit, etc.), the failure surfaces through the existing footer error path — the same inline error rendering used today for built-in server failures, with the server's `name` and a one-line description of the failure. The editor continues to function without LSP support for that file.
 
 19. Editing or removing an `[[editor.language_servers]]` entry in the settings file does not affect an already-running server for that entry — neither restarting it with new values, nor stopping it on removal. The running server keeps reflecting the configuration from its most recent launch, and continues to serve in-flight requests from open files. New values (or the absence of the entry) take effect only on the next launch, which the user triggers by closing the workspace's editor panes for that filetype and reopening a file, or via an explicit restart action (out of scope to design here; the requirement is that subsequent launches honor the current settings).
@@ -175,7 +177,7 @@ Key observations:
     }
   }
   ```
-  Other servers do not use an inner `settings` wrapper — rust-analyzer, for example, reads its `initializationOptions` flat. The shape inside `initialization_options` is defined by each server; Warp does not restructure it. Per invariant 17, string leaves go through placeholder substitution (invariant 5) before the value is sent on the wire; non-string values pass through unchanged.
+  Other servers do not use an inner `settings` wrapper — rust-analyzer, for example, reads its `initializationOptions` flat. The shape inside `initialization_options` is defined by each server; Warp does not restructure it. Per invariant 17, string leaves go through placeholder substitution (invariant 5) before the value is sent on the wire; non-string values pass through unchanged. This example works under invariant 17's initialize-only configuration channel because JDTLS accepts its full configuration in this payload at startup; configuration it would otherwise refresh at runtime (vscode-java delivers updates via `workspace/didChangeConfiguration`) stays at its launch-time values until the server is relaunched (invariant 19).
 
 ## Worked examples: overriding a built-in server
 
