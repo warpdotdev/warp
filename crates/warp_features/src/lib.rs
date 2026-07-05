@@ -634,8 +634,9 @@ pub enum FeatureFlag {
 
     /// Enables platform skills support (--skill flag) for agent runs.
     ///
-    /// Skills are loaded from `.agents/skills/`, `.warp/skills/`, `.claude/skills/`, and `.codex/skills/`
-    /// directories to provide base prompts for agent runs.
+    /// Skills are loaded from `.agents/skills/`, `.warp/skills/`, `.claude/skills/`, `.codex/skills/`,
+    /// `.cursor/skills/`, `.gemini/skills/`, `.copilot/skills/`, `.factory/skills/`, `.github/skills/`,
+    /// `.opencode/skills/`, and `.kiro/skills/` directories to provide base prompts for agent runs.
     OzPlatformSkills,
     /// Enables Oz identity federation commands.
     OzIdentityFederation,
