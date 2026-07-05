@@ -630,3 +630,242 @@ mod indic_run_tests {
         assert_eq!(entry_word_ids(&shape), vec![0, 0, 0, 1]);
     }
 }
+
+/// Phase 15 (Telugu variable-width-cells plan): diagnostic to attribute the
+/// residual inter-word gap Mahārāja reported (visibly wider than a plain
+/// ASCII space at the same font/size). Two candidate causes were identified
+/// by reading the code: (1) connectors (space/punctuation) never go through
+/// `quantize_indic_span` -- each always reserves exactly 1 full monospace
+/// cell, stacking when several occur together (e.g. "word, word"); (2) an
+/// unproven-but-plausible discrepancy between the ISOLATED per-cluster
+/// natural-width measurement `flush_pending_indic_cluster` trusts at INPUT
+/// time and the IN-CONTEXT continuous shaping `render_indic_run` actually
+/// draws at RENDER time -- nothing today checks these agree.
+///
+/// This module measures both, using the real Menlo `CoreTextClusterMeasurer`
+/// and the real `layout_line` shaping path (not a synthetic stand-in), so
+/// the numbers are faithful to what actually renders.
+#[cfg(target_os = "macos")]
+mod indic_gap_diagnostics {
+    use std::sync::Arc;
+
+    use warpui::fonts::Properties;
+    use warpui::platform::mac::FontDB as MacFontDB;
+    use warpui::platform::{FontDB as _, LineStyle, TextLayoutSystem as _};
+    use warpui::text_layout::{ClipConfig, StyleAndFont, DEFAULT_TOP_BOTTOM_RATIO};
+
+    use super::super::{entry_word_ids, is_connector_punct, scan_indic_run};
+    use crate::terminal::event_listener::ChannelEventListener;
+    use crate::terminal::model::grid::cluster_measurer::{ClusterWidthMeasurer, CoreTextClusterMeasurer};
+    use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks};
+    use crate::terminal::model::secrets::ObfuscateSecrets;
+    use crate::terminal::SizeInfo;
+    use warp_terminal::model::grid::Dimensions;
+
+    const FONT_SIZE: f32 = 13.0;
+
+    fn feed(grid: &mut GridHandler, text: &str) {
+        let mut processor = crate::terminal::model::ansi::Processor::new();
+        processor.parse_bytes(grid, text.as_bytes(), &mut std::io::sink());
+    }
+
+    /// Shapes `text` as ONE continuous line, exactly the way `render_indic_run`
+    /// does -- same `layout_line` path `CoreTextClusterMeasurer` itself uses
+    /// (`cluster_measurer.rs`), just over the whole run's text instead of one
+    /// cluster, and via a directly-owned `MacFontDB` instead of the trait
+    /// object, so this test has no dependency on a `PaintContext`/`FontCache`.
+    fn shape_continuous(
+        db: &MacFontDB,
+        family: warpui::fonts::FamilyId,
+        text: &str,
+    ) -> warpui::text_layout::Line {
+        let run_length_chars = text.chars().count();
+        db.layout_line(
+            text,
+            LineStyle {
+                font_size: FONT_SIZE,
+                line_height_ratio: 1.0,
+                baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                fixed_width_tab_size: None,
+            },
+            &[(
+                0..run_length_chars,
+                StyleAndFont {
+                    font_family: family,
+                    properties: Properties::default(),
+                    style: Default::default(),
+                },
+            )],
+            f32::MAX,
+            ClipConfig::default(),
+        )
+    }
+
+    #[test]
+    fn indic_gap_diag_isolated_vs_in_context_and_boundary_gaps() {
+        let mut db = MacFontDB::default();
+        let family = db.load_from_system("Menlo").expect("Menlo should be resolvable");
+        // Real Menlo advance at 13pt, used as the cell width so the numbers
+        // below are realistic (not the dummy 1px `new_without_font_metrics`
+        // would give, which would make every cluster hit the 8-cell clamp
+        // regardless of any real allocation behavior).
+        let cell_width = shape_continuous(&db, family, "MMMMMMMMMM").width / 10.0;
+        eprintln!(
+            "cell_width = {cell_width:.3}px (this is the ASCII single-space baseline used for comparison)"
+        );
+
+        let measurer = CoreTextClusterMeasurer::new("Menlo", Properties::default(), FONT_SIZE)
+            .expect("Menlo should be resolvable");
+
+        for text in [
+            "వార్త వెలుగు",
+            "వార్త, వెలుగు",
+            "ప్రభుత్వం చిత్రాలకు",
+            "శంకరాభరణం, సాగరం",
+        ] {
+            // ---- INPUT-TIME path, verbatim: feed through a real GridHandler
+            // so clustering + cumulative ceil() allocation are exactly what
+            // production does.
+            let size_info = SizeInfo::new(
+                pathfinder_geometry::vector::vec2f(80.0 * cell_width, 3.0 * 18.0),
+                warpui::units::Pixels::new(cell_width),
+                warpui::units::Pixels::new(18.0),
+                warpui::units::Pixels::zero(),
+                warpui::units::Pixels::zero(),
+            );
+            let inner_measurer = CoreTextClusterMeasurer::new("Menlo", Properties::default(), FONT_SIZE)
+                .expect("Menlo should be resolvable");
+            let mut grid = GridHandler::new(
+                size_info,
+                0,
+                ChannelEventListener::new_for_test(),
+                false,
+                ObfuscateSecrets::No,
+                PerformResetGridChecks::No,
+                Arc::new(inner_measurer),
+            );
+            feed(&mut grid, text);
+
+            // ---- RENDER-TIME path, verbatim: scan the row into an
+            // IndicRunShape (what the renderer does every frame), assign
+            // word ids, shape the whole run's text as ONE continuous line.
+            let row = grid.row(0).expect("row 0 should exist");
+            let shape = scan_indic_run(&row, 0, grid.columns(), &grid, 0, ObfuscateSecrets::No);
+            let word_ids = entry_word_ids(&shape);
+            let num_words = word_ids.last().map_or(0, |w| w + 1);
+            let line = shape_continuous(&db, family, &shape.full_text);
+
+            let chars: Vec<char> = shape.full_text.chars().collect();
+            let mut char_word = vec![usize::MAX; chars.len()];
+            let mut char_is_conn = vec![false; chars.len()];
+            for (i, range) in shape.char_ranges.iter().enumerate() {
+                let is_conn = range.len() == 1
+                    && matches!(chars.get(range.start), Some(&c) if c == ' ' || is_connector_punct(c));
+                for ci in range.clone() {
+                    char_word[ci] = word_ids[i];
+                    char_is_conn[ci] = is_conn;
+                }
+            }
+
+            // Per-word in-context extents from the ONE shaped line, over
+            // CLUSTER glyphs only (connectors excluded so a trailing
+            // absorbed comma/space doesn't drag a word's "ink end" right).
+            let mut start = vec![f32::INFINITY; num_words];
+            let mut adv_end = vec![f32::NEG_INFINITY; num_words];
+            let mut conn_advance = vec![0.0f32; num_words];
+            for run in &line.runs {
+                for g in &run.glyphs {
+                    let (Some(&w), Some(&is_conn)) = (char_word.get(g.index), char_is_conn.get(g.index))
+                    else {
+                        continue;
+                    };
+                    if w == usize::MAX {
+                        continue;
+                    }
+                    if is_conn {
+                        conn_advance[w] += g.width;
+                        continue;
+                    }
+                    start[w] = start[w].min(g.position_along_baseline.x());
+                    adv_end[w] = adv_end[w].max(g.position_along_baseline.x() + g.width);
+                }
+            }
+
+            // Per-word grid columns and per-word input-time isolated-cluster
+            // sum, read back from the actual grid cells (each base cell's
+            // content is exactly one flushed cluster, so this reconstructs
+            // precisely what `flush_pending_indic_cluster` measured).
+            let mut word_start_col = vec![0usize; num_words];
+            let mut seen = vec![false; num_words];
+            let mut isolated_sum = vec![0.0f32; num_words];
+            let mut alloc_cells = vec![0usize; num_words];
+            for (i, range) in shape.char_ranges.iter().enumerate() {
+                let w = word_ids[i];
+                if !seen[w] {
+                    seen[w] = true;
+                    word_start_col[w] = shape.cols[i];
+                }
+                let is_conn = range.len() == 1 && char_is_conn[range.start];
+                if !is_conn {
+                    let entry_text: String = chars[range.clone()].iter().collect();
+                    isolated_sum[w] += measurer.natural_width_px(&entry_text, cell_width);
+                    alloc_cells[w] += row[shape.cols[i]].span().max(1) as usize;
+                }
+            }
+
+            eprintln!("== {text:?}  full_text={:?}", shape.full_text);
+            for w in 0..num_words {
+                let in_ctx = adv_end[w] - start[w];
+                eprintln!(
+                    "  word {w}: isolated_sum={:.2}px  in_context={:.2}px  delta={:+.2}px ({:+.2} cells)  \
+                     allocated={} cells ({:.2}px)  render_slack={:.2}px",
+                    isolated_sum[w],
+                    in_ctx,
+                    isolated_sum[w] - in_ctx,
+                    (isolated_sum[w] - in_ctx) / cell_width,
+                    alloc_cells[w],
+                    alloc_cells[w] as f32 * cell_width,
+                    alloc_cells[w] as f32 * cell_width - in_ctx,
+                );
+                // The one thing that must NEVER be true: in-context shaping
+                // wider than what the allocator trusted would mean the
+                // allocation under-covers the real rendered width (risk of
+                // visual overlap/merge, the exact failure mode the round()
+                // experiment caused earlier in this rewrite).
+                assert!(
+                    in_ctx <= isolated_sum[w] + 0.5,
+                    "in-context shaping ({in_ctx:.2}px) WIDER than isolated sum ({:.2}px) for word {w} \
+                     of {text:?} -- allocation would under-cover this word's real rendered width",
+                    isolated_sum[w]
+                );
+            }
+
+            // Rendered gap at each word boundary, reproducing
+            // `render_indic_run`'s real shift formula by hand from the same
+            // data (`run_start_col` is 0 here, single run starting at col 0).
+            for w in 1..num_words {
+                let shift_prev = ((word_start_col[w - 1] as f32 * cell_width) - start[w - 1]).max(0.0);
+                let prev_ink_end = adv_end[w - 1] + shift_prev;
+                let gap = word_start_col[w] as f32 * cell_width - prev_ink_end;
+                let n_connector_cells = word_start_col[w] - (word_start_col[w - 1] + alloc_cells[w - 1]);
+                eprintln!(
+                    "  boundary {}->{}: rendered_gap={:.2}px = {:.2} cells  (connector cells N={n_connector_cells}, \
+                     connector in-context advance={:.2}px vs N*cell_width={:.2}px, excess over N*cw={:+.2}px)",
+                    w - 1,
+                    w,
+                    gap,
+                    gap / cell_width,
+                    conn_advance[w - 1],
+                    n_connector_cells as f32 * cell_width,
+                    gap - n_connector_cells as f32 * cell_width,
+                );
+                assert!(
+                    gap >= -0.5,
+                    "negative gap ({gap:.2}px) at boundary {}->{} of {text:?} -- words would overlap",
+                    w - 1,
+                    w
+                );
+            }
+        }
+    }
+}
