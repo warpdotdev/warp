@@ -4782,20 +4782,6 @@ impl CodeReviewView {
         )
     }
 
-    fn clip_file_content(file_content: Box<dyn Element>, top_inset: f32) -> Box<dyn Element> {
-        let top_inset = top_inset.max(0.);
-        Container::new(
-            Clipped::new(
-                Container::new(file_content)
-                    .with_margin_top(-top_inset)
-                    .finish(),
-            )
-            .finish(),
-        )
-        .with_margin_top(top_inset)
-        .finish()
-    }
-
     /// Renders a single file's diff
     fn render_file_diff(
         &self,
@@ -4833,43 +4819,31 @@ impl CodeReviewView {
         let mut stack = Stack::new().with_constrain_absolute_children();
         // Only show file content if expanded.
         if file.is_expanded {
-            // When this file is the one being scrolled, its header is pinned as an
-            // overlay on top of the diff content (added as a positioned child below).
-            let pin_header = is_item_being_scrolled && !is_first_item_with_no_scroll;
-
-            // Reserve the header's height above the content so the content doesn't
-            // shift up under the pinned header.
-            let header_height = if pin_header {
-                app.element_position_by_id_at_last_frame(
-                    self.window_id,
-                    self.file_diff_header_position(file_index),
-                )
-                .map(|header_rect| header_rect.height())
-                .unwrap_or(FILE_HEADER_HEIGHT)
-            } else {
-                0.
-            };
-
-            let file_content = Container::new(self.render_file_content(file, appearance))
-                .with_margin_top(header_height)
-                .finish();
-            // Always clip file content so it respects the file card/header's
-            // visible boundary. The parent/header corner radii only affect their
-            // own drawing; they do not clip the editor's painting. When the
-            // header is pinned, the visible content boundary moves down to the
-            // pinned header's bottom edge (`scroll offset + header height`);
-            // otherwise the normal content bounds are used.
-            let file_content_top_inset = if pin_header {
-                scroll_offset_from_top.offset_from_start().as_f32() + header_height
-            } else {
-                0.
-            };
-            let file_content = Self::clip_file_content(file_content, file_content_top_inset);
-
             stack.add_child(
-                SavePosition::new(file_content, &self.file_index_position(file_index)).finish(),
+                SavePosition::new(
+                    Container::new(self.render_file_content(file, appearance))
+                        .with_margin_top(
+                            if is_item_being_scrolled && !is_first_item_with_no_scroll {
+                                // This is the height of the header bar needs to be present. Otherwise,
+                                // the file contents shift up by this amount.
+                                if let Some(header_rect) = app.element_position_by_id_at_last_frame(
+                                    self.window_id,
+                                    self.file_diff_header_position(file_index),
+                                ) {
+                                    header_rect.height()
+                                } else {
+                                    FILE_HEADER_HEIGHT
+                                }
+                            } else {
+                                0.
+                            },
+                        )
+                        .finish(),
+                    &self.file_index_position(file_index),
+                )
+                .finish(),
             );
-            if pin_header {
+            if is_item_being_scrolled && !is_first_item_with_no_scroll {
                 let sticky_file_header = self.render_file_header(file, appearance, app);
                 stack.add_positioned_child(
                     sticky_file_header,

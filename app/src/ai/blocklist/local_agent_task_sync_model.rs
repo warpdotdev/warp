@@ -215,17 +215,32 @@ impl LocalAgentTaskSyncModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some((task_id, update)) =
+        let Some((task_id, Some(update))) =
             with_local_conversation(conversation_id, ctx, |conversation| {
+                // When the conversation transitions to Error but the last exchange is
+                // still streaming, the stream hasn't finished processing the error yet.
+                // Skip this update — `mark_request_completed_with_error` will fire
+                // `UpdatedConversationStatus` again once the exchange finishes, at
+                // which point we can read and classify the real structured error.
+                if matches!(conversation.status(), ConversationStatus::Error) {
+                    let last_is_streaming =
+                        conversation.root_task_exchanges().last().is_some_and(|e| {
+                            matches!(&e.output_status, AIAgentOutputStatus::Streaming { .. })
+                        });
+                    if last_is_streaming {
+                        return None;
+                    }
+                }
+
                 let (task_state, status_message) = map_conversation_status(conversation);
-                LocalTaskUpdate {
+                Some(LocalTaskUpdate {
                     task_state: Some(task_state),
                     server_conversation_token: conversation
                         .server_conversation_token()
                         .map(|token| token.as_str().to_string()),
                     status_message,
                     ..LocalTaskUpdate::default()
-                }
+                })
             })
         else {
             return;
@@ -380,8 +395,10 @@ fn map_conversation_status(
         // can't clear it later, so a "reconnecting" note would linger after resume.
         ConversationStatus::TransientError => (AgentTaskState::InProgress, None),
         ConversationStatus::Error => {
-            // Extract the specific RenderableAIError from the last exchange to
-            // classify ERROR vs FAILED and provide a PlatformErrorCode.
+            // Extract the specific RenderableAIError to classify ERROR vs FAILED
+            // and provide a PlatformErrorCode. Prefer the last exchange's error;
+            // fall back to the conversation's out-of-band `status_error` (set when
+            // the failure had no stream/exchange to attach to, e.g. shell exit).
             let renderable_error = conversation
                 .root_task_exchanges()
                 .last()
@@ -394,7 +411,8 @@ fn map_conversation_status(
                     } else {
                         None
                     }
-                });
+                })
+                .or_else(|| conversation.status_error());
             task_update_for_conversation_error(renderable_error)
         }
         ConversationStatus::Cancelled => (
@@ -413,6 +431,10 @@ fn map_conversation_status(
 /// Maps a conversation-level error to a terminal task update. In-flight recoveries
 /// surface as `TransientError`, so an `Error` status is always terminal here — the
 /// `will_attempt_resume` rendering hint is deliberately ignored.
+///
+/// Every error-setting path records a structured `RenderableAIError` (on the last
+/// exchange or via the conversation's `status_error`), so the `None` arm is only a
+/// defensive fallback for an `Error` status set without one.
 fn task_update_for_conversation_error(
     error: Option<&RenderableAIError>,
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
@@ -420,7 +442,9 @@ fn task_update_for_conversation_error(
         Some(error) => classify_renderable_error(error),
         None => (
             AgentTaskState::Error,
-            Some(TaskStatusUpdate::message("Agent encountered an error")),
+            Some(TaskStatusUpdate::message(
+                "Agent encountered an error".to_string(),
+            )),
         ),
     }
 }
@@ -507,6 +531,13 @@ pub(crate) fn classify_renderable_error(
                 )
             }
         }
+        RenderableAIError::AgentExitedShell => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::InvalidRequest,
+            )),
+        ),
     }
 }
 

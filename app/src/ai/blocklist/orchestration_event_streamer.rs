@@ -553,6 +553,103 @@ impl OrchestrationEventStreamer {
         }
     }
 
+    /// Confirms parent status against the server when an orchestrator blocks
+    /// on `wait_for_events`, registering it for the owner-side ancestor
+    /// stream. This is the trigger that lets a parent learn about children
+    /// created out-of-band (Oz CLI / web API), which never flowed through
+    /// [`Self::register_watched_run_id`]. Once the parent role is established
+    /// it is permanent for the conversation's life, so subsequent waits
+    /// short-circuit on the already-parent check below.
+    pub fn register_parent_on_wait(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !FeatureFlag::WaitForEventsParentRegistration.is_enabled() {
+            return;
+        }
+        // One-level-tree invariant: a child can never also be a parent, so
+        // skip the server fetch. The child still receives its own inbox via
+        // the existing `is_eligible` -> `RunIds(self)` stream, so there is no
+        // regression.
+        let is_child = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|c| c.has_parent_agent());
+        if is_child {
+            return;
+        }
+        // Passive views of a run hosted elsewhere (shared-session viewers,
+        // remote-child placeholders) must not register: the owning process
+        // owns the inbox. Mirrors the `is_eligible` exclusion and avoids a
+        // wasted `get_ambient_agent_task` fetch.
+        if self.is_remote_run_view(conversation_id, ctx) {
+            return;
+        }
+        // Already a known parent: the live ancestor stream already discovers
+        // new children via the server `parent_run_id` JOIN, so no re-fetch is
+        // needed. The fetch below exists only to make the initial
+        // not-parent -> parent transition.
+        if self.is_parent_agent_conversation(conversation_id, ctx) {
+            return;
+        }
+        // No run_id yet (rare): nothing to query the server with; the next
+        // wait re-checks.
+        let Some(self_run_id) = self.self_run_id(conversation_id, ctx) else {
+            return;
+        };
+        let Ok(task_id) = self_run_id.parse::<AmbientAgentTaskId>() else {
+            return;
+        };
+        let ai_client = self.ai_client.clone();
+        ctx.spawn(
+            async move { ai_client.get_ambient_agent_task(&task_id).await },
+            move |me, result, ctx| {
+                me.finish_register_parent_on_wait(conversation_id, result, ctx);
+            },
+        );
+    }
+
+    /// Completes the wait-time parent registration fetch. A non-empty
+    /// `children` list confirms the conversation is an orchestrator: install
+    /// the children and reevaluate eligibility, which (with
+    /// `OwnerOrchestrationAncestorStreamer` on) opens the
+    /// `AncestorRunId { include_self: true }` stream that thereafter tracks
+    /// all children dynamically. Empty children means it is not a parent; an
+    /// error is a graceful no-op (the next wait re-checks).
+    fn finish_register_parent_on_wait(
+        &mut self,
+        conversation_id: AIConversationId,
+        result: anyhow::Result<crate::ai::ambient_agents::task::AmbientAgentTask>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let task = match result {
+            Ok(task) => task,
+            Err(err) => {
+                log::warn!(
+                    "wait_for_events parent registration fetch failed for \
+                     {conversation_id:?}: {err:#}; will re-check on next wait"
+                );
+                return;
+            }
+        };
+        if task.children.is_empty() {
+            return;
+        }
+        let base_cursor = self
+            .streams
+            .get(&conversation_id)
+            .map(|stream| stream.event_cursor)
+            .unwrap_or(0);
+        self.apply_task_children(conversation_id, &task, base_cursor);
+        // Mirror `register_watched_run_id`: also watch `self_run_id` so the
+        // parent's own inbox is delivered if `desired_sse_filter` falls back to
+        // `RunIds` (i.e. `OwnerOrchestrationAncestorStreamer` disabled, where
+        // the filter would otherwise watch only children). A no-op in the
+        // ancestor-stream path, which already covers self via `include_self`.
+        self.ensure_self_run_id_watched(conversation_id, ctx);
+        self.reevaluate_eligibility(conversation_id, ctx);
+    }
+
     // ---- Viewer-mode consumer registry --------------------------------
 
     /// Registers a viewer-mode consumer (a shared-session viewer pane) for
@@ -1375,18 +1472,11 @@ impl OrchestrationEventStreamer {
                     // Reset the retry counter on success.
                     stream.restore_fetch_failures = 0;
                     stream.harness = agent_task_harness(&task).or(stream.harness);
-
-                    // Merge the server cursor: use the max of SQLite and
-                    // server values so we don't re-deliver events the
-                    // client already acknowledged locally.
-                    let server_seq = task.last_event_sequence.unwrap_or(0);
-                    stream.event_cursor = sqlite_cursor.max(server_seq);
-
-                    // Server-reported children may be absent from local history.
-                    for child in task.children {
-                        stream.watched_run_ids.insert(child);
-                    }
                 }
+                // Install server-reported children (which may be absent from
+                // local history) and merge the server cursor against the
+                // SQLite value so already-acknowledged events aren't replayed.
+                self.apply_task_children(conv_id, &task, sqlite_cursor);
                 self.reevaluate_eligibility(conv_id, ctx);
             }
             Err(err) => {
@@ -1444,6 +1534,29 @@ impl OrchestrationEventStreamer {
                 me.spawn_restore_fetch(conv_id, task_id, sqlite_cursor, ctx);
             },
         );
+    }
+
+    /// Installs server-reported child run_ids into `conversation_id`'s watched
+    /// set and merges the event cursor to `max(base_cursor,
+    /// task.last_event_sequence)`. Shared by the post-restore fetch and the
+    /// wait-time parent registration: both must pick up children that may be
+    /// absent from local history (including out-of-band CLI/API children)
+    /// without replaying events already acknowledged locally. No-op if the
+    /// stream was removed while the fetch was in flight.
+    fn apply_task_children(
+        &mut self,
+        conversation_id: AIConversationId,
+        task: &crate::ai::ambient_agents::task::AmbientAgentTask,
+        base_cursor: i64,
+    ) {
+        let Some(stream) = self.streams.get_mut(&conversation_id) else {
+            return;
+        };
+        let server_seq = task.last_event_sequence.unwrap_or(0);
+        stream.event_cursor = base_cursor.max(server_seq);
+        for child in &task.children {
+            stream.watched_run_ids.insert(child.clone());
+        }
     }
 
     // ---- Eligibility predicate ---------------------------------------

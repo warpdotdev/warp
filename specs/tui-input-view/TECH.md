@@ -186,7 +186,7 @@ TuiInputView : TuiView + TypedActionView
 **`TuiInputView` tests** (`crates/warp_tui/src/input/view_tests.rs` — 14 tests): drive a real `CodeEditorModel` (char-cell) behind a real `TuiInputView` (registering `Appearance::mock()`), covering cursor placement on empty/multi-line buffers, empty-line handling, up/down navigation across blank lines, selection text, `Ctrl+K` / `Ctrl+U` / `Ctrl+Y` kill-yank behaviour, and display-width cursor positioning for wide (CJK) and zero-width characters.
 
 **Examples (manual smoke)**:
-- `crates/warp_tui/examples/tui_input_demo.rs` — interactive editor-backed input demo. Run: `cargo run -p warp_tui --example tui_input_demo`.
+- `crates/warp_tui/examples/tui_input_demo.rs` — interactive editor-backed input demo. (Since removed — the input view is exercised by the real `warp-tui` binary via `./script/run-tui`.)
 - `crates/warpui_core/examples/tui_file_viewer.rs` — validates the TUI runtime/rendering pipeline independently (scrollable file viewer, no editor dependency). Run: `cargo run -p warpui_core --example tui_file_viewer --features tui -- <path>`.
 
 ## Risks and Mitigations

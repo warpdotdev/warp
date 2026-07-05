@@ -245,6 +245,7 @@ use workspace::sync_inputs::SyncedInputState;
 use self::features::FeatureFlag;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
+use crate::ai::blocklist::RecordingController;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::facts::manager::AIFactManager;
@@ -306,6 +307,8 @@ use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::{AudibleBell, CustomSecretRegexUpdater, History};
+#[cfg(feature = "tui")]
+pub use crate::tui::{TuiLoginModel, TuiLoginPhase};
 use crate::undo_close::UndoCloseStack;
 use crate::user_config::WarpConfig;
 use crate::util::bindings::is_binding_cross_platform;
@@ -409,16 +412,17 @@ pub(crate) enum LaunchMode {
 
     /// Run the headless TUI front-end (the `warp-tui` binary in the `warp_tui`
     /// crate). Boots the real headless app so auth/agent state can be reused,
-    /// but prints to stdout instead of opening a GUI window.
+    /// then renders an editor-backed input UI to the terminal (via `mount`)
+    /// instead of opening a GUI window.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     Tui {
-        #[cfg(feature = "tui")]
-        frontend: Option<TuiFrontend>,
+        /// Builds the root TUI view and starts the TUI driver. Runs after
+        /// `initialize_app`; supplied by [`run_tui`]. Carried in the variant
+        /// (rather than as a `run_internal` parameter) so it stays scoped to
+        /// this mode.
+        mount: TuiMountFn,
     },
 }
-
-#[cfg(feature = "tui")]
-type TuiFrontend = Box<dyn FnOnce(&mut AppContext) -> bool + Send + 'static>;
 
 impl LaunchMode {
     fn args(&self) -> Cow<'_, warp_cli::AppArgs> {
@@ -444,6 +448,20 @@ impl LaunchMode {
             | LaunchMode::RemoteServerProxy
             | LaunchMode::RemoteServerDaemon { .. }
             | LaunchMode::Tui { .. } => false,
+        }
+    }
+
+    /// The settings surface for this launch mode. The TUI front-end gets its
+    /// own settings file and local-only (non-cloud-synced) config; every other
+    /// mode uses the standard GUI settings surface.
+    fn settings_mode(&self) -> ::settings::SettingsMode {
+        match self {
+            LaunchMode::Tui { .. } => ::settings::SettingsMode::Tui,
+            LaunchMode::App { .. }
+            | LaunchMode::CommandLine { .. }
+            | LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. } => ::settings::SettingsMode::Gui,
         }
     }
 
@@ -819,12 +837,16 @@ pub fn run_integration_test(driver: TestDriver) -> Result<()> {
     run_internal(launch)
 }
 
-/// Boots the app and invokes a headless TUI frontend after authentication.
+/// Runs the headless TUI front-end (the `warp-tui` binary in the `warp_tui`
+/// crate). Bootstraps the real (headless) app and then runs `mount`, which
+/// builds the root TUI view and starts the non-blocking TUI driver.
+///
+/// `mount` is supplied by the `warp_tui` crate (which owns the concrete root
+/// view plus the window/driver bootstrap), so `warp` never has to depend on
+/// `warp_tui`.
 #[cfg(feature = "tui")]
-pub fn run_tui(frontend: impl FnOnce(&mut AppContext) -> bool + Send + 'static) -> Result<()> {
-    run_internal(LaunchMode::Tui {
-        frontend: Some(Box::new(frontend)),
-    })
+pub fn run_tui(mount: TuiMountFn) -> Result<()> {
+    run_internal(LaunchMode::Tui { mount })
 }
 
 /// Dispatches a worker command when the current executable was re-invoked for one.
@@ -849,7 +871,14 @@ pub fn run_tui_worker_if_requested() -> Option<Result<()>> {
     Some(run_worker_command(worker))
 }
 
-/// Runs the app (or CLI / daemon).
+/// The headless TUI front-end's mount callback, carried by [`LaunchMode::Tui`].
+/// Supplied to [`run_tui`] by the `warp_tui` crate; it runs after
+/// `initialize_app` to build the root TUI view and start the TUI driver.
+pub type TuiMountFn = Box<dyn FnOnce(&mut warpui::AppContext)>;
+
+/// Runs the app (or CLI / daemon). For [`LaunchMode::Tui`] it runs the mount
+/// carried by the variant after `initialize_app` (building the root TUI view and
+/// starting the driver) in place of the GUI/CLI `launch()` path.
 fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let mut timer = IntervalTimer::new();
 
@@ -1003,6 +1032,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // start spawning any child processes.
     #[cfg(windows)]
     command::windows::init();
+
+    // Establish the settings surface (GUI vs TUI) before initializing
+    // preferences so the settings infra selects the right file name and
+    // cloud-sync behavior for this launch mode.
+    ::settings::set_settings_mode(launch_mode.settings_mode());
 
     let private_preferences = settings::init_private_user_preferences();
     let (public_preferences, startup_toml_parse_error) = settings::init_public_user_preferences();
@@ -1183,20 +1217,18 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         }
 
         // The TUI front-end reuses the full `initialize_app` bootstrap above (so
-        // auth/`AuthManager` exist), but runs its own init instead of the
+        // auth, `Appearance`, settings, etc. exist), then runs the device-login
+        // flow and mounts the TUI (via `crate::tui::init`) instead of the
         // GUI/CLI `launch()` path.
-        #[cfg(feature = "tui")]
-        if let LaunchMode::Tui { frontend } = &mut launch_mode {
-            crate::tui::init(
-                frontend
-                    .take()
-                    .expect("TUI frontend must be initialized exactly once"),
-                ctx,
-            );
-            return;
+        match launch_mode {
+            #[cfg(feature = "tui")]
+            LaunchMode::Tui { mount } => crate::tui::init(mount, ctx),
+            #[cfg(not(feature = "tui"))]
+            LaunchMode::Tui { .. } => {
+                unreachable!("the `tui` launch mode requires the `tui` feature")
+            }
+            other => launch(ctx, app_state, other),
         }
-
-        launch(ctx, app_state, launch_mode);
     })
 }
 
@@ -1613,6 +1645,7 @@ pub(crate) fn initialize_app(
 
     ctx.add_singleton_model(|_| SettingsPaneManager::new());
     ctx.add_singleton_model(|_| AIFactManager::new());
+    ctx.add_singleton_model(|_| RecordingController::new());
     ctx.add_singleton_model(|_| ExecutionProfileEditorManager::default());
     ctx.add_singleton_model(|_| NetworkLogPaneManager::default());
     ctx.add_singleton_model(|_| pricing::PricingInfoModel::new());
@@ -2817,7 +2850,7 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
     ctx.set_fallback_font_fn(font_fallback::fallback_font_fn);
 
     match launch_mode {
-        // The TUI front-end runs its own init in the run closure and returns
+        // The TUI front-end runs its own mount in the run closure and returns
         // before reaching launch().
         LaunchMode::Tui { .. } => unreachable!("LaunchMode::Tui is handled before launch()"),
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {

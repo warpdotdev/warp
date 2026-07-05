@@ -10,6 +10,9 @@ crash_reporting = ["dep:sentry", "dep:sentry-log"]
 integration_tests = []
 local_fs = []
 release_bundle = []
+# Enabled when building the self-contained standalone CLI binary (see the bundle
+# script). Keep in sync with the `app` crate's `standalone` feature.
+standalone = []
 test-util = ["dep:mockito", "warp_features/test-util"]
 
 [dependencies]

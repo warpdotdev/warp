@@ -34,6 +34,7 @@ define_settings_group!(CloudAgentSettings, settings: [
         default: None,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     harness_auth_ftux_completed: HarnessAuthFtuxCompleted {
@@ -41,6 +42,7 @@ define_settings_group!(CloudAgentSettings, settings: [
         default: HashMap::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     last_selected_harness: LastSelectedHarness {
@@ -48,6 +50,7 @@ define_settings_group!(CloudAgentSettings, settings: [
         default: None,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     last_selected_host: LastSelectedHost {
@@ -55,6 +58,7 @@ define_settings_group!(CloudAgentSettings, settings: [
         default: None,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     last_selected_harness_model: LastSelectedHarnessModel {
@@ -62,6 +66,7 @@ define_settings_group!(CloudAgentSettings, settings: [
         default: HashMap::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     last_selected_auth_secret: LastSelectedAuthSecret {
@@ -69,6 +74,7 @@ define_settings_group!(CloudAgentSettings, settings: [
         default: HashMap::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     // Per-harness record of whether the user explicitly chose "Inherit
@@ -80,6 +86,7 @@ define_settings_group!(CloudAgentSettings, settings: [
         default: HashMap::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 ]);

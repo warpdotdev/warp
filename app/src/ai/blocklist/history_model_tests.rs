@@ -72,6 +72,7 @@ fn create_user_query_message(
     query: &str,
 ) -> warp_multi_agent_api::Message {
     warp_multi_agent_api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),
@@ -3991,4 +3992,632 @@ fn non_resumable_stream_error_stays_terminal_in_output_status() {
         !error.will_attempt_resume(),
         "will_attempt_resume must be false for a non-recoverable error, got {error:?}"
     );
+}
+
+// --- rewind truncation regression (REPRO) ---
+
+fn agent_output_message(
+    id: &str,
+    task_id: &str,
+    request_id: &str,
+    text: &str,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: id.to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        fetched_memories: vec![],
+        message: Some(warp_multi_agent_api::message::Message::AgentOutput(
+            warp_multi_agent_api::message::AgentOutput {
+                text: text.to_string(),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+fn subagent_tool_call_result_message(
+    id: &str,
+    task_id: &str,
+    tool_call_id: &str,
+    request_id: &str,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: id.to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        fetched_memories: vec![],
+        message: Some(warp_multi_agent_api::message::Message::ToolCallResult(
+            warp_multi_agent_api::message::ToolCallResult {
+                tool_call_id: tool_call_id.to_string(),
+                context: None,
+                result: Some(warp_multi_agent_api::message::tool_call_result::Result::Cancel(())),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+/// Builds a sub-agent tool-call message with `request_id` set, returning the
+/// message and its `tool_call_id` (for pairing with a result message).
+fn make_subagent_call(
+    id: &str,
+    task_id: &str,
+    subtask_id: &str,
+    request_id: &str,
+    metadata: Option<warp_multi_agent_api::message::tool_call::subagent::Metadata>,
+) -> (warp_multi_agent_api::Message, String) {
+    use crate::ai::agent::task::helper::MessageExt;
+    use crate::test_util::ai_agent_tasks::create_subagent_tool_call_message;
+    let mut call = create_subagent_tool_call_message(id, task_id, subtask_id, metadata);
+    call.request_id = request_id.to_string();
+    let tool_call_id = call.tool_call().unwrap().tool_call_id.clone();
+    (call, tool_call_id)
+}
+
+/// Returns the flat list of user-query strings in `tasks` (root + subtasks),
+/// in linearized order.
+fn user_queries_in_tasks(tasks: &[warp_multi_agent_api::Task]) -> Vec<String> {
+    let mut queries = Vec::new();
+    for task in tasks {
+        for message in &task.messages {
+            if let Some(warp_multi_agent_api::message::Message::UserQuery(uq)) = &message.message {
+                queries.push(uq.query.clone());
+            }
+        }
+    }
+    queries
+}
+
+/// Returns the root task from a `compute_active_tasks()` result.
+fn find_root_task<'a>(
+    tasks: &'a [warp_multi_agent_api::Task],
+    root_task_id: &str,
+) -> &'a warp_multi_agent_api::Task {
+    tasks
+        .iter()
+        .find(|t| t.id == root_task_id)
+        .expect("root task must be present in the active task set")
+}
+
+/// True if `task` contains a sub-agent `tool_call` whose matching
+/// `tool_call_result` is absent (a dangling tool_use), or a `tool_call_result`
+/// for a sub-agent `tool_call` that is absent. Used to assert the rewind
+/// invariant that no sub-agent call/result half is ever left dangling.
+fn has_dangling_subagent_pair(task: &warp_multi_agent_api::Task) -> bool {
+    use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
+    let subagent_call_ids: HashSet<&str> = task
+        .messages
+        .iter()
+        .filter_map(|m| {
+            m.tool_call()
+                .and_then(|tc| tc.subagent().map(|_| tc.tool_call_id.as_str()))
+        })
+        .collect();
+    let result_ids: HashSet<&str> = task
+        .messages
+        .iter()
+        .filter_map(|m| m.tool_call_result().map(|r| r.tool_call_id.as_str()))
+        .collect();
+    // A sub-agent call without its result.
+    let call_without_result = subagent_call_ids.iter().any(|id| !result_ids.contains(id));
+    // A result for a sub-agent call that no longer exists. (Non-sub-agent tool
+    // results, e.g. run_shell_command, are not tracked in `subagent_call_ids`
+    // and so are correctly ignored here.)
+    call_without_result
+}
+
+/// Helper: build + restore a conversation, find the root exchange holding
+/// `rewind_query`, truncate from it, and return the resulting
+/// `compute_active_tasks()` plus the full set of task ids that survive in the
+/// task store (so callers can assert subtask pruning).
+fn restore_truncate_and_collect(
+    app: &mut warpui::App,
+    root_task: warp_multi_agent_api::Task,
+    subtasks: Vec<warp_multi_agent_api::Task>,
+    rewind_query: &str,
+) -> (Vec<warp_multi_agent_api::Task>, Vec<String>) {
+    let terminal_view_id = EntityId::new();
+    let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    let conversation_id = AIConversationId::new();
+
+    let mut tasks = vec![root_task];
+    tasks.extend(subtasks);
+
+    let conversation = AIConversation::new_restored(conversation_id, tasks, None)
+        .expect("conversation should build");
+    history_model.update(app, |model, ctx| {
+        model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+    });
+
+    let rewind_exchange_id = history_model.read(app, |model, _| {
+        model
+            .conversation(&conversation_id)
+            .expect("conversation exists")
+            .root_task_exchanges()
+            .find(|exchange| {
+                exchange.input.iter().any(|input| {
+                    matches!(input, AIAgentInput::UserQuery { query, .. } if query == rewind_query)
+                })
+            })
+            .map(|exchange| exchange.id)
+            .expect("rewind exchange should exist")
+    });
+
+    history_model.update(app, |model, ctx| {
+        model
+            .truncate_conversation_from_exchange(conversation_id, rewind_exchange_id, ctx)
+            .expect("truncate should succeed");
+    });
+
+    history_model.read(app, |model, _| {
+        let conversation = model
+            .conversation(&conversation_id)
+            .expect("conversation exists");
+        let active_tasks = conversation.compute_active_tasks();
+        let all_task_ids = conversation
+            .all_tasks()
+            .map(|t| t.id().to_string())
+            .collect::<Vec<_>>();
+        (active_tasks, all_task_ids)
+    })
+}
+
+/// Timing (a): a (terminal-use) sub-agent invoked AFTER the rewind point. The
+/// root sub-agent tool-call message is in the rewound turn, so truncation
+/// removes it; the now-orphaned subtask must be pruned from the task store and
+/// must not appear in the next request.
+#[test]
+fn rewind_orphans_subagent_subtask_invoked_after_rewind_point() {
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
+
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let root_task_id = "root-task";
+        let subtask_id = "sub-1";
+
+        let (subagent_call, subagent_tool_call_id) =
+            make_subagent_call("m4", root_task_id, subtask_id, "req-2", None);
+
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
+                create_user_query_message("m1", root_task_id, "req-1", "keep me"),
+                agent_output_message("m2", root_task_id, "req-1", "ok"),
+                // The rewound turn that spawns the terminal sub-agent.
+                create_user_query_message("m3", root_task_id, "req-2", "spawn terminal agent"),
+                subagent_call,
+                subagent_tool_call_result_message(
+                    "m5",
+                    root_task_id,
+                    &subagent_tool_call_id,
+                    "req-2",
+                ),
+            ],
+        );
+        let subtask = create_api_subtask(
+            subtask_id,
+            root_task_id,
+            vec![agent_output_message(
+                "s1",
+                subtask_id,
+                "req-2",
+                "terminal work",
+            )],
+        );
+
+        let (active_tasks, all_task_ids) = restore_truncate_and_collect(
+            &mut app,
+            root_task,
+            vec![subtask],
+            "spawn terminal agent",
+        );
+
+        assert!(
+            !active_tasks.iter().any(|t| t.id == subtask_id),
+            "orphaned sub-agent subtask must NOT be re-sent; active task ids: {:?}",
+            active_tasks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            !all_task_ids.iter().any(|id| id == subtask_id),
+            "orphaned sub-agent subtask must be pruned from the task store; task ids: {all_task_ids:?}",
+        );
+        assert!(
+            !has_dangling_subagent_pair(find_root_task(&active_tasks, root_task_id)),
+            "root must not contain a dangling sub-agent tool_call after rewind"
+        );
+    });
+}
+
+/// STRADDLE: a (terminal-use) sub-agent whose spawning ToolCall is BEFORE the
+/// rewind point but whose ToolCallResult lands in a LATER turn that gets
+/// rewound. The fix removes BOTH halves from the root and prunes the subtask,
+/// so it is neither re-sent nor left as a dangling tool_use.
+#[test]
+fn rewind_straddle_subagent_call_kept_result_removed_does_not_resend_subtask() {
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
+
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let root_task_id = "root-task";
+        let subtask_id = "sub-1";
+
+        let (subagent_call, subagent_tool_call_id) =
+            make_subagent_call("m2", root_task_id, subtask_id, "req-1", None);
+
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
+                // Turn 1 (kept): spawns the terminal sub-agent.
+                create_user_query_message("m1", root_task_id, "req-1", "spawn terminal agent"),
+                subagent_call,
+                // Turn 2 (rewound): the sub-agent's result arrives here.
+                create_user_query_message("m3", root_task_id, "req-2", "continue"),
+                subagent_tool_call_result_message(
+                    "m4",
+                    root_task_id,
+                    &subagent_tool_call_id,
+                    "req-2",
+                ),
+            ],
+        );
+        let subtask = create_api_subtask(
+            subtask_id,
+            root_task_id,
+            vec![agent_output_message(
+                "s1",
+                subtask_id,
+                "req-1",
+                "terminal work",
+            )],
+        );
+
+        let (active_tasks, all_task_ids) =
+            restore_truncate_and_collect(&mut app, root_task, vec![subtask], "continue");
+
+        assert!(
+            !active_tasks.iter().any(|t| t.id == subtask_id),
+            "straddle: subtask must NOT be re-sent after rewind; active task ids: {:?}",
+            active_tasks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            !all_task_ids.iter().any(|id| id == subtask_id),
+            "straddle: subtask must be pruned from the task store; task ids: {all_task_ids:?}",
+        );
+        assert!(
+            !has_dangling_subagent_pair(find_root_task(&active_tasks, root_task_id)),
+            "straddle: root must not retain a dangling sub-agent tool_call after rewind"
+        );
+    });
+}
+
+/// Timing (b): a sub-agent whose call AND result are BOTH before the rewind
+/// point must be preserved (valid history) — the subtask stays in the store and
+/// the root keeps both halves.
+#[test]
+fn rewind_preserves_subagent_fully_before_rewind_point() {
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
+
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let root_task_id = "root-task";
+        let subtask_id = "sub-1";
+
+        let (subagent_call, subagent_tool_call_id) =
+            make_subagent_call("m2", root_task_id, subtask_id, "req-1", None);
+
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
+                // Turn 1 (kept): sub-agent runs and finishes entirely.
+                create_user_query_message("m1", root_task_id, "req-1", "do work"),
+                subagent_call,
+                subagent_tool_call_result_message(
+                    "m3",
+                    root_task_id,
+                    &subagent_tool_call_id,
+                    "req-1",
+                ),
+                agent_output_message("m4", root_task_id, "req-1", "done"),
+                // Turn 2 (rewound).
+                create_user_query_message("m5", root_task_id, "req-2", "continue"),
+                agent_output_message("m6", root_task_id, "req-2", "more"),
+            ],
+        );
+        let subtask = create_api_subtask(
+            subtask_id,
+            root_task_id,
+            vec![agent_output_message(
+                "s1",
+                subtask_id,
+                "req-1",
+                "terminal work",
+            )],
+        );
+
+        let (active_tasks, all_task_ids) =
+            restore_truncate_and_collect(&mut app, root_task, vec![subtask], "continue");
+
+        assert!(
+            all_task_ids.iter().any(|id| id == subtask_id),
+            "sub-agent fully before the rewind point must be preserved in the task store; task ids: {all_task_ids:?}",
+        );
+        let root = find_root_task(&active_tasks, root_task_id);
+        assert!(
+            !has_dangling_subagent_pair(root),
+            "a preserved finished sub-agent must keep both its call and result in the root"
+        );
+    });
+}
+
+/// Summarization is implemented as a sub-agent (`MoveMessagesToNewTask`) that
+/// relocates earlier conversation messages — including user queries — into a
+/// summary subtask. If a rewind removes the summarization result while keeping
+/// its call, the summary subtask would otherwise become "unfinished" and be
+/// re-sent, dragging the summarized-away user query back into the request. The
+/// fix removes both halves and prunes the summary subtask.
+#[test]
+fn rewind_removes_summarized_away_user_query_from_next_request() {
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
+
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let root_task_id = "root-task";
+        let summary_subtask_id = "summary-sub";
+        let summarized_away = "summarized away question";
+
+        let (summarization_call, summarization_tool_call_id) = make_subagent_call(
+            "m_sum",
+            root_task_id,
+            summary_subtask_id,
+            "req-1",
+            Some(warp_multi_agent_api::message::tool_call::subagent::Metadata::Summarization(())),
+        );
+
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
+                // Turn 1 (kept): the summarization sub-agent is invoked.
+                create_user_query_message("m1", root_task_id, "req-1", "please summarize"),
+                summarization_call,
+                agent_output_message("m_summary", root_task_id, "req-1", "summary text"),
+                // Turn 2 (rewound): the summarization result arrives here.
+                create_user_query_message("m3", root_task_id, "req-2", "continue"),
+                subagent_tool_call_result_message(
+                    "m4",
+                    root_task_id,
+                    &summarization_tool_call_id,
+                    "req-2",
+                ),
+            ],
+        );
+        // The summary subtask holds the moved-away user query.
+        let summary_subtask = create_api_subtask(
+            summary_subtask_id,
+            root_task_id,
+            vec![
+                create_user_query_message("s1", summary_subtask_id, "req-0", summarized_away),
+                agent_output_message("s2", summary_subtask_id, "req-0", "old answer"),
+            ],
+        );
+
+        let (active_tasks, all_task_ids) =
+            restore_truncate_and_collect(&mut app, root_task, vec![summary_subtask], "continue");
+
+        let queries = user_queries_in_tasks(&active_tasks);
+        assert!(
+            !queries.iter().any(|q| q == summarized_away),
+            "summarized-away user query must NOT be in the next request, got: {queries:?}"
+        );
+        assert!(
+            !all_task_ids.iter().any(|id| id == summary_subtask_id),
+            "the summary subtask must be pruned from the task store; task ids: {all_task_ids:?}",
+        );
+        assert!(
+            !has_dangling_subagent_pair(find_root_task(&active_tasks, root_task_id)),
+            "root must not retain a dangling summarization sub-agent tool_call after rewind"
+        );
+    });
+}
+
+/// DURABILITY + MULTI-TURN: after a straddle rewind, the repair lives in the
+/// task store, so the first post-rewind request (A), a follow-up request (B),
+/// AND a persist -> `new_restored` round-trip are all clean (no re-sent
+/// subtask, no dangling sub-agent tool_call).
+#[test]
+fn straddle_rewind_followup_requests_are_clean_and_durable() {
+    use crate::ai::agent::task::TaskId;
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+        let root_task_id = "root-task";
+        let subtask_id = "sub-1";
+
+        let (subagent_call, subagent_tool_call_id) =
+            make_subagent_call("m2", root_task_id, subtask_id, "req-1", None);
+
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
+                create_user_query_message("m1", root_task_id, "req-1", "spawn terminal agent"),
+                subagent_call,
+                create_user_query_message("m3", root_task_id, "req-2", "continue"),
+                subagent_tool_call_result_message(
+                    "m4",
+                    root_task_id,
+                    &subagent_tool_call_id,
+                    "req-2",
+                ),
+            ],
+        );
+        let subtask = create_api_subtask(
+            subtask_id,
+            root_task_id,
+            vec![agent_output_message(
+                "s1",
+                subtask_id,
+                "req-1",
+                "terminal work",
+            )],
+        );
+
+        let conversation = AIConversation::new_restored(
+            conversation_id,
+            vec![root_task, subtask],
+            Some(AgentConversationData {
+                server_conversation_token: Some("token-1".to_string()),
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            }),
+        )
+        .expect("conversation should build");
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let rewind_exchange_id = history_model.read(&app, |model, _| {
+            model
+                .conversation(&conversation_id)
+                .unwrap()
+                .root_task_exchanges()
+                .find(|e| {
+                    e.input.iter().any(|i| {
+                        matches!(i, AIAgentInput::UserQuery { query, .. } if query == "continue")
+                    })
+                })
+                .map(|e| e.id)
+                .unwrap()
+        });
+        history_model.update(&mut app, |model, ctx| {
+            model
+                .truncate_conversation_from_exchange(conversation_id, rewind_exchange_id, ctx)
+                .unwrap();
+        });
+
+        // Request A (first post-rewind send) is clean.
+        let active_a = history_model.read(&app, |model, _| {
+            model
+                .conversation(&conversation_id)
+                .unwrap()
+                .compute_active_tasks()
+        });
+        assert!(
+            !active_a.iter().any(|t| t.id == subtask_id),
+            "request A must not re-send the subtask"
+        );
+        assert!(
+            !has_dangling_subagent_pair(find_root_task(&active_a, root_task_id)),
+            "request A root must not contain a dangling sub-agent tool_call"
+        );
+
+        // Durable: capture the persisted snapshot from the rewind and restore
+        // it. The persist is dispatched from a spawned future, so block until
+        // the `UpdateMultiAgentConversation` event arrives.
+        let restored_tasks: Vec<warp_multi_agent_api::Task> = loop {
+            match receiver.recv_timeout(Duration::from_secs(2)) {
+                Ok(ModelEvent::UpdateMultiAgentConversation { updated_tasks, .. }) => {
+                    break updated_tasks
+                }
+                Ok(_) => continue,
+                Err(_) => panic!("rewind must persist a task snapshot"),
+            }
+        };
+        assert!(
+            restored_tasks.iter().any(|t| t.id == root_task_id),
+            "persisted snapshot must contain the root task"
+        );
+        assert!(
+            !restored_tasks.iter().any(|t| t.id == subtask_id),
+            "persisted snapshot must not contain the pruned subtask: {:?}",
+            restored_tasks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+        );
+        let restored = AIConversation::new_restored(AIConversationId::new(), restored_tasks, None)
+            .expect("restore from rewind snapshot should succeed");
+        let restored_active = restored.compute_active_tasks();
+        assert!(
+            !restored_active.iter().any(|t| t.id == subtask_id),
+            "restored conversation must not re-send the subtask"
+        );
+        assert!(
+            !has_dangling_subagent_pair(find_root_task(&restored_active, root_task_id)),
+            "restored conversation root must not contain a dangling sub-agent tool_call"
+        );
+
+        // Request B (follow-up) is also clean.
+        let stream_id = ResponseStreamId::new_for_test();
+        history_model.update(&mut app, |model, ctx| {
+            let exchange = create_exchange_with_query("follow up B", Local::now(), None);
+            let request_input = RequestInput {
+                conversation_id,
+                input_messages: HashMap::from([(
+                    TaskId::new(root_task_id.to_string()),
+                    exchange.input,
+                )]),
+                working_directory: exchange.working_directory,
+                model_id: exchange.model_id,
+                coding_model_id: exchange.coding_model_id,
+                cli_agent_model_id: exchange.cli_agent_model_id,
+                computer_use_model_id: exchange.computer_use_model_id,
+                shared_session_response_initiator: exchange.response_initiator,
+                request_start_ts: exchange.start_time,
+                supported_tools_override: None,
+            };
+            model
+                .update_conversation_for_new_request_input(
+                    request_input,
+                    stream_id,
+                    terminal_view_id,
+                    ctx,
+                )
+                .unwrap();
+        });
+        let active_b = history_model.read(&app, |model, _| {
+            model
+                .conversation(&conversation_id)
+                .unwrap()
+                .compute_active_tasks()
+        });
+        assert!(
+            !active_b.iter().any(|t| t.id == subtask_id),
+            "follow-up request B must not re-send the subtask"
+        );
+        assert!(
+            !has_dangling_subagent_pair(find_root_task(&active_b, root_task_id)),
+            "follow-up request B root must not contain a dangling sub-agent tool_call"
+        );
+    });
 }

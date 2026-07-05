@@ -223,6 +223,22 @@ impl DisplayMap {
         })
     }
 
+    /// Returns the `[start, end)` display columns of the visual (soft-wrapped)
+    /// row that `point` lies on, or `None` if the soft-wrap layout is
+    /// unavailable (e.g. before the first frame of the editor has been laid
+    /// out). Callers should fall back to logical-line behavior in that case.
+    pub fn soft_wrapped_row_bounds(
+        &self,
+        point: DisplayPoint,
+        clamp_direction: soft_wrap::ClampDirection,
+    ) -> Option<Range<u32>> {
+        self.soft_wrap_state.read(|frame_layouts| {
+            frame_layouts
+                .ok()?
+                .soft_wrapped_row_bounds(point, clamp_direction)
+        })
+    }
+
     pub fn to_soft_wrap_point(
         &self,
         point: DisplayPoint,

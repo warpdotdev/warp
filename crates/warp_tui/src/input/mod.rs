@@ -11,4 +11,4 @@
 pub mod kill_buffer;
 pub mod view;
 
-pub use view::{TuiInputView, TuiInputViewEvent};
+pub use view::{init, TuiInputView, TuiInputViewEvent};

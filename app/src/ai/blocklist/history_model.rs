@@ -271,6 +271,9 @@ pub struct BlocklistAIHistoryModel {
     /// via `set_parent_for_conversation` and `restore_conversations`.
     children_by_parent: HashMap<AIConversationId, Vec<AIConversationId>>,
 
+    /// Conversations that have had at least one AIBlock receive imported review comments.
+    conversations_with_imported_comments: HashSet<AIConversationId>,
+
     /// In-flight optimistic conversation rename state keyed by conversation.
     in_flight_conversation_renames: HashMap<AIConversationId, InFlightConversationRename>,
 
@@ -398,6 +401,14 @@ impl BlocklistAIHistoryModel {
     /// * The conversation has never been read into memory from db. Use load_conversation_from_db to handle reading from db.
     pub fn conversation(&self, conversation_id: &AIConversationId) -> Option<&AIConversation> {
         self.conversations_by_id.get(conversation_id)
+    }
+
+    pub fn mark_conversation_has_imported_comments(&mut self, id: AIConversationId) {
+        self.conversations_with_imported_comments.insert(id);
+    }
+
+    pub fn conversation_has_imported_comments(&self, id: &AIConversationId) -> bool {
+        self.conversations_with_imported_comments.contains(id)
     }
 
     pub fn conversation_mut(
@@ -1213,7 +1224,7 @@ impl BlocklistAIHistoryModel {
         status: ConversationStatus,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.update_conversation_status_with_error_message(
+        self.update_conversation_status_with_error(
             terminal_surface_id,
             conversation_id,
             status,
@@ -1222,21 +1233,16 @@ impl BlocklistAIHistoryModel {
         );
     }
 
-    pub fn update_conversation_status_with_error_message(
+    pub fn update_conversation_status_with_error(
         &mut self,
         terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
         status: ConversationStatus,
-        error_message: Option<String>,
+        error: Option<RenderableAIError>,
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
-            conversation.update_status_with_error_message(
-                status,
-                error_message,
-                terminal_surface_id,
-                ctx,
-            );
+            conversation.update_status_with_error(status, error, terminal_surface_id, ctx);
         }
     }
 

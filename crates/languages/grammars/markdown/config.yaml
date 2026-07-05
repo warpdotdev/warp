@@ -1,0 +1,8 @@
+display_name: "Markdown"
+indent_unit:
+  space: 2
+brackets:
+  - start: "["
+    end: "]"
+  - start: "("
+    end: ")"

@@ -10,6 +10,7 @@ define_settings_group!(LigatureSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "appearance.text.ligature_rendering_enabled",
         description: "Whether to render font ligatures in the terminal.",

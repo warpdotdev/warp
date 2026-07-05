@@ -3,9 +3,10 @@ pub mod llm_judge;
 mod step;
 mod user_defaults;
 mod util;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::Write;
+use std::sync::Mutex;
 
 pub use assertions::*;
 pub use step::*;
@@ -29,6 +30,29 @@ pub const RUNTIME_TAG_TOTAL_EXCHANGES: &str = "total_exchanges";
 pub const RUNTIME_TAG_TOKEN_USAGE_PREFIX: &str = "token_usage.";
 
 const CODE_DIFF_OUTPUT_FILE_ENV_VAR: &str = "CODE_DIFF_OUTPUT_FILE";
+
+/// Runtime tags recorded from inside test steps. Steps cannot reach the
+/// driver's persisted data map (only `on_finish` receives it), so tags
+/// recorded mid-run are staged here and merged by `drain_pending_runtime_tags`.
+static PENDING_RUNTIME_TAGS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+/// Buffers a runtime tag recorded from inside a test step (e.g. analytics for
+/// a conversation that will no longer be active at `on_finish` time).
+pub fn record_pending_runtime_tag(key: impl Into<String>, value: impl Into<String>) {
+    let mut tags = PENDING_RUNTIME_TAGS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    tags.insert(key.into(), value.into());
+}
+
+/// Merges (and clears) tags staged by `record_pending_runtime_tag` into the
+/// driver's persisted data. Call this from the eval's `on_finish`.
+pub fn drain_pending_runtime_tags(persisted_data: &mut PersistedDataMap) {
+    let mut tags = PENDING_RUNTIME_TAGS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    persisted_data.extend(std::mem::take(&mut *tags));
+}
 
 pub fn output_code_diff_with_base_commit(
     base_commit: &str,

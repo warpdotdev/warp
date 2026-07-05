@@ -6,7 +6,7 @@ use super::*;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, RenderableAIError,
     StartAgentExecutionMode, StartAgentResult,
 };
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
@@ -251,11 +251,14 @@ fn execute_resolves_error_when_request_linkage_happens_after_child_already_faile
         });
 
         history_model.update(&mut app, |history_model, ctx| {
-            history_model.update_conversation_status_with_error_message(
+            history_model.update_conversation_status_with_error(
                 terminal_view_id,
                 child_conversation_id,
                 ConversationStatus::Error,
-                Some("'codex' CLI not found on your machine.".to_string()),
+                Some(RenderableAIError::other(
+                    "'codex' CLI not found on your machine.",
+                    false,
+                )),
                 ctx,
             );
         });
@@ -431,11 +434,14 @@ fn execute_returns_detailed_error_when_child_startup_fails_before_initialization
         });
 
         history_model.update(&mut app, |history_model, ctx| {
-            history_model.update_conversation_status_with_error_message(
+            history_model.update_conversation_status_with_error(
                 terminal_view_id,
                 child_conversation_id,
                 ConversationStatus::Error,
-                Some("Failed to resolve child agent skills: review-comments".to_string()),
+                Some(RenderableAIError::other(
+                    "Failed to resolve child agent skills: review-comments",
+                    false,
+                )),
                 ctx,
             );
         });
@@ -801,11 +807,11 @@ fn parallel_pendings_each_resolve_independently_via_recorded_child_id() {
         });
 
         history_model.update(&mut app, |history_model, ctx| {
-            history_model.update_conversation_status_with_error_message(
+            history_model.update_conversation_status_with_error(
                 terminal_view_id,
                 child_b,
                 ConversationStatus::Error,
-                Some("Agent B init failed".to_string()),
+                Some(RenderableAIError::other("Agent B init failed", false)),
                 ctx,
             );
         });
@@ -938,11 +944,14 @@ fn errored_child_launch_emits_cleanup_event() {
         let (state, _executor) = dispatch_pending_child_launch(&mut app);
         link_pending_child(&state, &mut app);
         state.history_model.update(&mut app, |model, ctx| {
-            model.update_conversation_status_with_error_message(
+            model.update_conversation_status_with_error(
                 state.terminal_view_id,
                 state.child_conversation_id,
                 ConversationStatus::Error,
-                Some("Child agent failed to spawn".to_string()),
+                Some(RenderableAIError::other(
+                    "Child agent failed to spawn",
+                    false,
+                )),
                 ctx,
             );
         });

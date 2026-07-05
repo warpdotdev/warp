@@ -821,3 +821,33 @@ fn test_streamed_agent_update_matches_reset_with_markdown_for_code_block() {
         }
     });
 }
+
+#[test]
+fn test_plan_markdown_content_preserves_copyable_structure() {
+    App::test((), |mut app| async move {
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_ctx| AIDocumentModel::new_for_test());
+
+        let plan_markdown = "# Migration Plan\n\n## Steps\n\n1. Audit the call sites\n   - Inventory each module\n   - Note breaking changes\n2. Land the refactor\n3. Verify with `cargo test`\n\n```rust path=null start=null\nfn migrate() {\n    println!(\"done\");\n}\n```";
+
+        let doc_id = model_handle.update(&mut app, |model, ctx| {
+            model.create_document(
+                "Migration Plan",
+                plan_markdown,
+                AIConversationId::new(),
+                None,
+                ctx,
+            )
+        });
+
+        let expected_markdown = "# Migration Plan\n\n## Steps\n\n1. Audit the call sites\n    * Inventory each module\n    * Note breaking changes\n2. Land the refactor\n3. Verify with `cargo test`\n\n```rust\nfn migrate() {\n    println!(\"done\");\n}\n```\n";
+
+        model_handle.update(&mut app, |model, ctx| {
+            let content = model
+                .get_document_content(&doc_id, ctx)
+                .expect("plan should expose its markdown content");
+
+            assert_eq!(content, expected_markdown);
+        });
+    });
+}

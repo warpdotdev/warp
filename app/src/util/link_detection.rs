@@ -43,9 +43,24 @@ pub(crate) struct DetectedLinksState {
     // on a link to open the tooltip, this link should remain highlighted and the tooltip in place
     // even if we hover over other links.
     pub(crate) link_location_open_tooltip: Option<LinkLocation>,
+    // Per-view-unique save-position id used to anchor the link tooltip overlay. Unique per AI
+    // block so that multiple blocks' tooltips don't collide on a single shared anchor id (which
+    // caused the tooltip to fail to position in multi-block conversations).
+    pub(crate) tooltip_position_id: String,
 }
 
 impl DetectedLinksState {
+    /// Returns the per-view save-position id used to anchor this block's link tooltip overlay,
+    /// falling back to the shared constant if one hasn't been set yet (only happens when no
+    /// tooltip is open, in which case the id is never consumed).
+    pub(crate) fn resolved_tooltip_position_id(&self) -> String {
+        if self.tooltip_position_id.is_empty() {
+            RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned()
+        } else {
+            self.tooltip_position_id.clone()
+        }
+    }
+
     /// Given a text location and char range, returns the detected link there if any.
     pub fn link_at(
         &self,
