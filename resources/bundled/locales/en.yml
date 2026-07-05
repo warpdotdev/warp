@@ -974,12 +974,15 @@ en:
     conflict_warning: "This shortcut conflicts with other keybinds"
     reset: "Default"
     press_new: "Press new keyboard shortcut"
+    press_new_shortcut: "Press new keyboard shortcut"
     add_custom: "Add your own custom keybindings to existing actions below."
     use_prefix: "Use"
     reference_suffix: "to reference these keybindings in a side pane at anytime."
     configure: "Configure keyboard shortcuts"
+    configure_shortcuts: "Configure keyboard shortcuts"
     not_synced: "Keyboard shortcuts are not synced to the cloud"
     command_column: "Command"
+    command: "Command"
 
   settings.features:
     category:
@@ -1121,6 +1124,7 @@ en:
     close: "Close"
     copy: "Copy"
     create: "Create"
+    default: "Default"
     delete: "Delete"
     disabled: "Disabled"
     dismiss: "Dismiss"
@@ -1597,6 +1601,19 @@ en:
     set_default_model:
       not_now: "Not now"
       change_default_model: "Change default model"
+    custom_inference:
+      add_endpoint: "Add endpoint"
+    agent_assisted:
+      add_repo: "Add repo"
+      create_environment: "Create environment"
+      no_directory_selected: "No directory selected"
+      select_repos: "Select repos for your environment"
+    delete_environment:
+      confirm: "Delete environment"
+    remove_endpoint:
+      confirm: "Remove endpoint"
+    handoff:
+      not_logged_in: "Not logged in"
 
   # ── Billing Settings ──
   settings.billing:

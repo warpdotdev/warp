@@ -974,12 +974,15 @@ ru:
     conflict_warning: "Это сочетание конфликтует с другими комбинациями"
     reset: "По умолчанию"
     press_new: "Нажмите новую комбинацию клавиш"
+    press_new_shortcut: "Нажмите новое сочетание клавиш"
     add_custom: "Добавьте свои комбинации клавиш к действиям ниже."
     use_prefix: "Используйте"
     reference_suffix: "чтобы посмотреть эти комбинации на боковой панели в любое время."
     configure: "Настройка горячих клавиш"
+    configure_shortcuts: "Настроить сочетания клавиш"
     not_synced: "Горячие клавиши не синхронизируются с облаком"
     command_column: "Команда"
+    command: "Команда"
 
   settings.features:
     category:
@@ -1121,6 +1124,7 @@ ru:
     close: "Закрыть"
     copy: "Копировать"
     create: "Создать"
+    default: "По умолчанию"
     delete: "Удалить"
     disabled: "Отключено"
     dismiss: "Закрыть"
@@ -1597,6 +1601,19 @@ ru:
     set_default_model:
       not_now: "Не сейчас"
       change_default_model: "Изменить модель по умолчанию"
+    custom_inference:
+      add_endpoint: "Добавить эндпоинт"
+    agent_assisted:
+      add_repo: "Добавить репозиторий"
+      create_environment: "Создать окружение"
+      no_directory_selected: "Каталог не выбран"
+      select_repos: "Выберите репозитории для вашего окружения"
+    delete_environment:
+      confirm: "Удалить окружение"
+    remove_endpoint:
+      confirm: "Удалить эндпоинт"
+    handoff:
+      not_logged_in: "Не выполнен вход"
 
   # ── Настройки биллинга ──
   settings.billing:
