@@ -4,9 +4,9 @@
 
 ## Context
 
-This feature is additive in code: the five built-in language servers (rust-analyzer, gopls, pyright-langserver, typescript-language-server, clangd) keep their existing code paths, persistence, footer surfaces, and install flow. The new system lives next to the built-in pipeline and runs first when a file is opened. Per product.md invariant 3, a custom `[[editor.language_servers]]` entry overrides built-ins two ways: **by filetype** — if a custom entry's `filetypes` matches the opened file, the custom server handles it — and **by name** — a custom entry whose `name` case-insensitively equals a built-in's display name (its `binary_name()`) suppresses that built-in entirely, for all of its filetypes. Only when no custom entry matches the file and the file's built-in is not name-suppressed does the existing built-in dispatch handle it unchanged.
+Built-in behavior is unchanged: the five built-in language servers (rust-analyzer, gopls, pyright-langserver, typescript-language-server, clangd) keep their existing persistence rows, footer surfaces, and install flow. Mechanically, a small set of shared identity types changes payload (three `LspRepoStatus` variants, one persistence event — see the design decision below); those changes are compiler-guided renames with no behavioral effect on built-ins. The new system lives next to the built-in pipeline and runs first when a file is opened. Per product.md invariant 3, a custom `[[editor.language_servers]]` entry overrides built-ins two ways: **by filetype** — if a custom entry's `filetypes` matches the opened file, the custom server handles it — and **by name** — a custom entry whose `name` case-insensitively equals a built-in's display name (its `binary_name()`) suppresses that built-in entirely, for all of its filetypes. Only when no custom entry matches the file and the file's built-in is not name-suppressed does the existing built-in dispatch handle it unchanged.
 
-**Design choice.** Built-in and custom runtime tracks are kept fully separate — no shared identity enum across built-in + custom status, separate in-memory caches, separate persistence rows (discriminated by `kind`). This isolation lets the built-in pipeline stay stable across releases while the custom pipeline iterates, and makes it straightforward for a reader to reason about each path independently.
+**Design choice.** One shared identity enum — `ServerKey { BuiltIn(LSPServerType), Custom(String) }` — threads through the manager, the status enum, persistence write-sites, and the footer. Built-in and custom servers differ structurally only where their data genuinely differs (the config payload); everywhere identity is the question, both kinds flow through the same enum, the same map, the same event, and the same render path, with exhaustive `match`es on `ServerKey` making every divergence point explicit. Persistence rows are discriminated by a `kind` column — the on-disk serialization of the `ServerKey` discriminant.
 
 ### Current architecture, with line refs
 
@@ -36,23 +36,40 @@ JSON Schema generation:
 
 Footer:
 
-- `app/src/code/footer.rs:1410-1855` — status rendering, Enable button dispatch, error rendering. Action enum is server-type-agnostic; the surfaces that take `&LSPServerType` for display gain a sibling branch that takes `&LspServerDescriptor` (or a unified key — see Phase 4).
+- `app/src/code/footer.rs:1410-1855` — status rendering, Enable button dispatch, error rendering. Action enum is server-type-agnostic; the surfaces that take `&LSPServerType` for display move to the shared `ServerKey` (see Phase 4).
 
 Glob support is already in-tree: `globset = { workspace = true }` is in `crates/lsp/Cargo.toml:23` (version `0.4.18` pinned at the root `Cargo.toml:161`) and used at `crates/lsp/src/service.rs:374-378`. product.md invariant 1 cites the `glob` crate's `Pattern` syntax — that's a strict subset of what `globset` accepts, so we don't add a dependency.
 
 Path utilities live in `crates/warp_util/src/path.rs` (no `~` expansion exists today; we add it). Data/cache dirs come from `crates/warp_core/src/paths.rs` (`data_dir()` at `:100`, `cache_dir()` at `:222`).
 
-### Design decision: parallel tracks, no shared identity enum
+### Design decision: one identity enum, two config payloads
 
-Custom servers run on a separate code path from built-ins. The two tracks share the underlying LSP runtime (`LspService`, `ProcessTransport`, `LspState`, diagnostics tracking — all verified identity-free) but diverge at every identity-bearing boundary:
+Custom servers reuse the existing LSP runtime end to end (`LspService`, `ProcessTransport`, `LspState`, diagnostics tracking — all verified identity-free). Identity is carried by a single shared enum, defined in `crates/lsp` and consumed by `app/`:
 
-- **Matcher** — checks customs first via `LanguageServersSettings::match_for_path`; when no custom matches, falls back to the existing `LanguageId::from_path` → `LSPServerType` dispatch — unless that built-in is suppressed by a same-named custom entry (`suppresses_builtin`, product.md invariant 3 by name), in which case no server handles the file.
-- **Status enums** — `LspRepoStatus` (built-in, 6 variants including install state) stays untouched. A new narrow `CustomLspRepoStatus` enum (3 variants: `Ready`, `Enabled`, `Disabled`) covers customs. Why a separate enum rather than reusing `LspRepoStatus`: half of `LspRepoStatus`'s variants encode install-flow states that are unreachable for customs (v1 has no custom install flow, product.md invariant 26), so reusing it would force every one of the ~24 existing `LspRepoStatus` match sites to handle states that cannot occur — either with dead arms or panics. A separate narrow enum keeps the impossible states unrepresentable and leaves the built-in match sites untouched. The footer dispatches "is this slot built-in or custom?" once at render time and enters one of two code paths.
-- **Manager registration** — `LspManagerModel.servers: HashMap<PathBuf, Vec<ModelHandle<LspServerModel>>>` already supports multiple servers per workspace. We extend `LspServerModel` to carry either a built-in `LspServerConfig` or a `CustomLspServerConfig`. Internal duplicate-detection keys on a small `ServerKey { BuiltIn(LSPServerType), Custom(String) }` enum scoped to the manager only — not propagated to `LspRepoStatus` or the footer.
-- **Persistence** — the SQLite `workspace_language_server` table gets a `kind` column (migration `2026-05-24-180000`) to discriminate `'BuiltIn'` from `'Custom'` rows. Customs are inserted with `kind = 'Custom'` and `language_server_name = descriptor.name`. The discriminator exists because a custom may share a built-in's name (the by-name override, product.md invariant 3) while both kinds persist enablement in the same `language_server_name` column — built-ins as serialized `LSPServerType` variant names (`"RustAnalyzer"`, `"GoPls"`, …), customs as `descriptor.name`. `kind` keeps the two populations disjoint without renaming existing built-in rows.
-- **Footer** — the existing built-in render path stays untouched. A new branch handles customs, reusing the same UI affordances (status indicator, Enable button, error inline) but driven by the descriptor's `name` instead of an `LSPServerType`.
+```rust
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ServerKey {
+    BuiltIn(LSPServerType),
+    Custom(String),          // descriptor `name`
+}
 
-Everything else (process spawning, JSON-RPC, install flow, file watching, the LSP state machine) stays untouched for built-ins. The cost of the parallel-track design is some duplication in spawn / lifecycle plumbing; the benefit is no risk to in-flight built-in work, minimal persistence change (one additive `kind` column via migration `2026-05-24-180000`), and no rename touching ~24 pattern-match sites for an enum the built-in side doesn't need to know about.
+impl ServerKey {
+    /// Footer display name: `binary_name()` for built-ins, the descriptor `name` for customs.
+    pub fn display_name(&self) -> &str { ... }
+}
+```
+
+Where it threads:
+
+- **Matcher** — checks customs first via `LanguageServersSettings::match_for_path`; when no custom matches, falls back to the existing `LanguageId::from_path` → `LSPServerType` dispatch — unless that built-in is suppressed by a same-named custom entry (`suppresses_builtin`, product.md invariant 3 by name), in which case no server handles the file. Resolution (Phase 4's `resolve_server_for_path`) produces the identity everything downstream consumes.
+- **Status** — `LspRepoStatus` serves both kinds. Its three identity-bearing variants (`DisabledAndInstalled`, `DisabledAndNotInstalled`, `Installing` — `app/src/ai/persisted_workspace.rs:92-105`) change payload from `server_type: LSPServerType` to `server: ServerKey`; the compiler surfaces all ~24 existing match sites for a mechanical update. Install-related variants are never *produced* for `Custom` keys in v1 (no custom install flow, product.md invariant 26) — a `debug_assert!` in `detect_lsp_workspace_status` documents that — but the footer's exhaustive matches render both kinds through one path.
+- **Manager** — `LspManagerModel.servers: HashMap<PathBuf, Vec<ModelHandle<LspServerModel>>>` already supports multiple servers per workspace. Registration, duplicate detection, and `LspManagerModelEvent::ServerRemoved` key on `ServerKey`.
+- **Persistence** — the SQLite `workspace_language_server` table gets a `kind` column (migration `2026-05-24-180000`): the on-disk serialization of the `ServerKey` discriminant. One event variant, one upsert function, and one in-memory map (`HashMap<ServerKey, EnablementState>`) serve both kinds. The `kind` column exists because a custom may share a built-in's name (the by-name override, product.md invariant 3) while both kinds persist enablement in the same `language_server_name` column — built-ins as serialized `LSPServerType` variant names (`"RustAnalyzer"`, `"GoPls"`, …), customs as `descriptor.name`. `kind` keeps the two populations disjoint without renaming existing built-in rows.
+- **Footer** — one render path, keyed by `ServerKey`. Display name and Enable dispatch come from the key; the same UI affordances (status indicator, Enable button, inline error) serve both kinds.
+
+The only structural two-ness that remains is the config payload — `LspServerConfigKind { BuiltIn(LspServerConfig), Custom(CustomLspServerConfig) }` — because the two configs genuinely carry different data (built-ins: binary discovery and install candidates; customs: descriptor and placeholder expansion). `LspServerConfigKind::key() -> ServerKey` derives identity from the shared enum; no other code re-derives the built-in/custom split.
+
+The cost of threading `ServerKey` through is payload changes to three `LspRepoStatus` variants and one persistence event, touching every existing pattern-match site (~24 for `LspRepoStatus`) — all compiler-guided, landed as mechanical commits at the start of their phases. The benefit is a single behavioral pipeline: no sibling enums, maps, or events to keep in sync, exhaustive `match`es surface every divergence point explicitly, and follow-ups that apply to both kinds (custom install flow, management surface) extend one pipeline instead of converging two.
 
 ## Proposed changes
 
@@ -258,26 +275,16 @@ let resolved = match config {
 
 **Accessors on `LspServerModel`** for the manager and footer:
 
-- `pub(crate) fn key(&self) -> ServerKey` — used by manager-internal duplicate detection.
-- `pub fn display_name(&self) -> &str` — `binary_name()` for built-ins, `descriptor.name` for customs.
+- `pub fn key(&self) -> ServerKey` — delegates to `LspServerConfigKind::key()`; the identity every consumer (manager, footer, persistence write-sites) uses.
+- `pub fn display_name(&self) -> &str` — delegates to `ServerKey::display_name()`.
 - `pub fn supports_path(&self, path: &Path) -> bool` — built-ins check `LanguageId::from_path` against `LSPServerType::languages()`; customs check the descriptor's compiled matchers.
 
-**`ServerKey` enum, scoped to manager-internal use only.** New type in `crates/lsp/src/manager.rs`:
-
-```rust
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub(crate) enum ServerKey {
-    BuiltIn(LSPServerType),
-    Custom(String),
-}
-```
-
-`pub(crate)` — does not leak to `LspRepoStatus` or the footer (see Phase 4's two-narrow-enums design). Used only by:
+**`ServerKey` is the shared identity enum** (defined in `crates/lsp` — see the design decision section for the type). Phase 3 lands it and its first consumers:
 
 - `LspManagerModel::server_registered(path, key, ctx)` for duplicate detection within a workspace's server vec
 - `LspManagerModelEvent::ServerRemoved { workspace_root, key, server_id }` — payload type changes from `server_type: LSPServerType` to `key: ServerKey`
 
-External subscribers to `ServerRemoved` (in `app/`) need updates when this payload changes. The compiler will surface every site.
+External subscribers to `ServerRemoved` (in `app/`) need updates when this payload changes. The compiler will surface every site. Phase 4 extends the same enum into `LspRepoStatus`, persistence, and the footer.
 
 **`LspManagerModel::register()`** (`crates/lsp/src/manager.rs:170-203`) accepts the new kind enum:
 
@@ -337,31 +344,31 @@ pub fn resolve_server_for_path<'a>(
 
 Each of the 15 sites calls `resolve_server_for_path` and matches on the result: `Custom` routes to the custom server, `BuiltIn` continues into the existing built-in path, `None` means no LSP for this file. The helper lives in `app/` (not `crates/lsp`) because resolution needs the `LanguageServersSettings` group, which is unreachable from the `lsp` crate. Resolution-policy unit tests (custom beats built-in, last-in-source-order, by-name suppression, built-in fallback, no match → `None`) live on this helper — once, instead of implied at 15 call sites.
 
-**Status — two narrow enums.** `LspRepoStatus` (`app/src/ai/persisted_workspace.rs:92-105`) **stays untouched**. The existing six variants serve built-ins only; the 24 pattern-match sites across `app/src/` don't get touched.
-
-A new sibling enum, narrow because install variants don't apply to customs:
+**Status — one enum, `ServerKey` payloads.** `LspRepoStatus` (`app/src/ai/persisted_workspace.rs:92-105`) serves both kinds. Its three identity-bearing variants change payload from `server_type: LSPServerType` to `server: ServerKey`:
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CustomLspRepoStatus {
+pub enum LspRepoStatus {
     Ready,
     Enabled,
-    Disabled,
+    CheckingForInstallation,
+    DisabledAndInstalled { server: ServerKey },      // was server_type: LSPServerType
+    DisabledAndNotInstalled { server: ServerKey },   // ditto
+    Installing { server: ServerKey },                // ditto
 }
 ```
 
-A parallel function `custom_lsp_repo_status(repo_root: &Path, name: &str, ctx: &mut ModelContext<Self>) -> CustomLspRepoStatus` lives next to the existing built-in `detect_lsp_workspace_status` (`persisted_workspace.rs:1202`), the function that computes `LspRepoStatus` for built-ins today.
+The ~24 existing match sites update mechanically (compiler-guided; landed as its own commit at the start of Phase 4). `detect_lsp_workspace_status` (`persisted_workspace.rs:1202`) extends to compute status for `Custom` keys through the same code path.
 
-**How `EnablementState` maps to `CustomLspRepoStatus` (product.md invariant 14).** Customs reuse `EnablementState` unchanged, including the memory-only `Suggested` variant: when a custom descriptor first matches a file in a workspace, the workspace's custom map gets a `Suggested` entry — the same candidate-detection insert built-ins use (`persisted_workspace.rs:597`), never persisted to SQLite. `custom_lsp_repo_status` maps `Yes` → `Enabled` (→ `Ready` once the footer subscribes to a live server) and both `Suggested` and `No` → `Disabled`. `Disabled` is what drives the footer's Enable affordance — the custom analog of `DisabledAndInstalled` for built-ins (v1 assumes a configured custom is installed; there is no install probe, invariant 26). The `Suggested`/`No` distinction stays in the map, not the status enum: `Suggested` vanishes on restart (re-detected on the next matching file open), while `No` — written only by the explicit disable actions in the footer dropdown and settings code page — persists across restarts per invariant 14.
+**How `EnablementState` maps to `LspRepoStatus` for customs (product.md invariant 14).** Customs reuse `EnablementState` unchanged, including the memory-only `Suggested` variant: when a custom descriptor first matches a file in a workspace, the shared enablement map gets a `Suggested` entry under its `ServerKey::Custom` — the same candidate-detection insert built-ins use (`persisted_workspace.rs:597`), never persisted to SQLite. Status derivation is the same as for built-ins, minus the install probe: `Yes` → `Enabled` (→ `Ready` once the footer subscribes to a live server); `Suggested` and `No` → `DisabledAndInstalled { server: ServerKey::Custom(name) }`, which drives the footer's Enable affordance. v1 assumes a configured custom is installed — there is no install probe or install flow (invariant 26), so `DisabledAndNotInstalled`, `Installing`, and `CheckingForInstallation` are never produced for `Custom` keys (a `debug_assert!` in `detect_lsp_workspace_status` documents this). The `Suggested`/`No` distinction stays in the enablement map, not the status enum: `Suggested` vanishes on restart (re-detected on the next matching file open), while `No` — written only by the explicit disable actions in the footer dropdown and settings code page — persists across restarts per invariant 14.
 
-**Footer dispatch.** `app/src/code/footer.rs` (1988 lines total) dispatches "is this slot built-in or custom?" once at render time and enters one of two code paths:
+**Footer dispatch.** `app/src/code/footer.rs` (1988 lines total) renders both kinds through one path, keyed by `ServerKey`:
 
-- `compute_status_message()` (lines 1532-1653) — split via the kind check at the top
-- `render_lsp_icon()` (1410-1448), `render_status_text()` (1450-1473) — drive off the resolved status; no enum-specific change
-- Enable button handler `CodeFooterViewAction::EnableLSP` (lines 1812-1855) — dispatches to either the existing `enable_lsp_server_for_path` (built-in) or new `enable_custom_lsp_server_for_path(path, name)` (custom). Button label: `format!("Enable {name}")` for customs vs. `format!("Enable {}", server_type.binary_name())` for built-ins.
+- `compute_status_message()` (lines 1532-1653) — takes the resolved `ServerKey`; message text comes from `key.display_name()`
+- `render_lsp_icon()` (1410-1448), `render_status_text()` (1450-1473) — drive off the resolved `LspRepoStatus`; no change beyond the payload rename
+- Enable button handler `CodeFooterViewAction::EnableLSP` (lines 1812-1855) — matches on the `ServerKey`: `BuiltIn` calls the existing `enable_lsp_server_for_path`, `Custom` calls the new `enable_custom_lsp_server_for_path(path, name)`. Button label is `format!("Enable {}", key.display_name())` for both kinds.
 
   **Trust boundary.** The Enable CTA is intentionally unchanged from the built-in flow and is **not** a per-launch authorization prompt for the resolved `command`/`args`. The user's `settings.toml` is the trust boundary: by writing an `[[editor.language_servers]]` entry, the user has already authorized what `command` runs (and what env values it inherits per invariants 5 and 16). The Enable CTA confirms only that the user wants this server attached *for this workspace* — exactly the same semantics it has for built-in servers today. Users who want to inspect what a custom server will run can read their own `settings.toml` (it is plain text, in a known location per the spec) and trace any `{{env_VAR}}` placeholders against their environment. Adding an in-app pre-launch verification surface (e.g., resolved-command preview before Enable) is out of scope for v1 — see the inspection/management surface in product.md invariant 31.
-- Button-label dispatch `button_label_for_cta_statuses` (lines 659-680) — gains a custom branch that pattern-matches on `CustomLspRepoStatus`
+- Button-label dispatch `button_label_for_cta_statuses` (lines 659-680) — its `LspRepoStatus` matches update for the `ServerKey` payload; no custom-specific branch needed
 
 Per product.md invariant 10, no new footer affordances or copy. Visual parity for both kinds.
 
@@ -379,35 +386,25 @@ CREATE TABLE workspace_language_server (
 
 Built-in rows: `kind = 'BuiltIn'`, `language_server_name` = serialized `LSPServerType` variant name (`"RustAnalyzer"`, `"GoPls"`, etc.). Custom rows: `kind = 'Custom'`, `language_server_name = descriptor.name` (e.g. `"ruby-lsp"`). The `(workspace_id, kind, language_server_name)` triple is the effective key — built-in and custom rows occupy disjoint subspaces, so a custom can carry the same string as a built-in variant name without an on-disk conflict. A custom may share a built-in's name (the by-name override, product.md invariant 3); the `kind` triple keeps its enable/disable rows disjoint from the built-in's even when the names coincide.
 
-**Persistence event shape.** Application code writes enablement state by emitting one of two `ModelEvent` variants on `app/src/persistence/mod.rs`. The existing built-in path stays untouched:
+**Persistence event shape.** Application code writes enablement state by emitting the existing `ModelEvent::UpsertWorkspaceLanguageServer` (`app/src/persistence/mod.rs:378`), whose payload changes from `lsp_type: LSPServerType` to the shared key:
 
 ```text
 ModelEvent::UpsertWorkspaceLanguageServer {
     workspace_path: PathBuf,
-    lsp_type: LSPServerType,     // serialized to language_server_name; kind = 'BuiltIn'
+    server: ServerKey,           // BuiltIn → kind = 'BuiltIn', variant name; Custom → kind = 'Custom', descriptor name
     enabled: EnablementState,
 }
 ```
 
-Phase 4 adds a sibling variant for customs:
+The dispatch arm at `app/src/persistence/sqlite.rs:750-755` and the existing `upsert_workspace_language_server` function (`sqlite.rs:1499`) serialize the key: `ServerKey::BuiltIn` writes `kind = 'BuiltIn'` with the serialized `LSPServerType` variant name, `ServerKey::Custom` writes `kind = 'Custom'` with the descriptor `name`. One event, one arm, one upsert — no sibling variants or functions. The write site (footer Enable-button handler, via `app/src/ai/persisted_workspace.rs`) obtains the key from the `ResolvedLspServer` returned by `resolve_server_for_path` (defined in the file-open dispatch section above).
 
-```text
-ModelEvent::UpsertWorkspaceCustomLanguageServer {
-    workspace_path: PathBuf,
-    name: String,                // becomes language_server_name; kind = 'Custom'
-    enabled: EnablementState,
-}
-```
+The in-memory cache on `Workspace` (`persisted_workspace.rs:132-134`) — currently `language_servers: HashMap<LSPServerType, EnablementState>` — is re-keyed to `HashMap<ServerKey, EnablementState>`. Existing built-in read/write sites wrap their `LSPServerType` in `ServerKey::BuiltIn` (compiler-guided); customs use `ServerKey::Custom(name)` through the same accessors.
 
-The dispatch handler at `app/src/persistence/sqlite.rs:750-755` adds a sibling arm that routes the new variant to `upsert_workspace_custom_language_server(connection, &workspace_path, &name, enabled)`, the analog of the existing `upsert_workspace_language_server` function. Each upsert function sets its own `kind` column literal (`'BuiltIn'` / `'Custom'`) — there is no runtime `kind` discriminator on the event itself, because the variant choice at the call site already encodes the kind. The application-side write sites (one per kind, both in `app/src/ai/persisted_workspace.rs`) pick the variant from the `ResolvedLspServer` returned by `resolve_server_for_path` (defined in the file-open dispatch section above) at the footer Enable-button handler.
+**Startup / read path.** Loader `app/src/persistence/sqlite.rs::get_all_workspace_language_servers_by_workspace` reads the `kind` column and reconstructs each row's `ServerKey` (`'BuiltIn'` rows parse `language_server_name` as an `LSPServerType` variant; `'Custom'` rows carry it as the descriptor name), populating the single map through `PersistedData` at app startup. A `'Custom'` row whose name no longer matches any configured descriptor stays in the map harmlessly — it only gates enablement if a matching descriptor reappears.
 
-The in-memory cache on `Workspace` (`persisted_workspace.rs:132-134`) — currently `language_servers: HashMap<LSPServerType, EnablementState>` — gains a sibling `custom_language_servers: HashMap<String, EnablementState>`. Read-paths walk both; write-paths route to whichever map matches the request kind.
+`has_enabled_lsp_server_for_file_path` (`persisted_workspace.rs:367`) extends by resolving the path through `resolve_server_for_path` and consulting the shared enablement map under the resolved `ServerKey`; `None` (no match, or a built-in suppressed by a same-named custom entry per invariant 3) reports no server.
 
-**Startup / read path.** Loader `app/src/persistence/sqlite.rs::get_all_workspace_language_servers_by_workspace` reads the `kind` column and partitions rows into `language_servers` (built-in) and `custom_language_servers` (custom). Both flow through `PersistedData` at app startup.
-
-`has_enabled_lsp_server_for_file_path` (`persisted_workspace.rs:367`) extends by resolving the path through `resolve_server_for_path`: a `Custom` result consults custom enablement, `BuiltIn` falls through to the existing built-in check, and `None` (no match, or a built-in suppressed by a same-named custom entry per invariant 3) reports no server.
-
-**Telemetry.** `app/src/code/lsp_telemetry.rs` already uses `server_type: String` as the event field type, sourced today from `LSPServerType::binary_name()`. The custom path sources from `descriptor.name`. No event-schema changes.
+**Telemetry.** `app/src/code/lsp_telemetry.rs` already uses `server_type: String` as the event field type, sourced today from `LSPServerType::binary_name()`. Both kinds source from `ServerKey::display_name()`. No event-schema changes.
 
 **Tests.** Integration tests in `crates/integration/src/test/` covering:
 
@@ -498,7 +495,7 @@ Manual validation gate at the end of Phase 4: load settings.toml with the JDTLS 
 ## Risks and mitigations
 
 - **Schema correctness depends on two unenforced conventions.** `define_settings_group!` generates the `SettingSchemaEntry` for `[[editor.language_servers]]`, so there's no hand-written registration to drift. The remaining risks are (1) the string-presentation attributes on `LspFiletypePattern` (`#[serde(try_from = "String", into = "String")]`, `#[schemars(with = "String")]`) — if dropped, the schema would emit a bogus object shape for what invariant 1 defines as a plain string; (2) the `///` doc comments on `command`/`args`/`env`/`initialization_options` that enumerate the `{{...}}` placeholders per invariant 25 — these are the *only* place placeholder semantics are documented for external editor tooling, and they can silently rot if the placeholder set changes without the doc comments being updated. Mitigation: the schema integration test (Phase 5) validates the product.md worked-example TOMLs against the generated schema, which would catch (1); (2) requires the placeholder-substitution code and these doc comments to live next to each other or be cross-referenced.
-- **`LspManagerModelEvent::ServerRemoved` payload change.** Today the event carries `server_type: LSPServerType`; the change makes it `key: ServerKey`. External subscribers in `app/` need updates. Mitigation: the rename is compiler-guided — every subscription site fails to build until updated. Land the rename as its own commit at the start of Phase 3 so the diff is purely mechanical.
+- **Shared-type payload changes touch existing built-in code.** Threading `ServerKey` changes the payloads of `LspManagerModelEvent::ServerRemoved` (Phase 3), three `LspRepoStatus` variants (~24 match sites), `ModelEvent::UpsertWorkspaceLanguageServer`, and the `Workspace` enablement map key (all Phase 4). No behavior changes for built-ins — every site wraps its existing `LSPServerType` in `ServerKey::BuiltIn`. Mitigation: each payload change is compiler-guided — every affected site fails to build until updated — and lands as its own mechanical commit at the start of its phase so review can separate the rename from the feature diff.
 - **A language-id table gap breaks strict servers.** A language absent from `language_ids.rs` gets its raw lowercase extension as the LSP `languageId`, and descriptors offer no way to override it (product.md invariant 33). Single-language servers that ignore `languageId` still work; strict servers mis-handle or reject the document — and the user has no config-side workaround. Mitigation: the Phase 1 seeding requirement (VS Code core identifiers + conventional ids for popular non-core languages, coverage-asserted in a unit test), plus treating post-ship gaps as data-only one-line additions that ride the normal release train. The docs page should list the id sent for each recognized extension so users can check it against their server's expectations before filing a gap.
 - **Glob crate edge cases.** product.md cites `glob` crate syntax; implementation uses `globset` (already a dependency, a superset). The validator at `crates/lsp/src/descriptor/validate.rs` rejects `**` and `{a,b}` explicitly to keep behavior matching the documented syntax. Tests in `validate_tests.rs` cover both.
 - **`workspace_hash` collision.** 64-bit prefix of SHA-256 has ~2^-32 collision probability across all workspaces a single user ever opens — well below the threshold where it matters. The same bound applies to the server-name segment of `lsp_server_cache_dir`. Documented in rustdoc on `warp_util::path::workspace_hash`.
