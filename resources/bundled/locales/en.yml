@@ -618,7 +618,23 @@ en:
     font_description: "The monospace font used in the terminal."
     reset_to_default: "Reset to default"
     about: "About"
-    account: "Account"
+    account:
+      title: "Account"
+      sign_up: "Sign up"
+      free_plan: "Free"
+      contact_support: "Contact support"
+      manage_billing: "Manage billing"
+      upgrade_to_turbo: "Upgrade to Turbo plan"
+      upgrade_to_lightspeed: "Upgrade to Lightspeed plan"
+      compare_plans: "Compare plans"
+      settings_sync: "Settings sync"
+      refer_a_friend: "Refer a friend"
+      version: "Version"
+      not_yet_loaded: "Not yet loaded"
+      staging_iap: "Staging IAP credentials"
+      refresh: "Refresh"
+      referral_cta: "Earn rewards by sharing Warp with friends & colleagues"
+      log_out: "Log out"
     ai:
       add_custom_endpoint: "Add custom endpoint"
       agent:
@@ -1112,6 +1128,18 @@ en:
       syntax_highlighting: "syntax highlighting"
       audible_bell: "audible terminal bell"
       autosuggestions: "autosuggestions"
+  updates:
+    up_to_date: "Up to date"
+    check_for_updates: "Check for updates"
+    checking: "checking for update..."
+    downloading: "downloading update..."
+    update_available: "Update available"
+    relaunch: "Relaunch Warp"
+    updating: "Updating..."
+    installed: "Installed update"
+    cant_install: "A new version of Warp is available but can't be installed"
+    update_manually: "Update Warp manually"
+    cant_launch: "A new version of Warp is installed but can't be launched."
 
   common:
     back: "Back"

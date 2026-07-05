@@ -618,7 +618,23 @@ ru:
     font_description: "Моноширинный шрифт, используемый в терминале."
     reset_to_default: "Сбросить по умолчанию"
     about: "О программе"
-    account: "Аккаунт"
+    account:
+      title: "Аккаунт"
+      sign_up: "Зарегистрироваться"
+      free_plan: "Бесплатно"
+      contact_support: "Связаться с поддержкой"
+      manage_billing: "Управление оплатой"
+      upgrade_to_turbo: "Перейти на план Turbo"
+      upgrade_to_lightspeed: "Перейти на план Lightspeed"
+      compare_plans: "Сравнить планы"
+      settings_sync: "Синхронизация настроек"
+      refer_a_friend: "Пригласить друга"
+      version: "Версия"
+      not_yet_loaded: "Ещё не загружено"
+      staging_iap: "Тестовые IAP учётные данные"
+      refresh: "Обновить"
+      referral_cta: "Получайте награды, делясь Warp с друзьями и коллегами"
+      log_out: "Выйти"
     ai:
       add_custom_endpoint: "Добавить свой endpoint"
       agent:
@@ -1112,6 +1128,18 @@ ru:
       syntax_highlighting: "подсветка синтаксиса"
       audible_bell: "звуковой сигнал терминала"
       autosuggestions: "автопредложения"
+  updates:
+    up_to_date: "Актуальная версия"
+    check_for_updates: "Проверить обновления"
+    checking: "проверка обновлений..."
+    downloading: "загрузка обновления..."
+    update_available: "Доступно обновление"
+    relaunch: "Перезапустить Warp"
+    updating: "Обновление..."
+    installed: "Обновление установлено"
+    cant_install: "Новая версия Warp доступна, но не может быть установлена"
+    update_manually: "Обновить Warp вручную"
+    cant_launch: "Новая версия Warp установлена, но не может быть запущена."
 
   common:
     back: "Назад"
