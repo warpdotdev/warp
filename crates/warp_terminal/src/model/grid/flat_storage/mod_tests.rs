@@ -207,6 +207,60 @@ fn test_styling_change_within_trailing_empty_cells() {
     assert!(!flat_rows[1][0].flags.intersects(Flags::BOLD));
 }
 
+/// Phase 13 (Telugu variable-width-cells plan): `GridHandler::carry_indic_word`
+/// moves an in-progress Indic word to the next line instead of splitting it
+/// mid-word, and marks the soft-wrap boundary with `WRAPLINE` on the cell
+/// right before the word rather than the row's physical last cell (the tail
+/// after that point is left blank -- the word moved away). This is a NEW
+/// kind of soft-wrapped row: unlike every wrap this crate produced before,
+/// it isn't fully occupied edge-to-edge. Confirms the row-commit soft-wrap
+/// check (which used to hardcode `row[columns - 1]`) now correctly
+/// recognizes this row as continuing rather than inserting a spurious
+/// trailing newline that would split the carried word from its prefix once
+/// the row scrolls into flat storage.
+#[test]
+fn test_row_soft_wraps_with_wrapline_before_physical_last_cell() {
+    let num_cols = 8;
+    let mut rows = vec![Row::new(num_cols), Row::new(num_cols)];
+
+    // Row 0: "aaa" (0-2), WRAPLINE on col 2 (not the physical last cell,
+    // col 7) -- exactly what `carry_indic_word` produces after erasing a
+    // word's already-written cells from col 3 onward. `occ` is bumped to
+    // the full row width, mirroring the erase touching every cell up to
+    // the row's end (the same as `carry_indic_word`'s real behaviour).
+    for (i, c) in "aaa".chars().enumerate() {
+        rows[0][i].c = c;
+    }
+    rows[0][2].flags.insert(Flags::WRAPLINE);
+    rows[0].occ = num_cols;
+
+    // Row 1: the carried word's replayed content.
+    for (i, c) in "bbbbbbb".chars().enumerate() {
+        rows[1][i].c = c;
+    }
+
+    let mut storage = FlatStorage::new(num_cols, None, None);
+    storage.push_rows(&rows);
+
+    assert!(
+        storage.row_wraps(0),
+        "a row whose WRAPLINE sits before its physical last cell (because its \
+         tail was erased by an Indic word carry) must still be recognized as \
+         soft-wrapped -- otherwise a spurious hard newline gets inserted, \
+         splitting the carried word from its prefix once this row is read \
+         back from flat storage (e.g. after scrolling into history)"
+    );
+
+    let flat_rows = storage
+        .rows_from(0)
+        .map(|row| row.as_ref().clone())
+        .collect_vec();
+    assert_eq!(flat_rows[0][0].c, 'a');
+    assert_eq!(flat_rows[0][1].c, 'a');
+    assert_eq!(flat_rows[0][2].c, 'a');
+    assert_eq!(flat_rows[1][0].c, 'b');
+}
+
 #[test]
 fn test_clear_after_truncate_front() {
     let num_cols = 20;

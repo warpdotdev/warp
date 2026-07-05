@@ -36,6 +36,7 @@ use itertools::Itertools;
 use string_offset::ByteOffset;
 use style::BgAndStyle;
 
+use super::cell::LineLength;
 use super::row::Row;
 use super::{cell, CellType};
 use crate::model::{ansi, Point};
@@ -253,10 +254,24 @@ impl FlatStorage {
                 }
             }
 
-            // If the grid row soft wraps, the last cell will be marked
-            // with the WRAPLINE flag.
-            let row_soft_wraps = row.occ == self.columns
-                && row[self.columns - 1]
+            // If the grid row soft wraps, the cell at its true content
+            // boundary is marked with the WRAPLINE flag. This used to check
+            // only `row[self.columns - 1]` (the row's physical last cell)
+            // guarded by `row.occ == self.columns` -- correct as long as a
+            // soft-wrapped row was always fully occupied edge-to-edge,
+            // which held for every wrap this crate produced until an Indic
+            // word-carry (see `GridHandler::carry_indic_word`) can leave a
+            // soft-wrapped row's word-carried-away tail blank, with
+            // WRAPLINE sitting earlier than the physical last cell. Reusing
+            // `Row::line_length()` (already correct for exactly this: it
+            // reverse-scans to the last non-blank cell instead of assuming
+            // the row is full) handles both cases identically -- for a
+            // fully-occupied row its fast path still returns the same
+            // `self.columns` as before, so this is not a behaviour change
+            // for any pre-existing wrap path.
+            let content_length = row.line_length();
+            let row_soft_wraps = content_length > 0
+                && row[content_length - 1]
                     .flags()
                     .intersects(cell::Flags::WRAPLINE);
             if !row_soft_wraps {
