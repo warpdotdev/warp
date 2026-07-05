@@ -116,7 +116,7 @@ Phase 2 lands as **three small, independently reviewable sub-phases**. Each comp
 
 #### Phase 2a — `JsonSchema` derives on descriptor types
 
-(Shipped.) Adds `JsonSchema` derives to the Phase-1 types so the schema generator can read them. Follows the codebase convention from `privacy.rs::CustomSecretRegex` — derive on the runtime type, use `#[serde(skip)]` + `#[schemars(skip)]` for the private compiled-matcher field. See commit `2b6555ed` for the shipped form.
+Adds `JsonSchema` derives to the Phase-1 types so the schema generator can read them. Follows the codebase convention from `privacy.rs::CustomSecretRegex` — derive on the runtime type, with `LspFiletypePattern` presenting as a plain string (`#[serde(try_from = "String", into = "String")]`, `#[schemars(with = "String")]` — see Phase 5). An initial version is implemented on the code PR (#10700), pending this review.
 
 #### Phase 2b — `define_settings_group!` invocation + `LspServerDescriptors` newtype
 
