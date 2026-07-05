@@ -2835,3 +2835,76 @@ fn real_measurer_janavari_number_boundary_is_tight() {
          regression"
     );
 }
+
+/// Phase 14 (Telugu variable-width-cells plan): regression guard for the
+/// "word fills exactly to the last column, then continues" carry bug --
+/// real Menlo-measured Telugu text at 140 columns used to split "అనేక" as
+/// "అనే"|"క" (and, at the user's real terminal width, "చిత్రాలకు" as
+/// "చి"|"త్రాలకు") because the continuity filter in
+/// `flush_pending_indic_cluster` discarded the in-progress word's
+/// accumulator exactly when a cluster filled the last column
+/// (`input_needs_wrap == true`), making `carry_indic_word`'s own handling
+/// of that state unreachable.
+///
+/// `bounds_to_string` reconstructs identically whether a word split mid-way
+/// across two rows or carried whole (concatenating cell content either way
+/// doesn't care where the row boundary fell), so it can't distinguish carry
+/// from split -- this test instead dumps each row's own content
+/// independently and checks that every previously-splitting word appears
+/// intact within a SINGLE row's dump (whole on one row, whether that's the
+/// row it started on or the next row it carried to).
+#[cfg(target_os = "macos")]
+#[test]
+fn real_measurer_no_mid_word_split_across_soft_wrap() {
+    use crate::terminal::model::grid::cluster_measurer::CoreTextClusterMeasurer;
+    use warpui::fonts::Properties;
+
+    let measurer = CoreTextClusterMeasurer::new("Menlo", Properties::default(), 13.0)
+        .expect("Menlo should be resolvable");
+    let size_info = crate::terminal::SizeInfo::new(
+        pathfinder_geometry::vector::vec2f(140.0 * 8.0, 3.0 * 18.0),
+        warpui::units::Pixels::new(8.0),
+        warpui::units::Pixels::new(18.0),
+        warpui::units::Pixels::zero(),
+        warpui::units::Pixels::zero(),
+    );
+    let mut grid = GridHandler::new(
+        size_info,
+        0,
+        crate::terminal::event_listener::ChannelEventListener::new_for_test(),
+        false,
+        ObfuscateSecrets::No,
+        crate::terminal::model::grid::grid_handler::PerformResetGridChecks::No,
+        std::sync::Arc::new(measurer),
+    );
+    let text = "1974లో \"ఓ సీత కథ\" చిత్రానికి తన మొదటి పాటను రచించారు, ఇది కె. విశ్వనాథ్ దర్శకత్వంలో వచ్చింది. ఆ తరువాత శంకరాభరణం, సాగర సంగమం, సిరిసిరి మువ్వ వంటి అనేక అద్భుతమైన చిత్రాలకు పాటలు రాశారు.";
+    feed(&mut grid, text);
+
+    let mut row_dumps = Vec::new();
+    for row_idx in 0..3 {
+        let Some(row) = grid.row(row_idx) else {
+            continue;
+        };
+        let mut col = 0;
+        let mut dump = String::new();
+        while col < row.len() {
+            let cell = &row[col];
+            if cell.c == crate::terminal::model::cell::DEFAULT_CHAR {
+                col += 1;
+                continue;
+            }
+            dump.push_char_or_str(cell.content_for_display());
+            col += cell.span().max(1) as usize;
+        }
+        row_dumps.push(dump);
+    }
+
+    for word in ["అనేక", "చిత్రాలకు", "అద్భుతమైన", "శంకరాభరణం"] {
+        assert!(
+            row_dumps.iter().any(|dump| dump.contains(word)),
+            "expected \"{word}\" to appear intact within a single row's content, but it \
+             didn't -- it split across the wrap boundary instead of carrying whole. row \
+             dumps: {row_dumps:?}"
+        );
+    }
+}

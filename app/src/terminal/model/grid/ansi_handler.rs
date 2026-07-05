@@ -166,6 +166,16 @@ struct IndicWordAccumulator {
     /// simpler and more robust than enumerating every cursor-movement call
     /// site that should reset it (most of which don't flush today).
     expected_point: Point,
+    /// The `input_needs_wrap` state expected alongside `expected_point` at
+    /// the next flush. A cluster that fills exactly to the last column
+    /// leaves `point` unchanged but sets `input_needs_wrap = true` -- the
+    /// very case carry exists to handle. Without tracking this separately,
+    /// the continuity check would have to reject that state (since
+    /// "cursor didn't move" alone can't distinguish "about to wrap" from
+    /// "not"), which would discard the accumulator right when carry is
+    /// needed most and make `GridHandler::carry_indic_word`'s
+    /// `cursor_needs_wrap` handling unreachable.
+    expected_needs_wrap: bool,
     /// Where this word's first cluster was written. Used to decide whether
     /// the word can still be carried whole to the next line (only if it
     /// started on the row the wrap is about to happen on -- a word that
@@ -1553,13 +1563,21 @@ impl GridHandler {
 
         self.flush_pending_indic_cluster();
 
-        // Move cursor to next line if the previous write left it pending --
-        // mirrors `input()`'s own pre-write housekeeping, needed here since
-        // we're now starting a fresh cluster at a (possibly new) position.
-        if self.grid.cursor().input_needs_wrap {
-            self.wrapline();
-        }
-
+        // Deliberately no wrap check here (unlike `input()`'s non-Indic
+        // path, which writes immediately via `write_grapheme_cluster` and
+        // so must resolve any pending wrap before writing). Buffering a
+        // cluster's text touches no grid cell -- there's nothing to
+        // position yet -- and resolving the wrap here would run it
+        // through a plain `wrapline()` with no carry consideration,
+        // pre-empting `flush_pending_indic_cluster`'s own will_wrap/carry
+        // decision for the OLD accumulator before it ever gets to run
+        // (this was a real bug: it made a word's next syllable always
+        // fall to a fresh line the instant the previous syllable filled
+        // the row exactly, instead of ever being considered for carry --
+        // see the Phase 14 execution log in the Telugu variable-width-
+        // cells plan). Deferring entirely to the eventual flush (which
+        // already reads `cursor_needs_wrap`/`cursor_point` correctly
+        // whenever it happens) is both simpler and correct.
         self.ansi_handler_state.pending_indic_cluster = Some(PendingIndicCluster {
             text: c.to_string(),
         });
@@ -1611,17 +1629,23 @@ impl GridHandler {
         let cursor_needs_wrap = self.grid.cursor().input_needs_wrap;
 
         // Continue the current word only if the cursor is exactly where
-        // the last flush left it -- any cursor motion (movement commands,
-        // scrolling) or a pending line wrap in between means this cluster
+        // the last flush left it, in the same pending-wrap state -- any
+        // cursor motion (movement commands, scrolling) means this cluster
         // starts a new word instead. Using the cursor position as the
         // continuity check (rather than resetting at every cursor-movement
         // call site) is simpler and can't miss a reset path, since ANY
-        // motion shows up here as a mismatch.
+        // motion shows up here as a mismatch. The `expected_needs_wrap`
+        // half of this check matters: a cluster that fills exactly to the
+        // last column leaves `point` unchanged but sets
+        // `input_needs_wrap = true` -- exactly the state that most needs
+        // carry to fire. Requiring `!cursor_needs_wrap` here would discard
+        // the accumulator right at that point and make
+        // `carry_indic_word`'s `cursor_needs_wrap` handling unreachable.
         let mut acc = self
             .ansi_handler_state
             .indic_word_accumulator
             .take()
-            .filter(|acc| acc.expected_point == cursor_point && !cursor_needs_wrap)
+            .filter(|acc| acc.expected_point == cursor_point && acc.expected_needs_wrap == cursor_needs_wrap)
             .unwrap_or_else(|| IndicWordAccumulator {
                 word_start_point: cursor_point,
                 ..Default::default()
@@ -1662,7 +1686,7 @@ impl GridHandler {
                 )
             } else {
                 acc = IndicWordAccumulator {
-                    word_start_point: self.grid.cursor_point(),
+                    word_start_point: cursor_point,
                     ..Default::default()
                 };
                 independent_span
@@ -1671,12 +1695,28 @@ impl GridHandler {
             cumulative_span
         };
 
-        self.write_grapheme_cluster(&pending.text, span as usize);
+        // A freshly-started accumulator's `word_start_point` was seeded
+        // from the cursor position observed BEFORE this cluster is
+        // written -- but this same `write_grapheme_cluster` call may
+        // itself wrap (and scroll) the row first if `input_needs_wrap`
+        // was already set, which would make that pre-write snapshot
+        // stale (it'd point at the wrong row relative to where the
+        // cluster actually landed). Use `write_grapheme_cluster`'s own
+        // return value -- the true post-wrap base point -- instead,
+        // whenever this cluster is the word's first (a continuing word's
+        // `word_start_point` was already fixed at its own true start and
+        // must not move).
+        let is_fresh_start = acc.clusters.is_empty();
+        let base_point = self.write_grapheme_cluster(&pending.text, span as usize);
+        if is_fresh_start {
+            acc.word_start_point = base_point;
+        }
 
         acc.cum_natural_px += natural_width_px;
         acc.cum_allocated_cells += span as u16;
         acc.clusters.push((pending.text, natural_width_px));
         acc.expected_point = self.grid.cursor_point();
+        acc.expected_needs_wrap = self.grid.cursor().input_needs_wrap;
         self.ansi_handler_state.indic_word_accumulator = Some(acc);
     }
 
@@ -1786,7 +1826,15 @@ impl GridHandler {
     /// insert-mode cell-shifting identically regardless of `width` --
     /// this generalizes what was previously separate width==1/width==2
     /// branches inline in `input()`.
-    fn write_grapheme_cluster(&mut self, text: &str, width: usize) {
+    /// Returns the grid point where the cluster's base cell actually landed
+    /// -- i.e. the cursor position AFTER any wrap/scroll this call performs,
+    /// not the position the caller observed beforehand. A caller that needs
+    /// to remember where a cluster started (e.g. `IndicWordAccumulator`'s
+    /// `word_start_point`, for the carry-to-next-line feature) must use
+    /// this return value rather than a pre-call cursor snapshot: if
+    /// `input_needs_wrap` was already set, this call wraps (and possibly
+    /// scrolls) the row before writing, which a pre-call snapshot can't see.
+    fn write_grapheme_cluster(&mut self, text: &str, width: usize) -> Point {
         debug_assert!(!text.is_empty(), "grapheme cluster text must not be empty");
         let num_cols = self.columns();
 
@@ -1821,7 +1869,8 @@ impl GridHandler {
             }
         }
 
-        if width == 1 {
+        let base_point = if width == 1 {
+            let base_point = self.grid.cursor_point();
             let mut chars = text.chars();
             // SAFETY: caller guarantees `text` is non-empty.
             let base = chars.next().unwrap();
@@ -1829,6 +1878,7 @@ impl GridHandler {
             for c in chars {
                 cell.push_zerowidth(c, /* log_long_grapheme_warnings */ true);
             }
+            base_point
         } else {
             if self.grid.cursor().point.col + width > num_cols {
                 if self.ansi_handler_state.mode.contains(TermMode::LINE_WRAP) {
@@ -1839,13 +1889,15 @@ impl GridHandler {
                     self.wrapline();
                 } else {
                     // Prevent out of bounds crash when linewrapping is disabled.
+                    let point = self.grid.cursor_point();
                     self.move_cursor_forward(|cursor| {
                         cursor.input_needs_wrap = true;
                     });
-                    return;
+                    return point;
                 }
             }
 
+            let base_point = self.grid.cursor_point();
             let mut chars = text.chars();
             // SAFETY: caller guarantees `text` is non-empty.
             let base = chars.next().unwrap();
@@ -1864,9 +1916,11 @@ impl GridHandler {
                     .flags
                     .insert(Flags::WIDE_CHAR_SPACER);
             }
-        }
+            base_point
+        };
 
         self.advance_cursor_by_one_cell();
+        base_point
     }
 
     /// Precondition: `c.width() == Some(1)`.

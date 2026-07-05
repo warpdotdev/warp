@@ -1438,6 +1438,64 @@ mod indic_word_carry_tests {
     }
 
     #[test]
+    fn word_continues_carrying_after_a_cluster_fills_the_exact_last_column() {
+        // 6 columns: "aaa" (0-2) leaves exactly 3 remaining. CLUSTER_1
+        // (span 3) fills cols 3-5 EXACTLY -- `input_needs_wrap` becomes
+        // true while `point` stays at col 5 (see
+        // `word_exactly_filling_remaining_columns_does_not_carry`). The
+        // continuity filter used to require `!cursor_needs_wrap`, which
+        // discarded the accumulator right here and made carry unreachable
+        // for CLUSTER_2 below -- it would fall back to an independent
+        // mid-word split instead of carrying the whole word.
+        let mut grid =
+            GridHandler::new_for_test_with_measurer(3, 6, std::sync::Arc::new(FixedWidthMeasurer));
+        for c in "aaa".chars() {
+            grid.input(c);
+        }
+        for c in CLUSTER_1.chars() {
+            grid.input(c);
+        }
+        for c in CLUSTER_2.chars() {
+            grid.input(c);
+        }
+        grid.input('X');
+
+        let row0 = grid.row(0).expect("row 0 exists");
+        assert_eq!(row0.get(0).map(|c| c.c), Some('a'));
+        assert_eq!(row0.get(1).map(|c| c.c), Some('a'));
+        assert_eq!(row0.get(2).map(|c| c.c), Some('a'));
+        for col in 3..6 {
+            assert_eq!(
+                row0.get(col).map(|c| c.c),
+                Some(cell::DEFAULT_CHAR),
+                "col {col} should be erased once the whole word carries away"
+            );
+        }
+        assert!(
+            row0.get(2).unwrap().flags.contains(Flags::WRAPLINE),
+            "WRAPLINE should mark the boundary right before the carried word"
+        );
+
+        let row1 = grid.row(1).expect("row 1 exists");
+        let base1 = row1.get(0).expect("row 1 should hold the carried word");
+        assert_eq!(base1.span(), 3);
+        assert_eq!(base1.raw_content(), CharOrStr::Str(CLUSTER_1));
+        let base2 = row1.get(3).expect("second cluster of the carried word");
+        assert_eq!(base2.span(), 3);
+        assert_eq!(base2.raw_content(), CharOrStr::Str(CLUSTER_2));
+        // The carried word (6 cells) exactly fills row 1's 6 columns too, so
+        // 'X' has nowhere left on that row and wraps on to row 2 -- ordinary
+        // wrapping unrelated to carry, not something to special-case.
+        let row2 = grid.row(2).expect("row 2 exists");
+        assert_eq!(
+            row2.get(0).map(|c| c.c),
+            Some('X'),
+            "the triggering char continues on the row after the carried word, which itself \
+             filled row 1 exactly"
+        );
+    }
+
+    #[test]
     fn cursor_motion_mid_word_disables_carry() {
         let mut grid =
             GridHandler::new_for_test_with_measurer(3, 8, std::sync::Arc::new(FixedWidthMeasurer));
