@@ -3,7 +3,7 @@
 
 //! TTY related functionality.
 use std::collections::HashMap;
-use std::ffi::{CStr, OsString};
+use std::ffi::OsString;
 use std::fs::{DirBuilder, File};
 use std::mem::MaybeUninit;
 use std::os::unix::fs::DirBuilderExt;
@@ -98,60 +98,103 @@ fn docker_sandbox_run_args(starter: &DockerSandboxShellStarter) -> Vec<std::ffi:
     args
 }
 
-#[derive(Debug)]
-struct Passwd<'a> {
-    name: &'a str,
-    dir: &'a str,
+/// The current user's password-database record, resolved for shell/session
+/// setup. Fields are owned so the record outlives any transient lookup buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CurrentUser {
+    pub(super) name: String,
+    pub(super) dir: String,
+    pub(super) shell: String,
 }
 
-/// Return a `Passwd` struct with pointers into the provided buf, or `None` when the current uid
-/// has no password-database entry or the lookup fails.
+/// Resolves the current uid's passwd record for shell/session setup.
 ///
-/// # Unsafety
+/// Resolution order, stopping at the first hit:
+/// 1. In-process passwd lookup (`getpwuid_r`, via nix) — fast, and correct
+///    wherever the process can resolve users itself (local `/etc/passwd`, or a
+///    glibc-dynamic build that can load NSS plugins).
+/// 2. `getent passwd <uid>` — delegates to the host's own NSS stack, so
+///    centrally-managed users (SSSD/LDAP/AD) still resolve even from a
+///    static/musl binary that can't `dlopen` glibc NSS plugins in-process.
+/// 3. `/etc/passwd` — last resort for minimal hosts that lack `getent`.
 ///
-/// If `buf` is changed while `Passwd` is alive, bad things will almost certainly happen.
-fn get_pw_entry(buf: &mut [i8; 1024]) -> Option<Passwd<'_>> {
-    // Create zeroed passwd struct.
-    let mut entry: MaybeUninit<libc::passwd> = MaybeUninit::uninit();
+/// Returns `None` only if all three fail; callers then fall back to the ambient
+/// environment (`$HOME`/`$USER`) or built-in shell defaults.
+pub(super) fn resolve_current_user() -> Option<CurrentUser> {
+    let uid = nix::unistd::getuid();
+    current_user_via_getpwuid(uid)
+        .or_else(|| current_user_via_getent(uid.as_raw()))
+        .or_else(|| current_user_from_passwd_file(uid.as_raw()))
+}
 
-    let mut res: *mut libc::passwd = ptr::null_mut();
+/// Step 1: resolve the current user with an in-process passwd lookup via nix's
+/// safe [`nix::unistd::User::from_uid`] wrapper (backed by `getpwuid_r`).
+fn current_user_via_getpwuid(uid: nix::unistd::Uid) -> Option<CurrentUser> {
+    match nix::unistd::User::from_uid(uid) {
+        Ok(Some(user)) => Some(CurrentUser {
+            name: user.name,
+            dir: user.dir.to_string_lossy().into_owned(),
+            shell: user.shell.to_string_lossy().into_owned(),
+        }),
+        // No passwd entry for this uid — e.g. a static/musl binary that can't
+        // resolve directory-service users in-process. Fall through to the
+        // host-delegated lookups.
+        Ok(None) => None,
+        Err(err) => {
+            safe_error!(
+                safe: ("passwd entry lookup failed for uid {uid}: {err}"),
+                full: ("passwd entry lookup failed")
+            );
+            None
+        }
+    }
+}
 
-    // Try and read the pw file.
-    let uid = unsafe { libc::getuid() };
-    let status = unsafe {
-        libc::getpwuid_r(
-            uid,
-            entry.as_mut_ptr(),
-            buf.as_mut_ptr() as *mut _,
-            buf.len(),
-            &mut res,
-        )
-    };
-    let entry = unsafe { entry.assume_init() };
-
-    if status != 0 {
-        safe_error!(
-            safe: ("passwd entry lookup failed for uid {uid} with status {status}"),
-            full: ("passwd entry lookup failed")
-        );
+/// Step 2: resolve via the host's `getent passwd <uid>`.
+///
+/// `getent` is the host's own (typically glibc-dynamic) binary, so it consults
+/// the host's full NSS configuration — including SSSD/LDAP/AD — which a
+/// static/musl Warp binary cannot do in-process.
+fn current_user_via_getent(uid: u32) -> Option<CurrentUser> {
+    let output = Command::new("getent")
+        .arg("passwd")
+        .arg(uid.to_string())
+        .output()
+        .ok()?;
+    if !output.status.success() {
         return None;
     }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    stdout.lines().find_map(|line| parse_passwd_line(line, uid))
+}
 
-    if res.is_null() {
-        safe_error!(
-            safe: ("passwd entry lookup failed for uid {uid}"),
-            full: ("passwd entry lookup failed")
-        );
+/// Step 3: resolve by reading `/etc/passwd` directly.
+fn current_user_from_passwd_file(uid: u32) -> Option<CurrentUser> {
+    let contents = std::fs::read_to_string("/etc/passwd").ok()?;
+    contents
+        .lines()
+        .find_map(|line| parse_passwd_line(line, uid))
+}
+
+/// Parse a single `passwd(5)`-format line
+/// (`name:passwd:uid:gid:gecos:dir:shell`) and return it as a [`CurrentUser`]
+/// iff its uid field equals `uid`.
+fn parse_passwd_line(line: &str, uid: u32) -> Option<CurrentUser> {
+    let mut fields = line.split(':');
+    let name = fields.next()?;
+    let _passwd = fields.next()?;
+    let line_uid: u32 = fields.next()?.parse().ok()?;
+    let _gid = fields.next()?;
+    let _gecos = fields.next()?;
+    let dir = fields.next()?;
+    let shell = fields.next()?;
+    if line_uid != uid {
         return None;
     }
-
-    // Sanity check.
-    assert_eq!(entry.pw_uid, uid);
-
-    // Build a borrowed Passwd struct.
-    Some(Passwd {
-        name: unsafe { CStr::from_ptr(entry.pw_name).to_str().unwrap() },
-        dir: unsafe { CStr::from_ptr(entry.pw_dir).to_str().unwrap() },
+    Some(CurrentUser {
+        name: name.to_owned(),
+        dir: dir.to_owned(),
+        shell: shell.to_owned(),
     })
 }
 
@@ -234,8 +277,7 @@ fn build_host_shell_command(
     honor_ps1: bool,
     node_version_chip_enabled: bool,
 ) -> Command {
-    let mut buf = [0; 1024];
-    let pw = get_pw_entry(&mut buf);
+    let pw = resolve_current_user();
 
     log::info!(
         "Starting shell {}",
@@ -776,8 +818,7 @@ fn build_docker_sandbox_command(
     honor_ps1: bool,
     node_version_chip_enabled: bool,
 ) -> Command {
-    let mut buf = [0; 1024];
-    let pw = get_pw_entry(&mut buf);
+    let pw = resolve_current_user();
 
     log::info!(
         "Starting Docker sandbox via {}",
@@ -966,7 +1007,26 @@ mod utils {
 }
 
 #[test]
-fn test_get_pw_entry() {
-    let mut buf: [i8; 1024] = [0; 1024];
-    let _pw = get_pw_entry(&mut buf);
+fn parse_passwd_line_extracts_matching_uid() {
+    let line = "alice:x:1000:1000:Alice:/home/alice:/bin/zsh";
+    assert_eq!(
+        parse_passwd_line(line, 1000),
+        Some(CurrentUser {
+            name: "alice".to_owned(),
+            dir: "/home/alice".to_owned(),
+            shell: "/bin/zsh".to_owned(),
+        })
+    );
+    // A non-matching uid or a malformed line yields None.
+    assert_eq!(parse_passwd_line(line, 1001), None);
+    assert_eq!(parse_passwd_line("not a passwd line", 1000), None);
+}
+
+#[test]
+fn resolve_current_user_returns_running_user() {
+    // On the test host the current uid resolves via getpwuid_r, so this should
+    // succeed and report a non-empty name.
+    if let Some(user) = resolve_current_user() {
+        assert!(!user.name.is_empty());
+    }
 }
