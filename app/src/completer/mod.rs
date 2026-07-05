@@ -51,7 +51,12 @@ pub struct SessionContext {
     cached_directory_entries: Arc<dashmap::DashMap<TypedPathBuf, Arc<Vec<EngineDirEntry>>>>,
 
     /// Snapshot of all Warp workflow aliases.
-    workflow_aliases: HashMap<String, String>,
+    ///
+    /// Wrapped in an `Arc` because `SessionContext` is cloned frequently (e.g. on
+    /// every prompt change and display-chip update) and this map is read-only after
+    /// construction. Cloning the `Arc` avoids deep-copying the whole map each time,
+    /// which showed up as significant heap churn in memory profiles.
+    workflow_aliases: Arc<HashMap<String, String>>,
 }
 
 impl SessionContext {
@@ -358,11 +363,11 @@ impl SessionContext {
         current_working_directory: TypedPathBuf,
         #[allow(unused_variables)] ctx: &AppContext,
     ) -> Self {
-        let workflow_aliases = if FeatureFlag::WorkflowAliases.is_enabled() {
+        let workflow_aliases = Arc::new(if FeatureFlag::WorkflowAliases.is_enabled() {
             WorkflowAliases::as_ref(ctx).autocomplete_data(ctx)
         } else {
             Default::default()
-        };
+        });
 
         cfg_if::cfg_if! {
             if #[cfg(feature = "completions_v2")] {
