@@ -394,7 +394,7 @@ impl CodeSettingsPageView {
                 Category::new(
                     crate::menu_label(
                         "settings.code_page.editor_subpage_title",
-                        "Code Editor and Review",
+                        "Editor and Code Review",
                     ),
                     code_editor_review_widgets,
                 ),
@@ -548,7 +548,7 @@ impl CodeSettingsPageView {
                 Category::new(
                     crate::menu_label(
                         "settings.code_page.editor_subpage_title",
-                        "Code Editor and Review",
+                        "Editor and Code Review",
                     ),
                     code_editor_review_widgets,
                 ),

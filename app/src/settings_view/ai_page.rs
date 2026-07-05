@@ -8267,7 +8267,7 @@ impl ApiKeysWidget {
                 })
         });
         let grok_connecting_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(crate::menu_label("settings.ai.connecting", "Connecting"), SecondaryTheme).with_size(ButtonSize::Small)
+            ActionButton::new(crate::menu_label("settings.ai.connecting", "Connecting…"), SecondaryTheme).with_size(ButtonSize::Small)
         });
         grok_connecting_button.update(ctx, |button, ctx| {
             button.set_disabled(true, ctx);
