@@ -854,12 +854,12 @@ impl VersionInfoWidget {
                 match autoupdate::get_update_state(app) {
                     AutoupdateStage::NoUpdateAvailable => (
                         Some(StatusContent {
-                            text: crate::menu_label("settings.updates.up_to_date", "Up to date"),
+                            text: crate::menu_label("updates.up_to_date", "Up to date"),
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
                             text: crate::menu_label(
-                                "settings.updates.check_for_updates",
+                                "updates.check_for_updates",
                                 "Check for updates",
                             ),
                             action: MainPageAction::CheckForUpdate,
@@ -868,7 +868,7 @@ impl VersionInfoWidget {
                     AutoupdateStage::CheckingForUpdate => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "settings.updates.checking",
+                                "updates.checking",
                                 "checking for update...",
                             ),
                             color: faded_text_color,
@@ -878,7 +878,7 @@ impl VersionInfoWidget {
                     AutoupdateStage::DownloadingUpdate => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "settings.updates.downloading",
+                                "updates.downloading",
                                 "downloading update...",
                             ),
                             color: faded_text_color,
@@ -888,19 +888,19 @@ impl VersionInfoWidget {
                     AutoupdateStage::UpdateReady { .. } => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "settings.updates.update_available",
+                                "updates.update_available",
                                 "Update available",
                             ),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: crate::menu_label("settings.updates.relaunch", "Relaunch Warp"),
+                            text: crate::menu_label("updates.relaunch", "Relaunch Warp"),
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::Updating { .. } => (
                         Some(StatusContent {
-                            text: crate::menu_label("settings.updates.updating", "Updating..."),
+                            text: crate::menu_label("updates.updating", "Updating..."),
                             color: faded_text_color,
                         }),
                         None,
@@ -908,27 +908,27 @@ impl VersionInfoWidget {
                     AutoupdateStage::UpdatedPendingRestart { .. } => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "settings.updates.installed",
+                                "updates.installed",
                                 "Installed update",
                             ),
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: crate::menu_label("settings.updates.relaunch", "Relaunch Warp"),
+                            text: crate::menu_label("updates.relaunch", "Relaunch Warp"),
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "settings.updates.cant_install",
+                                "updates.cant_install",
                                 "A new version of Warp is available but can't be installed",
                             ),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
                             text: crate::menu_label(
-                                "settings.updates.update_manually",
+                                "updates.update_manually",
                                 "Update Warp manually",
                             ),
                             // note: the handler for this action is a no-op
@@ -938,14 +938,14 @@ impl VersionInfoWidget {
                     AutoupdateStage::UnableToLaunchNewVersion { .. } => (
                         Some(StatusContent {
                             text: crate::menu_label(
-                                "settings.updates.cant_launch",
+                                "updates.cant_launch",
                                 "A new version of Warp is installed but can't be launched.",
                             ),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
                             text: crate::menu_label(
-                                "settings.updates.update_manually",
+                                "updates.update_manually",
                                 "Update Warp manually",
                             ),
                             // note: the handler for this action is a no-op
