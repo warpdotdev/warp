@@ -359,8 +359,7 @@ impl TuiTerminalSessionView {
     /// hint at a time — the ctrl-c exit confirmation while armed, else a
     /// transient notice, else the shell-mode callout; the active model and
     /// working directory are pushed to the right edge behind a flex spacer.
-    /// The caller must cap the row's height (a row fills the height it is
-    /// offered), e.g. with a one-row [`TuiConstrainedBox`].
+    /// Every child truncates to a single row, so the row lays out one row tall.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
         let mut footer = TuiFlex::row();
@@ -626,11 +625,7 @@ impl TuiView for TuiTerminalSessionView {
             TuiFlex::column()
                 .flex_child(TuiChildView::new(&self.transcript).finish())
                 .child(input_box.finish())
-                .child(
-                    TuiConstrainedBox::new(self.render_footer(ctx).finish())
-                        .with_max_rows(1)
-                        .finish(),
-                )
+                .child(self.render_footer(ctx).finish())
                 .finish(),
         )
         .with_padding(2)

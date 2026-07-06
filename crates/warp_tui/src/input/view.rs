@@ -30,9 +30,11 @@ use warp_editor::render::model::{
 };
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{
-    Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
-    TuiLayoutContext, TuiParentElement, TuiPoint, TuiRect, TuiRectExt, TuiSize, TuiStyle, TuiText,
+    Modifier, TuiBuffer, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext,
+    TuiFlex, TuiHoverable, TuiLayoutContext, TuiParentElement, TuiPoint, TuiRect, TuiRectExt,
+    TuiSize, TuiStyle, TuiText,
 };
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::EditableBinding;
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
@@ -45,9 +47,6 @@ use crate::tui_builder::TuiUiBuilder;
 
 /// Logical rows scrolled per mouse-wheel notch (matches `TuiScrollable`).
 const WHEEL_STEP: isize = 2;
-
-/// Columns reserved for the shell-mode `!` affordance (glyph + gap).
-const SHELL_PREFIX_WIDTH: u16 = 2;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
@@ -557,6 +556,9 @@ pub struct TuiInputView {
     /// Whether a mouse drag-selection is in progress (set on mouse-down, cleared
     /// on mouse-up). Mirrors the GUI editor's `is_selecting`.
     is_selecting: bool,
+    /// Mouse state for the shell-mode `!` gutter; created once here (not inline
+    /// during render) so mouse tracking survives per-frame element rebuilds.
+    prefix_mouse_state: MouseStateHandle,
 }
 
 impl Entity for TuiInputView {
@@ -594,6 +596,7 @@ impl TuiInputView {
             scroll_offset: 0,
             max_visible_rows: 6,
             is_selecting: false,
+            prefix_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -637,13 +640,6 @@ impl TuiInputView {
             (start, end)
         });
 
-        let shell_mode = self.is_shell_mode(ctx);
-        let prefix_style = if shell_mode {
-            TuiUiBuilder::from_app(ctx).shell_mode_accent_style()
-        } else {
-            TuiStyle::default()
-        };
-
         TuiInputElement {
             model: self.model.clone(),
             text,
@@ -652,14 +648,36 @@ impl TuiInputView {
             scroll_offset: self.scroll_offset,
             max_visible_rows: self.max_visible_rows,
             is_selecting: self.is_selecting,
-            shell_mode,
-            prefix_style,
+            shell_mode: self.is_shell_mode(ctx),
             column: TuiFlex::column(),
             cursor_col: 0,
             cursor_row_in_view: 0,
             cursor_visible: false,
             selected_spans: Vec::new(),
         }
+    }
+
+    /// Composes the shell-mode input row: the accent-styled `!` affordance in a
+    /// two-column gutter (glyph plus one column of right padding), then the
+    /// editor filling the remaining width. The gutter is outside the editable
+    /// area; clicking it places the cursor at the start of the buffer.
+    fn shell_element(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let prefix_style = TuiUiBuilder::from_app(ctx).shell_mode_accent_style();
+        let prefix = TuiHoverable::new(
+            self.prefix_mouse_state.clone(),
+            TuiContainer::new(TuiText::new("!").with_style(prefix_style).finish())
+                .with_padding_right(1)
+                .finish(),
+        )
+        .on_click(|event_ctx, _| {
+            event_ctx.dispatch_typed_action(TuiInputAction::SelectionStartAt {
+                offset: CharOffset::from(1),
+            });
+        });
+        TuiFlex::row()
+            .child(prefix.finish())
+            .flex_child(Box::new(self.render_element(ctx)))
+            .finish()
     }
 }
 
@@ -669,7 +687,11 @@ impl TuiView for TuiInputView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        Box::new(self.render_element(ctx))
+        if self.is_shell_mode(ctx) {
+            self.shell_element(ctx)
+        } else {
+            Box::new(self.render_element(ctx))
+        }
     }
 }
 
@@ -1222,11 +1244,10 @@ struct TuiInputElement {
     /// Whether a mouse drag-selection is in progress (captured from the view at
     /// render time); gates drag/up handling in `dispatch_event`.
     is_selecting: bool,
-    /// Whether the input is in `!` shell mode (captured at render time). Insets
-    /// the editable area by [`SHELL_PREFIX_WIDTH`] and draws the `!` affordance.
+    /// Whether the input is in `!` shell mode (captured at render time). Gates
+    /// the element-level Esc handling; the `!` affordance itself is a sibling
+    /// row child composed by [`TuiInputView::shell_element`].
     shell_mode: bool,
-    /// Style for the `!` affordance glyph (the shell-mode accent color).
-    prefix_style: TuiStyle,
     /// Visible rows, built during `layout`.
     column: TuiFlex,
     /// The cursor's 0-based column within the visible area (set during `layout`).
@@ -1241,26 +1262,6 @@ struct TuiInputElement {
 }
 
 impl TuiInputElement {
-    /// Columns the editable area is inset from the left edge (the `!`
-    /// affordance gutter in shell mode).
-    fn inset(&self) -> u16 {
-        if self.shell_mode {
-            SHELL_PREFIX_WIDTH
-        } else {
-            0
-        }
-    }
-
-    /// The area the editable text occupies within `area` (excludes the gutter).
-    fn content_area(&self, area: TuiRect) -> TuiRect {
-        TuiRect::new(
-            area.x.saturating_add(self.inset()),
-            area.y,
-            area.width.saturating_sub(self.inset()),
-            area.height,
-        )
-    }
-
     /// Builds the visible rows, cursor position, and selection spans for
     /// `terminal_width`, storing them for `render`/`cursor_position`.
     fn build(&mut self, terminal_width: u16, visible_rows: u32) {
@@ -1384,11 +1385,9 @@ impl TuiInputElement {
         // text resolves to the buffer's end rather than past it.
         let visual_row = visual_row.min(last_row);
 
-        // Column within that row, in display cells (0 is the left edge of the
-        // editable area; clicks on the shell-prefix gutter resolve to column 0).
-        let col = position
-            .x
-            .saturating_sub(area.x.saturating_add(self.inset()));
+        // Column within that row, in display cells (0 is the input's left edge;
+        // drags left of it clamp to column 0).
+        let col = position.x.saturating_sub(area.x);
 
         // Step 3: resolve (visual_row, col) to a char offset. The soft-wrap map
         // clamps the column to the row's end and is 0-based, while the buffer
@@ -1459,14 +1458,13 @@ impl TuiElement for TuiInputElement {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiSize {
-        // The layout constraint is the first place the real terminal width is
-        // known. In shell mode the `!` affordance gutter is reserved first, so
-        // the editable width shrinks by the inset. Push that width onto the
-        // model (interior-mutable) so event-time navigation/scroll read the
-        // right width, then build the rows at that width — mirroring how the
-        // GUI computes geometry during layout.
-        let terminal_width = constraint.constrain_width(constraint.max.width);
-        let editor_width = terminal_width.saturating_sub(self.inset());
+        // The layout constraint is the first place the real editor width is
+        // known (in shell mode the enclosing row has already reserved the `!`
+        // gutter, so the constraint is the editable width). Push that width
+        // onto the model (interior-mutable) so event-time navigation/scroll
+        // read the right width, then build the rows at that width — mirroring
+        // how the GUI computes geometry during layout.
+        let editor_width = constraint.constrain_width(constraint.max.width);
         let render_state = self.model.as_ref(app).render_state().clone();
         if let Some(cc) = render_state.as_ref(app).char_cell() {
             cc.set_terminal_width(editor_width);
@@ -1487,32 +1485,21 @@ impl TuiElement for TuiInputElement {
         );
         // The editor claims the full width it was offered (its wrap width),
         // not just the longest row's width the content-sized column reports.
-        TuiSize::new(terminal_width, content_size.height)
+        // Both components are already within `constraint`.
+        TuiSize::new(editor_width, content_size.height)
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
-        let content_area = self.content_area(area);
-        if self.shell_mode && area.width > 0 && area.height > 0 {
-            TuiText::new("!").with_style(self.prefix_style).render(
-                TuiRect::new(area.x, area.y, 1, 1),
-                buffer,
-                ctx,
-            );
-        }
-        self.column.render(content_area, buffer, ctx);
+        self.column.render(area, buffer, ctx);
         if !self.selected_spans.is_empty() {
             let reversed = TuiStyle::default().add_modifier(Modifier::REVERSED);
             for &(row_in_view, start_col, end_col) in &self.selected_spans {
-                let y = content_area.y.saturating_add(row_in_view);
-                let x = content_area.x.saturating_add(start_col);
+                let y = area.y.saturating_add(row_in_view);
+                let x = area.x.saturating_add(start_col);
                 let width = end_col.saturating_sub(start_col);
-                if y < content_area.y + content_area.height && width > 0 {
-                    let sel_rect = TuiRect::new(
-                        x,
-                        y,
-                        width.min(content_area.width.saturating_sub(start_col)),
-                        1,
-                    );
+                if y < area.y + area.height && width > 0 {
+                    let sel_rect =
+                        TuiRect::new(x, y, width.min(area.width.saturating_sub(start_col)), 1);
                     buffer.set_style(sel_rect, reversed);
                 }
             }
@@ -1520,14 +1507,13 @@ impl TuiElement for TuiInputElement {
     }
 
     fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        let cursor_col = self.cursor_col.saturating_add(self.inset());
         if !self.cursor_visible
-            || cursor_col >= area.width
+            || self.cursor_col >= area.width
             || self.cursor_row_in_view >= area.height
         {
             return None;
         }
-        Some((cursor_col, self.cursor_row_in_view))
+        Some((self.cursor_col, self.cursor_row_in_view))
     }
 
     fn dispatch_event(

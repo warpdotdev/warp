@@ -22,11 +22,11 @@ GUI prior art (the semantics we mirror):
 
 ## Proposed changes
 
-### 0. TUI framework impact: no new elements or events needed
+### 0. TUI framework dependency: `TuiFlex` cross-axis sizing
 
-Everything ships with existing `warpui_core::elements::tui` primitives; the framework itself does not change:
+The shell-mode gutter is composed with existing `warpui_core::elements::tui` primitives on top of the stacked `TuiFlex` change (branch `harry/tui-flex-alignment`):
 - **Styled text**: `TuiText::with_style(TuiStyle)` applies one style to a whole run ([`crates/warpui_core/src/elements/tui/text.rs:45 @ 51145bb7`](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warpui_core/src/elements/tui/text.rs#L45)). The blue `!` glyph and the single-color hint line each render as their own `TuiText`; no rich-text/multi-span element is required.
-- **No `TuiRow` exists** for horizontal composition, but none is needed: `TuiInputElement` is already a hand-rolled element that lays out rows, paints selection via `TuiBuffer::set_style`, and reports the cursor cell, so the 2-column gutter is an area offset inside its existing `layout`/`render`, with the affordance rendered as a `TuiText` into a 2×1 sub-rect.
+- **Horizontal composition**: the gutter is a `TuiFlex::row()` — a fixed `!` affordance child followed by the editor element as a flex child filling the leftover width. The row sizes to the editor's height because `TuiFlex` (per the stacked branch) sizes its cross axis to its largest child, clamped to the constraint, matching the GUI `Flex`'s content-sized cross-axis policy; cross-axis positioning/fill uses `TuiFlex::with_cross_axis_alignment(CrossAxisAlignment)` (shared with the GUI), with `Stretch` used by the transcript's full-width input banner in `crates/warp_tui/src/agent_block_sections.rs`.
 - **Border color**: the input border already uses `TuiContainer::with_border_style` ([container.rs:120](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warpui_core/src/elements/tui/container.rs#L120)); shell mode just swaps the style's fg. Theme-token → `Color` conversion (`CoreFill::from(ThemeFill::from(...)).into()`) already exists in the session view's render.
 - **Esc key**: the runtime already converts `KeyCode::Esc` to keystroke key `"escape"` ([`crates/warpui_core/src/runtime/event_conversion.rs:146`](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warpui_core/src/runtime/event_conversion.rs#L146)); the input key table just gains an arm for it. No new `TuiEvent` variants.
 - **New surface area is crate-local to `warp_tui`**: one `TuiInputAction` variant (`ExitShellMode`), the hint-line view, and the transient-hint timer (a spawned delayed task via the existing view-context spawn APIs, as `ctx.spawn_stream_local` is already used in the session view).
@@ -45,8 +45,8 @@ Action handling changes:
 - New `TuiInputAction::ExitShellMode` bound to plain `esc` in the key table, consumed only while in shell mode so esc stays available to ancestors otherwise (PRODUCT.md #11).
 - `Submit` no longer clears the buffer; it only emits `Submitted`. A new `pub fn clear(&mut self, ctx)` clears buffer + scroll, and the session view calls it on every accepted submission (agent prompt or executed shell command). This is what lets a blocked shell submission retain its text (PRODUCT.md #20).
 
-Rendering changes (`TuiInputElement`):
-- The element captures `shell_mode: bool` and the accent style at render time. When set, `layout` lays the editor out at `terminal_width - 2` (the width pushed onto the char-cell render state), and `render`/`cursor_position`/`offset_at` inset all rows by 2 columns; the `!` affordance is drawn in the first-row gutter styled with the shell-mode accent (`theme.ansi_fg_blue()`, via `crate::ui::shell_mode_accent_color`). Because the affordance is outside the buffer, selection/select-all/cursor math need no special-casing (PRODUCT.md #2, #8) — only the 2-column x-offset in `offset_at` and `cursor_position` must account for it.
+Rendering changes:
+- `TuiInputView::render` branches on shell mode: outside it, the plain editor element; in it, a `TuiFlex::row()` composed by `TuiInputView::shell_element` — a fixed gutter child (the `!` glyph styled with the shell-mode accent `theme.ansi_fg_blue()`, wrapped in a one-column right-padding `TuiContainer` and a `TuiHoverable` whose click state lives on the view) followed by the editor as a flex child. The flex hands the editor a slot two columns narrower and offset right, so the width pushed onto the char-cell render state, cursor placement, and mouse mapping need no shell-mode special-casing inside `TuiInputElement`; only the element-level Esc handling still reads `shell_mode`. Because the affordance is outside the buffer, selection/select-all/cursor math need no special-casing either (PRODUCT.md #2, #8). A click on the gutter dispatches `SelectionStartAt` at the buffer start.
 
 ### 3. Submit routing and execution (`crates/warp_tui/src/terminal_session_view.rs`)
 
@@ -77,7 +77,7 @@ Mode-transition semantics (the `{AI, locked}` default sticking, `{Shell, locked}
 - Without an input-mode model, `!` inserts literally (the demo stays unaffected) and `ExitShellMode` is a no-op.
 - Enter emits `Submitted` without clearing; `clear()` empties buffer and resets scroll (#20's retain-on-reject depends on this split).
 - Esc is not consumed outside shell mode and is consumed in shell mode (#11, #23).
-- Shell-mode gutter geometry: the rendered cursor shifts right by 2 (#2), mouse mapping measures from the editable area with gutter clicks landing at the start (#8), and wrapping happens two columns earlier (#8).
+- Shell-mode gutter geometry (via the composed `shell_element` row): the rendered cursor shifts right by 2 (#2), mouse mapping measures from the editor's slot after the gutter with gutter clicks consumed by the affordance's click handler (#8), and wrapping happens two columns earlier (#8).
 
 Session-view routing (shell submit → `ExecuteCommand` with `CommandExecutionSource::User`, conversation cancellation, blocked-PTY transient hint) is not unit-testable for the same constructibility reason (`TuiTerminalSessionView` needs a full `TerminalSurfaceInit`); it is validated manually.
 

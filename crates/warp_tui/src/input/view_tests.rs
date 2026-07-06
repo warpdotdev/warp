@@ -715,7 +715,8 @@ fn wheel_outside_area_is_ignored() {
 // Mode *transitions* live on the shared `BlocklistAIInputModel` (exercised by
 // the app crate's `input_model` tests); these tests cover the view's inert
 // default without an input-mode model, the submit/clear split, and the
-// element's shell-mode gutter geometry (via a directly-flipped `shell_mode`).
+// shell-mode gutter geometry of the composed `!`-affordance row (built
+// directly via `TuiInputView::shell_element`).
 
 /// Without an input-mode model, `!` is a plain character — no shell mode.
 #[test]
@@ -788,20 +789,38 @@ fn escape_passes_through_outside_shell_mode() {
     });
 }
 
-/// Lays out the view's element with `shell_mode` forced on, returning the
-/// element and its area (as `laid_out_element`, plus the gutter).
-fn laid_out_shell_element(
+/// Lays out the shell-mode composition (the `!` gutter row wrapping the
+/// editor) at width `W`, returning the boxed row element and its area.
+fn laid_out_shell_row(
     view: &ViewHandle<TuiInputView>,
     ctx: &AppContext,
-) -> (TuiInputElement, TuiRect) {
-    let mut element = view.as_ref(ctx).render_element(ctx);
-    element.shell_mode = true;
+) -> (Box<dyn TuiElement>, TuiRect) {
+    let mut element = view.as_ref(ctx).shell_element(ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
     let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
     (element, TuiRect::new(0, 0, size.width, size.height))
+}
+
+/// Lays out the editor content element in the slot the shell row's flex hands
+/// it: two columns narrower, offset right of the gutter.
+fn laid_out_shell_content_slot(
+    view: &ViewHandle<TuiInputView>,
+    ctx: &AppContext,
+) -> (TuiInputElement, TuiRect) {
+    let mut element = view.as_ref(ctx).render_element(ctx);
+    let mut rendered_views = EntityIdMap::default();
+    let mut lctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(W - 2, 20)),
+        &mut lctx,
+        ctx,
+    );
+    (element, TuiRect::new(2, 0, size.width, size.height))
 }
 
 /// In shell mode the rendered cursor is shifted right by the `!` gutter.
@@ -811,7 +830,7 @@ fn shell_mode_offsets_cursor_by_gutter() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, "ab");
-            let (element, area) = laid_out_shell_element(&view, ctx);
+            let (element, area) = laid_out_shell_row(&view, ctx);
             let mut rendered_views = EntityIdMap::default();
             let mut lctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
@@ -821,8 +840,9 @@ fn shell_mode_offsets_cursor_by_gutter() {
     });
 }
 
-/// In shell mode mouse columns are measured from the editable area (clicks on
-/// the gutter resolve to column 0).
+/// In shell mode mouse columns are measured from the editable area (the
+/// editor's slot starts after the gutter), and a click on the gutter itself
+/// is consumed, placing the cursor at the start of the buffer.
 #[test]
 fn shell_mode_offsets_mouse_mapping_by_gutter() {
     App::test((), |mut app| async move {
@@ -830,7 +850,7 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             let view = build_view(ctx);
             type_str(&view, ctx, "hello world");
             let action = {
-                let (element, area) = laid_out_shell_element(&view, ctx);
+                let (element, area) = laid_out_shell_content_slot(&view, ctx);
                 element.mouse_action(&left_down(2 + 3, 0, 1, false), area, ctx)
             };
             let Some(TuiInputAction::SelectionStartAt { offset }) = action else {
@@ -839,14 +859,25 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             // Screen column 5 = content column 3 = gap offset 4 (1-based).
             assert_eq!(offset.as_usize(), 4);
 
-            let action = {
-                let (element, area) = laid_out_shell_element(&view, ctx);
-                element.mouse_action(&left_down(0, 0, 1, false), area, ctx)
+            // A press on the gutter is consumed by the `!` affordance (its
+            // click handler moves the cursor to the buffer start).
+            let (mut row, area) = laid_out_shell_row(&view, ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut lctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
             };
-            let Some(TuiInputAction::SelectionStartAt { offset }) = action else {
-                panic!("expected SelectionStartAt, got {action:?}");
-            };
-            assert_eq!(offset.as_usize(), 1, "gutter clicks land at the start");
+            let mut event_ctx = TuiEventContext::default();
+            event_ctx.set_origin_view(Some(view.id()));
+            assert!(
+                row.dispatch_event(
+                    &left_down(0, 0, 1, false),
+                    area,
+                    &mut event_ctx,
+                    &mut lctx,
+                    ctx
+                ),
+                "gutter clicks must be consumed"
+            );
         });
     });
 }
@@ -862,7 +893,7 @@ fn shell_mode_wraps_at_gutter_narrowed_width() {
             type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
             let (_, area) = laid_out_element(&view, ctx);
             assert_eq!(area.height, 1);
-            let (_, area) = laid_out_shell_element(&view, ctx);
+            let (_, area) = laid_out_shell_row(&view, ctx);
             assert_eq!(area.height, 2, "shell mode should wrap two columns earlier");
         });
     });
