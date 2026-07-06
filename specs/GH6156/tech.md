@@ -4,7 +4,7 @@
 
 ## Context
 
-Windows jump lists are populated by the app via the Shell COM interface `ICustomDestinationList`. Warp currently sets no custom destinations or tasks, so its taskbar jump list shows only Windows defaults. The user's saved Tab Configs are already openable via `warp://tab_config/<file-stem>`, and "New Window" is already openable via `warp://action/new_window?path=~`. We will register one jump list destination per Tab Config and one static "New Window" task.
+Windows jump lists are populated by the app via the Shell COM interface `ICustomDestinationList`. Warp currently sets no custom destinations or tasks, so its taskbar jump list shows only Windows defaults. The user's saved Tab Configs are already openable via `<scheme>://tab_config/<file-stem>`, and "New Window" is already openable via `<scheme>://action/new_window?path=~`, where `<scheme>` is the running channel's URI scheme from `ChannelState::url_scheme()`. We will register one jump list destination per Tab Config and one static "New Window" task.
 
 The running process already declares its AppUserModelID (AUMID) via `warpui::platform::windows::AppBuilderExt::set_app_user_model_id` in [`app/src/lib.rs`](https://github.com/warpdotdev/warp/blob/05927696c07c3ddcfb89ac24113fc202e41dc71/app/src/lib.rs), using `ChannelState::app_id().to_string()` to match the installer's shortcut (`dev.warp.{MyAppName}` in [`script/windows/windows-installer.iss`](https://github.com/warpdotdev/warp/blob/05927696c07c3ddcfb89ac24113fc202e41dc71/script/windows/windows-installer.iss)). This satisfies the jump list prerequisite; this feature only needs to ensure the jump list is refreshed after app initialization, when the AUMID is already set.
 
@@ -19,13 +19,13 @@ Relevant files:
 
 ## Proposed changes
 
-1. **Feature flag.** Add `WindowsJumpList` to `FeatureFlag` in `crates/warp_features/src/lib.rs` and to `DOGFOOD_FLAGS`. Gate all new code with `FeatureFlag::WindowsJumpList.is_enabled()`; use `#[cfg(windows)]` only for COM calls.
+1. **Feature flag.** Add `WindowsJumpList` to `FeatureFlag` in `crates/warp_features/src/lib.rs` and to `DOGFOOD_FLAGS`. Gate all new code with `FeatureFlag::WindowsJumpList.is_enabled()`; use `#[cfg(windows)]` only for COM calls. When the flag is disabled, call `ICustomDestinationList::DeleteList` (or commit an empty custom list) on startup to remove any previously committed destinations/tasks so the jump list does not show stale entries.
 2. **Reuse the existing AUMID assignment.** No new AUMID setter is needed. `app/src/lib.rs` already calls `app_builder.set_app_user_model_id(ChannelState::app_id().to_string())` during app builder initialization, before the first jump list refresh.
 3. **Add a jump list refresh module.** Create `app/src/platform/windows/jump_list.rs` (included from `windows.rs`) with:
-   - `pub fn refresh_jump_list(configs: &[TabConfigEntry])` that calls `ICustomDestinationList::BeginList`, reads the available destination slot count from `pcMinSlots`, adds a "New Window" task, adds a "Tab Configs" category with up to that many sorted Tab Config entries, and commits. On COM failure, log and return; jump list population must never break startup. The function is safe to call from a background thread.
+   - `pub fn refresh_jump_list(configs: &[TabConfigEntry])` that calls `ICustomDestinationList::BeginList`, reads the available destination slot count from `pcMinSlots`, and obtains the removed-destinations `IObjectCollection`. Filter out any Tab Config entries whose identifiers appear in the removed collection so user-removed destinations are not re-added. Add a "New Window" task, add a "Tab Configs" category with the remaining entries up to the slot count, and commit. On COM failure, log and return; jump list population must never break startup. The function is safe to call from a background thread.
    - A helper that builds `IShellLinkW` shortcuts targeting the current executable with the deeplink URI as arguments. Percent-encode the file stem as a URI path segment and pass the full deeplink as a single quoted Shell Link argument so valid filenames cannot split argv or change URL semantics. Set the visible label via `IPropertyStore::SetValue(PKEY_Title, ...)` and the tooltip via `IShellLinkW::SetDescription`.
    - Initialize COM (`CoInitializeEx(COINIT_APARTMENTTHREADED)`) at entry and pair with `CoUninitialize`, because `IShellLinkW`/`ICustomDestinationList` are apartment-threaded and must be created and used on the same thread.
-4. **Tab Config to jumplist item mapper.** Add `tab_configs_to_jump_entries(configs: &[TabConfig]) -> Vec<TabConfigEntry>` in the jump list module. Derive the file stem from `config.source_path`, use `config.name` as the label, and produce `warp://tab_config/<stem>` deeplinks. Sort alphabetically by display name. The jump-list refresh function then truncates the sorted entries to the slot count returned by `ICustomDestinationList::BeginList` (`pcMinSlots`, default 10) so the capped subset is deterministic.
+4. **Tab Config to jumplist item mapper.** Add `tab_configs_to_jump_entries(configs: &[TabConfig]) -> Vec<TabConfigEntry>` in the jump list module. Derive the file stem from `config.source_path`, use `config.name` as the label, and produce `<scheme>://tab_config/<stem>` deeplinks using `ChannelState::url_scheme()`. Sort alphabetically by display name. The jump-list refresh function then truncates the sorted entries to the slot count returned by `ICustomDestinationList::BeginList` (`pcMinSlots`, default 10) so the capped subset is deterministic.
 5. **Trigger refresh asynchronously from the existing reload path.** In `app/src/user_config/native.rs`, inside the `ctx.spawn` callback for tab configs (both startup and `WarpConfigUpdateEvent::TabConfigs`), map the parsed configs to entries and fire a fire-and-forget background task:
    ```rust
    ctx.background_executor()
@@ -39,12 +39,13 @@ Relevant files:
 
 ## Testing and validation
 
-- **Unit test (mapper):** In a `*_tests.rs` file, assert: label uses `name`, deeplink is `warp://tab_config/<stem>`, entries sort by display name, empty input yields empty output, and two configs with the same `name` but different stems both appear with distinct deeplinks.
+- **Unit test (mapper):** In a `*_tests.rs` file, assert: label uses `name`, deeplink uses `ChannelState::url_scheme()` and the expected `<scheme>://tab_config/<stem>` form, entries sort by display name, empty input yields empty output, and two configs with the same `name` but different stems both appear with distinct deeplinks.
 - **Manual tests on Windows with the flag enabled:**
   - Save a Tab Config, pin Warp to the taskbar, right-click, and confirm "New Window" and the "Tab Configs" category/entry appear; click each and verify behavior.
   - Quit Warp and click each entry; confirm cold-start opens the correct window.
   - Add/delete a `*.toml` while Warp runs; confirm the jump list updates without restart.
-  - With the flag disabled, confirm no custom task/category appears.
+  - With the flag disabled after a previous enabled run, confirm any previously committed custom tasks/categories are cleared from the jump list.
   - For a parametrized Tab Config, confirm the params modal appears on jump list click (matching the `+` menu behavior).
+  - Remove a Tab Config from the jump list via the Windows UI, then trigger a refresh; confirm the removed entry stays removed.
 - **Async startup behavior:** verify the first window paints before the jump list commit finishes; a failed refresh must not block startup or surface an error UI.
 - **Regression:** `./script/presubmit` passes and existing Tab Config / URI tests still pass.
