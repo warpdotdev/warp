@@ -962,6 +962,17 @@ ru:
     indexing_remote_syncing_partial: "Индексация - {completed}"
     indexing_remote_syncing_zero: "Индексация - 0 / {total}"
     indexing_remote_generic: "Индексация..."
+    lsp_status_installed: "Установлено"
+    lsp_status_installing: "Установка..."
+    lsp_status_checking: "Проверка..."
+    lsp_status_available_for_download: "Доступно для загрузки"
+    lsp_status_available: "Доступен"
+    lsp_status_busy: "Занят"
+    lsp_status_failed: "Ошибка"
+    lsp_status_stopped: "Остановлен"
+    lsp_status_not_running: "Не запущен"
+    lsp_restart_server: "Перезапустить сервер"
+    lsp_view_logs: "Показать журналы"
 
   settings.category:
     themes: "Темы"

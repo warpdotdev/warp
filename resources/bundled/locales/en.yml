@@ -962,6 +962,17 @@ en:
     indexing_remote_syncing_partial: "Indexing - {completed}"
     indexing_remote_syncing_zero: "Indexing - 0 / {total}"
     indexing_remote_generic: "Indexing..."
+    lsp_status_installed: "Installed"
+    lsp_status_installing: "Installing..."
+    lsp_status_checking: "Checking..."
+    lsp_status_available_for_download: "Available for download"
+    lsp_status_available: "Available"
+    lsp_status_busy: "Busy"
+    lsp_status_failed: "Failed"
+    lsp_status_stopped: "Stopped"
+    lsp_status_not_running: "Not running"
+    lsp_restart_server: "Restart server"
+    lsp_view_logs: "View logs"
 
   settings.category:
     themes: "Themes"

@@ -110,6 +110,39 @@ fn indexing_disabled_global_ai_text() -> &'static str {
 fn codebase_index_limit_reached() -> &'static str {
     crate::menu_label("settings.code_page.codebase_index_limit_reached", "You have reached the maximum number of codebase indices for your plan. Delete existing indices to auto-index new codebases.")
 }
+fn lsp_status_installed() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_status_installed", "Installed")
+}
+fn lsp_status_installing() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_status_installing", "Installing...")
+}
+fn lsp_status_checking() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_status_checking", "Checking...")
+}
+fn lsp_status_available_for_download() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_status_available_for_download", "Available for download")
+}
+fn lsp_status_available() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_status_available", "Available")
+}
+fn lsp_status_busy() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_status_busy", "Busy")
+}
+fn lsp_status_failed() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_status_failed", "Failed")
+}
+fn lsp_status_stopped() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_status_stopped", "Stopped")
+}
+fn lsp_status_not_running() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_status_not_running", "Not running")
+}
+fn lsp_restart_server() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_restart_server", "Restart server")
+}
+fn lsp_view_logs() -> &'static str {
+    crate::menu_label("settings.code_page.lsp_view_logs", "View logs")
+}
 #[cfg(not(target_family = "wasm"))]
 const REMOTE_CODEBASE_INDEX_LIMIT_REACHED_FAILURE: &str =
     "maximum number of codebase indexes has been reached";
@@ -2225,10 +2258,10 @@ impl CodePageWidget {
         );
 
         let (description, is_installing) = match &repo_status {
-            Some(LspRepoStatus::DisabledAndInstalled { .. }) => ("Installed", false),
-            Some(LspRepoStatus::Installing { .. }) => ("Installing...", true),
-            Some(LspRepoStatus::CheckingForInstallation) => ("Checking...", true),
-            _ => ("Available for download", false),
+            Some(LspRepoStatus::DisabledAndInstalled { .. }) => (lsp_status_installed(), false),
+            Some(LspRepoStatus::Installing { .. }) => (lsp_status_installing(), true),
+            Some(LspRepoStatus::CheckingForInstallation) => (lsp_status_checking(), true),
+            _ => (lsp_status_available_for_download(), false),
         };
 
         name_desc_column.add_child(
@@ -2410,7 +2443,7 @@ impl CodePageWidget {
                         background: Some(theme.surface_3().into()),
                         ..Default::default()
                     })
-                    .with_text_label("Restart server".to_owned())
+                    .with_text_label(lsp_restart_server().to_owned())
                     .build()
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| {
@@ -2441,7 +2474,7 @@ impl CodePageWidget {
                         font_size: Some(12.),
                         ..Default::default()
                     })
-                    .with_text_label("View logs".to_owned())
+                    .with_text_label(lsp_view_logs().to_owned())
                     .build()
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| {
@@ -2497,26 +2530,26 @@ impl CodePageWidget {
                         AnsiColorIdentifier::Green
                             .to_ansi_color(&theme.terminal_colors().normal)
                             .into(),
-                        "Available",
+                        lsp_status_available(),
                     ),
                     LspState::Starting | LspState::Available { .. } => (
                         AnsiColorIdentifier::Yellow
                             .to_ansi_color(&theme.terminal_colors().normal)
                             .into(),
-                        "Busy",
+                        lsp_status_busy(),
                     ),
                     LspState::Failed { .. } => (
                         AnsiColorIdentifier::Red
                             .to_ansi_color(&theme.terminal_colors().normal)
                             .into(),
-                        "Failed",
+                        lsp_status_failed(),
                     ),
                     LspState::Stopped { .. } | LspState::Stopping { .. } => {
-                        (theme.disabled_ui_text_color().into_solid(), "Stopped")
+                        (theme.disabled_ui_text_color().into_solid(), lsp_status_stopped())
                     }
                 }
             }
-            None => (theme.disabled_ui_text_color().into_solid(), "Not running"),
+            None => (theme.disabled_ui_text_color().into_solid(), lsp_status_not_running()),
         }
     }
 }
