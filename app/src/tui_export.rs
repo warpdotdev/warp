@@ -27,12 +27,14 @@ pub use crate::ai::blocklist::history_model::{
 };
 pub use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
-    ShellCommandExecutor, ShellCommandExecutorEvent,
+    InputConfig, InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
+    PolicyConfigUpdate, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
+pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::event::AfterBlockCompletedEvent;
 pub use crate::terminal::input::CommandExecutionSource;

@@ -17,6 +17,7 @@ pub(crate) mod queued_query;
 pub(super) use controller::RequestInput;
 pub mod history_model;
 pub mod inline_action;
+mod input_mode_policy;
 mod input_model;
 mod permissions;
 mod persistence;
@@ -68,9 +69,12 @@ pub(crate) use history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FORK_PREFIX,
     PRE_REWIND_PREFIX,
 };
-pub use input_model::BlocklistAIInputModel;
-pub(crate) use input_model::{
-    BlocklistAIInputEvent, InputConfig, InputType, InputTypeAutoDetectionSource,
+// The policy types are re-exported for the TUI frontend via `tui_export`.
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use input_mode_policy::{InputModePolicy, InputModePolicyHandle, PolicyConfigUpdate};
+pub(crate) use input_model::BlocklistAIInputEvent;
+pub use input_model::{
+    BlocklistAIInputModel, InputConfig, InputType, InputTypeAutoDetectionSource,
 };
 pub(crate) use passive_suggestions::{
     LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
