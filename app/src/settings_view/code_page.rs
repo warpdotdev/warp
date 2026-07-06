@@ -143,6 +143,48 @@ fn lsp_restart_server() -> &'static str {
 fn lsp_view_logs() -> &'static str {
     crate::menu_label("settings.code_page.lsp_view_logs", "View logs")
 }
+fn auto_open_code_review_panel() -> &'static str {
+    crate::menu_label("settings.code_page.auto_open_code_review_panel", "Auto open code review panel")
+}
+fn auto_open_code_review_panel_desc() -> &'static str {
+    crate::menu_label("settings.code_page.auto_open_code_review_panel_desc", "When this setting is on, the code review panel will open on the first accepted diff of a conversation")
+}
+fn show_code_review_button() -> &'static str {
+    crate::menu_label("settings.code_page.show_code_review_button", "Show code review button")
+}
+fn show_code_review_button_desc() -> &'static str {
+    crate::menu_label("settings.code_page.show_code_review_button_desc", "Show a button in the top right of the window to toggle the code review panel.")
+}
+fn show_diff_stats() -> &'static str {
+    crate::menu_label("settings.code_page.show_diff_stats", "Show diff stats on code review button")
+}
+fn show_diff_stats_desc() -> &'static str {
+    crate::menu_label("settings.code_page.show_diff_stats_desc", "Show lines added and removed counts on the code review button.")
+}
+fn project_explorer() -> &'static str {
+    crate::menu_label("settings.code_page.project_explorer", "Project explorer")
+}
+fn project_explorer_desc() -> &'static str {
+    crate::menu_label("settings.code_page.project_explorer_desc", "Adds an IDE-style project explorer / file tree to the left side tools panel.")
+}
+fn global_file_search() -> &'static str {
+    crate::menu_label("settings.code_page.global_file_search", "Global file search")
+}
+fn global_file_search_desc() -> &'static str {
+    crate::menu_label("settings.code_page.global_file_search_desc", "Adds global file search to the left side tools panel.")
+}
+fn show_hidden_files() -> &'static str {
+    crate::menu_label("settings.code_page.show_hidden_files", "Show hidden files in project explorer")
+}
+fn show_hidden_files_desc() -> &'static str {
+    crate::menu_label("settings.code_page.show_hidden_files_desc", "Show dotfiles and hidden files (starting with .) in the project explorer.")
+}
+fn format_on_save() -> &'static str {
+    crate::menu_label("settings.code_page.format_on_save", "Format on save (requires an active language server)")
+}
+fn format_on_save_desc() -> &'static str {
+    crate::menu_label("settings.code_page.format_on_save_desc", "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected.")
+}
 #[cfg(not(target_family = "wasm"))]
 const REMOTE_CODEBASE_INDEX_LIMIT_REACHED_FAILURE: &str =
     "maximum number of codebase indexes has been reached";
@@ -2747,7 +2789,7 @@ impl SettingsWidget for AutoOpenCodeReviewPaneCodeWidget {
     ) -> Box<dyn Element> {
         let general_settings = GeneralSettings::as_ref(app);
         render_body_item::<CodeSettingsPageAction>(
-            "Auto open code review panel".into(),
+            auto_open_code_review_panel().into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
@@ -2761,7 +2803,7 @@ impl SettingsWidget for AutoOpenCodeReviewPaneCodeWidget {
                     ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane);
                 })
                 .finish(),
-            Some("When this setting is on, the code review panel will open on the first accepted diff of a conversation".into()),
+            Some(auto_open_code_review_panel_desc().into()),
         )
     }
 }
@@ -2824,7 +2866,7 @@ impl SettingsWidget for CodeReviewPanelToggleWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            "Show code review button".into(),
+            show_code_review_button().into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
@@ -2838,10 +2880,7 @@ impl SettingsWidget for CodeReviewPanelToggleWidget {
                     ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleCodeReviewPanel);
                 })
                 .finish(),
-            Some(
-                "Show a button in the top right of the window to toggle the code review panel."
-                    .into(),
-            ),
+            Some(show_code_review_button_desc().into()),
         )
     }
 }
@@ -2867,7 +2906,7 @@ impl SettingsWidget for CodeReviewDiffStatsToggleWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            "Show diff stats on code review button".into(),
+            show_diff_stats().into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
@@ -2883,7 +2922,7 @@ impl SettingsWidget for CodeReviewDiffStatsToggleWidget {
                     );
                 })
                 .finish(),
-            Some("Show lines added and removed counts on the code review button.".into()),
+            Some(show_diff_stats_desc().into()),
         )
     }
 }
@@ -2909,7 +2948,7 @@ impl SettingsWidget for ProjectExplorerToggleWidget {
         let code_settings = CodeSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            "Project explorer".into(),
+            project_explorer().into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
@@ -2923,10 +2962,7 @@ impl SettingsWidget for ProjectExplorerToggleWidget {
                     ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleProjectExplorer);
                 })
                 .finish(),
-            Some(
-                "Adds an IDE-style project explorer / file tree to the left side tools panel."
-                    .into(),
-            ),
+            Some(project_explorer_desc().into()),
         )
     }
 }
@@ -2952,7 +2988,7 @@ impl SettingsWidget for GlobalSearchToggleWidget {
         let code_settings = CodeSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            "Global file search".into(),
+            global_file_search().into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
@@ -2966,7 +3002,7 @@ impl SettingsWidget for GlobalSearchToggleWidget {
                     ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleGlobalSearch);
                 })
                 .finish(),
-            Some("Adds global file search to the left side tools panel.".into()),
+            Some(global_file_search_desc().into()),
         )
     }
 }
@@ -2992,7 +3028,7 @@ impl SettingsWidget for ShowHiddenFilesToggleWidget {
         let code_settings = CodeSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            "Show hidden files in project explorer".into(),
+            show_hidden_files().into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
@@ -3006,9 +3042,7 @@ impl SettingsWidget for ShowHiddenFilesToggleWidget {
                     ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleShowHiddenFiles);
                 })
                 .finish(),
-            Some(
-                "Show dotfiles and hidden files (starting with .) in the project explorer.".into(),
-            ),
+            Some(show_hidden_files_desc().into()),
         )
     }
 }
@@ -3034,7 +3068,7 @@ impl SettingsWidget for FormatOnSaveToggleWidget {
         let code_settings = CodeSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            "Format on save (requires an active language server)".into(),
+            format_on_save().into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
@@ -3048,10 +3082,7 @@ impl SettingsWidget for FormatOnSaveToggleWidget {
                     ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleFormatOnSave);
                 })
                 .finish(),
-            Some(
-                "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
-                    .into(),
-            ),
+            Some(format_on_save_desc().into()),
         )
     }
 }
