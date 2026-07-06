@@ -1613,7 +1613,7 @@ impl BlocklistAIHistoryModel {
         // Build truncated tasks by retaining only messages whose IDs are in
         // `allowed_message_ids`. Tasks whose message list becomes empty and
         // which are non-root tasks are dropped.
-        let truncated_tasks: Vec<warp_multi_agent_api::Task> = conversation
+        let mut truncated_tasks: Vec<warp_multi_agent_api::Task> = conversation
             .all_tasks()
             .filter_map(|t| {
                 if let Some(message_ids_to_retain) = message_ids_to_retain_by_task.get(t.id()) {
@@ -1633,6 +1633,23 @@ impl BlocklistAIHistoryModel {
                 "Truncated tasks for forked conversation at block are empty for conversation {}.",
                 conversation.id()
             ));
+        }
+
+        // Forking at an exchange boundary can retain an assistant `tool_call`
+        // whose matching `tool_call_result` lived in a later (dropped) exchange
+        // (a call and its result carry different `request_id`s, so
+        // `into_exchanges` places them in separate exchanges). Sending a prompt
+        // in the fork would then hit an Anthropic `400 invalid_request_error:
+        // tool_use ids were found without tool_result blocks`. Reconcile each
+        // retained-but-unresolved tool_call so every tool_use stays paired.
+        for task in truncated_tasks.iter_mut() {
+            let source_task_messages = conversation
+                .all_tasks()
+                .filter_map(|t| t.source())
+                .find(|source| source.id == task.id)
+                .map(|source| source.messages.as_slice())
+                .unwrap_or(&[]);
+            reconcile_dangling_tool_calls_in_forked_task(task, source_task_messages);
         }
 
         let updated_tasks_with_new_ids =
@@ -3178,6 +3195,104 @@ impl From<&AIAgentOutputStatus> for AIQueryHistoryOutputStatus {
                 FinishedAIAgentOutput::Success { .. } => Self::Completed,
             },
         }
+    }
+}
+
+/// Reconciles every retained `tool_call` in a forked `task` whose matching
+/// `tool_call_result` was dropped by the truncation (a call and its result live
+/// in different exchanges because they carry different `request_id`s). An
+/// unpaired `tool_use` makes the fork's next request fail with the Anthropic
+/// `400 invalid_request_error: tool_use ids were found without tool_result
+/// blocks`.
+///
+/// Reconciliation is a hybrid, preferring to preserve real context:
+/// - PREFER pulling the real `tool_call_result` forward from the source
+///   conversation (`source_task_messages` is this task's full pre-truncation
+///   history), keeping its original `request_id` so it groups into the right
+///   exchange on restore. This retains the actual tool output.
+/// - FALL BACK to a synthesized `Cancel` result when there is no real result
+///   (a genuinely in-flight tool call), and for sub-agent `tool_call`s so we do
+///   not drag the sub-agent's subtask into the fork. A `Cancel` keeps the turn
+///   valid and signals the model the call can be retried; this mirrors the
+///   server's `NewToolCallCancellationMessage`.
+///
+/// The reconciled result is inserted immediately after its `tool_call` to keep
+/// call/result ordering within the task.
+fn reconcile_dangling_tool_calls_in_forked_task(
+    task: &mut warp_multi_agent_api::Task,
+    source_task_messages: &[warp_multi_agent_api::Message],
+) {
+    let resolved_tool_call_ids: HashSet<String> = task
+        .messages
+        .iter()
+        .filter_map(|m| m.tool_call_result().map(|r| r.tool_call_id.clone()))
+        .collect();
+
+    // Real results from the source history, keyed by tool_call_id, so a dropped
+    // result can be pulled forward.
+    let source_results_by_tool_call_id: HashMap<String, &warp_multi_agent_api::Message> =
+        source_task_messages
+            .iter()
+            .filter_map(|m| m.tool_call_result().map(|r| (r.tool_call_id.clone(), m)))
+            .collect();
+
+    // Collect each dangling tool_call's position, id, whether it is a sub-agent
+    // call, and its request_id up front so we don't mutate while iterating.
+    let dangling: Vec<(usize, String, bool, String)> = task
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, message)| {
+            let tool_call = message.tool_call()?;
+            (!resolved_tool_call_ids.contains(&tool_call.tool_call_id)).then(|| {
+                (
+                    idx,
+                    tool_call.tool_call_id.clone(),
+                    tool_call.subagent().is_some(),
+                    message.request_id.clone(),
+                )
+            })
+        })
+        .collect();
+
+    // Insert from the back so earlier indices remain valid as we splice.
+    for (idx, tool_call_id, is_subagent, request_id) in dangling.into_iter().rev() {
+        // Prefer the real result for non-sub-agent calls; otherwise synthesize
+        // a cancellation.
+        let reconciled = source_results_by_tool_call_id
+            .get(&tool_call_id)
+            .filter(|_| !is_subagent)
+            .map(|real| (*real).clone())
+            .unwrap_or_else(|| {
+                synthesized_tool_call_cancellation_message(&task.id, &tool_call_id, &request_id)
+            });
+        task.messages.insert(idx + 1, reconciled);
+    }
+}
+
+/// Builds a `Cancel` `tool_call_result` message paired to `tool_call_id`,
+/// carrying `request_id` so it groups into the same exchange as its `tool_call`
+/// on restore.
+fn synthesized_tool_call_cancellation_message(
+    task_id: &str,
+    tool_call_id: &str,
+    request_id: &str,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: Uuid::new_v4().to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        fetched_memories: vec![],
+        message: Some(warp_multi_agent_api::message::Message::ToolCallResult(
+            warp_multi_agent_api::message::ToolCallResult {
+                tool_call_id: tool_call_id.to_string(),
+                context: None,
+                result: Some(warp_multi_agent_api::message::tool_call_result::Result::Cancel(())),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
     }
 }
 
