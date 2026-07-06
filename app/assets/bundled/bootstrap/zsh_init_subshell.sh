@@ -5,7 +5,7 @@
 # command -p resolves the given command with the system default PATH, ensuring the shell
 # can find them even if the user has a clobbered PATH value.
 setopt hist_ignore_space
- unsetopt ZLE
+ unsetopt ZLE CORRECT CORRECT_ALL
  WARP_IS_SUBSHELL=1
  WARP_SESSION_ID=@@WARP_SESSION_ID@@
  _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n)

@@ -2,7 +2,7 @@
 #
 # command -p resolves the given command with the system default PATH, ensuring the shell
 # can find them even if the user has a clobbered PATH value.
- unsetopt ZLE
+ unsetopt ZLE CORRECT CORRECT_ALL
  WARP_SESSION_ID=@@WARP_SESSION_ID@@
  _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n)
  _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER)
