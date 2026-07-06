@@ -21,8 +21,11 @@ pub use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,
     PendingQueryState,
 };
-pub use crate::ai::blocklist::diff_storage::TuiDiffStorage;
-pub use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff};
+pub use crate::ai::blocklist::diff_storage::{
+    DiffStorage, DiffStorageHelper, FileSnapshot, RegisteredDiffStorage, SaveFuture,
+    UpdatedFileState,
+};
+pub use crate::ai::blocklist::diff_types::{changed_lines_from_op, DiffSessionType, FileDiff};
 pub use crate::ai::blocklist::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
@@ -36,6 +39,7 @@ pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
+pub use crate::code::DiffResult;
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::event::AfterBlockCompletedEvent;

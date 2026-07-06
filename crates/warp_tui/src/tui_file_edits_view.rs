@@ -7,13 +7,15 @@
 //! execution applies the diffs' deltas unmodified; this view renders a compact
 //! summary over the stored diffs.
 use warp::tui_export::{
-    AIAgentActionId, Appearance, BlocklistAIActionModel, DiffSessionType, FileDiff, TuiDiffStorage,
+    AIAgentActionId, Appearance, BlocklistAIActionModel, DiffSessionType, FileDiff,
 };
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{Modifier, TuiContainer, TuiElement, TuiStyle, TuiText};
 use warpui_core::elements::Fill;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
+
+use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageHandle};
 
 /// A per-action view backing one `RequestFileEdits` tool call in the transcript.
 pub(super) struct TuiFileEditsView {
@@ -40,7 +42,8 @@ impl TuiFileEditsView {
 
         let executor = action_model.as_ref(ctx).request_file_edits_executor(ctx);
         executor.update(ctx, |executor, _| {
-            executor.register_requested_edits(&action_id, Box::new(storage.clone()));
+            let handle = TuiDiffStorageHandle::new(storage.clone());
+            executor.register_requested_edits(&action_id, Box::new(handle));
         });
 
         Self { storage }
