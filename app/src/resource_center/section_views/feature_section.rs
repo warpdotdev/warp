@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use warpui::elements::{
     Align, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Hoverable, Icon,
     MouseState, MouseStateHandle, ParentElement, Shrinkable,
@@ -34,12 +36,16 @@ pub enum FeatureSection {
 }
 
 impl FeatureSection {
-    pub fn section_name_string(&self) -> &'static str {
+    pub fn section_name_string(&self) -> Cow<'static, str> {
         match self {
-            FeatureSection::WhatsNew => "What's New?",
-            FeatureSection::GettingStarted => "Getting Started",
-            FeatureSection::MaximizeWarp => "Maximize Warp",
-            FeatureSection::AdvancedSetup => "Advanced Setup",
+            FeatureSection::WhatsNew => i18n::t!("resource_center.section_name.whats_new"),
+            FeatureSection::GettingStarted => {
+                i18n::t!("resource_center.section_name.getting_started")
+            }
+            FeatureSection::MaximizeWarp => i18n::t!("resource_center.section_name.maximize_warp"),
+            FeatureSection::AdvancedSetup => {
+                i18n::t!("resource_center.section_name.advanced_setup")
+            }
         }
     }
 }
