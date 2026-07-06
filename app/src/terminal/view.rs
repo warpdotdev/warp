@@ -15940,24 +15940,6 @@ impl TerminalView {
         self.enter_agent_view_after_pending_commands = false;
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    pub(super) fn on_pty_spawn_failed(
-        &mut self,
-        pty_spawn_error: anyhow::Error,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.pty_spawn_failed = true;
-        // Emit before the banner so the terminal driver can cancel its
-        // bootstrap wait immediately, without waiting for the 60 s timeout.
-        let reason = format!("{pty_spawn_error:#}");
-        ctx.emit(Event::PtySpawnFailed { reason });
-        self.insert_shell_process_terminated_banner(
-            shell_terminated_banner::TerminationType::PtySpawnFailure { pty_spawn_error },
-            ctx,
-        );
-        ctx.notify();
-    }
-
     /// Start a timer so that we can detect when a session does not bootstrap in a timely manner
     fn start_bootstrap_timer(&self, duration: Duration, ctx: &mut ViewContext<Self>) {
         let _ = ctx.spawn(
