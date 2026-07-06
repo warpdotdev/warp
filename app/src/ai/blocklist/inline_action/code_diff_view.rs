@@ -57,7 +57,7 @@ use crate::ai::blocklist::action_model::{
     MalformedFinalLineProxyEvent, RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent,
 };
 use crate::ai::blocklist::diff_storage::{
-    DiffSaveState, DiffStorageView, PendingFileState, RegisteredDiffStorage, UpdatedFileState,
+    DiffSaveState, DiffStorage, PendingFileState, RegisteredDiffStorage, UpdatedFileState,
 };
 use crate::ai::blocklist::diff_types::{changed_lines_from_op, DiffSessionType, FileDiff};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
@@ -364,7 +364,7 @@ impl RegisteredDiffStorage for WeakViewHandle<CodeDiffView> {
         };
         view.update(app, |view, ctx| {
             view.mark_accepted_for_save(ctx);
-            DiffStorageView::accept_and_save(view, ctx)
+            DiffStorage::accept_and_save(view, ctx)
         })
     }
 }
@@ -408,7 +408,7 @@ pub struct CodeDiffView {
     session_platform: Option<SessionPlatform>,
     /// Whether diffs target local disk or a remote host.
     diff_session_type: DiffSessionType,
-    /// In-flight accept progress (shared [`DiffStorageView`] flow).
+    /// In-flight accept progress (shared [`DiffStorage`] flow).
     save_state: DiffSaveState,
 }
 
@@ -989,7 +989,7 @@ impl CodeDiffView {
         ctx.emit(CodeDiffViewEvent::TryAccept);
 
         // Persistence and result assembly run through the shared
-        // [`DiffStorageView`] flow once the executor (or the passive handler)
+        // [`DiffStorage`] flow once the executor (or the passive handler)
         // calls `accept_and_save`. Optimistically mark the diff accepted and
         // minimize the review UI.
         self.state = CodeDiffState::Accepted;
@@ -2933,7 +2933,7 @@ pub fn convert_file_edits_to_file_diffs(
         .collect()
 }
 
-impl DiffStorageView for CodeDiffView {
+impl DiffStorage for CodeDiffView {
     fn save_state_mut(&mut self) -> &mut DiffSaveState {
         &mut self.save_state
     }

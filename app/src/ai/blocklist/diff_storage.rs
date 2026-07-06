@@ -2,17 +2,17 @@
 //! diffs.
 //!
 //! Every surface that stores pending diffs — the GUI `CodeDiffView` and the
-//! up-stack TUI diff storage — implements [`DiffStorageView`]. The trait's
+//! up-stack TUI diff storage — implements [`DiffStorage`]. The trait's
 //! provided methods are the shared save-completion flow: they track per-file
 //! progress in a [`DiffSaveState`] and assemble the final
 //! [`RequestFileEditsResult`], so every surface produces results through the
-//! same code. Only the write kickoff ([`DiffStorageView::start_saving`]) is
+//! same code. Only the write kickoff ([`DiffStorage::start_saving`]) is
 //! surface-specific: the GUI saves through its editor buffers.
 //!
 //! The executor knows surfaces only through [`RegisteredDiffStorage`], a small
 //! object-safe handle trait, because GUI `ViewHandle`s and model `ModelHandle`s
 //! share no common handle type. Each surface's handle type implements it
-//! directly, delegating to the entity's [`DiffStorageView`]. Every surface must
+//! directly, delegating to the entity's [`DiffStorage`]. Every surface must
 //! register its storage before the action's diffs resolve
 //! (`register_requested_edits`); preprocess and execute assume a registered
 //! storage.
@@ -42,7 +42,7 @@ const APPLY_DIFF_RESULT_CONTEXT_LINES: usize = 10;
 /// ([`Self::start_saving`]). Provided methods are the shared save-completion
 /// flow, so every surface assembles its [`RequestFileEditsResult`] through the
 /// same code. Callers drive an accept solely through [`Self::accept_and_save`].
-pub trait DiffStorageView {
+pub trait DiffStorage {
     /// The in-flight accept's progress and result channel. Impls just store a
     /// [`DiffSaveState`]; only the provided methods below act on it.
     fn save_state_mut(&mut self) -> &mut DiffSaveState;
@@ -109,8 +109,8 @@ pub trait DiffStorageView {
 
 /// Progress and result delivery for one in-flight accept.
 ///
-/// Each [`DiffStorageView`] impl stores one of these and exposes it via
-/// [`DiffStorageView::save_state_mut`]; the trait's provided methods drive it.
+/// Each [`DiffStorage`] impl stores one of these and exposes it via
+/// [`DiffStorage::save_state_mut`]; the trait's provided methods drive it.
 #[derive(Default)]
 pub struct DiffSaveState {
     /// Per-file save/diff-computation tracking; `Some` while an accept is in flight.
@@ -167,13 +167,13 @@ impl DiffSaveState {
     }
 }
 
-/// The executor-facing handle over a registered [`DiffStorageView`] surface.
+/// The executor-facing handle over a registered [`DiffStorage`] surface.
 ///
-/// A separate trait from [`DiffStorageView`] because the executor holds
+/// A separate trait from [`DiffStorage`] because the executor holds
 /// surfaces by handle, and GUI view handles and model handles share no common
 /// type. Each surface's handle type (e.g. `WeakViewHandle<CodeDiffView>`)
 /// implements this directly, delegating each call to its entity's
-/// [`DiffStorageView`].
+/// [`DiffStorage`].
 pub trait RegisteredDiffStorage {
     /// Pushes resolved diffs into the surface (called when preprocess resolves).
     fn set_candidate_diffs(

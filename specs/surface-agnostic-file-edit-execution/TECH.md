@@ -48,7 +48,7 @@ User Accept ──> TryAccept ──> executor::execute(id)
   └─ diff_storages[id].accept_and_save()      [RegisteredDiffStorage]
         │  (handle upgrade/update)
         ▼
-     DiffStorageView::accept_and_save          [shared, provided]
+     DiffStorage::accept_and_save          [shared, provided]
        ├─ save_state.begin(count) ──> returns result future ──┐
        └─ start_saving()          [surface-specific:          │
             GUI: editor buffers / InlineDiffView;              │
@@ -65,7 +65,7 @@ ActionExecution::new_async(future) ──> telemetry ──> LLM
 
 ## Design
 
-### The `DiffStorageView` trait (`app/src/ai/blocklist/diff_storage.rs`)
+### The `DiffStorage` trait (`app/src/ai/blocklist/diff_storage.rs`)
 
 Implemented by every surface that stores pending diffs. Required methods are state accessors — the fields live on each impl, since traits cannot hold state — plus the surface-specific write kickoff. Provided methods are the shared save-completion flow:
 
@@ -80,7 +80,7 @@ Implemented by every surface that stores pending diffs. Required methods are sta
 
 ### The `RegisteredDiffStorage` trait
 
-The executor-facing handle over a registered surface. GUI `ViewHandle`s and model `ModelHandle`s share no common handle type, so each surface's handle type implements this directly, delegating to its entity's `DiffStorageView`:
+The executor-facing handle over a registered surface. GUI `ViewHandle`s and model `ModelHandle`s share no common handle type, so each surface's handle type implements this directly, delegating to its entity's `DiffStorage`:
 
 - `set_candidate_diffs(diffs, session_type, app)` — preprocess pushes resolved diffs into the surface.
 - `accept_and_save(app)` — persists everything, resolving with the result for the LLM.
@@ -102,7 +102,7 @@ Per-action state keeps master's two-field shape:
 
 ### GUI (`code_diff_view.rs`, `block.rs`, `inline_diff.rs`)
 
-`CodeDiffView` implements `DiffStorageView`; its core save flow is master's, untouched:
+`CodeDiffView` implements `DiffStorage`; its core save flow is master's, untouched:
 
 - `start_saving` drives `InlineDiffView::accept_and_save_diff` per file (compute result diff + save editor content through `FileModel`); completions arrive via the per-file `FileSaved`/`FailedToSave`/`DiffAccepted` subscriptions, which forward into `handle_file_saved`/`handle_diff_computed` by index. The GUI's result diff stays editor-computed, as on master; save failures surface master's per-file toasts.
 - `pending_file_state` is master's result extraction behind the accessor: final content from the editor buffers (possibly user-edited), changed lines from editor state, rename/delete bookkeeping.

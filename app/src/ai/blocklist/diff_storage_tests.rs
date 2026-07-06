@@ -7,7 +7,7 @@ use warpui::{App, Entity, ModelHandle};
 
 use super::*;
 
-/// Minimal [`DiffStorageView`] impl: canned report state and a no-op write
+/// Minimal [`DiffStorage`] impl: canned report state and a no-op write
 /// kickoff, so tests drive completion through the shared flow's handlers.
 struct TestSurface {
     save_state: DiffSaveState,
@@ -23,7 +23,7 @@ impl TestSurface {
     }
 }
 
-impl DiffStorageView for TestSurface {
+impl DiffStorage for TestSurface {
     fn save_state_mut(&mut self) -> &mut DiffSaveState {
         &mut self.save_state
     }
