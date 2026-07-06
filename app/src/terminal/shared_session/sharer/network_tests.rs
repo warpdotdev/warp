@@ -379,7 +379,14 @@ fn test_handle_pty_read_event_while_not_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
+        // Use a generous tick budget: this is the only test that waits on the real
+        // ~50ms PTY batch timer to fire, and the default assert_eventually! budget
+        // (~100ms) is too tight on Windows, where coarse timer granularity (~15.6ms)
+        // plus loaded single-threaded-executor CI intermittently pushes the flush
+        // past it. The larger budget keeps the real batch-timer path under test while
+        // eliminating the flake.
         assert_eventually!(
+            200 =>
             network.read(&app, |network, _ctx| {
                 matches!(&network.pty_bytes_batch_status, PtyBytesBatchStatus::Batching { accumulated, .. } if accumulated == b"a" )
             }),
@@ -388,6 +395,7 @@ fn test_handle_pty_read_event_while_not_batching() {
 
         // When the timer is done, the accumulated event should be sent to the server.
         assert_eventually!(
+            200 =>
             ws_proxy_rx.len() == 1,
             "Accumulated event should be sent to the server"
         );

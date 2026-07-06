@@ -5,7 +5,7 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 use super::search_results_common::{
     render_collapsible_search_results, CollapsibleSearchResultsState,
 };
-use crate::ai::agent::icons::yellow_running_icon;
+use crate::ai::agent::icons::{failed_icon, yellow_running_icon};
 use crate::ai::agent::WebSearchStatus;
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
 
@@ -32,7 +32,21 @@ impl WebSearchView {
     }
 
     pub fn set_status(&mut self, status: &WebSearchStatus) {
-        self.status = status.clone();
+        // The proto error status carries no query; preserve the prior one for the header.
+        self.status = match status {
+            WebSearchStatus::Error { query } if query.is_empty() => WebSearchStatus::Error {
+                query: self.current_query(),
+            },
+            other => other.clone(),
+        };
+    }
+
+    fn current_query(&self) -> String {
+        match &self.status {
+            WebSearchStatus::Searching { query } => query.clone().unwrap_or_default(),
+            WebSearchStatus::Success { query, .. } => query.clone(),
+            WebSearchStatus::Error { query } => query.clone(),
+        }
     }
 
     fn render_loading(&self, query: &Option<String>, app: &AppContext) -> Box<dyn Element> {
@@ -45,7 +59,7 @@ impl WebSearchView {
             "Searching the web".to_string()
         };
 
-        super::search_results_common::render_loading_header(text, loading_icon, app)
+        super::search_results_common::render_status_header(text, loading_icon, app)
     }
 
     fn render_success(
@@ -159,11 +173,19 @@ impl View for WebSearchView {
                 .with_agent_output_item_spacing(app)
                 .finish(),
             WebSearchStatus::Error { query } => {
-                // For now, render as if search completed with no results
-                // TODO(advait): Add proper error rendering
-                self.render_success(query, &[], app)
-                    .with_agent_output_item_spacing(app)
-                    .finish()
+                let appearance = Appearance::as_ref(app);
+                let text = if query.is_empty() {
+                    "Web search failed".to_string()
+                } else {
+                    format!("Web search failed for \"{query}\"")
+                };
+                super::search_results_common::render_status_header(
+                    text,
+                    failed_icon(appearance),
+                    app,
+                )
+                .with_agent_output_item_spacing(app)
+                .finish()
             }
         }
     }

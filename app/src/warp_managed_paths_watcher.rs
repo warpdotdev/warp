@@ -44,6 +44,20 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
             );
         }
     }
+
+    // The TUI surface stores its settings in a separate config directory
+    // (see `warp_core::paths::tui_config_local_dir`). Create it up front — only
+    // for that surface — so the watcher can register it at startup and pick up
+    // the first settings write.
+    if settings::settings_mode() == settings::SettingsMode::Tui {
+        let tui_config_local_dir = warp_core::paths::tui_config_local_dir();
+        if let Err(err) = fs::create_dir_all(&tui_config_local_dir) {
+            log::warn!(
+                "Failed to create Warp TUI config directory {}: {err}",
+                tui_config_local_dir.display()
+            );
+        }
+    }
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -269,6 +283,28 @@ impl WarpManagedPathsWatcher {
                     RecursiveMode::Recursive,
                     "Warp config directory",
                 );
+            }
+            // Watch the TUI settings directory for that surface. On macOS it's
+            // a sibling `.warp_cli*` directory outside `config_local_dir`; on
+            // other platforms it nests under `config_local_dir` and is already
+            // covered by the recursive watch above (the `starts_with` guard
+            // skips the redundant registration).
+            if settings::settings_mode() == settings::SettingsMode::Tui {
+                let tui_config_local_dir = warp_core::paths::tui_config_local_dir();
+                if tui_config_local_dir.exists()
+                    && !tui_config_local_dir.starts_with(&data_dir)
+                    && (!should_register_config_local_dir
+                        || !tui_config_local_dir.starts_with(&config_local_dir))
+                {
+                    Self::register_path(
+                        ctx,
+                        &watcher,
+                        tui_config_local_dir,
+                        WatchFilter::accept_all(),
+                        RecursiveMode::Recursive,
+                        "Warp TUI config directory",
+                    );
+                }
             }
             if let Some(warp_home_skills_dir) = warp_home_skills_dir() {
                 if warp_home_skills_dir.exists()

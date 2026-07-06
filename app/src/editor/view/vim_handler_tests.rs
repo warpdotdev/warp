@@ -1,9 +1,7 @@
-use std::collections::HashSet;
-
 use itertools::Itertools;
 use unindent::Unindent;
 use warpui::platform::WindowStyle;
-use warpui::{App, ViewHandle};
+use warpui::{App, EntityIdSet, ViewHandle};
 
 use super::*;
 use crate::editor::EditorView;
@@ -298,7 +296,7 @@ fn test_vim_number_repeat_line_motion() {
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,
@@ -378,7 +376,7 @@ fn test_vim_number_repeat_character_motion() {
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,
@@ -2397,7 +2395,7 @@ fn test_vim_begin_line_above() {
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,
@@ -7130,6 +7128,39 @@ fn test_vim_visual_mode_paste() {
 }
 
 #[test]
+fn test_vim_visual_mode_paste_after_history_recall() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let editor = add_editor_vim_normal_mode("echo foo bar", &mut app);
+
+        // Yank "foo" into the unnamed register.
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("wve", ctx);
+            view.vim_user_insert("y", ctx);
+        });
+
+        // Simulate scrolling up the command history (e.g. pressing "k" in normal mode), which
+        // replaces the editor buffer with a previously run command via an ephemeral edit.
+        editor.update(&mut app, |view, ctx| {
+            view.set_buffer_text_ignoring_undo("echo xxx bar", ctx);
+        });
+
+        // Select "xxx" in the recalled command and paste "foo" over it. The selected range should
+        // be replaced, not appended to.
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("0wve", ctx);
+            view.vim_user_insert("p", ctx);
+        });
+
+        editor.read(&app, |view, ctx| {
+            assert_eq!(view.buffer_text(ctx), "echo foo bar");
+            assert_eq!(view.vim_mode(ctx), Some(VimMode::Normal));
+        });
+    });
+}
+
+#[test]
 fn test_vim_unnamed_system_clipboard() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -7627,7 +7658,7 @@ fn test_vim_visual_selection_with_newlines() {
         // Ensure layout so vertical motions (j/k) use real geometry for goal columns.
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
-        let mut updated = std::collections::HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,
@@ -7675,7 +7706,7 @@ fn test_vim_visual_selection_with_newlines() {
         // Re-layout for new content
         let window_id = app.read(|ctx| editor.window_id(ctx));
         let mut presenter = warpui::presenter::Presenter::new(window_id);
-        let mut updated = std::collections::HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = warpui::WindowInvalidation {
             updated,

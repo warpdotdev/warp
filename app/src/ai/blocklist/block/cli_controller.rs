@@ -237,7 +237,7 @@ impl CLISubagentController {
                             me.controller.update(ctx, |controller, ctx| {
                                 controller.cancel_conversation_progress(
                                     conversation_id,
-                                    CancellationReason::OptimisticCLISubagentCompletion,
+                                    CancellationReason::CommandFinishedDuringInlineAgentView,
                                     ctx,
                                 );
                             });
@@ -483,7 +483,7 @@ impl CLISubagentController {
         ctx: &mut ModelContext<Self>,
     ) {
         if event
-            .terminal_view_id()
+            .terminal_surface_id()
             .is_some_and(|id| id != self.terminal_view_id)
         {
             return;

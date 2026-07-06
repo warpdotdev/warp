@@ -97,6 +97,7 @@ pub enum AIDocumentAction {
     Close,
     SelectVersion(AIDocumentVersion),
     Export,
+    CopyAsMarkdown,
     OpenVersionMenu,
     CreateWarpDriveNotebook,
     RevertToDocumentVersion,
@@ -262,21 +263,26 @@ impl AIDocumentView {
                 use crate::ai::blocklist::BlocklistAIHistoryEvent;
                 match event {
                     BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                        terminal_view_id, ..
+                        terminal_surface_id,
+                        ..
                     } => {
                         // Check if this is our terminal view
                         if let Some(tv) = &me.original_terminal_view {
-                            if tv.id() == *terminal_view_id {
+                            if tv.id() == *terminal_surface_id {
                                 me.update_header_buttons(ctx);
                             }
                         }
                     }
                     BlocklistAIHistoryEvent::RestoredConversations {
-                        terminal_view_id,
+                        terminal_surface_id,
                         conversation_ids,
                     } => {
                         // Try to populate terminal view if conversations were restored
-                        me.maybe_populate_terminal_view(*terminal_view_id, conversation_ids, ctx);
+                        me.maybe_populate_terminal_view(
+                            *terminal_surface_id,
+                            conversation_ids,
+                            ctx,
+                        );
                     }
                     BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
                         conversation_id: cid,
@@ -1132,6 +1138,20 @@ impl TypedActionView for AIDocumentView {
                 self.refresh(ctx);
             }
             AIDocumentAction::Export => self.export(ctx),
+            AIDocumentAction::CopyAsMarkdown => {
+                let markdown = self.editor.as_ref(ctx).markdown_unescaped(ctx);
+                ctx.clipboard()
+                    .write(ClipboardContent::plain_text(markdown));
+
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::success("Copied to clipboard as Markdown".to_string()),
+                        window_id,
+                        ctx,
+                    );
+                });
+            }
             AIDocumentAction::CreateWarpDriveNotebook => self.create_warp_drive_notebook(ctx),
             AIDocumentAction::CopyLink(link) => {
                 send_telemetry_from_ctx!(
@@ -1319,6 +1339,13 @@ impl BackingView for AIDocumentView {
                     .into_item(),
             );
         }
+
+        menu_items.push(
+            MenuItemFields::new("Copy as Markdown")
+                .with_on_select_action(AIDocumentAction::CopyAsMarkdown)
+                .with_icon(Icon::Copy)
+                .into_item(),
+        );
 
         #[cfg(feature = "local_fs")]
         {

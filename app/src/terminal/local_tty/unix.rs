@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use signal_hook_mio::v1_0::Signals;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_core::safe_error;
 use warpui::{AppContext, SingletonEntity};
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
@@ -101,21 +102,15 @@ fn docker_sandbox_run_args(starter: &DockerSandboxShellStarter) -> Vec<std::ffi:
 struct Passwd<'a> {
     name: &'a str,
     dir: &'a str,
-    shell: &'a str,
 }
 
-pub fn get_pw_shell() -> String {
-    let mut buf = [0; 1024];
-    let pw = get_pw_entry(&mut buf);
-    pw.shell.to_string()
-}
-
-/// Return a Passwd struct with pointers into the provided buf.
+/// Return a `Passwd` struct with pointers into the provided buf, or `None` when the current uid
+/// has no password-database entry or the lookup fails.
 ///
 /// # Unsafety
 ///
 /// If `buf` is changed while `Passwd` is alive, bad things will almost certainly happen.
-fn get_pw_entry(buf: &mut [i8; 1024]) -> Passwd<'_> {
+fn get_pw_entry(buf: &mut [i8; 1024]) -> Option<Passwd<'_>> {
     // Create zeroed passwd struct.
     let mut entry: MaybeUninit<libc::passwd> = MaybeUninit::uninit();
 
@@ -134,23 +129,30 @@ fn get_pw_entry(buf: &mut [i8; 1024]) -> Passwd<'_> {
     };
     let entry = unsafe { entry.assume_init() };
 
-    if status < 0 {
-        panic!("getpwuid_r failed");
+    if status != 0 {
+        safe_error!(
+            safe: ("passwd entry lookup failed for uid {uid} with status {status}"),
+            full: ("passwd entry lookup failed")
+        );
+        return None;
     }
 
     if res.is_null() {
-        panic!("pw not found");
+        safe_error!(
+            safe: ("passwd entry lookup failed for uid {uid}"),
+            full: ("passwd entry lookup failed")
+        );
+        return None;
     }
 
     // Sanity check.
     assert_eq!(entry.pw_uid, uid);
 
     // Build a borrowed Passwd struct.
-    Passwd {
+    Some(Passwd {
         name: unsafe { CStr::from_ptr(entry.pw_name).to_str().unwrap() },
         dir: unsafe { CStr::from_ptr(entry.pw_dir).to_str().unwrap() },
-        shell: unsafe { CStr::from_ptr(entry.pw_shell).to_str().unwrap() },
-    }
+    })
 }
 
 pub struct Pty {
@@ -248,7 +250,10 @@ fn build_host_shell_command(
     // Support an overridden home directory for integration tests, which
     // should execute in a more hermetic environment than one where the home
     // directory contains whatever happens to already exist there.
-    let home_dir = std::env::var("HOME").unwrap_or_else(|_| pw.dir.to_owned());
+    let home_dir = std::env::var("HOME")
+        .ok()
+        .or_else(|| pw.as_ref().map(|pw| pw.dir.to_owned()))
+        .unwrap_or_else(|| "/".to_owned());
 
     // Unfortunately process::Command has no facility for using the same fd for in/out/err.
     // The issue is that Stdio wants to close its fd. Previously we tried Stdio::from_raw_fd(follower)
@@ -258,8 +263,15 @@ fn build_host_shell_command(
     // in the tests. Therefore we do NOT set stdin, stdout, stderr here; instead we
     // do it in the pre_exec hook.
     // Setup shell environment.
-    builder.env("LOGNAME", pw.name);
-    builder.env("USER", pw.name);
+    if let Some(user_name) = pw
+        .as_ref()
+        .map(|pw| pw.name.to_owned())
+        .or_else(|| std::env::var("USER").ok())
+        .or_else(|| std::env::var("LOGNAME").ok())
+    {
+        builder.env("LOGNAME", &user_name);
+        builder.env("USER", &user_name);
+    }
     builder.env("HOME", &home_dir);
 
     // Specify terminal name and capabilities.
@@ -777,7 +789,10 @@ fn build_docker_sandbox_command(
         builder.arg(arg);
     }
 
-    let home_dir = std::env::var("HOME").unwrap_or_else(|_| pw.dir.to_owned());
+    let home_dir = std::env::var("HOME")
+        .ok()
+        .or_else(|| pw.as_ref().map(|pw| pw.dir.to_owned()))
+        .unwrap_or_else(|| "/".to_owned());
 
     // Environment variables set on the host-side `sbx` process.
     //
@@ -791,8 +806,15 @@ fn build_docker_sandbox_command(
     // Once we've validated what the container bootstrap actually needs,
     // we can trim this list down to the variables the in-container bash
     // session actually consumes.
-    builder.env("LOGNAME", pw.name);
-    builder.env("USER", pw.name);
+    if let Some(user_name) = pw
+        .as_ref()
+        .map(|pw| pw.name.to_owned())
+        .or_else(|| std::env::var("USER").ok())
+        .or_else(|| std::env::var("LOGNAME").ok())
+    {
+        builder.env("LOGNAME", &user_name);
+        builder.env("USER", &user_name);
+    }
     builder.env("HOME", &home_dir);
     builder.env("TERM", "xterm-256color");
     builder.env("TERM_PROGRAM", "WarpTerminal");

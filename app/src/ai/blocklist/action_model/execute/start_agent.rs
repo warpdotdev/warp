@@ -233,7 +233,7 @@ impl StartAgentExecutor {
         };
         if let Some(error_msg) = start_agent_error_message_for_status(
             conversation.status(),
-            conversation.status_error_message(),
+            conversation.status_error_message().as_deref(),
         ) {
             self.complete_pending_as_error(request_id, child_conversation_id, error_msg, ctx);
             return;
@@ -270,7 +270,7 @@ impl StartAgentExecutor {
                 };
                 let error_msg = start_agent_error_message_for_status(
                     conversation.status(),
-                    conversation.status_error_message(),
+                    conversation.status_error_message().as_deref(),
                 );
                 if let Some(error_msg) = error_msg {
                     self.complete_pending_as_error(request_id, *conversation_id, error_msg, ctx);
@@ -290,7 +290,7 @@ impl StartAgentExecutor {
             | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
             | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-            | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+            | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::SplitConversation { .. }
@@ -300,7 +300,7 @@ impl StartAgentExecutor {
             | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
-            | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. } => {}
+            | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. } => {}
             BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
             | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}

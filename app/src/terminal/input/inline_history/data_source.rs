@@ -155,7 +155,7 @@ impl InlineHistoryMenuDataSource {
         let mut conversation_entries: Vec<MenuEntry> = Vec::new();
         let history_model = BlocklistAIHistoryModel::handle(app).as_ref(app);
         for conversation in
-            history_model.all_live_conversations_for_terminal_view(self.terminal_view_id)
+            history_model.all_live_conversations_for_terminal_surface(self.terminal_view_id)
         {
             if conversation.is_entirely_passive() || conversation.exchange_count() == 0 {
                 continue;

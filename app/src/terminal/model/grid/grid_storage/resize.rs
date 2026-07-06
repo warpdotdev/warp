@@ -340,7 +340,12 @@ impl GridStorage {
 
             loop {
                 // Remove all cells which require reflowing.
-                let mut wrapped = match row.shrink(columns) {
+                let shrunk = row.shrink(columns);
+                if !reflow {
+                    reset_invalid_trailing_wide_char(&mut row, columns);
+                }
+
+                let mut wrapped = match shrunk {
                     Some(wrapped) if reflow => wrapped,
                     _ => {
                         let cursor_buffer_line =
@@ -475,4 +480,12 @@ impl GridStorage {
         // Clamp the saved cursor to the grid.
         self.saved_cursor.point.col = min(self.saved_cursor.point.col, columns - 1);
     }
+}
+
+fn reset_invalid_trailing_wide_char(row: &mut Row, columns: usize) {
+    if columns == 0 || !row[columns - 1].flags().contains(Flags::WIDE_CHAR) {
+        return;
+    }
+    let bg = row[columns - 1].bg;
+    row[columns - 1] = bg.into();
 }

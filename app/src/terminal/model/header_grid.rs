@@ -9,7 +9,7 @@ use pathfinder_color::ColorU;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::units::{IntoLines as _, Lines};
 
-use super::ansi::{self, Attr, Handler, PrecmdValue, PreexecValue, Processor};
+use super::ansi::{self, Attr, Handler, PrecmdValue, PreexecValue, Processor, PromptMetadata};
 use super::block::{BlockGridPoint, BlockSize};
 use super::blockgrid::BlockGrid;
 use super::bootstrap::BootstrapStage;
@@ -210,7 +210,7 @@ impl HeaderGrid {
         self.prompt_grid = grid;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub(super) fn set_prompt_and_command_grid(&mut self, grid: BlockGrid) {
         self.prompt_and_command_grid = grid;
     }
@@ -653,6 +653,101 @@ impl HeaderGrid {
         // If the given command didn't include a newline, make sure to add one here.
         if self.command_should_show_as_empty_when_finished() {
             self.linefeed();
+        }
+    }
+
+    fn has_leading_prefix_redraw_artifact(command_grid_text: &str, preexec_command: &str) -> bool {
+        if preexec_command.is_empty()
+            || command_grid_text == preexec_command
+            || command_grid_text.len() <= preexec_command.len()
+        {
+            return false;
+        }
+
+        let Some(extra_prefix) = command_grid_text.strip_suffix(preexec_command) else {
+            return false;
+        };
+
+        !extra_prefix.is_empty() && preexec_command.starts_with(extra_prefix)
+    }
+
+    fn prompt_text_for_preexec_reconciliation(&self, include_escape_sequences: bool) -> String {
+        if !self.honor_ps1 {
+            return String::new();
+        }
+
+        self.prompt_to_string_internal(
+            include_escape_sequences,
+            RespectObfuscatedSecrets::No,
+            false, /* force_obfuscated_secrets */
+        )
+    }
+
+    fn should_reconcile_command_grid_with_preexec_command(&self, preexec_command: &str) -> bool {
+        let command_grid_text = self.command_with_secrets_unobfuscated(false);
+        if Self::has_leading_prefix_redraw_artifact(&command_grid_text, preexec_command) {
+            return true;
+        }
+
+        let prompt = self.prompt_text_for_preexec_reconciliation(false);
+        let combined = self.prompt_and_command_with_secrets_unobfuscated(false);
+        let Some(rendered_after_prompt) = combined.strip_prefix(&prompt) else {
+            return false;
+        };
+
+        Self::has_leading_prefix_redraw_artifact(rendered_after_prompt, preexec_command)
+    }
+
+    fn reconcile_command_grid_with_preexec_command(&mut self, preexec_command: &str) {
+        if !self.should_reconcile_command_grid_with_preexec_command(preexec_command) {
+            return;
+        }
+
+        let prompt = self.prompt_text_for_preexec_reconciliation(true);
+
+        self.prompt_and_command_grid.reset_state();
+        self.prompt_and_command_grid.start();
+        self.cached_prompt_end_point = None;
+        self.cached_command_start_point = None;
+
+        let mut processor = Processor::new();
+        Self::parse_logical_text_into_command_grid(
+            &mut self.prompt_and_command_grid,
+            &mut processor,
+            &prompt,
+        );
+        self.mark_and_cache_end_of_prompt();
+
+        self.prompt_and_command_grid.terminal_attribute(Attr::Bold);
+        Self::parse_logical_text_into_command_grid(
+            &mut self.prompt_and_command_grid,
+            &mut processor,
+            preexec_command,
+        );
+    }
+
+    fn parse_logical_text_into_command_grid(
+        grid: &mut BlockGrid,
+        processor: &mut Processor,
+        text: impl AsRef<str>,
+    ) {
+        let mut lines = text.as_ref().split('\n');
+        if let Some(line) = lines.next() {
+            processor.parse_bytes(
+                grid,
+                line.strip_suffix('\r').unwrap_or(line).as_bytes(),
+                &mut io::sink(),
+            );
+        }
+
+        for line in lines {
+            grid.carriage_return();
+            grid.linefeed();
+            processor.parse_bytes(
+                grid,
+                line.strip_suffix('\r').unwrap_or(line).as_bytes(),
+                &mut io::sink(),
+            );
         }
     }
 
@@ -1141,7 +1236,11 @@ impl ansi::Handler for HeaderGrid {
         delegate_with_writer!(self.text_area_size_chars(writer));
     }
 
-    fn precmd(&mut self, data: PrecmdValue) {
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        self.prompt_only_precmd(data.prompt_metadata);
+    }
+
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
         if let Some(honor_ps1) = data.honor_ps1 {
             if honor_ps1 != self.honor_ps1 {
                 log::debug!(
@@ -1208,7 +1307,13 @@ impl ansi::Handler for HeaderGrid {
         }
     }
 
-    fn preexec(&mut self, _data: PreexecValue) {
+    fn preexec(&mut self, data: PreexecValue) {
+        // The command grid is built from the shell's line-editor echo stream before preexec.
+        // Some shells redraw a short command prefix before echoing the full multiline command.
+        // Finish the grid first so the full multiline text is inspectable, then use preexec's
+        // canonical command only when the grid is provably that command with a redrawn prefix.
+        self.finish_command_grid();
+        self.reconcile_command_grid_with_preexec_command(&data.command);
         self.finish_command_grid();
     }
 

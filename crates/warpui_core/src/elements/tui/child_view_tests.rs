@@ -1,14 +1,12 @@
-use std::collections::HashMap;
-
 use super::TuiChildView;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiElement, TuiLayoutContext, TuiPresentationContext, TuiRect, TuiText,
 };
-use crate::EntityId;
+use crate::{EntityId, EntityIdMap};
 
 #[test]
 fn embeds_and_renders_the_stub_at_the_given_area() {
-    let mut rendered_views = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
     let view = TuiChildView::from_rendered(
         EntityId::from_usize(1),
         Box::new(TuiText::new("Z")),
@@ -28,8 +26,8 @@ fn embeds_and_renders_the_stub_at_the_given_area() {
 fn present_records_the_child_as_a_child_of_the_current_view() {
     let root = EntityId::from_usize(7);
     let child = EntityId::from_usize(8);
-    let mut rendered_views = HashMap::new();
-    let mut parent_by_child = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
+    let mut parent_by_child = EntityIdMap::default();
 
     {
         let mut ctx = TuiPresentationContext::new(root, &mut rendered_views, &mut parent_by_child);
@@ -45,8 +43,8 @@ fn present_nests_grandchildren_under_their_immediate_parent() {
     let root = EntityId::from_usize(1);
     let child = EntityId::from_usize(2);
     let grandchild = EntityId::from_usize(3);
-    let mut rendered_views = HashMap::new();
-    let mut parent_by_child = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
+    let mut parent_by_child = EntityIdMap::default();
 
     {
         let mut ctx = TuiPresentationContext::new(root, &mut rendered_views, &mut parent_by_child);

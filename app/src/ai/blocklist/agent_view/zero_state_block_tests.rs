@@ -1,13 +1,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use warp_core::command::ExitCode;
 use warpui::r#async::executor::Background;
 
 use super::{display_working_directory, format_session_location, should_render_oz_updates_section};
 use crate::ai::blocklist::agent_view::zero_state_block::current_working_directory_for_zero_state;
 use crate::terminal::color::{self, Colors};
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi::{Handler, InitShellValue, PrecmdValue, SSHValue};
+use crate::terminal::model::ansi::{
+    CommandFinishedValue, CompletionMetadata, Handler, InitShellValue, PreexecValue,
+    PromptMetadata, SSHValue,
+};
+use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::Session;
 use crate::terminal::model::test_utils::block_size;
 use crate::terminal::model::TerminalModel;
@@ -31,6 +36,30 @@ fn prebootstrap_terminal_with_startup_path(startup_path: &str) -> TerminalModel 
     terminal.block_list_mut().reinit_shell();
     terminal
 }
+
+/// Advances a pre-bootstrap terminal through a single bootstrapping command so the block lifecycle
+/// coordinator reaches `AwaitingPrecmd`. The completing command moves the bootstrap stage from
+/// `WarpInput` to `ScriptExecution` without finishing bootstrap, so the terminal stays
+/// pre-bootstrap (the startup-path fallback remains in effect) while a following prompt-only precmd
+/// is accepted and applied to the fresh active block.
+fn advance_prebootstrap_to_script_execution(terminal: &mut TerminalModel) {
+    terminal.preexec(PreexecValue {
+        command: "bootstrap-script".to_owned(),
+        ..Default::default()
+    });
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: BlockId::new(),
+        },
+        ..Default::default()
+    });
+    debug_assert!(
+        terminal.block_list().is_script_execution(),
+        "helper should leave the terminal in the ScriptExecution bootstrap stage"
+    );
+}
+
 #[test]
 fn format_session_location_shows_path_only_for_local_sessions() {
     let session = Session::test();
@@ -78,7 +107,8 @@ fn display_working_directory_abbreviates_subdirectory_under_home() {
 #[test]
 fn cwd_for_recent_conversations_prefers_active_block_pwd() {
     let mut terminal = prebootstrap_terminal_with_startup_path("/startup/path");
-    terminal.precmd(PrecmdValue {
+    advance_prebootstrap_to_script_execution(&mut terminal);
+    terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some("/active/path".to_owned()),
         session_id: Some(123),
         ..Default::default()

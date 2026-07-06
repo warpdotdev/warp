@@ -976,7 +976,7 @@ impl ProfileModelSelector {
                     .get_llm_info(&id)
                     .map(|info| info.id.clone())
             })
-            .unwrap_or_else(|| llm_preferences.get_default_base_model().id.clone());
+            .unwrap_or_else(|| llm_preferences.get_default_base_model(ctx).id.clone());
 
         let model_id_to_add_profile_default_label_to = Some(&profile_base_model_id);
 

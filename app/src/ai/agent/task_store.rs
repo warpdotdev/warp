@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use warp_multi_agent_api as api;
 
 use super::task::helper::{MessageExt, ToolCallExt};
 use super::task::{Task, TaskId};
-use super::{AIAgentExchange, AIAgentExchangeId, AIAgentOutputMessageType};
+use super::{AIAgentExchange, AIAgentExchangeId, AIAgentOutputMessageType, MessageId};
 use crate::ai::agent::{AIAgentContext, AIAgentInput};
 use crate::ai::skills::SkillDescriptor;
 
@@ -20,6 +20,7 @@ pub struct TaskStore {
     root_task_id: TaskId,
     tasks: HashMap<TaskId, Task>,
     linearized_refs: Vec<ExchangeRef>,
+    exchange_id_index: HashMap<AIAgentExchangeId, ExchangeRef>,
     /// If the root task was upgraded from an optimistic (client-generated) ID
     /// to a server-assigned ID, stores the original optimistic ID so that
     /// deferred event handlers referencing the stale ID can still resolve
@@ -33,6 +34,7 @@ impl TaskStore {
         let mut store = Self {
             tasks: HashMap::new(),
             linearized_refs: Vec::new(),
+            exchange_id_index: HashMap::new(),
             root_task_id: root_task_id.clone(),
             optimistic_root_task_id: None,
         };
@@ -47,6 +49,7 @@ impl TaskStore {
         let mut store = Self {
             tasks,
             linearized_refs: Vec::new(),
+            exchange_id_index: HashMap::new(),
             root_task_id,
             optimistic_root_task_id: None,
         };
@@ -107,15 +110,15 @@ impl TaskStore {
         None
     }
 
-    /// Modifies a task via the provided closure and rebuilds the exchange index
-    /// if exchanges changed.
+    /// Modifies a task via the provided closure and rebuilds the exchange index if the exchange
+    /// count changes.
     pub fn modify_task<R>(
         &mut self,
         task_id: &TaskId,
         f: impl FnOnce(&mut Task) -> R,
     ) -> Option<R> {
-        let exchange_count_before = self.tasks.get(task_id)?.exchanges_len();
         let task = self.tasks.get_mut(task_id)?;
+        let exchange_count_before = task.exchanges_len();
         let result = f(task);
         let exchange_count_after = self
             .tasks
@@ -150,6 +153,32 @@ impl TaskStore {
         }
         self.root_task_id = new_root_id;
         self.insert(root_task);
+    }
+
+    pub fn exchange_by_id(&self, exchange_id: AIAgentExchangeId) -> Option<&AIAgentExchange> {
+        let exchange_ref = self.exchange_id_index.get(&exchange_id)?;
+        self.lookup_exchange(exchange_ref)
+    }
+
+    pub(super) fn rebuild_exchange_id_index(&mut self) {
+        self.exchange_id_index = self
+            .tasks
+            .values()
+            .flat_map(|task| {
+                let task_id = task.id().clone();
+                task.exchanges()
+                    .enumerate()
+                    .map(move |(exchange_index, exchange)| {
+                        (
+                            exchange.id,
+                            ExchangeRef {
+                                task_id: task_id.clone(),
+                                exchange_index,
+                            },
+                        )
+                    })
+            })
+            .collect();
     }
 
     pub fn first_exchange(&self) -> Option<&AIAgentExchange> {
@@ -272,8 +301,77 @@ impl TaskStore {
 
     pub fn remove(&mut self, task_id: &TaskId) -> Option<Task> {
         let task = self.tasks.remove(task_id)?;
-        self.linearized_refs.retain(|r| &r.task_id != task_id);
+        self.rebuild_linearized_refs_index();
         Some(task)
+    }
+
+    /// Removes the given message ids from the source of every non-root task.
+    ///
+    /// Used by conversation rewind: summarization (`MoveMessagesToNewTask`)
+    /// relocates rewound root messages into a subtask while the root exchange's
+    /// `added_message_ids` still reference them, so a root-only removal would
+    /// leave them to be re-sent. Removing source messages does not change the
+    /// exchange index, so no rebuild is required.
+    pub fn remove_messages_from_non_root_tasks(&mut self, message_ids: &HashSet<MessageId>) {
+        if message_ids.is_empty() {
+            return;
+        }
+        let root_task_id = self.root_task_id.clone();
+        for (task_id, task) in self.tasks.iter_mut() {
+            if *task_id == root_task_id {
+                continue;
+            }
+            task.remove_messages(message_ids);
+        }
+    }
+
+    /// Removes every non-root task that is no longer reachable from the root by
+    /// following sub-agent tool calls (transitively).
+    ///
+    /// Used after a rewind truncation to drop orphaned subtasks (whose spawning
+    /// sub-agent tool call was removed) and straddle subtasks (whose call we
+    /// stripped because its result was rewound). Sub-agents whose call survives
+    /// in the root remain reachable and are kept, preserving valid history.
+    pub fn prune_unreachable_subtasks(&mut self) {
+        let reachable = self.reachable_task_ids();
+        let to_remove: Vec<TaskId> = self
+            .tasks
+            .keys()
+            .filter(|id| **id != self.root_task_id && !reachable.contains(*id))
+            .cloned()
+            .collect();
+        if to_remove.is_empty() {
+            return;
+        }
+        for id in &to_remove {
+            self.tasks.remove(id);
+        }
+        self.rebuild_linearized_refs_index();
+    }
+
+    /// Computes the set of task ids reachable from the root task by following
+    /// sub-agent tool calls in task sources (transitively). Unlike
+    /// `compute_active_task_ids`, a sub-agent's subtask stays reachable even
+    /// after its result arrives, so finished sub-agents remain part of history.
+    fn reachable_task_ids(&self) -> HashSet<TaskId> {
+        let mut reachable: HashSet<TaskId> = HashSet::new();
+        let mut queue = vec![self.root_task_id.clone()];
+        while let Some(task_id) = queue.pop() {
+            if !reachable.insert(task_id.clone()) {
+                continue;
+            }
+            let Some(task) = self.tasks.get(&task_id) else {
+                continue;
+            };
+            for message in task.messages() {
+                if let Some(subagent) = message.tool_call().and_then(|tc| tc.subagent()) {
+                    if !subagent.task_id.is_empty() {
+                        queue.push(TaskId::new(subagent.task_id.clone()));
+                    }
+                }
+            }
+        }
+        reachable
     }
 
     fn lookup_exchange(&self, r: &ExchangeRef) -> Option<&AIAgentExchange> {
@@ -286,6 +384,7 @@ impl TaskStore {
     /// Rebuilds the linearized index from scratch using DFS traversal.
     fn rebuild_linearized_refs_index(&mut self) {
         self.linearized_refs = Self::build_linearized_refs(&self.tasks, &self.root_task_id);
+        self.rebuild_exchange_id_index();
     }
 
     /// Builds linearized exchange refs via DFS traversal without mutating self.

@@ -493,7 +493,7 @@ impl UserWorkspaces {
     }
     /// Whether custom inference endpoints are enabled for the current user.
     /// Anonymous or logged-out users are not allowed to use custom inference.
-    /// Enterprise workspaces require the enterprise custom inference flag, Warp Plan, or dogfood.
+    /// Controlled by the BYO_ENDPOINT billing policy.
     pub fn is_custom_inference_enabled(&self, app: &AppContext) -> bool {
         if AuthStateProvider::as_ref(app)
             .get()
@@ -503,11 +503,7 @@ impl UserWorkspaces {
         }
 
         self.current_workspace()
-            .map(|workspace| {
-                workspace.billing_metadata.customer_type != CustomerType::Enterprise
-                    || FeatureFlag::CustomInferenceEndpointsEnterprise.is_enabled()
-                    || ChannelState::channel().is_dogfood()
-            })
+            .map(|workspace| workspace.billing_metadata.is_byo_endpoint_enabled())
             .unwrap_or(true)
     }
 

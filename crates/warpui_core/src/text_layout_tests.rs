@@ -370,6 +370,238 @@ fn test_paint_start_ellipsis_does_not_overlap_leftmost_glyph() {
     });
 }
 
+/// Regression test for the "inline-code link underline" bug: a run that has BOTH a
+/// background and an underline must paint its background BEFORE its underline. The
+/// underline is a filled rect in the same layer as the background, so if the
+/// background is drawn afterward it covers (hides) the underline — which is exactly
+/// what happened for a detected link rendered as inline code (gray code background)
+/// on a soft-wrapping line. We assert the draw order: background rect precedes the
+/// underline rect.
+#[test]
+fn test_run_background_painted_before_underline() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let bg_color = ColorU::from_u32(0x37393CFF);
+            let underline_color = ColorU::from_u32(0x7AA6DAFF);
+            let glyph_width = 12.0;
+            let glyph_count = 5usize;
+
+            let glyphs = (0..glyph_count)
+                .map(|i| Glyph {
+                    id: 0,
+                    position_along_baseline: vec2f(glyph_width * i as f32, 0.),
+                    index: i,
+                    width: glyph_width,
+                })
+                .collect();
+            let run = Run {
+                font_id: FontId(0),
+                glyphs,
+                styles: TextStyle::default()
+                    .with_background_color(bg_color)
+                    .with_underline_color(underline_color),
+                width: glyph_width * glyph_count as f32,
+            };
+            let line = Line {
+                width: run.width,
+                trailing_whitespace_width: 0.,
+                runs: vec![run],
+                font_size: 12.,
+                line_height_ratio: 1.,
+                baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                clip_config: None,
+                ascent: 10.,
+                descent: 2.,
+                caret_positions: Vec::new(),
+                chars_with_missing_glyphs: Vec::new(),
+            };
+
+            let mut scene = Scene::new(1., rendering::Config::default());
+            line.paint(
+                RectF::new(Vector2F::zero(), Vector2F::new(1000., 50.)),
+                &PaintStyleOverride::default(),
+                ColorU::black(),
+                ctx.font_cache(),
+                &mut scene,
+            );
+
+            // Find, in draw order within the layer, the background rect and the
+            // first underline rect (identified by their solid fill colors).
+            let layer = scene.layers().next().expect("at least one layer");
+            let bg_index = layer
+                .rects
+                .iter()
+                .position(|rect| matches!(rect.background, Fill::Solid(color) if color == bg_color))
+                .expect("background rect should be painted");
+            let underline_index = layer
+                .rects
+                .iter()
+                .position(
+                    |rect| matches!(rect.background, Fill::Solid(color) if color == underline_color),
+                )
+                .expect("underline rect should be painted");
+
+            assert!(
+                bg_index < underline_index,
+                "background rect (index {bg_index}) must be painted before the underline rect \
+                 (index {underline_index}) so the underline renders on top of the background",
+            );
+        });
+    });
+}
+
+/// The run background must be clamped to the horizontal span of glyphs that are
+/// actually drawn (`visible_left`..`visible_right`), not the full run width. This
+/// is what keeps a partially-truncated backgrounded run (e.g. an inline-code link
+/// cut off by an ellipsis) from painting a background past its visible glyphs.
+///
+/// We exercise `paint_run_background` directly because the platform test `FontDB`
+/// reports a zero advance for the ellipsis glyph, so `ellipsis_width` is always 0
+/// and the end-to-end ellipsis-truncation branch in `paint_internal` cannot be
+/// driven from a unit test. This still pins the clamping arithmetic that fixes the
+/// bug.
+#[test]
+fn test_run_background_clamped_to_visible_glyph_span() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let bg_color = ColorU::from_u32(0x37393CFF);
+            let glyph_width = 12.0;
+            let glyph_count = 10usize;
+
+            let glyphs = (0..glyph_count)
+                .map(|i| Glyph {
+                    id: 0,
+                    position_along_baseline: vec2f(glyph_width * i as f32, 0.),
+                    index: i,
+                    width: glyph_width,
+                })
+                .collect();
+            let run = Run {
+                font_id: FontId(0),
+                glyphs,
+                styles: TextStyle::default().with_background_color(bg_color),
+                width: glyph_width * glyph_count as f32, // 120px
+            };
+            let line = Line {
+                width: run.width,
+                trailing_whitespace_width: 0.,
+                runs: vec![run],
+                font_size: 12.,
+                line_height_ratio: 1.,
+                baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                clip_config: None,
+                ascent: 10.,
+                descent: 2.,
+                caret_positions: Vec::new(),
+                chars_with_missing_glyphs: Vec::new(),
+            };
+
+            // Only the first three glyphs (0..36px) are "visible".
+            let visible_left = 0.;
+            let visible_right = 36.;
+
+            let mut scene = Scene::new(1., rendering::Config::default());
+            line.paint_run_background(
+                &line.runs[0],
+                Vector2F::zero(),
+                RectF::new(Vector2F::zero(), Vector2F::new(1000., 50.)),
+                visible_left,
+                visible_right,
+                ctx.font_cache(),
+                &mut scene,
+                &default_compute_baseline_position_fn(),
+            );
+
+            let layer = scene.layers().next().expect("at least one layer");
+            let bg_rect = layer
+                .rects
+                .iter()
+                .find(|rect| matches!(rect.background, Fill::Solid(color) if color == bg_color))
+                .expect("background rect should be painted");
+
+            // The background spans exactly the visible glyph span (36px), not the
+            // full 120px run width.
+            assert_approx_eq!(f32, bg_rect.bounds.width(), visible_right - visible_left);
+            assert_approx_eq!(f32, bg_rect.bounds.min_x(), visible_left);
+            assert_approx_eq!(f32, bg_rect.bounds.max_x(), visible_right);
+        });
+    });
+}
+
+/// A backgrounded run that is fully truncated (contributes no visible glyphs) must
+/// not paint a background at all. Here a leading run consumes the entire paint
+/// width, so the trailing backgrounded run is clipped away and the per-run
+/// visible-span guard in `paint_internal` skips its background.
+#[test]
+fn test_fully_truncated_run_paints_no_background() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let bg_color = ColorU::from_u32(0x37393CFF);
+            let glyph_width = 12.0;
+
+            let make_glyphs = |start: usize, count: usize| {
+                (0..count)
+                    .map(|i| Glyph {
+                        id: 0,
+                        position_along_baseline: vec2f(glyph_width * (start + i) as f32, 0.),
+                        index: start + i,
+                        width: glyph_width,
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            // Run A (no background) fills the paint bounds; run B (background) sits
+            // entirely past the bounds and is fully truncated.
+            let run_a = Run {
+                font_id: FontId(0),
+                glyphs: make_glyphs(0, 5),
+                styles: TextStyle::default(),
+                width: glyph_width * 5.,
+            };
+            let run_b = Run {
+                font_id: FontId(0),
+                glyphs: make_glyphs(5, 5),
+                styles: TextStyle::default().with_background_color(bg_color),
+                width: glyph_width * 5.,
+            };
+            let line = Line {
+                width: glyph_width * 10.,
+                trailing_whitespace_width: 0.,
+                runs: vec![run_a, run_b],
+                font_size: 12.,
+                line_height_ratio: 1.,
+                baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                clip_config: None,
+                ascent: 10.,
+                descent: 2.,
+                caret_positions: Vec::new(),
+                chars_with_missing_glyphs: Vec::new(),
+            };
+
+            let mut scene = Scene::new(1., rendering::Config::default());
+            line.paint(
+                // 60px bounds == run A's width, so run B is fully truncated.
+                RectF::new(Vector2F::zero(), Vector2F::new(60., 50.)),
+                &PaintStyleOverride::default(),
+                ColorU::black(),
+                ctx.font_cache(),
+                &mut scene,
+            );
+
+            let painted_bg = scene.layers().any(|layer| {
+                layer
+                    .rects
+                    .iter()
+                    .any(|rect| matches!(rect.background, Fill::Solid(color) if color == bg_color))
+            });
+            assert!(
+                !painted_bg,
+                "a fully truncated run must not paint its background",
+            );
+        });
+    });
+}
+
 /// When start-clipping without an ellipsis (fade style), the offset fix must
 /// not change the existing layout — visible glyphs should remain right-aligned
 /// in the paint bounds with no extra horizontal shift.

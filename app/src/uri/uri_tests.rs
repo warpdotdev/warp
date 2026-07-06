@@ -731,6 +731,49 @@ fn test_parse_tab_path_bare_tilde() {
     assert_eq!(parse_tab_path(&url), Some(home));
 }
 
+// -- warp://settings deeplink parsing ----------------------------------------
+
+#[test]
+fn test_settings_widget_deeplink_target() {
+    assert_eq!(
+        settings_widget_deeplink_target("global_hotkey").map(|(section, _)| section),
+        Some(SettingsSection::Features),
+    );
+    assert_eq!(
+        settings_widget_deeplink_target("custom_router").map(|(section, _)| section),
+        Some(SettingsSection::WarpAgent),
+    );
+    #[cfg(not(target_family = "wasm"))]
+    assert_eq!(
+        settings_widget_deeplink_target("cli_agents").map(|(section, _)| section),
+        Some(SettingsSection::ThirdPartyCLIAgents),
+    );
+    // Unknown / empty slugs are not linkable (allowlist only).
+    assert!(settings_widget_deeplink_target("not_a_widget").is_none());
+    assert!(settings_widget_deeplink_target("").is_none());
+}
+
+#[test]
+fn test_settings_section_for_simple_subpage() {
+    assert_eq!(
+        settings_section_for_simple_subpage("appearance"),
+        Some(SettingsSection::Appearance),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("billing_and_usage"),
+        Some(SettingsSection::BillingAndUsage),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("platform"),
+        Some(SettingsSection::OzCloudAPIKeys),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("warp_agent"),
+        Some(SettingsSection::WarpAgent),
+    );
+    assert!(settings_section_for_simple_subpage("not_a_subpage").is_none());
+}
+
 // Regression coverage for issue #9005: shell scripts opened via `file://` should run,
 // not open in the editor. Exercised through the pure routing helper to avoid standing
 // up a full `AppContext`.

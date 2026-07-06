@@ -38,12 +38,10 @@
 //!
 //! [`TuiChildView`]: crate::elements::tui::TuiChildView
 
-use std::collections::HashMap;
-
 use crate::elements::tui::{
     TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPresentationContext, TuiRect,
 };
-use crate::{AppContext, EntityId, TuiView, ViewHandle, WindowId, WindowInvalidation};
+use crate::{AppContext, EntityIdMap, TuiView, ViewHandle, WindowId, WindowInvalidation};
 
 /// A painted frame: the composited cell [`TuiBuffer`] plus the absolute cursor
 /// position (in buffer cell coordinates), if a focused element owns the cursor.
@@ -81,7 +79,7 @@ impl TuiFrame {
 pub struct TuiPresenter {
     /// Pre-rendered elements keyed by view id. Populated by [`invalidate`](Self::invalidate)
     /// for each view that changed; consumed by [`TuiChildView`] during layout.
-    pub(crate) rendered_views: HashMap<EntityId, Box<dyn TuiElement>>,
+    pub(crate) rendered_views: EntityIdMap<Box<dyn TuiElement>>,
     /// The root element tree from the last [`present`](Self::present) call,
     /// with all child views already laid out inside it. Reused as the starting
     /// point for the next frame's layout (for unchanged child subtrees) and for
@@ -168,9 +166,9 @@ impl TuiPresenter {
         let mut layout_ctx = TuiLayoutContext {
             rendered_views: &mut self.rendered_views,
         };
-        let arranged = arrange(element.as_mut(), area, &mut layout_ctx);
+        let arranged = arrange(element.as_mut(), area, &mut layout_ctx, ctx);
 
-        let mut embeddings = HashMap::new();
+        let mut embeddings = EntityIdMap::default();
         {
             let mut present_ctx = TuiPresentationContext::new(
                 root_view_id,
@@ -191,12 +189,17 @@ impl TuiPresenter {
     /// Exposed for the runtime and tests that drive layout/paint for an element
     /// tree produced outside the app's view registry. No view-ancestry is
     /// recorded and no `rendered_views` state is consulted or updated.
-    pub fn present_element(&mut self, mut root: Box<dyn TuiElement>, area: TuiRect) -> TuiFrame {
-        let mut empty_views = HashMap::new();
+    pub fn present_element(
+        &mut self,
+        mut root: Box<dyn TuiElement>,
+        area: TuiRect,
+        app: &AppContext,
+    ) -> TuiFrame {
+        let mut empty_views = EntityIdMap::default();
         let mut layout_ctx = TuiLayoutContext {
             rendered_views: &mut empty_views,
         };
-        let arranged = arrange(root.as_mut(), area, &mut layout_ctx);
+        let arranged = arrange(root.as_mut(), area, &mut layout_ctx, app);
         paint(root.as_ref(), arranged, area, &mut empty_views)
     }
 
@@ -210,8 +213,13 @@ impl TuiPresenter {
 /// Measure the root against `area` and anchor the measured size at the area's
 /// origin (the size is already within the area, but clamp defensively so
 /// writes stay in bounds).
-fn arrange(root: &mut dyn TuiElement, area: TuiRect, ctx: &mut TuiLayoutContext) -> TuiRect {
-    let measured = root.layout(TuiConstraint::loose(area.as_size()), ctx);
+fn arrange(
+    root: &mut dyn TuiElement,
+    area: TuiRect,
+    ctx: &mut TuiLayoutContext,
+    app: &AppContext,
+) -> TuiRect {
+    let measured = root.layout(TuiConstraint::loose(area.as_size()), ctx, app);
     TuiRect::new(
         area.x,
         area.y,
@@ -229,7 +237,7 @@ fn paint(
     root: &dyn TuiElement,
     arranged: TuiRect,
     area: TuiRect,
-    rendered_views: &mut HashMap<EntityId, Box<dyn TuiElement>>,
+    rendered_views: &mut EntityIdMap<Box<dyn TuiElement>>,
 ) -> TuiFrame {
     let mut buffer = TuiBuffer::empty(buffer_rect_for(area));
     let mut ctx = TuiLayoutContext { rendered_views };

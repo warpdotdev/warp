@@ -149,7 +149,12 @@ impl Entity for ActionView {
 pub struct TuiEmpty;
 
 impl TuiElement for TuiEmpty {
-    fn layout(&mut self, _constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        _constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
         TuiSize::ZERO
     }
 

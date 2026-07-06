@@ -5,8 +5,6 @@
 set -e
 
 WORKSPACE_ROOT_DIR="$(pwd)"
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT_DIR/target}"
-DIST_DIR="$CARGO_TARGET_DIR/dist"
 
 cleanup() {
   # Delete the directory that was used as a staging area during the bundling
@@ -122,6 +120,24 @@ done
 # set positional arguments in their proper place
 eval set -- "$PARAMS"
 
+# Statically compile the CLI and warpctrl artifacts so they can run on older Linux distros.
+if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
+  TARGET_TRIPLE="${BUILD_ARCH}-unknown-linux-musl"
+  # Only configure the musl toolchain when we are actually compiling.  Packaging-only
+  # runs (--skip-build) just need TARGET_TRIPLE to locate the prebuilt binary, and
+  # configuring the toolchain there would force an unnecessary (and potentially
+  # failing) musl-cross download on hosts that never compile.
+  if [[ "$BUILD" == "true" ]]; then
+    source "$WORKSPACE_ROOT_DIR/script/linux/configure_musl_toolchain" "$TARGET_TRIPLE"
+    # Make sure we have the rust musl target available.
+    rustup target add "$TARGET_TRIPLE"
+  fi
+fi
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT_DIR/target}"
+CARGO_TARGET_OUTPUT_ROOT="$CARGO_TARGET_DIR${TARGET_TRIPLE:+/$TARGET_TRIPLE}"
+
+DIST_DIR="$CARGO_TARGET_OUTPUT_ROOT/dist"
+
 if [[ $DEBUG = true ]]; then
   CARGO_PROFILE="dev"
 elif [[ $RELEASE_CHANNEL = "local" || $RELEASE_CHANNEL = "dev" ]]; then
@@ -142,9 +158,9 @@ else
 fi
 
 if [[ "$CARGO_PROFILE" == "dev" ]]; then
-  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_DIR/debug"
+  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_OUTPUT_ROOT/debug"
 else
-  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_DIR/$CARGO_PROFILE"
+  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_OUTPUT_ROOT/$CARGO_PROFILE"
 fi
 # NOTE: if you change this path, update the "Clean stale bundle output"
 # steps in .github/workflows/create_release.yml so they continue to wipe
@@ -233,14 +249,15 @@ export APPIMAGE_NAME="$APP_NAME-$BUILD_ARCH.AppImage"
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if [[ "$CHECK_ONLY" == "true" ]]; then
-  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" ${TARGET_TRIPLE:+--target $TARGET_TRIPLE}
   exit 0
 fi
 
 # Build the binary.
 if [[ "$BUILD" == "true" ]]; then
   echo "Building and bundling Warp for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
-  cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+  cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" ${TARGET_TRIPLE:+--target $TARGET_TRIPLE}
+
   echo "Making debug copy of '$EXECUTABLE_PATH' at '$DEBUG_EXECUTABLE_PATH'"
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
 
@@ -248,11 +265,11 @@ if [[ "$BUILD" == "true" ]]; then
   if [[ $RELEASE_CHANNEL = "dev" ]]; then
     # For dev builds, only strip debug symbols, as we want to keep some
     # symbols for profiling purposes.
-    strip --strip-debug "$EXECUTABLE_PATH"
+    "${WARP_MUSL_STRIP:-strip}" --strip-debug "$EXECUTABLE_PATH"
   else
     # For production builds, strip all symbols, to keep the binary size
     # smaller.
-    strip --strip-all "$EXECUTABLE_PATH"
+    "${WARP_MUSL_STRIP:-strip}" --strip-all "$EXECUTABLE_PATH"
   fi
 else
   echo 'Skipping `cargo build` step due to --skip-build argument'

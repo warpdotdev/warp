@@ -41,6 +41,8 @@ if [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"debian"* ]]; then
     libclang-dev
     # Required by script/presubmit's clang-format check on C/C++/Obj-C sources.
     clang-format
+    # Required to build statically-linked binaries for Linux.
+    musl-tools
   )
   warp_sudo apt-get install -y "${PACKAGES[@]}"
 

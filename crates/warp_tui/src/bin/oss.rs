@@ -29,5 +29,5 @@ fn main() -> Result<()> {
     }
     ChannelState::set(state);
 
-    warp::run_tui()
+    warp_tui::run()
 }

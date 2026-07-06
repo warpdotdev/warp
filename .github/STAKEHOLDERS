@@ -37,11 +37,6 @@
 /crates/lsp/ @kevinyang372 @moirahuang
 /crates/repo_metadata/ @kevinyang372
 
-# Settings and keybindings
-/app/src/settings/ @lucieleblanc
-/app/src/settings_view/ @lucieleblanc
-/app/src/resource_center/keybindings_page.rs @lucieleblanc
-
 # Input editor / window, tab, and pane management / grep tool call
 /app/src/terminal/input/ @vkodithala
 /app/src/pane_group/ @vkodithala
@@ -66,13 +61,6 @@
 /app/src/tab_configs/ @moirahuang
 /app/resources/tab_configs/ @moirahuang
 /crates/warp_util/src/worktree_names.rs @moirahuang
-
-# Onboarding / code review and git diff
-/app/src/ai/onboarding.rs @kevinchevalier
-/app/src/code_review/ @kevinchevalier
-/app/src/code/diff_viewer.rs @kevinchevalier
-/app/src/code/inline_diff.rs @kevinchevalier
-/crates/onboarding/ @kevinchevalier
 
 # MCP and skills
 /app/src/ai/mcp/ @peicodes @vkodithala
@@ -152,7 +140,7 @@
 
 # Windows and Linux (and winit) platform
 /crates/warpui/src/windowing/winit/ @acarl005 @vorporeal @alokedesai
-/app/src/terminal/local_tty/windows/ @abhishekp106 @vorporeal @acarl005
+/app/src/terminal/local_tty/windows/ @vorporeal @acarl005
 /app/src/autoupdate/windows.rs @acarl005
 /app/src/autoupdate/linux.rs @vorporeal
 /app/src/app_services/windows/ @acarl005
@@ -160,9 +148,6 @@
 /app/src/terminal/writeable_pty/bootstrap_file/windows.rs @acarl005
 /app/assets/bundled/bootstrap/pwsh.ps1 @acarl005
 /app/assets/bundled/bootstrap/pwsh_init_shell.ps1 @acarl005
-
-# /pr-comments
-/app/src/search/slash_command_menu/static_commands/commands.rs @lucieleblanc
 
 # Grep tool call UI
 /app/src/ai/blocklist/action_model/execute/grep.rs @vkodithala
@@ -193,14 +178,7 @@
 /crates/warp_server_client/ @ianhodge
 
 # Session sharing
-/app/src/terminal/shared_session/ @abhishekp106 @szgupta @bnavetta
-
-# Agent profiles and execution permissions
-/app/src/ai/cloud_agent_config/ @abhishekp106
-/app/src/ai/cloud_agent_settings.rs @abhishekp106
-/app/src/ai/execution_profiles/ @abhishekp106
-/app/src/terminal/profile_model_selector.rs @abhishekp106
-/app/src/settings_view/execution_profile_view.rs @abhishekp106
+/app/src/terminal/shared_session/ @szgupta @bnavetta
 
 # Environment setup / agent management view
 /app/src/ai/agent_management/ @liliwilson
