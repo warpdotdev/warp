@@ -201,6 +201,7 @@ fn cell_to_style(cell: &Cell, colors: &TerminalColorList) -> TuiStyle {
     if cell.bg != Color::Named(NamedColor::Background) {
         style = style.bg(cell_to_color(&cell.bg, colors));
     }
+
     if cell.flags.contains(Flags::BOLD) {
         style = style.add_modifier(Modifier::BOLD);
     }

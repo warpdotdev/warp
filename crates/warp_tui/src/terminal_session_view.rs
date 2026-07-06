@@ -366,6 +366,7 @@ impl TuiTerminalSessionView {
         } else {
             None
         };
+
         if let Some((text, style)) = hint {
             footer = footer.child(TuiText::new(text).with_style(style).truncate().finish());
         }
