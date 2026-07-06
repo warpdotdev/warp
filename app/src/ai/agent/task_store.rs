@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use indexmap::IndexMap;
 use warp_multi_agent_api as api;
 
 use super::task::helper::{MessageExt, ToolCallExt};
@@ -14,13 +15,21 @@ struct ExchangeRef {
     exchange_index: usize,
 }
 
-/// Task storage with a linearized exchange index for O(1) first/last access.
+/// Task storage with a combined ordered exchange index.
+///
+/// Exchanges are stored in a single [`IndexMap`] keyed by [`AIAgentExchangeId`].
+/// The map preserves DFS traversal insertion order, providing both O(1)
+/// positional access (first/last) and O(1) lookup by ID in one structure.
+/// This eliminates the previous two-field design (`linearized_refs` +
+/// `exchange_id_index`) whose synchronization was an invariant that callers
+/// had to manually maintain.
 #[derive(Debug, Clone)]
 pub struct TaskStore {
     root_task_id: TaskId,
     tasks: HashMap<TaskId, Task>,
-    linearized_refs: Vec<ExchangeRef>,
-    exchange_id_index: HashMap<AIAgentExchangeId, ExchangeRef>,
+    /// Linearized (DFS-ordered) map from exchange ID to its location in `tasks`.
+    /// Serves as both the ordered exchange list and the O(1) ID lookup index.
+    exchanges: IndexMap<AIAgentExchangeId, ExchangeRef>,
     /// If the root task was upgraded from an optimistic (client-generated) ID
     /// to a server-assigned ID, stores the original optimistic ID so that
     /// deferred event handlers referencing the stale ID can still resolve
@@ -33,27 +42,25 @@ impl TaskStore {
         let root_task_id = root_task.id().clone();
         let mut store = Self {
             tasks: HashMap::new(),
-            linearized_refs: Vec::new(),
-            exchange_id_index: HashMap::new(),
+            exchanges: IndexMap::new(),
             root_task_id: root_task_id.clone(),
             optimistic_root_task_id: None,
         };
         store.tasks.insert(root_task_id, root_task);
-        store.rebuild_linearized_refs_index();
+        store.rebuild_exchange_index();
         store
     }
 
     /// Creates a TaskStore from an existing HashMap of tasks.
-    /// Rebuilds the linearized index after construction.
+    /// Rebuilds the exchange index after construction.
     pub fn from_tasks(tasks: HashMap<TaskId, Task>, root_task_id: TaskId) -> Self {
         let mut store = Self {
             tasks,
-            linearized_refs: Vec::new(),
-            exchange_id_index: HashMap::new(),
+            exchanges: IndexMap::new(),
             root_task_id,
             optimistic_root_task_id: None,
         };
-        store.rebuild_linearized_refs_index();
+        store.rebuild_exchange_index();
         store
     }
 
@@ -76,18 +83,18 @@ impl TaskStore {
         self.tasks.len()
     }
 
-    /// Appends an exchange to a task and rebuilds the index.
+    /// Appends an exchange to a task and rebuilds the exchange index.
     /// Returns true if the task was found and the exchange was appended.
     pub fn append_exchange(&mut self, task_id: &TaskId, exchange: AIAgentExchange) -> bool {
         let Some(task) = self.tasks.get_mut(task_id) else {
             return false;
         };
         task.append_exchange(exchange);
-        self.rebuild_linearized_refs_index();
+        self.rebuild_exchange_index();
         true
     }
 
-    /// Removes an exchange from a task and rebuilds the index.
+    /// Removes an exchange from a task and rebuilds the exchange index.
     /// Returns the removed exchange if found.
     pub fn remove_task_exchange(
         &mut self,
@@ -96,7 +103,7 @@ impl TaskStore {
     ) -> Option<AIAgentExchange> {
         let task = self.tasks.get_mut(task_id)?;
         let exchange = task.remove_exchange(exchange_id)?;
-        self.rebuild_linearized_refs_index();
+        self.rebuild_exchange_index();
         Some(exchange)
     }
 
@@ -126,7 +133,7 @@ impl TaskStore {
             .map(|t| t.exchanges_len())
             .unwrap_or(0);
         if exchange_count_before != exchange_count_after {
-            self.rebuild_linearized_refs_index();
+            self.rebuild_exchange_index();
         }
         Some(result)
     }
@@ -156,56 +163,42 @@ impl TaskStore {
     }
 
     pub fn exchange_by_id(&self, exchange_id: AIAgentExchangeId) -> Option<&AIAgentExchange> {
-        let exchange_ref = self.exchange_id_index.get(&exchange_id)?;
+        let exchange_ref = self.exchanges.get(&exchange_id)?;
         self.lookup_exchange(exchange_ref)
     }
 
-    pub(super) fn rebuild_exchange_id_index(&mut self) {
-        self.exchange_id_index = self
-            .tasks
-            .values()
-            .flat_map(|task| {
-                let task_id = task.id().clone();
-                task.exchanges()
-                    .enumerate()
-                    .map(move |(exchange_index, exchange)| {
-                        (
-                            exchange.id,
-                            ExchangeRef {
-                                task_id: task_id.clone(),
-                                exchange_index,
-                            },
-                        )
-                    })
-            })
-            .collect();
+    /// Rebuilds the exchange index from scratch. Call this after any mutation
+    /// that changes exchange IDs without changing exchange count (e.g.
+    /// `reassign_exchange_ids`).
+    pub(super) fn rebuild_exchange_index(&mut self) {
+        self.exchanges = Self::build_exchange_index(&self.tasks, &self.root_task_id);
     }
 
     pub fn first_exchange(&self) -> Option<&AIAgentExchange> {
-        self.linearized_refs
-            .first()
-            .and_then(|r| self.lookup_exchange(r))
+        self.exchanges
+            .get_index(0)
+            .and_then(|(_, r)| self.lookup_exchange(r))
     }
 
     pub fn latest_exchange(&self) -> Option<&AIAgentExchange> {
-        self.linearized_refs
+        self.exchanges
             .last()
-            .and_then(|r| self.lookup_exchange(r))
+            .and_then(|(_, r)| self.lookup_exchange(r))
     }
 
     pub fn exchange_count(&self) -> usize {
-        self.linearized_refs.len()
+        self.exchanges.len()
     }
 
     pub fn all_exchanges(&self) -> impl Iterator<Item = &AIAgentExchange> {
-        self.linearized_refs
-            .iter()
+        self.exchanges
+            .values()
             .filter_map(|r| self.lookup_exchange(r))
     }
 
     pub fn all_exchanges_rev(&self) -> impl Iterator<Item = &AIAgentExchange> {
-        self.linearized_refs
-            .iter()
+        self.exchanges
+            .values()
             .rev()
             .filter_map(|r| self.lookup_exchange(r))
     }
@@ -213,7 +206,7 @@ impl TaskStore {
     pub fn all_exchanges_by_task(&self) -> Vec<(TaskId, Vec<&AIAgentExchange>)> {
         let mut result: Vec<(TaskId, Vec<&AIAgentExchange>)> = Vec::new();
 
-        for exchange_ref in &self.linearized_refs {
+        for (_, exchange_ref) in &self.exchanges {
             let Some(exchange) = self.lookup_exchange(exchange_ref) else {
                 continue;
             };
@@ -234,7 +227,7 @@ impl TaskStore {
     }
 
     pub fn latest_skills(&self) -> Option<Vec<SkillDescriptor>> {
-        self.linearized_refs.iter().rev().find_map(|exchange_ref| {
+        self.exchanges.values().rev().find_map(|exchange_ref| {
             let exchange = self.lookup_exchange(exchange_ref);
 
             if let Some(exchange) = exchange {
@@ -296,12 +289,12 @@ impl TaskStore {
 
     pub fn insert(&mut self, task: Task) {
         self.tasks.insert(task.id().clone(), task);
-        self.rebuild_linearized_refs_index();
+        self.rebuild_exchange_index();
     }
 
     pub fn remove(&mut self, task_id: &TaskId) -> Option<Task> {
         let task = self.tasks.remove(task_id)?;
-        self.rebuild_linearized_refs_index();
+        self.rebuild_exchange_index();
         Some(task)
     }
 
@@ -346,7 +339,7 @@ impl TaskStore {
         for id in &to_remove {
             self.tasks.remove(id);
         }
-        self.rebuild_linearized_refs_index();
+        self.rebuild_exchange_index();
     }
 
     /// Computes the set of task ids reachable from the root task by following
@@ -381,32 +374,32 @@ impl TaskStore {
             .nth(r.exchange_index)
     }
 
-    /// Rebuilds the linearized index from scratch using DFS traversal.
-    fn rebuild_linearized_refs_index(&mut self) {
-        self.linearized_refs = Self::build_linearized_refs(&self.tasks, &self.root_task_id);
-        self.rebuild_exchange_id_index();
-    }
-
-    /// Builds linearized exchange refs via DFS traversal without mutating self.
-    /// This allows us to borrow `tasks` immutably throughout the traversal.
-    fn build_linearized_refs(
+    /// Builds a DFS-ordered [`IndexMap`] from exchange ID to its location in `tasks`.
+    ///
+    /// By building into an `IndexMap` rather than separate `Vec` + `HashMap` fields,
+    /// the ordering and the ID index are a single structure with one source of
+    /// truth — callers can never observe them out of sync.
+    fn build_exchange_index(
         tasks: &HashMap<TaskId, Task>,
         root_task_id: &TaskId,
-    ) -> Vec<ExchangeRef> {
-        let mut refs = Vec::new();
+    ) -> IndexMap<AIAgentExchangeId, ExchangeRef> {
+        let mut index = IndexMap::new();
 
         fn append_refs_for_task(
             tasks: &HashMap<TaskId, Task>,
-            refs: &mut Vec<ExchangeRef>,
+            index: &mut IndexMap<AIAgentExchangeId, ExchangeRef>,
             task: &Task,
         ) {
             let task_id = task.id().clone();
 
             for (exchange_index, exchange) in task.exchanges().enumerate() {
-                refs.push(ExchangeRef {
-                    task_id: task_id.clone(),
-                    exchange_index,
-                });
+                index.insert(
+                    exchange.id,
+                    ExchangeRef {
+                        task_id: task_id.clone(),
+                        exchange_index,
+                    },
+                );
 
                 // Check for subagent calls in the exchange output.
                 if let Some(output) = exchange.output_status.output() {
@@ -417,7 +410,7 @@ impl TaskStore {
                             if let Some(subtask) =
                                 tasks.get(&TaskId::new(subagent_call.task_id.clone()))
                             {
-                                append_refs_for_task(tasks, refs, subtask);
+                                append_refs_for_task(tasks, index, subtask);
                             }
                         }
                     }
@@ -426,10 +419,10 @@ impl TaskStore {
         }
 
         if let Some(root_task) = tasks.get(root_task_id) {
-            append_refs_for_task(tasks, &mut refs, root_task);
+            append_refs_for_task(tasks, &mut index, root_task);
         }
 
-        refs
+        index
     }
 }
 

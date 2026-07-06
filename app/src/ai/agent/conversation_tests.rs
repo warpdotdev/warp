@@ -203,7 +203,7 @@ fn reassign_exchange_ids_keeps_exchange_lookup_consistent() {
 
     // Reassigning regenerates ids without changing the exchange count, so
     // `modify_task` does not rebuild the index; correctness relies on the
-    // explicit `rebuild_exchange_id_index()` call. The stale ids must be gone.
+    // explicit `rebuild_exchange_index()` call. The stale ids must be gone.
     for id in &old_ids {
         assert!(conversation.exchange_with_id(*id).is_none());
     }
