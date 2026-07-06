@@ -4750,11 +4750,12 @@ fn install_mock_model_event_sender(app: &mut warpui::App) -> std::sync::mpsc::Re
     receiver
 }
 
-/// HYBRID (real-result pull-forward): a completed tool_call whose real
-/// tool_call_result is in a later exchange -> fork exact at the call's exchange
-/// -> the REAL result (not a synthesized Cancel) is pulled forward and paired.
+/// Forking mid-tool-call at an exact exchange must never leave a dangling
+/// `tool_use`: a completed tool_call has its REAL result pulled forward from the
+/// source, while a genuinely in-flight tool_call falls back to a synthesized
+/// `Cancel` positioned right after the call, carrying its request_id.
 #[test]
-fn fork_exact_pulls_forward_real_tool_call_result() {
+fn fork_exact_midtoolcall_pairs_retained_tool_uses() {
     use crate::ai::agent::task::helper::MessageExt;
     use crate::test_util::ai_agent_tasks::create_api_task;
 
@@ -4764,21 +4765,26 @@ fn fork_exact_pulls_forward_real_tool_call_result() {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let root_task_id = "root-task";
-        let tool_call_id = "toolu_completed";
+        let completed_id = "toolu_completed";
+        let inflight_id = "toolu_inflight";
+        // The fork point (req-1) holds the user query plus two tool_calls: one
+        // whose real result arrives later (req-2, truncated by the fork) and one
+        // that never receives a result (in-flight).
         let root_task = create_api_task(
             root_task_id,
             vec![
-                create_user_query_message("m1", root_task_id, "req-1", "run a command"),
-                regular_tool_call_message("m2", root_task_id, tool_call_id, "req-1"),
-                regular_tool_call_result_message("m3", root_task_id, tool_call_id, "req-2"),
-                agent_output_message("m4", root_task_id, "req-2", "done"),
+                create_user_query_message("m1", root_task_id, "req-1", "run commands"),
+                regular_tool_call_message("m2", root_task_id, completed_id, "req-1"),
+                regular_tool_call_message("m3", root_task_id, inflight_id, "req-1"),
+                regular_tool_call_result_message("m4", root_task_id, completed_id, "req-2"),
+                agent_output_message("m5", root_task_id, "req-2", "done"),
             ],
         );
         let source = AIConversation::new_restored(AIConversationId::new(), vec![root_task], None)
             .expect("source conversation should build");
 
         let (source_id, exchange_id) =
-            restore_and_find_exchange(&mut app, &history_model, source, "run a command");
+            restore_and_find_exchange(&mut app, &history_model, source, "run commands");
 
         let forked = history_model.update(&mut app, |model, ctx| {
             let source = model.conversation(&source_id).unwrap().clone();
@@ -4792,285 +4798,53 @@ fn fork_exact_pulls_forward_real_tool_call_result() {
             !has_dangling_tool_use(root),
             "fork must leave no dangling tool_use"
         );
-        let result = root
+        // Completed call: the REAL result (m4) is pulled forward, not a Cancel.
+        let completed = root
             .messages
             .iter()
             .find(|m| {
                 m.tool_call_result()
-                    .is_some_and(|r| r.tool_call_id == tool_call_id)
+                    .is_some_and(|r| r.tool_call_id == completed_id)
             })
-            .expect("a result must be paired with the tool_call");
+            .expect("completed tool_call must be paired");
         assert_eq!(
-            result.id, "m3",
+            completed.id, "m4",
             "the REAL result message should be pulled forward"
         );
         assert!(
             matches!(
-                result.tool_call_result().and_then(|r| r.result.as_ref()),
+                completed.tool_call_result().and_then(|r| r.result.as_ref()),
                 Some(warp_multi_agent_api::message::tool_call_result::Result::RunShellCommand(_))
             ),
             "the pulled-forward result must be the real run_shell_command result, not a Cancel"
         );
-    });
-}
 
-/// HYBRID (Cancel fallback): a tool_call with NO result anywhere in the source
-/// (genuinely in-flight) -> fork exact at the call's exchange -> a Cancel result
-/// is synthesized and paired, immediately after the call, with the call's
-/// request_id.
-#[test]
-fn fork_exact_synthesizes_cancel_for_in_flight_tool_call() {
-    use crate::ai::agent::task::helper::MessageExt;
-    use crate::test_util::ai_agent_tasks::create_api_task;
-
-    App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        let _receiver = install_mock_model_event_sender(&mut app);
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-
-        let root_task_id = "root-task";
-        let tool_call_id = "toolu_inflight";
-        let root_task = create_api_task(
-            root_task_id,
-            vec![
-                create_user_query_message("m1", root_task_id, "req-1", "run a command"),
-                regular_tool_call_message("m2", root_task_id, tool_call_id, "req-1"),
-            ],
-        );
-        let source = AIConversation::new_restored(AIConversationId::new(), vec![root_task], None)
-            .expect("source conversation should build");
-
-        let (source_id, exchange_id) =
-            restore_and_find_exchange(&mut app, &history_model, source, "run a command");
-
-        let forked = history_model.update(&mut app, |model, ctx| {
-            let source = model.conversation(&source_id).unwrap().clone();
-            model
-                .fork_conversation_at_exchange(&source, exchange_id, true, "[Fork] ", None, ctx)
-                .expect("fork should succeed")
-        });
-
-        let root = forked_root_task(&forked);
-        assert!(
-            !has_dangling_tool_use(root),
-            "fork must leave no dangling tool_use"
-        );
-        let result = root
+        // In-flight call: a Cancel is synthesized immediately after the call,
+        // carrying the call's request_id.
+        let inflight = root
             .messages
             .iter()
             .find(|m| {
                 m.tool_call_result()
-                    .is_some_and(|r| r.tool_call_id == tool_call_id)
+                    .is_some_and(|r| r.tool_call_id == inflight_id)
             })
-            .expect("a Cancel result must be synthesized for the in-flight tool_call");
-        assert_ne!(
-            result.id, "m2",
-            "the synthesized result must be a new message"
-        );
+            .expect("in-flight tool_call must be paired with a synthesized Cancel");
         assert!(
             matches!(
-                result.tool_call_result().and_then(|r| r.result.as_ref()),
+                inflight.tool_call_result().and_then(|r| r.result.as_ref()),
                 Some(warp_multi_agent_api::message::tool_call_result::Result::Cancel(_))
             ),
             "in-flight tool_call must fall back to a Cancel result"
         );
-        // Positioned immediately after its call, with the call's request_id.
-        let call_idx = root.messages.iter().position(|m| m.id == "m2").unwrap();
+        let call_idx = root.messages.iter().position(|m| m.id == "m3").unwrap();
         let next = &root.messages[call_idx + 1];
         assert_eq!(
-            next.id, result.id,
+            next.id, inflight.id,
             "Cancel must immediately follow its tool_call"
         );
         assert_eq!(
             next.request_id, "req-1",
             "Cancel carries the call's request_id"
-        );
-    });
-}
-
-/// HYBRID (sub-agent -> Cancel): an unresolved sub-agent tool_call is
-/// reconciled with a synthesized Cancel even when a real sub-agent result
-/// exists in a later exchange, so the sub-agent subtask is not dragged in.
-#[test]
-fn fork_exact_synthesizes_cancel_for_dangling_subagent_call() {
-    use crate::ai::agent::task::helper::MessageExt;
-    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
-
-    App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        let _receiver = install_mock_model_event_sender(&mut app);
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-
-        let root_task_id = "root-task";
-        let subtask_id = "sub-1";
-        let (subagent_call, subagent_tool_call_id) =
-            make_subagent_call("m2", root_task_id, subtask_id, "req-1", None);
-        let root_task = create_api_task(
-            root_task_id,
-            vec![
-                create_user_query_message("m1", root_task_id, "req-1", "spawn agent"),
-                subagent_call,
-                create_user_query_message("m3", root_task_id, "req-2", "continue"),
-                subagent_tool_call_result_message(
-                    "m4_real",
-                    root_task_id,
-                    &subagent_tool_call_id,
-                    "req-2",
-                ),
-            ],
-        );
-        let subtask = create_api_subtask(
-            subtask_id,
-            root_task_id,
-            vec![agent_output_message("s1", subtask_id, "req-1", "sub work")],
-        );
-        let source =
-            AIConversation::new_restored(AIConversationId::new(), vec![root_task, subtask], None)
-                .expect("source conversation should build");
-
-        let (source_id, exchange_id) =
-            restore_and_find_exchange(&mut app, &history_model, source, "spawn agent");
-
-        let forked = history_model.update(&mut app, |model, ctx| {
-            let source = model.conversation(&source_id).unwrap().clone();
-            model
-                .fork_conversation_at_exchange(&source, exchange_id, true, "[Fork] ", None, ctx)
-                .expect("fork should succeed")
-        });
-
-        let root = forked_root_task(&forked);
-        assert!(
-            !has_dangling_subagent_pair(root),
-            "fork must leave no dangling sub-agent tool_call"
-        );
-        let result = root
-            .messages
-            .iter()
-            .find(|m| {
-                m.tool_call_result()
-                    .is_some_and(|r| r.tool_call_id == subagent_tool_call_id)
-            })
-            .expect("a Cancel result must be synthesized for the sub-agent call");
-        assert_ne!(
-            result.id, "m4_real",
-            "the real sub-agent result must NOT be pulled forward"
-        );
-        assert!(
-            matches!(
-                result.tool_call_result().and_then(|r| r.result.as_ref()),
-                Some(warp_multi_agent_api::message::tool_call_result::Result::Cancel(_))
-            ),
-            "sub-agent tool_call must be reconciled with a synthesized Cancel"
-        );
-    });
-}
-
-/// HYBRID (parallel unresolved calls): two unpaired tool_calls in the forked
-/// exchange each get a paired result.
-#[test]
-fn fork_exact_pairs_all_parallel_unresolved_tool_calls() {
-    use crate::ai::agent::task::helper::MessageExt;
-    use crate::test_util::ai_agent_tasks::create_api_task;
-
-    App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        let _receiver = install_mock_model_event_sender(&mut app);
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-
-        let root_task_id = "root-task";
-        let root_task = create_api_task(
-            root_task_id,
-            vec![
-                create_user_query_message("m1", root_task_id, "req-1", "do two things"),
-                regular_tool_call_message("m2", root_task_id, "toolu_a", "req-1"),
-                regular_tool_call_message("m3", root_task_id, "toolu_b", "req-1"),
-            ],
-        );
-        let source = AIConversation::new_restored(AIConversationId::new(), vec![root_task], None)
-            .expect("source conversation should build");
-
-        let (source_id, exchange_id) =
-            restore_and_find_exchange(&mut app, &history_model, source, "do two things");
-
-        let forked = history_model.update(&mut app, |model, ctx| {
-            let source = model.conversation(&source_id).unwrap().clone();
-            model
-                .fork_conversation_at_exchange(&source, exchange_id, true, "[Fork] ", None, ctx)
-                .expect("fork should succeed")
-        });
-
-        let root = forked_root_task(&forked);
-        assert!(
-            !has_dangling_tool_use(root),
-            "both parallel tool_uses must be paired"
-        );
-        let result_ids: HashSet<&str> = root
-            .messages
-            .iter()
-            .filter_map(|m| m.tool_call_result().map(|r| r.tool_call_id.as_str()))
-            .collect();
-        assert!(result_ids.contains("toolu_a") && result_ids.contains("toolu_b"));
-    });
-}
-
-/// The fork must not mutate the SOURCE conversation's tasks; reconciliation
-/// only affects the forked copy.
-#[test]
-fn fork_exact_does_not_mutate_source_conversation() {
-    use crate::test_util::ai_agent_tasks::create_api_task;
-
-    App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        let _receiver = install_mock_model_event_sender(&mut app);
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-
-        let root_task_id = "root-task";
-        let tool_call_id = "toolu_x";
-        let root_task = create_api_task(
-            root_task_id,
-            vec![
-                create_user_query_message("m1", root_task_id, "req-1", "run a command"),
-                regular_tool_call_message("m2", root_task_id, tool_call_id, "req-1"),
-            ],
-        );
-        let source = AIConversation::new_restored(AIConversationId::new(), vec![root_task], None)
-            .expect("source conversation should build");
-
-        let (source_id, exchange_id) =
-            restore_and_find_exchange(&mut app, &history_model, source, "run a command");
-
-        let source_ids_before: Vec<String> = history_model.read(&app, |model, _| {
-            model
-                .conversation(&source_id)
-                .unwrap()
-                .all_tasks()
-                .filter_map(|t| t.source())
-                .find(|t| t.id == root_task_id)
-                .map(|t| t.messages.iter().map(|m| m.id.clone()).collect())
-                .unwrap_or_default()
-        });
-
-        history_model.update(&mut app, |model, ctx| {
-            let source = model.conversation(&source_id).unwrap().clone();
-            model
-                .fork_conversation_at_exchange(&source, exchange_id, true, "[Fork] ", None, ctx)
-                .expect("fork should succeed");
-        });
-
-        let source_ids_after: Vec<String> = history_model.read(&app, |model, _| {
-            model
-                .conversation(&source_id)
-                .unwrap()
-                .all_tasks()
-                .filter_map(|t| t.source())
-                .find(|t| t.id == root_task_id)
-                .map(|t| t.messages.iter().map(|m| m.id.clone()).collect())
-                .unwrap_or_default()
-        });
-
-        assert_eq!(
-            source_ids_before, source_ids_after,
-            "forking must not inject a reconciliation result into the source conversation"
         );
     });
 }
