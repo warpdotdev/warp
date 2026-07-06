@@ -42,6 +42,7 @@ pub mod repositories;
 pub mod repository;
 pub mod repository_identifier;
 pub mod standing_queries;
+pub mod standing_query_walker;
 mod telemetry;
 pub mod watcher;
 pub mod wrapper_model;
@@ -77,6 +78,9 @@ pub use remote_model::RemoteRepoMetadataModel;
 pub use repository_identifier::{RemoteRepositoryIdentifier, RepositoryIdentifier};
 pub use standing_queries::{
     StandingQueryContent, StandingQueryDefinitions, StandingQueryResults, StandingQueryResultsDelta,
+};
+pub use standing_query_walker::{
+    evaluate_standing_queries, StandingQueryWalkOptions, STANDING_QUERY_WALK_MAX_DEPTH,
 };
 pub use wrapper_model::{RepoMetadataEvent, RepoMetadataModel};
 

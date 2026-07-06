@@ -911,6 +911,13 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
+
+    /// Stage 1 of replacing eager repo indexing with on-the-fly search:
+    /// local project skills (SKILL.md) and rules (WARP.md/AGENTS.md) are
+    /// discovered via a standalone, filename-filtered standing-query walk
+    /// instead of the standing results computed during the eager file-tree
+    /// build. Local-only; remote/SSH repositories keep the eager path.
+    OnTheFlyStandingQueries,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
