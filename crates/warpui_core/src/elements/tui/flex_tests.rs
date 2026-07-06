@@ -9,6 +9,7 @@ use crate::elements::tui::{
     TuiEventHandler, TuiLayoutContext, TuiParentElement, TuiPresentationContext, TuiRect, TuiSize,
     TuiText,
 };
+use crate::elements::CrossAxisAlignment;
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::{App, EntityId, EntityIdMap};
@@ -195,15 +196,96 @@ fn row_clips_children_past_the_available_width() {
 }
 
 #[test]
-fn row_fills_the_offered_cross_axis_height() {
+fn row_sizes_cross_axis_to_its_tallest_child() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            // Like a column spans the offered width, a row spans the offered
-            // height; cap it with a TuiConstrainedBox where a thinner bar is
-            // needed.
+            // The cross axis is content-sized (like the GUI Flex): a row of
+            // one-row children is one row tall, not the offered three rows.
             let mut row = TuiFlex::row().child(TuiText::new("A").truncate().finish());
             let size = layout_at(&mut row, TuiSize::new(4, 3), app_ctx);
-            assert_eq!(size, TuiSize::new(1, 3));
+            assert_eq!(size, TuiSize::new(1, 1));
+        });
+    });
+}
+
+#[test]
+fn tight_cross_axis_constraint_forces_fill() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            // A tight constraint's min clamps the content-sized cross axis
+            // (and main axis) up to the offered extent.
+            let mut row = TuiFlex::row().child(TuiText::new("A").truncate().finish());
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = row.layout(TuiConstraint::tight(TuiSize::new(4, 3)), &mut ctx, app_ctx);
+            assert_eq!(size, TuiSize::new(4, 3));
+        });
+    });
+}
+
+// -- cross-axis alignment --
+
+#[test]
+fn stretch_fills_offered_cross_extent_and_tightens_children() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            // A stretched column fills the offered width, and its children get
+            // a tight cross constraint: the nested (unstretched) column is
+            // forced to width 4 even though its content is one column wide.
+            let mut column = TuiFlex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .child(
+                    TuiFlex::column()
+                        .child(TuiText::new("A").truncate().finish())
+                        .finish(),
+                );
+            let size = layout_at(&mut column, TuiSize::new(4, 3), app_ctx);
+            assert_eq!(size, TuiSize::new(4, 1));
+        });
+    });
+}
+
+#[test]
+fn center_positions_child_along_cross_axis() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            // A one-row child centered in a three-row row lands on the middle
+            // row.
+            let mut row = TuiFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .child(TuiText::new("A").truncate().finish());
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = row.layout(TuiConstraint::tight(TuiSize::new(5, 3)), &mut ctx, app_ctx);
+            assert_eq!(size, TuiSize::new(5, 3));
+            assert_eq!(
+                render_to_lines(&row, TuiSize::new(5, 3)),
+                vec!["     ", "A    ", "     "],
+            );
+        });
+    });
+}
+
+#[test]
+fn end_positions_child_along_cross_axis() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            // End-aligned column: the one-column child lands at the right edge
+            // of the five-column cross extent.
+            let mut column = TuiFlex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::End)
+                .child(TuiText::new("A").truncate().finish());
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = column.layout(TuiConstraint::tight(TuiSize::new(5, 1)), &mut ctx, app_ctx);
+            assert_eq!(size, TuiSize::new(5, 1));
+            assert_eq!(render_to_lines(&column, TuiSize::new(5, 1)), vec!["    A"]);
         });
     });
 }
