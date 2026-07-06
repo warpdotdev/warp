@@ -9,11 +9,11 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_core::session_id::SessionId;
 use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
 
-use crate::terminal::ShellLaunchData;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::bootstrap::{generate_session_id, init_shell_script_for_shell};
 use crate::terminal::local_tty::docker_sandbox::DockerSandboxShellStarter;
 use crate::terminal::shell::{ShellName, ShellType};
+use crate::terminal::ShellLaunchData;
 use crate::util::path::resolve_executable;
 #[cfg(windows)]
 use crate::util::windows::{powershell_5_path, powershell_7_path, wsl_path};
@@ -114,7 +114,7 @@ impl ShellStarter {
                 ShellLaunchData::WSL { distro } => {
                     return Some(ShellStarterSourceOrWslName::WSLName {
                         distro_name: distro,
-                    });
+                    })
                 }
                 ShellLaunchData::MSYS2 {
                     executable_path,
@@ -720,16 +720,6 @@ fn wsl_arguments_for_session_spawning_command(
     shell_type: ShellType,
     session_id: SessionId,
 ) -> Vec<OsString> {
-    // NOTE: We deliberately do NOT use `--exec` here. On the WSL 2.9.3 / WSLC
-    // preview (which rewrote the WSL CLI/console relay), launching the
-    // interactive session with `wsl ... --exec <shell>` breaks the ConPTY stdin
-    // relay: the shell's output still reaches Warp (the InitShell hook arrives),
-    // but the bootstrap bytes Warp writes back never reach the shell's stdin, so
-    // bootstrap never completes and the tab hangs at "Starting bash"
-    // (https://github.com/warpdotdev/warp/issues/13308). Instead we use the same
-    // `--shell-type standard --` shape as the working shell-detection and
-    // home-directory calls above (and the `wsl -d <distro>` manual workaround),
-    // which keeps the input relay intact.
     let mut args = vec![
         "--distribution".into(),
         distribution.into(),
