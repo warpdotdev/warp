@@ -19,7 +19,8 @@ use super::*;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
+    AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentExchange,
+    AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, RequestCommandOutputResult,
     UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -5326,6 +5327,143 @@ fn ctrl_c_after_transfer_takeover_does_not_cancel_conversation() {
             // completion to the agent, so Ctrl-C should interrupt the command without
             // cancelling the conversation.
             assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+        });
+    })
+}
+
+#[test]
+fn ctrl_c_interrupts_requested_command_before_long_running_threshold() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.view_id, false, false, false, ctx)
+                });
+
+            let action_id = AIAgentActionId::from("requested-command".to_owned());
+            let mut model = view.model.lock();
+            model.simulate_cmd("sleep 20");
+            let active_block = model.block_list_mut().active_block_mut();
+            assert!(active_block.is_executing() || active_block.is_command_grid_active());
+            assert!(!active_block.is_active_and_long_running());
+            active_block.set_agent_interaction_mode_for_requested_command(
+                action_id,
+                None,
+                conversation_id,
+            );
+            assert!(active_block.is_agent_driving_command());
+            conversation_id
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(&TerminalAction::CtrlC, ctx);
+        });
+
+        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ETX]]);
+        terminal.read(&app, |view, ctx| {
+            let model = view.model.lock();
+            let active_block = model.block_list().active_block();
+            assert!(!active_block.is_agent_driving_command());
+            assert!(active_block
+                .agent_interaction_metadata()
+                .is_some_and(|metadata| metadata.should_suppress_auto_resume()));
+            drop(model);
+
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.status(), &ConversationStatus::Cancelled);
+        });
+    })
+}
+
+#[test]
+fn ctrl_c_cancels_buffered_requested_command_snapshot() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let (conversation_id, action_id) = terminal.update(&mut app, |view, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.view_id, false, false, false, ctx)
+                });
+            let action_id = AIAgentActionId::from("requested-command".to_owned());
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 20", "running");
+            let block_id = {
+                let mut model = view.model.lock();
+                let active_block = model.block_list_mut().active_block_mut();
+                active_block.set_agent_interaction_mode_for_requested_command(
+                    action_id.clone(),
+                    None,
+                    conversation_id,
+                );
+                active_block.id().clone()
+            };
+
+            view.ai_action_model.update(ctx, |action_model, ctx| {
+                action_model.apply_finished_action_result(
+                    conversation_id,
+                    AIAgentActionResult {
+                        id: action_id.clone(),
+                        task_id: TaskId::new("requested-command-task".to_owned()),
+                        result: AIAgentActionResultType::RequestCommandOutput(
+                            RequestCommandOutputResult::LongRunningCommandSnapshot {
+                                block_id,
+                                command: "sleep 20".to_owned(),
+                                grid_contents: "running".to_owned(),
+                                cursor: "<|cursor|>".to_owned(),
+                                is_alt_screen_active: false,
+                            },
+                        ),
+                    },
+                    ctx,
+                );
+            });
+            view.cancel_requested_long_running_command(conversation_id, action_id.clone(), ctx);
+            (conversation_id, action_id)
+        });
+
+        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ETX]]);
+        terminal.read(&app, |view, ctx| {
+            let status = view
+                .ai_action_model
+                .as_ref(ctx)
+                .get_action_status(&action_id)
+                .expect("action result should exist");
+            assert!(status.is_cancelled());
+
+            let model = view.model.lock();
+            let active_block = model.block_list().active_block();
+            assert!(!active_block.is_agent_driving_command());
+            assert_eq!(active_block.ai_conversation_id(), Some(conversation_id));
         });
     })
 }

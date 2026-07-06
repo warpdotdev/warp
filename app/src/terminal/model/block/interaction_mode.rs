@@ -123,6 +123,7 @@ impl Block {
             .is_some_and(|metadata| {
                 metadata.requested_command_action_id().is_some()
                     && metadata.long_running_control_state().is_none()
+                    && !metadata.should_suppress_auto_resume()
             })
     }
 
@@ -161,7 +162,7 @@ impl Block {
     /// the conversation has been cancelled and should not resume on its own.
     pub fn set_user_control_and_suppress_auto_resume(&mut self) {
         if let InteractionMode::Agent(metadata) = &mut self.interaction_mode {
-            metadata.suppress_auto_resume = true;
+            metadata.set_suppress_auto_resume();
             if let Some(state) = &mut metadata.long_running_control_state {
                 *state = LongRunningCommandControlState::User {
                     reason: UserTakeOverReason::Stop,

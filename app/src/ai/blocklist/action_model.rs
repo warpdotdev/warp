@@ -1054,6 +1054,62 @@ impl BlocklistAIActionModel {
         }
     }
 
+    /// Cancels a pending/running requested-command action, or marks its buffered snapshot as cancelled.
+    pub(crate) fn cancel_requested_command_with_id(
+        &mut self,
+        conversation_id: AIConversationId,
+        action_id: &AIAgentActionId,
+        reason: CancellationReason,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if self
+            .running_actions
+            .get(&conversation_id)
+            .is_some_and(|running| running.contains(action_id))
+            || self
+                .pending_actions
+                .get(&conversation_id)
+                .is_some_and(|actions| actions.iter().any(|action| action.id == *action_id))
+        {
+            self.cancel_action_with_id(conversation_id, action_id, reason, ctx);
+            return true;
+        }
+        // If the command was already classified as long-running, its snapshot can be buffered
+        // before the agent consumes it. Rewrite that result as cancelled so the agent does not
+        // attach to a command the user already interrupted.
+        let Some(action_result) = self
+            .finished_action_results
+            .get_mut(&conversation_id)
+            .and_then(|results| {
+                results.iter_mut().find(|result| {
+                    result.id == *action_id
+                        && matches!(
+                            result.result,
+                            AIAgentActionResultType::RequestCommandOutput(
+                                RequestCommandOutputResult::LongRunningCommandSnapshot { .. }
+                            )
+                        )
+                })
+            })
+        else {
+            return false;
+        };
+
+        *action_result = Arc::new(AIAgentActionResult {
+            id: action_result.id.clone(),
+            task_id: action_result.task_id.clone(),
+            result: AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::CancelledBeforeExecution,
+            ),
+        });
+        self.sort_finished_results(conversation_id);
+        ctx.emit(BlocklistAIActionEvent::FinishedAction {
+            action_id: action_id.clone(),
+            conversation_id,
+            cancellation_reason: Some(reason),
+        });
+        true
+    }
     /// Cancels any in-flight WaitForEvents action for the given conversation.
     pub fn cancel_wait_for_events_for_conversation(
         &mut self,
