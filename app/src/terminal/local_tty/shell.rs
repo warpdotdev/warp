@@ -190,6 +190,9 @@ impl ShellStarter {
                     .ok()
                     .flatten()
                     .map(|user| user.shell.display().to_string());
+                if pw_shell_path.is_none() {
+                    log::error!("user lookup from nix::unistd::User::from_uid failed");
+                }
                 if let Some((resolved_pw_shell_path, shell_type)) =
                     pw_shell_path.as_deref().and_then(supported_shell_path_and_type)
                 {
