@@ -3257,35 +3257,29 @@ fn reconcile_dangling_tool_calls_in_forked_task(
             .get(&tool_call_id)
             .map(|real| (*real).clone())
             .unwrap_or_else(|| {
-                synthesized_tool_call_cancellation_message(&task.id, &tool_call_id, &request_id)
+                // No real result to pull forward (in-flight call): synthesize a
+                // `Cancel` result carrying the call's `request_id` so it groups
+                // into the same exchange as its `tool_call` on restore.
+                warp_multi_agent_api::Message {
+                    id: Uuid::new_v4().to_string(),
+                    task_id: task.id.clone(),
+                    server_message_data: String::new(),
+                    citations: vec![],
+                    fetched_memories: vec![],
+                    message: Some(warp_multi_agent_api::message::Message::ToolCallResult(
+                        warp_multi_agent_api::message::ToolCallResult {
+                            tool_call_id: tool_call_id.clone(),
+                            context: None,
+                            result: Some(
+                                warp_multi_agent_api::message::tool_call_result::Result::Cancel(()),
+                            ),
+                        },
+                    )),
+                    request_id: request_id.clone(),
+                    timestamp: None,
+                }
             });
         task.messages.insert(idx + 1, reconciled);
-    }
-}
-
-/// Builds a `Cancel` `tool_call_result` message paired to `tool_call_id`,
-/// carrying `request_id` so it groups into the same exchange as its `tool_call`
-/// on restore.
-fn synthesized_tool_call_cancellation_message(
-    task_id: &str,
-    tool_call_id: &str,
-    request_id: &str,
-) -> warp_multi_agent_api::Message {
-    warp_multi_agent_api::Message {
-        id: Uuid::new_v4().to_string(),
-        task_id: task_id.to_string(),
-        server_message_data: String::new(),
-        citations: vec![],
-        fetched_memories: vec![],
-        message: Some(warp_multi_agent_api::message::Message::ToolCallResult(
-            warp_multi_agent_api::message::ToolCallResult {
-                tool_call_id: tool_call_id.to_string(),
-                context: None,
-                result: Some(warp_multi_agent_api::message::tool_call_result::Result::Cancel(())),
-            },
-        )),
-        request_id: request_id.to_string(),
-        timestamp: None,
     }
 }
 

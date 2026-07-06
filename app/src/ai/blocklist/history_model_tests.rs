@@ -18,6 +18,7 @@ use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
     ServerAIConversationMetadata,
 };
+use crate::ai::agent::task::helper::MessageExt;
 use crate::ai::agent::{
     AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
     RenderableAIError, Shared, TransientNetworkErrorKind, UserQueryMode,
@@ -38,6 +39,7 @@ use crate::persistence::ModelEvent;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::model::session::SessionId;
+use crate::test_util::ai_agent_tasks::create_api_task;
 use crate::test_util::settings::{
     initialize_history_persistence_for_tests, initialize_settings_for_tests,
 };
@@ -4689,7 +4691,6 @@ fn regular_tool_call_result_message(
 /// (paired by `tool_call_id`) is absent. Mirrors the Anthropic invariant that
 /// each `tool_use` block must be immediately followed by its `tool_result`.
 fn has_dangling_tool_use(task: &warp_multi_agent_api::Task) -> bool {
-    use crate::ai::agent::task::helper::MessageExt;
     let result_ids: HashSet<&str> = task
         .messages
         .iter()
@@ -4756,9 +4757,6 @@ fn install_mock_model_event_sender(app: &mut warpui::App) -> std::sync::mpsc::Re
 /// `Cancel` positioned right after the call, carrying its request_id.
 #[test]
 fn fork_exact_midtoolcall_pairs_retained_tool_uses() {
-    use crate::ai::agent::task::helper::MessageExt;
-    use crate::test_util::ai_agent_tasks::create_api_task;
-
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         let _receiver = install_mock_model_event_sender(&mut app);
