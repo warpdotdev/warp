@@ -1029,6 +1029,13 @@ en:
     card_view_runs_link: "View my runs"
     tooltip_share: "Share"
     tooltip_edit: "Edit"
+    card_last_edited: "Last edited: {}"
+    card_last_used: "Last used: {}"
+    section_shared_by_team: "Shared by Warp and {}"
+    card_env_id: "Env ID: {}"
+    card_image: "Image: {}"
+    card_repos: "Repos: {}"
+    card_setup_commands: "Setup commands: {}"
 
   settings.category:
     themes: "Themes"

@@ -1029,6 +1029,13 @@ ru:
     card_view_runs_link: "Просмотреть мои запуски"
     tooltip_share: "Поделиться"
     tooltip_edit: "Изменить"
+    card_last_edited: "Последнее изменение: {}"
+    card_last_used: "Последнее использование: {}"
+    section_shared_by_team: "Предоставлено Warp и {}"
+    card_env_id: "ID среды: {}"
+    card_image: "Образ: {}"
+    card_repos: "Репозитории: {}"
+    card_setup_commands: "Команды настройки: {}"
 
   settings.category:
     themes: "Темы"

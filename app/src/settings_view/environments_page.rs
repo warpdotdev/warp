@@ -172,6 +172,27 @@ fn tooltip_share() -> &'static str {
 fn tooltip_edit() -> &'static str {
     crate::menu_label("settings.environments_page.tooltip_edit", "Edit")
 }
+fn card_last_edited_template() -> &'static str {
+    crate::menu_label("settings.environments_page.card_last_edited", "Last edited: {}")
+}
+fn card_last_used_template() -> &'static str {
+    crate::menu_label("settings.environments_page.card_last_used", "Last used: {}")
+}
+fn section_shared_by_team_template() -> &'static str {
+    crate::menu_label("settings.environments_page.section_shared_by_team", "Shared by Warp and {}")
+}
+fn card_env_id_template() -> &'static str {
+    crate::menu_label("settings.environments_page.card_env_id", "Env ID: {}")
+}
+fn card_image_template() -> &'static str {
+    crate::menu_label("settings.environments_page.card_image", "Image: {}")
+}
+fn card_repos_template() -> &'static str {
+    crate::menu_label("settings.environments_page.card_repos", "Repos: {}")
+}
+fn card_setup_commands_template() -> &'static str {
+    crate::menu_label("settings.environments_page.card_setup_commands", "Setup commands: {}")
+}
 const CARD_BORDER_WIDTH: f32 = 1.;
 const CARD_PADDING: f32 = 16.;
 const CARD_SPACING: f32 = 12.;
@@ -278,16 +299,12 @@ impl EnvironmentDisplayData {
     /// Format the timestamp text showing last edited and last used times.
     fn format_timestamp_text(&self) -> String {
         let last_edited_part = self.last_edited_ts.map(|ts| {
-            format!(
-                "Last edited: {}",
-                format_approx_duration_from_now_utc(ts.utc())
-            )
+            card_last_edited_template()
+                .replace("{}", &format_approx_duration_from_now_utc(ts.utc()))
         });
         let last_used_part = match self.last_used_ts {
-            Some(ts) => format!(
-                "Last used: {}",
-                format_approx_duration_from_now_utc(ts.utc())
-            ),
+            Some(ts) => card_last_used_template()
+                .replace("{}", &format_approx_duration_from_now_utc(ts.utc())),
             None => card_last_used_never().to_string(),
         };
         match last_edited_part {
@@ -1405,7 +1422,7 @@ impl EnvironmentsPageWidget {
             EnvironmentListScope::Team => {
                 let shared_by_text = UserWorkspaces::as_ref(app)
                     .current_team()
-                    .map(|team| format!("Shared by Warp and {}", team.name))
+                    .map(|team| section_shared_by_team_template().replace("{}", &team.name))
                     .unwrap_or_else(|| section_shared_by_team_fallback().to_string());
                 Self::render_overline_header(&shared_by_text, appearance)
             }
@@ -1847,7 +1864,7 @@ impl EnvironmentsPageWidget {
             // since it returns a Box<dyn Element> that can only be consumed once
             let env_id_str_copy = env_id_str.clone();
             let env_id_with_copy = render_copyable_text_field(
-                CopyableTextFieldConfig::new(format!("Env ID: {}", env_id_str.clone()))
+                CopyableTextFieldConfig::new(card_env_id_template().replace("{}", &env_id_str.clone()))
                     .with_font_size(appearance.ui_font_size() * 0.9)
                     .with_text_color(blended_colors::text_sub(theme, theme.surface_1()))
                     .with_icon_size(12.)
@@ -1902,7 +1919,7 @@ impl EnvironmentsPageWidget {
                 }
             }
 
-            let mut details_parts = vec![format!("Image: {}", env_docker_image)];
+            let mut details_parts = vec![card_image_template().replace("{}", &env_docker_image)];
 
             if !env_github_repos.is_empty() {
                 let repos_text = env_github_repos
@@ -1910,12 +1927,12 @@ impl EnvironmentsPageWidget {
                     .map(|(owner, repo)| format!("{}/{}", owner, repo))
                     .collect::<Vec<_>>()
                     .join(", ");
-                details_parts.push(format!("Repos: {}", repos_text));
+                details_parts.push(card_repos_template().replace("{}", &repos_text));
             }
 
             if !env_setup_commands.is_empty() {
                 let commands_text = env_setup_commands.join(", ");
-                details_parts.push(format!("Setup commands: {}", commands_text));
+                details_parts.push(card_setup_commands_template().replace("{}", &commands_text));
             }
 
             // Create details section with Env ID on first line and other details below
