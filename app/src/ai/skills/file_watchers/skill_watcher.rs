@@ -8,10 +8,12 @@ use ai::skills::{
 };
 use async_channel::Sender;
 use futures::future::BoxFuture;
-use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
 use repo_metadata::repository::{Repository, SubscriberId};
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate};
+use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcherEvent, HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
 
@@ -19,8 +21,9 @@ use super::subscribers::{
     HomeSkillSubscriber, ProjectSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber,
 };
 use super::utils::{
-    find_local_project_skill_files_on_filesystem, find_project_skill_files_in_tree,
-    is_home_provider_path, is_home_skill_directory, is_skill_file, read_skills_from_directories,
+    find_local_project_skill_files_on_filesystem, find_local_project_skill_files_with_walk,
+    find_project_skill_files_in_tree, is_home_provider_path, is_home_skill_directory,
+    is_skill_file, path_is_project_skill_relevant, read_skills_from_directories,
     read_skills_from_files,
 };
 use crate::ai::remote_context_files::{
@@ -52,11 +55,14 @@ pub struct SkillWatcher {
     /// Allocates refresh generations that cannot be reused if a repository is removed
     /// and subsequently re-added while an old task is still in flight.
     next_project_skill_refresh_generation: u64,
-    /// Failed local repos still need the project file watcher path because
-    /// repo metadata indexing can fail for oversized repos. This replaces the
-    /// previous `watched_repos` set so we only subscribe when fallback is active
-    /// and can also clean up the subscriber on repo removal.
-    failed_local_project_watchers: HashMap<PathBuf, (ModelHandle<Repository>, SubscriberId)>,
+    /// Local repos with a direct project file watcher.
+    ///
+    /// With [`FeatureFlag::OnTheFlyStandingQueries`] enabled this is the primary
+    /// discovery path for every detected local repo: the `Repository` recursive
+    /// watch triggers standing-query re-walks. With the flag disabled it only
+    /// holds fallback watchers for repos whose repo metadata indexing failed
+    /// (indexing can fail for oversized repos).
+    local_project_watchers: HashMap<PathBuf, (ModelHandle<Repository>, SubscriberId)>,
     watcher_event_tx: Sender<SkillWatcherEvent>,
     /// Tracks watchers on home provider directories (e.g. ~/.agents, ~/.claude) so they
     /// can be cleaned up when the directory is deleted.
@@ -181,23 +187,42 @@ impl SkillWatcher {
         // RepoMetadataModel for both local and remote repos when available, while
         // local repos fall back to a direct project watcher only if metadata
         // indexing fails.
+        //
+        // With `OnTheFlyStandingQueries` enabled, local repos instead use the
+        // standalone standing-query walk as the primary path: metadata events
+        // only ensure the repo's direct watcher exists (covering repos indexed
+        // without a `DetectedGitRepo` event, e.g. user-added workspaces), and
+        // freshness comes from that watcher's re-walks. Remote repos keep the
+        // metadata-backed path in both modes.
         ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), |me, _, event, ctx| {
             use repo_metadata::wrapper_model::RepoMetadataEvent;
             match event {
                 RepoMetadataEvent::RepositoryUpdated { id } => {
-                    me.refresh_project_skills_for_repo(id, ctx);
+                    if local_uses_standing_query_walk(id) {
+                        me.ensure_local_project_discovery(id, ctx);
+                    } else {
+                        me.refresh_project_skills_for_repo(id, ctx);
+                    }
                 }
                 RepoMetadataEvent::StandingQueryResultsUpdated { id, delta } => {
-                    if delta.project_skills_changed() {
+                    if local_uses_standing_query_walk(id) {
+                        // Freshness is driven by the repo's direct watcher re-walks.
+                    } else if delta.project_skills_changed() {
                         me.refresh_project_skills_for_repo(id, ctx);
                     }
                 }
                 RepoMetadataEvent::RepositoryRemoved { id } => {
                     me.remove_project_skills_for_repo(id);
-                    me.stop_failed_local_project_watcher(id, ctx);
+                    me.stop_local_project_watcher(id, ctx);
                 }
                 RepoMetadataEvent::UpdatingRepositoryFailed { id } => {
-                    me.fallback_to_local_project_watcher(id, ctx);
+                    if local_uses_standing_query_walk(id) {
+                        // The walk-based primary path does not depend on
+                        // indexing; just make sure the repo is watched.
+                        me.ensure_local_project_discovery(id, ctx);
+                    } else {
+                        me.fallback_to_local_project_watcher(id, ctx);
+                    }
                 }
                 RepoMetadataEvent::FileTreeUpdated { .. }
                 | RepoMetadataEvent::FileTreeEntryUpdated { .. }
@@ -205,12 +230,24 @@ impl SkillWatcher {
             }
         });
 
+        // With `OnTheFlyStandingQueries` enabled, repo detection (rather than
+        // eager metadata indexing) is the primary trigger for local project
+        // skill discovery.
+        ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
+            if !FeatureFlag::OnTheFlyStandingQueries.is_enabled() {
+                return;
+            }
+            let DetectedRepositoriesEvent::DetectedGitRepo { repository, .. } = event;
+            let repo_id = RepositoryIdentifier::local(repository.as_ref(ctx).root_dir().clone());
+            me.ensure_local_project_discovery(&repo_id, ctx);
+        });
+
         Self {
             repository_message_tx,
             project_skill_files_by_repo: HashMap::new(),
             project_skill_refresh_generations: HashMap::new(),
             next_project_skill_refresh_generation: 0,
-            failed_local_project_watchers: HashMap::new(),
+            local_project_watchers: HashMap::new(),
             watcher_event_tx,
             home_provider_watchers,
             symlink_canonical_to_originals: HashMap::new(),
@@ -230,10 +267,27 @@ impl SkillWatcher {
                 .into_iter()
                 .collect()
         };
+        self.apply_project_skill_refresh(
+            repo_id.clone(),
+            refresh_generation,
+            current_skill_files,
+            ctx,
+        );
+    }
 
+    /// Applies a freshly discovered set of project skill files: emits deletions
+    /// for skills that disappeared, re-reads the current set, and records it as
+    /// the latest known state for the repository.
+    fn apply_project_skill_refresh(
+        &mut self,
+        repo_id: RepositoryIdentifier,
+        refresh_generation: u64,
+        current_skill_files: HashSet<LocalOrRemotePath>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let previous_skill_files = self
             .project_skill_files_by_repo
-            .get(repo_id)
+            .get(&repo_id)
             .cloned()
             .unwrap_or_default();
 
@@ -265,7 +319,111 @@ impl SkillWatcher {
         );
 
         self.project_skill_files_by_repo
-            .insert(repo_id.clone(), current_skill_files);
+            .insert(repo_id, current_skill_files);
+    }
+
+    /// Ensures the walk-based primary discovery path is active for a local
+    /// repository: registers the direct project watcher if needed and runs the
+    /// initial standing-query walk on first registration. Subsequent freshness
+    /// comes from the watcher's re-walks.
+    fn ensure_local_project_discovery(
+        &mut self,
+        repo_id: &RepositoryIdentifier,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let RepositoryIdentifier::Local(repo_root) = repo_id else {
+            return;
+        };
+        let Some(local_path) = repo_root.to_local_path() else {
+            return;
+        };
+        let newly_watched = !self.local_project_watchers.contains_key(&local_path);
+        self.watch_local_project_repo(local_path, ctx);
+        if newly_watched {
+            self.refresh_local_project_skills_via_walk(repo_id.clone(), ctx);
+        }
+    }
+
+    /// Re-discovers a local repository's project skills with the standalone
+    /// standing-query walk on a background thread.
+    fn refresh_local_project_skills_via_walk(
+        &mut self,
+        repo_id: RepositoryIdentifier,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let RepositoryIdentifier::Local(repo_root) = &repo_id else {
+            return;
+        };
+        let Some(local_path) = repo_root.to_local_path() else {
+            return;
+        };
+        let refresh_generation = self.advance_project_skill_refresh_generation(&repo_id);
+        ctx.spawn(
+            async move { find_local_project_skill_files_with_walk(&local_path) },
+            move |me, skill_files, ctx| {
+                if me.project_skill_refresh_generations.get(&repo_id) != Some(&refresh_generation) {
+                    return;
+                }
+                me.apply_project_skill_refresh(
+                    repo_id,
+                    refresh_generation,
+                    skill_files.into_iter().collect(),
+                    ctx,
+                );
+            },
+        );
+    }
+
+    /// Handles a direct project watcher update when the walk-based primary
+    /// path is active: skill-relevant changes trigger a full re-walk of the
+    /// repository's standing queries.
+    fn handle_local_project_walk_update(
+        &mut self,
+        root_dir: &StandardizedPath,
+        update: &RepositoryUpdate,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let repo_id = RepositoryIdentifier::local(root_dir.clone());
+        if !self.update_touches_project_skills(&repo_id, update) {
+            return;
+        }
+        self.refresh_local_project_skills_via_walk(repo_id, ctx);
+    }
+
+    /// Returns whether a repository update can affect project skill discovery:
+    /// a changed path is skill-relevant (a `SKILL.md` or anything at/below a
+    /// provider directory), or a deletion/move removed a directory above a
+    /// known skill file.
+    fn update_touches_project_skills(
+        &self,
+        repo_id: &RepositoryIdentifier,
+        update: &RepositoryUpdate,
+    ) -> bool {
+        let changed_paths = update
+            .added_or_modified()
+            .chain(update.deleted.iter())
+            .chain(update.moved.keys())
+            .chain(update.moved.values());
+        for target in changed_paths {
+            if path_is_project_skill_relevant(&target.path) {
+                return true;
+            }
+        }
+
+        let Some(known_skill_files) = self.project_skill_files_by_repo.get(repo_id) else {
+            return false;
+        };
+        update
+            .deleted
+            .iter()
+            .chain(update.moved.values())
+            .any(|removed| {
+                known_skill_files.iter().any(|skill| {
+                    skill
+                        .to_local_path()
+                        .is_some_and(|path| path.starts_with(&removed.path))
+                })
+            })
     }
 
     fn advance_project_skill_refresh_generation(&mut self, repo_id: &RepositoryIdentifier) -> u64 {
@@ -288,24 +446,27 @@ impl SkillWatcher {
         };
 
         self.scan_local_project_skills_from_filesystem(&local_path, ctx);
-        self.watch_failed_local_project_repo(local_path, ctx);
+        self.watch_local_project_repo(local_path, ctx);
     }
 
-    /// Register a failed local project root to watch for skill file changes.
-    fn watch_failed_local_project_repo(
-        &mut self,
-        repo_path: PathBuf,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.failed_local_project_watchers.contains_key(&repo_path) {
+    /// Register a local project root to watch for skill file changes.
+    ///
+    /// This serves the flag-on walk-based primary path for every detected
+    /// repo, and the indexing-failure fallback path when the flag is off.
+    fn watch_local_project_repo(&mut self, repo_path: PathBuf, ctx: &mut ModelContext<Self>) {
+        if self.local_project_watchers.contains_key(&repo_path) {
             return;
         }
 
-        let Some(repo_handle) =
-            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(&repo_path, ctx)
-        else {
+        // Repos registered without a `DetectedGitRepo` event (e.g. user-added
+        // workspaces) are absent from `DetectedRepositories`; fall back to the
+        // directory watcher's registration directly.
+        let repo_handle = DetectedRepositories::as_ref(ctx)
+            .get_local_watched_repo_for_path(&repo_path, ctx)
+            .or_else(|| DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(&repo_path));
+        let Some(repo_handle) = repo_handle else {
             log::warn!(
-                "Could not start local project skill fallback watcher for {}; repo is not watched",
+                "Could not start local project skill watcher for {}; repo is not watched",
                 repo_path.display()
             );
             return;
@@ -316,17 +477,17 @@ impl SkillWatcher {
         });
         let start = repo_handle.update(ctx, |repo, ctx| repo.start_watching(subscriber, ctx));
         let subscriber_id = start.subscriber_id;
-        self.failed_local_project_watchers
+        self.local_project_watchers
             .insert(repo_path.clone(), (repo_handle.clone(), subscriber_id));
 
         ctx.spawn(start.registration_future, move |me, res, ctx| {
             if let Err(err) = res {
                 log::warn!(
-                    "Failed to start local project skill fallback watcher for {}: {err}",
+                    "Failed to start local project skill watcher for {}: {err}",
                     repo_path.display()
                 );
                 if let Some((repo_handle, subscriber_id)) =
-                    me.failed_local_project_watchers.remove(&repo_path)
+                    me.local_project_watchers.remove(&repo_path)
                 {
                     repo_handle.update(ctx, |repo, ctx| {
                         repo.stop_watching(subscriber_id, ctx);
@@ -418,7 +579,7 @@ impl SkillWatcher {
         );
     }
 
-    fn stop_failed_local_project_watcher(
+    fn stop_local_project_watcher(
         &mut self,
         repo_id: &RepositoryIdentifier,
         ctx: &mut ModelContext<Self>,
@@ -429,8 +590,7 @@ impl SkillWatcher {
         let Some(local_path) = repo_path.to_local_path() else {
             return;
         };
-        let Some((repo_handle, subscriber_id)) =
-            self.failed_local_project_watchers.remove(&local_path)
+        let Some((repo_handle, subscriber_id)) = self.local_project_watchers.remove(&local_path)
         else {
             return;
         };
@@ -497,8 +657,12 @@ impl SkillWatcher {
                     .watcher_event_tx
                     .try_send(SkillWatcherEvent::SkillsAdded { skills });
             }
-            SkillRepositoryMessage::ProjectRepositoryUpdate { update } => {
-                self.handle_failed_local_project_update(&update, ctx);
+            SkillRepositoryMessage::ProjectRepositoryUpdate { root_dir, update } => {
+                if FeatureFlag::OnTheFlyStandingQueries.is_enabled() {
+                    self.handle_local_project_walk_update(&root_dir, &update, ctx);
+                } else {
+                    self.handle_failed_local_project_update(&update, ctx);
+                }
             }
             SkillRepositoryMessage::HomeRepositoryUpdate { update } => {
                 self.handle_repository_update(&update, ctx);
@@ -1038,6 +1202,14 @@ impl SkillWatcher {
             }
         });
     }
+}
+
+/// Returns whether the walk-based standing-query path handles this repository:
+/// local repositories only, and only when `OnTheFlyStandingQueries` is enabled.
+/// Remote repositories always use the metadata-backed standing results.
+fn local_uses_standing_query_walk(repo_id: &RepositoryIdentifier) -> bool {
+    matches!(repo_id, RepositoryIdentifier::Local(_))
+        && FeatureFlag::OnTheFlyStandingQueries.is_enabled()
 }
 
 fn read_project_skill_contents(

@@ -5,7 +5,10 @@ use ai::skills::{
     ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
 };
 use anyhow::Error;
-use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
+use repo_metadata::{
+    evaluate_standing_queries, RepoMetadataModel, RepositoryIdentifier, StandingQueryDefinitions,
+    StandingQueryWalkOptions,
+};
 use walkdir::{DirEntry, WalkDir};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -73,6 +76,38 @@ pub(super) fn find_local_project_skill_files_on_filesystem(
                 .then_some(LocalOrRemotePath::Local(skill_file))
         })
         .collect()
+}
+
+/// Finds local project skill files with the standalone standing-query walk.
+///
+/// This is the primary local discovery path when
+/// [`FeatureFlag::OnTheFlyStandingQueries`](warp_core::features::FeatureFlag) is enabled: it
+/// evaluates the same standing-query definitions as the eager repo metadata walk (including
+/// gitignore pruning and symlinked provider children) without materializing a file tree.
+pub(super) fn find_local_project_skill_files_with_walk(scan_root: &Path) -> Vec<LocalOrRemotePath> {
+    let provider_paths: Vec<PathBuf> = SKILL_PROVIDER_DEFINITIONS
+        .iter()
+        .map(|provider| provider.skills_path.clone())
+        .collect();
+    let mut definitions = StandingQueryDefinitions::default();
+    definitions.set_project_skill_provider_paths(provider_paths.clone());
+    let options = StandingQueryWalkOptions {
+        force_included_paths: provider_paths,
+        ..Default::default()
+    };
+    evaluate_standing_queries(scan_root, &definitions, &options)
+        .project_skills()
+        .filter(|content| !content.is_directory)
+        .map(|content| LocalOrRemotePath::Local(content.path.to_local_path_lossy()))
+        .collect()
+}
+
+/// Returns whether a changed path can affect project skill discovery: the
+/// path is a `SKILL.md` file, or it is at or below a skill provider directory
+/// (e.g. `.agents/skills`).
+pub(super) fn path_is_project_skill_relevant(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some("SKILL.md")
+        || path.ancestors().any(is_project_provider_path)
 }
 
 fn find_local_provider_directories_on_filesystem(scan_root: &Path) -> Vec<PathBuf> {

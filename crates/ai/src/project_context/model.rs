@@ -11,11 +11,20 @@ use super::GlobalRules;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
+        use std::pin::Pin;
+
+        use async_channel::Sender;
+        use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
+        use repo_metadata::repository::{Repository, RepositorySubscriber, SubscriberId};
         use repo_metadata::{
-            RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier, StandingQueryContent,
+            evaluate_standing_queries, DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel,
+            RepositoryIdentifier, RepositoryUpdate, StandingQueryContent,
+            StandingQueryDefinitions, StandingQueryWalkOptions, STANDING_QUERY_WALK_MAX_DEPTH,
         };
+        use warp_core::features::FeatureFlag;
         use warp_util::remote_path::RemotePath;
         use warp_util::standardized_path::StandardizedPath;
+        use warpui_core::ModelHandle;
     }
 }
 
@@ -27,6 +36,64 @@ pub type ProjectRuleContentReader = fn(
     Vec<LocalOrRemotePath>,
     &AppContext,
 ) -> BoxFuture<'static, anyhow::Result<ProjectRuleContents>>;
+
+/// A repository update from a directly watched local rule root, tagged with
+/// the watched root so the model can re-walk the right repository.
+#[cfg(feature = "local_fs")]
+type LocalRuleWatchMessage = (StandardizedPath, RepositoryUpdate);
+
+/// Repository subscriber that forwards file change events for a watched local
+/// rule root back to [`ProjectContextModel`].
+#[cfg(feature = "local_fs")]
+struct ProjectRuleSubscriber {
+    message_tx: Sender<LocalRuleWatchMessage>,
+}
+
+#[cfg(feature = "local_fs")]
+impl RepositorySubscriber for ProjectRuleSubscriber {
+    fn on_scan(
+        &mut self,
+        _repository: &Repository,
+        _ctx: &mut ModelContext<Repository>,
+    ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        // The initial walk is triggered directly when discovery starts; this
+        // subscriber only keeps rule results fresh afterward.
+        Box::pin(async {})
+    }
+
+    fn on_files_updated(
+        &mut self,
+        repository: &Repository,
+        update: &RepositoryUpdate,
+        _ctx: &mut ModelContext<Repository>,
+    ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        let tx = self.message_tx.clone();
+        let root_dir = repository.root_dir().clone();
+        let update = update.clone();
+        Box::pin(async move {
+            let _ = tx.send((root_dir, update)).await;
+        })
+    }
+}
+
+/// Returns whether the walk-based standing-query path handles this repository:
+/// local repositories only, and only when `OnTheFlyStandingQueries` is enabled.
+/// Remote repositories always use the metadata-backed standing results.
+#[cfg(feature = "local_fs")]
+fn local_uses_standing_query_walk(repo_id: &RepositoryIdentifier) -> bool {
+    matches!(repo_id, RepositoryIdentifier::Local(_))
+        && FeatureFlag::OnTheFlyStandingQueries.is_enabled()
+}
+
+/// Returns whether a changed path can affect project rule discovery.
+#[cfg(feature = "local_fs")]
+fn path_is_project_rule_relevant(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("WARP.md") || name.eq_ignore_ascii_case("AGENTS.md")
+        })
+}
 
 #[cfg(feature = "local_fs")]
 fn standing_project_rule_paths<'a>(
@@ -209,6 +276,19 @@ pub struct ProjectContextModel {
     rule_refresh_generations: HashMap<RepositoryIdentifier, u64>,
     #[cfg(feature = "local_fs")]
     next_rule_refresh_generation: u64,
+    /// App-provided rule content reader, stored so walk-based refreshes
+    /// triggered outside metadata events can read rule contents.
+    #[cfg(feature = "local_fs")]
+    project_rule_content_reader: Option<ProjectRuleContentReader>,
+    /// Sender for updates from directly watched local rule roots. Present only
+    /// after `new_from_persisted` wires up the receiving stream.
+    #[cfg(feature = "local_fs")]
+    rule_walk_message_tx: Option<Sender<LocalRuleWatchMessage>>,
+    /// Local rule roots with a direct `Repository` watcher. Only populated when
+    /// `OnTheFlyStandingQueries` is enabled: the watcher triggers standing-query
+    /// re-walks when WARP.md/AGENTS.md files change.
+    #[cfg(feature = "local_fs")]
+    local_rule_watchers: HashMap<PathBuf, (ModelHandle<Repository>, SubscriberId)>,
     /// File-based global rules and their local watcher state. Kept separate
     /// from `path_to_rules`, which is project-scoped.
     pub(super) global_rules: GlobalRules,
@@ -281,17 +361,43 @@ impl ProjectContextModel {
         let mut model = Self::default();
         #[cfg(feature = "local_fs")]
         {
+            model.project_rule_content_reader = Some(project_rule_content_reader);
+
+            // Receive updates from directly watched local rule roots (used by
+            // the flag-on walk-based discovery path).
+            let (rule_walk_tx, rule_walk_rx) = async_channel::unbounded();
+            model.rule_walk_message_tx = Some(rule_walk_tx);
+            ctx.spawn_stream_local(
+                rule_walk_rx,
+                |me, (root_dir, update): LocalRuleWatchMessage, ctx| {
+                    if FeatureFlag::OnTheFlyStandingQueries.is_enabled() {
+                        me.handle_local_rule_watch_update(root_dir, &update, ctx);
+                    }
+                },
+                |_, _| {},
+            );
+
+            // With `OnTheFlyStandingQueries` enabled, local rule discovery is
+            // driven by repo detection and the direct rule-root watchers rather
+            // than eager repo metadata indexing. Remote repos keep the
+            // metadata-backed path in both modes.
             ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), move |me, _, event, ctx| {
                 match event {
                     RepoMetadataEvent::RepositoryUpdated { id } => {
-                        me.refresh_project_rules_for_repo(
-                            id.clone(),
-                            project_rule_content_reader,
-                            ctx,
-                        );
+                        if local_uses_standing_query_walk(id) {
+                            me.ensure_local_rule_discovery(id, ctx);
+                        } else {
+                            me.refresh_project_rules_for_repo(
+                                id.clone(),
+                                project_rule_content_reader,
+                                ctx,
+                            );
+                        }
                     }
                     RepoMetadataEvent::StandingQueryResultsUpdated { id, delta } => {
-                        if delta.project_rules_changed() {
+                        if local_uses_standing_query_walk(id) {
+                            // Freshness is driven by the rule-root watcher re-walks.
+                        } else if delta.project_rules_changed() {
                             me.refresh_project_rules_for_repo(
                                 id.clone(),
                                 project_rule_content_reader,
@@ -307,6 +413,18 @@ impl ProjectContextModel {
                     | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
                     | RepoMetadataEvent::IncrementalUpdateReady { .. } => {}
                 }
+            });
+
+            // With `OnTheFlyStandingQueries` enabled, repo detection is the
+            // primary trigger for local rule discovery.
+            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
+                if !FeatureFlag::OnTheFlyStandingQueries.is_enabled() {
+                    return;
+                }
+                let DetectedRepositoriesEvent::DetectedGitRepo { repository, .. } = event;
+                let repo_id =
+                    RepositoryIdentifier::local(repository.as_ref(ctx).root_dir().clone());
+                me.ensure_local_rule_discovery(&repo_id, ctx);
             });
 
             ctx.spawn(
@@ -347,6 +465,11 @@ impl ProjectContextModel {
         {
             let repo_path = StandardizedPath::from_local_canonicalized(&root_path)?;
             let repo_id = RepositoryIdentifier::local(repo_path.clone());
+            if FeatureFlag::OnTheFlyStandingQueries.is_enabled() {
+                // Walk-based discovery: no repo metadata tracking needed.
+                self.ensure_local_rule_discovery(&repo_id, ctx);
+                return Ok(());
+            }
             if RepoMetadataModel::as_ref(ctx)
                 .standing_query_results(&repo_id, ctx)
                 .is_none()
@@ -358,6 +481,208 @@ impl ProjectContextModel {
             self.refresh_project_rules_for_repo(repo_id, project_rule_content_reader, ctx);
         }
         Ok(())
+    }
+
+    /// Ensures the walk-based rule discovery path is active for a local root:
+    /// registers the direct rule-root watcher if needed and runs the initial
+    /// standing-query walk on first registration. Subsequent freshness comes
+    /// from the watcher's re-walks.
+    #[cfg(feature = "local_fs")]
+    fn ensure_local_rule_discovery(
+        &mut self,
+        repo_id: &RepositoryIdentifier,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let RepositoryIdentifier::Local(repo_root) = repo_id else {
+            return;
+        };
+        let Some(local_path) = repo_root.to_local_path() else {
+            return;
+        };
+        let newly_watched = !self.local_rule_watchers.contains_key(&local_path);
+        self.watch_local_rule_root(local_path, ctx);
+        if newly_watched {
+            self.refresh_local_project_rules_via_walk(repo_id.clone(), ctx);
+        }
+    }
+
+    /// Registers a direct `Repository` watcher on a local rule root so
+    /// WARP.md/AGENTS.md changes trigger standing-query re-walks.
+    #[cfg(feature = "local_fs")]
+    fn watch_local_rule_root(&mut self, root_path: PathBuf, ctx: &mut ModelContext<Self>) {
+        if self.local_rule_watchers.contains_key(&root_path) {
+            return;
+        }
+        let Some(message_tx) = self.rule_walk_message_tx.clone() else {
+            return;
+        };
+        let Ok(std_path) = StandardizedPath::from_local_canonicalized(&root_path) else {
+            return;
+        };
+        // `add_directory` returns the existing registration when the root is
+        // already watched (e.g. as a detected repo), so this works for both
+        // git repositories and plain directories.
+        let repo_handle = match DirectoryWatcher::handle(ctx)
+            .update(ctx, |watcher, ctx| watcher.add_directory(std_path, ctx))
+        {
+            Ok(handle) => handle,
+            Err(err) => {
+                log::warn!(
+                    "Failed to register rule root {} for watching: {err}",
+                    root_path.display()
+                );
+                return;
+            }
+        };
+
+        let subscriber = Box::new(ProjectRuleSubscriber { message_tx });
+        let start = repo_handle.update(ctx, |repo, ctx| repo.start_watching(subscriber, ctx));
+        let subscriber_id = start.subscriber_id;
+        self.local_rule_watchers
+            .insert(root_path.clone(), (repo_handle.clone(), subscriber_id));
+
+        ctx.spawn(start.registration_future, move |me, res, ctx| {
+            if let Err(err) = res {
+                log::warn!(
+                    "Failed to start watching rule root {}: {err}",
+                    root_path.display()
+                );
+                if let Some((repo_handle, subscriber_id)) =
+                    me.local_rule_watchers.remove(&root_path)
+                {
+                    repo_handle.update(ctx, |repo, ctx| {
+                        repo.stop_watching(subscriber_id, ctx);
+                    });
+                }
+            }
+        });
+    }
+
+    /// Re-discovers a local root's project rules with the standalone
+    /// standing-query walk on a background thread.
+    #[cfg(feature = "local_fs")]
+    fn refresh_local_project_rules_via_walk(
+        &mut self,
+        repo_id: RepositoryIdentifier,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let RepositoryIdentifier::Local(repo_root) = &repo_id else {
+            return;
+        };
+        let Some(local_path) = repo_root.to_local_path() else {
+            return;
+        };
+        let Some(project_rule_content_reader) = self.project_rule_content_reader else {
+            return;
+        };
+
+        // Git repositories are walked in full (matching eager-index standing
+        // coverage); other directories only surface first-level rules
+        // (matching the lazily-loaded path coverage).
+        let max_depth = if local_path.join(".git").exists() {
+            STANDING_QUERY_WALK_MAX_DEPTH
+        } else {
+            1
+        };
+
+        self.next_rule_refresh_generation += 1;
+        let refresh_generation = self.next_rule_refresh_generation;
+        self.rule_refresh_generations
+            .insert(repo_id.clone(), refresh_generation);
+
+        ctx.spawn(
+            async move {
+                // Force-include the skill provider directories to match the
+                // eager walk, which always descends into them.
+                let force_included_paths: Vec<PathBuf> = crate::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone())
+                    .collect();
+                let options = StandingQueryWalkOptions {
+                    max_depth,
+                    force_included_paths,
+                };
+                let results = evaluate_standing_queries(
+                    &local_path,
+                    &StandingQueryDefinitions::default(),
+                    &options,
+                );
+                results
+                    .project_rules()
+                    .filter(|content| !content.is_directory)
+                    .filter_map(|content| {
+                        content.path.to_local_path().map(LocalOrRemotePath::Local)
+                    })
+                    .collect::<Vec<_>>()
+            },
+            move |me, rule_paths, ctx| {
+                if me.rule_refresh_generations.get(&repo_id) != Some(&refresh_generation) {
+                    return;
+                }
+                me.read_rule_contents_and_apply(
+                    repo_id,
+                    refresh_generation,
+                    rule_paths,
+                    project_rule_content_reader,
+                    ctx,
+                );
+            },
+        );
+    }
+
+    /// Handles an update from a directly watched rule root: rule-relevant
+    /// changes trigger a full re-walk of the root's standing rule queries.
+    #[cfg(feature = "local_fs")]
+    fn handle_local_rule_watch_update(
+        &mut self,
+        root_dir: StandardizedPath,
+        update: &RepositoryUpdate,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let repo_id = RepositoryIdentifier::local(root_dir);
+        if !self.update_touches_project_rules(&repo_id, update) {
+            return;
+        }
+        self.refresh_local_project_rules_via_walk(repo_id, ctx);
+    }
+
+    /// Returns whether a repository update can affect project rule discovery:
+    /// a changed path is a rule file, or a deletion/move removed a directory
+    /// above a known rule file.
+    #[cfg(feature = "local_fs")]
+    fn update_touches_project_rules(
+        &self,
+        repo_id: &RepositoryIdentifier,
+        update: &RepositoryUpdate,
+    ) -> bool {
+        let changed_paths = update
+            .added_or_modified()
+            .chain(update.deleted.iter())
+            .chain(update.moved.keys())
+            .chain(update.moved.values());
+        for target in changed_paths {
+            if path_is_project_rule_relevant(&target.path) {
+                return true;
+            }
+        }
+
+        let known_rule_paths: Vec<PathBuf> = repo_id
+            .to_local_or_remote_path()
+            .and_then(|project_root| self.path_to_rules.get(&project_root))
+            .map(|rules| rules.local_rule_paths().collect())
+            .unwrap_or_default();
+        if known_rule_paths.is_empty() {
+            return false;
+        }
+        update
+            .deleted
+            .iter()
+            .chain(update.moved.values())
+            .any(|removed| {
+                known_rule_paths
+                    .iter()
+                    .any(|rule| rule.starts_with(&removed.path))
+            })
     }
 
     #[cfg(feature = "local_fs")]
@@ -377,13 +702,32 @@ impl ProjectContextModel {
                 .into_iter()
                 .flat_map(|results| results.project_rules()),
         );
-        let read_rule_contents = project_rule_content_reader(rule_paths.clone(), ctx);
-
         self.next_rule_refresh_generation += 1;
         let refresh_generation = self.next_rule_refresh_generation;
         self.rule_refresh_generations
             .insert(repo_id.clone(), refresh_generation);
-        let repo_id_for_result = repo_id.clone();
+        self.read_rule_contents_and_apply(
+            repo_id,
+            refresh_generation,
+            rule_paths,
+            project_rule_content_reader,
+            ctx,
+        );
+    }
+
+    /// Reads the contents of the given rule paths and reconciles them into the
+    /// repository's rule state, guarded by the refresh generation.
+    #[cfg(feature = "local_fs")]
+    fn read_rule_contents_and_apply(
+        &mut self,
+        repo_id: RepositoryIdentifier,
+        refresh_generation: u64,
+        rule_paths: Vec<LocalOrRemotePath>,
+        project_rule_content_reader: ProjectRuleContentReader,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let read_rule_contents = project_rule_content_reader(rule_paths.clone(), ctx);
+        let repo_id_for_result = repo_id;
         ctx.spawn(read_rule_contents, move |me, result, ctx| {
             if me.rule_refresh_generations.get(&repo_id_for_result) != Some(&refresh_generation) {
                 return;
@@ -420,6 +764,28 @@ impl ProjectContextModel {
         existing_rules
     }
 
+    /// Stops and forgets the direct rule-root watcher for a local root, if any.
+    #[cfg(feature = "local_fs")]
+    fn stop_local_rule_watcher(
+        &mut self,
+        repo_id: &RepositoryIdentifier,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let RepositoryIdentifier::Local(repo_root) = repo_id else {
+            return;
+        };
+        let Some(local_path) = repo_root.to_local_path() else {
+            return;
+        };
+        let Some((repo_handle, subscriber_id)) = self.local_rule_watchers.remove(&local_path)
+        else {
+            return;
+        };
+        repo_handle.update(ctx, |repo, ctx| {
+            repo.stop_watching(subscriber_id, ctx);
+        });
+    }
+
     #[cfg(feature = "local_fs")]
     fn remove_project_rules_for_repo(
         &mut self,
@@ -427,6 +793,7 @@ impl ProjectContextModel {
         ctx: &mut ModelContext<Self>,
     ) {
         self.rule_refresh_generations.remove(repo_id);
+        self.stop_local_rule_watcher(repo_id, ctx);
         let Some(project_root) = repo_id.to_local_or_remote_path() else {
             return;
         };
