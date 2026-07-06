@@ -8,7 +8,7 @@ use warpui::{App, Entity, ModelHandle};
 use super::*;
 
 /// Minimal [`DiffStorage`] impl: canned report state and a no-op write
-/// kickoff, so tests drive completion through the shared flow's handlers.
+/// kickoff, so tests drive completion through the [`DiffStorageHelper`] flow.
 struct TestSurface {
     save_state: DiffSaveState,
     files: Vec<PendingFileState>,

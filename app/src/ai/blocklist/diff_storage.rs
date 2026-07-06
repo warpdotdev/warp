@@ -2,18 +2,19 @@
 //! diffs.
 //!
 //! Every surface that stores pending diffs — the GUI `CodeDiffView` and the
-//! up-stack TUI diff storage — implements [`DiffStorage`]. The trait's
-//! provided methods are the shared save-completion flow: they track per-file
-//! progress in a [`DiffSaveState`] and assemble the final
+//! up-stack TUI diff storage — implements [`DiffStorage`], a required-methods-
+//! only contract: state accessors plus the surface-specific write kickoff.
+//! The shared save-completion flow is [`DiffStorageHelper`], blanket-implemented
+//! for every `DiffStorage` so no surface can override it: it tracks per-file
+//! progress in a [`DiffSaveState`] and assembles the final
 //! [`RequestFileEditsResult`], so every surface produces results through the
-//! same code. Only the write kickoff ([`DiffStorage::start_saving`]) is
-//! surface-specific: the GUI saves through its editor buffers.
+//! same code.
 //!
 //! The executor knows surfaces only through [`RegisteredDiffStorage`], a small
 //! object-safe handle trait, because GUI `ViewHandle`s and model `ModelHandle`s
 //! share no common handle type. Each surface's handle type implements it
-//! directly, delegating to the entity's [`DiffStorage`]. Every surface must
-//! register its storage before the action's diffs resolve
+//! directly, delegating to its entity's [`DiffStorageHelper`] flow. Every
+//! surface must register its storage before the action's diffs resolve
 //! (`register_requested_edits`); preprocess and execute assume a registered
 //! storage.
 use std::collections::HashMap;
@@ -37,14 +38,15 @@ const APPLY_DIFF_RESULT_CONTEXT_LINES: usize = 10;
 
 /// A surface that stores pending file-edit diffs and persists them on accept.
 ///
-/// Required methods are state accessors (the fields live on each impl, since
+/// This trait is only ever implemented, never imported for its methods: every
+/// method is required — state accessors (the fields live on each impl, since
 /// traits cannot hold state) plus the surface-specific write kickoff
-/// ([`Self::start_saving`]). Provided methods are the shared save-completion
-/// flow, so every surface assembles its [`RequestFileEditsResult`] through the
-/// same code. Callers drive an accept solely through [`Self::accept_and_save`].
+/// ([`Self::start_saving`]). The shared save-completion flow lives on
+/// [`DiffStorageHelper`]; callers drive an accept solely through
+/// [`DiffStorageHelper::accept_and_save`].
 pub trait DiffStorage {
     /// The in-flight accept's progress and result channel. Impls just store a
-    /// [`DiffSaveState`]; only the provided methods below act on it.
+    /// [`DiffSaveState`]; only the [`DiffStorageHelper`] flow acts on it.
     fn save_state_mut(&mut self) -> &mut DiffSaveState;
 
     /// Number of pending file diffs; sizes the per-file save tracking.
@@ -56,13 +58,21 @@ pub trait DiffStorage {
 
     /// Kicks off persistence for every pending file.
     ///
-    /// The surface-specific hook invoked by [`Self::accept_and_save`] — never
-    /// called directly by callers. The GUI saves through its editor buffers;
-    /// surfaces without editor buffers dispatch writes to `FileModel`. Each
-    /// file's completion must be reported back through
-    /// [`Self::handle_file_saved`] and [`Self::handle_diff_computed`].
+    /// The surface-specific hook invoked by
+    /// [`DiffStorageHelper::accept_and_save`] — never called directly by
+    /// callers. The GUI saves through its editor buffers; surfaces without
+    /// editor buffers dispatch writes to `FileModel`. Each file's completion
+    /// must be reported back through [`DiffStorageHelper::handle_file_saved`]
+    /// and [`DiffStorageHelper::handle_diff_computed`].
     fn start_saving(&mut self, app: &mut AppContext);
+}
 
+/// The shared save-completion flow over an impl of [`DiffStorage`].
+///
+/// These are defined within a separate trait rather than default
+/// implementations of `DiffStorage` so implementations cannot errantly
+/// override them (the same convention as `AIBlockModelHelper`).
+pub trait DiffStorageHelper {
     /// The entry point for accepting a surface's diffs: persists them all,
     /// resolving with the assembled result once every file's save and
     /// result-diff computation completes.
@@ -72,15 +82,33 @@ pub trait DiffStorage {
     fn accept_and_save(
         &mut self,
         app: &mut AppContext,
+    ) -> BoxFuture<'static, RequestFileEditsResult>;
+
+    /// Records one file's save completion (or failure).
+    fn handle_file_saved(&mut self, idx: usize, error: Option<Rc<FileSaveError>>, app: &AppContext);
+
+    /// Records one file's computed result diff.
+    fn handle_diff_computed(&mut self, idx: usize, diff: Rc<DiffResult>, app: &AppContext);
+}
+
+// Each flow method ends by assembling and delivering the result once every
+// file is saved and its result diff computed (`DiffSaveState::is_complete`).
+impl<T: DiffStorage> DiffStorageHelper for T {
+    fn accept_and_save(
+        &mut self,
+        app: &mut AppContext,
     ) -> BoxFuture<'static, RequestFileEditsResult> {
         let count = self.pending_diff_count();
         let result = self.save_state_mut().begin(count);
         self.start_saving(app);
-        self.try_finish(app);
+        // Zero-file accepts are already complete.
+        if self.save_state_mut().is_complete() {
+            let files = self.pending_file_state(app);
+            self.save_state_mut().finish(files);
+        }
         result
     }
 
-    /// Records one file's save completion (or failure).
     fn handle_file_saved(
         &mut self,
         idx: usize,
@@ -88,29 +116,25 @@ pub trait DiffStorage {
         app: &AppContext,
     ) {
         self.save_state_mut().mark_diff_saved(idx, error);
-        self.try_finish(app);
+        if self.save_state_mut().is_complete() {
+            let files = self.pending_file_state(app);
+            self.save_state_mut().finish(files);
+        }
     }
 
-    /// Records one file's computed result diff.
     fn handle_diff_computed(&mut self, idx: usize, diff: Rc<DiffResult>, app: &AppContext) {
         self.save_state_mut().mark_diff_computed(idx, diff);
-        self.try_finish(app);
-    }
-
-    /// Assembles and delivers the result once every file is saved and computed.
-    fn try_finish(&mut self, app: &AppContext) {
-        if !self.save_state_mut().is_complete() {
-            return;
+        if self.save_state_mut().is_complete() {
+            let files = self.pending_file_state(app);
+            self.save_state_mut().finish(files);
         }
-        let files = self.pending_file_state(app);
-        self.save_state_mut().finish(files);
     }
 }
 
 /// Progress and result delivery for one in-flight accept.
 ///
 /// Each [`DiffStorage`] impl stores one of these and exposes it via
-/// [`DiffStorage::save_state_mut`]; the trait's provided methods drive it.
+/// [`DiffStorage::save_state_mut`]; the [`DiffStorageHelper`] flow drives it.
 #[derive(Default)]
 pub struct DiffSaveState {
     /// Per-file save/diff-computation tracking; `Some` while an accept is in flight.
@@ -173,7 +197,7 @@ impl DiffSaveState {
 /// surfaces by handle, and GUI view handles and model handles share no common
 /// type. Each surface's handle type (e.g. `WeakViewHandle<CodeDiffView>`)
 /// implements this directly, delegating each call to its entity's
-/// [`DiffStorage`].
+/// [`DiffStorageHelper`] flow.
 pub trait RegisteredDiffStorage {
     /// Pushes resolved diffs into the surface (called when preprocess resolves).
     fn set_candidate_diffs(

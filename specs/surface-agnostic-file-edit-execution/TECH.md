@@ -48,16 +48,17 @@ User Accept ──> TryAccept ──> executor::execute(id)
   └─ diff_storages[id].accept_and_save()      [RegisteredDiffStorage]
         │  (handle upgrade/update)
         ▼
-     DiffStorage::accept_and_save          [shared, provided]
+     DiffStorageHelper::accept_and_save    [shared blanket impl]
        ├─ save_state.begin(count) ──> returns result future ──┐
        └─ start_saving()          [surface-specific:          │
             GUI: editor buffers / InlineDiffView;              │
             TUI (up-stack): FileModel write dispatch]          │
         │                                                     │
-     callbacks: handle_file_saved / handle_diff_computed      │
+     callbacks: handle_file_saved /                           │
+                handle_diff_computed  [DiffStorageHelper]     │
         │                                                     │
-     try_finish ──> assemble_result(progress,                 │
-                    pending_file_state()) ──> send ───────────┘
+     all complete ──> assemble_result(progress,               │
+                      pending_file_state()) ──> send ────────┘
         │
         ▼
 ActionExecution::new_async(future) ──> telemetry ──> LLM
@@ -65,16 +66,16 @@ ActionExecution::new_async(future) ──> telemetry ──> LLM
 
 ## Design
 
-### The `DiffStorage` trait (`app/src/ai/blocklist/diff_storage.rs`)
+### The `DiffStorage` / `DiffStorageHelper` traits (`app/src/ai/blocklist/diff_storage.rs`)
 
-Implemented by every surface that stores pending diffs. Required methods are state accessors — the fields live on each impl, since traits cannot hold state — plus the surface-specific write kickoff. Provided methods are the shared save-completion flow:
+The surface contract and the shared flow follow the `AIBlockModel` / `AIBlockModelHelper` convention (`app/src/ai/blocklist/block/model/helper.rs`): a required-methods-only trait that surfaces implement, and a `Helper` trait whose methods are defined once in a blanket impl so implementations cannot errantly override them:
 
-- Required: `save_state_mut` (the in-flight accept's [`DiffSaveState`]), `pending_diff_count`, `pending_file_state` (per-file report state: reported paths, changed lines, final contents, user-edit flags), and `start_saving` (the write kickoff — the hook `accept_and_save` invokes, never called by callers directly).
-- Provided: `accept_and_save` (the sole entry point: begins tracking, calls `start_saving`, returns a `BoxFuture<RequestFileEditsResult>`), `handle_file_saved` / `handle_diff_computed` (record per-file completion), and `try_finish` (when every file is saved and its result diff computed, assembles the result and sends it).
+- `DiffStorage` — implemented by every surface that stores pending diffs. All methods required: state accessors — the fields live on each impl, since traits cannot hold state — plus the surface-specific write kickoff: `save_state_mut` (the in-flight accept's [`DiffSaveState`]), `pending_diff_count`, `pending_file_state` (per-file report state: reported paths, changed lines, final contents, user-edit flags), and `start_saving` (the write kickoff — the hook `accept_and_save` invokes, never called by callers directly).
+- `DiffStorageHelper` — the shared flow, blanket-implemented for every `DiffStorage`: `accept_and_save` (the sole entry point: begins tracking, calls `start_saving`, returns a `BoxFuture<RequestFileEditsResult>`) and `handle_file_saved` / `handle_diff_computed` (record per-file completion; surfaces call these from their save-completion events). Each flow method ends with the completion check: when every file is saved and its result diff computed, assemble the result and send it.
 
 `DiffSaveState` encapsulates the in-flight accept: per-file progress (`SavingDiffs`) plus the result-delivery oneshot, with private fields so surfaces cannot reach into the channel. Each surface stores one and exposes it via `save_state_mut`; only `is_saving` is public (revert guards).
 
-`try_finish` is master's `try_emit_diffs_saved` relocated to shared code: it combines the per-file `DiffResult`s into the unified diff, builds updated/deleted file state from `pending_file_state` (`updated_file_contexts_from_content_map`), and maps save errors to `DiffApplicationFailed`. Delivery through the stored oneshot replaces master's `SavedAcceptedDiffs` event + executor subscription. Dropping a surface mid-save drops the sender, resolving the future with `Cancelled`.
+The completion check + `assemble_result` is master's `try_emit_diffs_saved` relocated to shared code: it combines the per-file `DiffResult`s into the unified diff, builds updated/deleted file state from `pending_file_state` (`updated_file_contexts_from_content_map`), and maps save errors to `DiffApplicationFailed`. Delivery through the stored oneshot replaces master's `SavedAcceptedDiffs` event + executor subscription. Dropping a surface mid-save drops the sender, resolving the future with `Cancelled`.
 
 `SavingDiffs` (per-file save status + computed result diff, complete when every file has both) moves from `code_diff_view.rs` to `diff_storage.rs` unchanged in behavior.
 
@@ -85,7 +86,7 @@ The executor-facing handle over a registered surface. GUI `ViewHandle`s and mode
 - `set_candidate_diffs(diffs, session_type, app)` — preprocess pushes resolved diffs into the surface.
 - `accept_and_save(app)` — persists everything, resolving with the result for the LLM.
 
-The GUI impl is on `WeakViewHandle<CodeDiffView>` (`code_diff_view.rs`): it upgrades and delegates, so the executor never keeps a dead review view alive; a dead view at execute time resolves `DiffApplicationFailed` recoverably. It flips the view to `Accepted` (`mark_accepted_for_save`) as persistence kicks off, then runs the trait's `accept_and_save`.
+The GUI impl is on `WeakViewHandle<CodeDiffView>` (`code_diff_view.rs`): it upgrades and delegates, so the executor never keeps a dead review view alive; a dead view at execute time resolves `DiffApplicationFailed` recoverably. It flips the view to `Accepted` (`mark_accepted_for_save`) as persistence kicks off, then runs `DiffStorageHelper::accept_and_save`.
 
 ### Executor (`request_file_edits.rs`)
 
@@ -111,7 +112,7 @@ Per-action state keeps master's two-field shape:
 
 ### Passive path (`terminal/view.rs`)
 
-`on_maa_code_diff_generated`'s `TryAccept` handler calls the view's `accept_and_save` (the shared trait flow) directly — passive diffs are not executor actions, so the view is the sole owner. The result is not surfaced to the LLM; failed writes surface the per-file toasts.
+`on_maa_code_diff_generated`'s `TryAccept` handler calls `DiffStorageHelper::accept_and_save` on the view directly — passive diffs are not executor actions, so the view is the sole owner. The result is not surfaced to the LLM; failed writes surface the per-file toasts.
 
 ### TUI surface (up-stack)
 
@@ -126,7 +127,7 @@ The TUI surface registers its own storage through `register_requested_edits` for
 
 ## Testing and validation
 
-- Shared-flow tests exercise the provided trait methods through a minimal test surface (`app/src/ai/blocklist/diff_storage_tests.rs`): result assembly on success, save failure → `DiffApplicationFailed`, deleted-file reporting, and the context-fragment extraction.
+- Shared-flow tests exercise the `DiffStorageHelper` flow through a minimal test surface (`app/src/ai/blocklist/diff_storage_tests.rs`): result assembly on success, save failure → `DiffApplicationFailed`, deleted-file reporting, and the context-fragment extraction.
 - Executor tests cover the registry lifecycle (`request_file_edits_tests.rs`): preprocess seeding of the registered storage, execution through the registered storage, preprocess failure reporting, `NotReady` without a registered storage, and `discard_pending`.
 
 ```bash
