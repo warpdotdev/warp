@@ -737,8 +737,8 @@ fn toggle_bootstrap_block_menu_item() -> MenuItem {
 }
 
 fn make_new_window_menu() -> Menu {
-    Menu::new(
-        "Window",
+    Menu::new_window_menu(
+        crate::menu_label("menu.window", "Window"),
         vec![
             MenuItem::Standard(StandardAction::Minimize),
             MenuItem::Standard(StandardAction::Zoom),
