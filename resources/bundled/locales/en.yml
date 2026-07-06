@@ -1037,6 +1037,25 @@ en:
     card_repos: "Repos: {}"
     card_setup_commands: "Setup commands: {}"
 
+  settings.mcp_servers:
+    description: "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. "
+    empty_state: "Once you add a MCP server, it will be shown here."
+    no_search_results: "No search results found"
+    search_placeholder: "Search MCP Servers"
+    add_button: "Add"
+    card_available_to_install: "Available to install"
+    toast_server_updated: "MCP server updated"
+    file_based_toggle_label: "Auto-spawn servers from third-party agents"
+    file_based_description: "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually in the \"Detected from\" sections below. "
+    file_based_learn_more_link: "See supported providers."
+    learn_more_link: "Learn more."
+    section_my_mcps: "My MCPs"
+    section_shared_no_team: "Shared by Warp and from other devices"
+    section_shared_from_warp: "Shared from Warp"
+    card_detected_from_config: "Detected from config file"
+    chip_shared_by_team_member: "Shared by a team member"
+    chip_from_another_device: "From another device"
+
   settings.category:
     themes: "Themes"
     icon: "Icon"
