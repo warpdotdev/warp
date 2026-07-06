@@ -987,6 +987,15 @@ en:
     show_hidden_files_desc: "Show dotfiles and hidden files (starting with .) in the project explorer."
     format_on_save: "Format on save (requires an active language server)"
     format_on_save_desc: "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
+    tabbed_editor_header: "Group files into single editor pane"
+    tabbed_editor_desc: "When this setting is on, any files opened in the same tab will be automatically grouped into a single editor pane."
+    layout_split_pane: "Split Pane"
+    layout_new_tab: "New Tab"
+    editor_default_app: "Default App"
+    choose_editor_file_links: "Choose an editor to open file links"
+    choose_editor_code_panels: "Choose an editor to open files from the code review panel, project explorer, and global search"
+    choose_layout: "Choose a layout to open files in Warp"
+    prefer_markdown_viewer: "Open Markdown files in Warp's Markdown Viewer by default"
 
   settings.category:
     themes: "Themes"
