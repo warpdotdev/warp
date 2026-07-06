@@ -1642,6 +1642,7 @@ impl BlocklistAIHistoryModel {
         // in the fork would then hit an Anthropic `400 invalid_request_error:
         // tool_use ids were found without tool_result blocks`. Reconcile each
         // retained-but-unresolved tool_call so every tool_use stays paired.
+        let mut cancelled_subagent_task_ids: HashSet<String> = HashSet::new();
         for task in truncated_tasks.iter_mut() {
             let source_task_messages = conversation
                 .all_tasks()
@@ -1649,8 +1650,19 @@ impl BlocklistAIHistoryModel {
                 .find(|source| source.id == task.id)
                 .map(|source| source.messages.as_slice())
                 .unwrap_or(&[]);
-            reconcile_dangling_tool_calls_in_forked_task(task, source_task_messages);
+            cancelled_subagent_task_ids.extend(reconcile_dangling_tool_calls_in_forked_task(
+                task,
+                source_task_messages,
+            ));
         }
+
+        // A synthesized sub-agent cancellation makes that sub-agent's subtask
+        // unreachable from the fork, but the exchange traversal may have already
+        // retained the subtask (when the fork point lands inside it), and its
+        // parent `tool_call` still references it. Drop those subtasks and their
+        // transitive descendants so the fork doesn't drag along an orphaned
+        // sub-agent task (mirrors the rewind path's `prune_unreachable_subtasks`).
+        prune_subtasks_and_descendants(&mut truncated_tasks, &cancelled_subagent_task_ids);
 
         let updated_tasks_with_new_ids =
             update_forked_task_properties(truncated_tasks, prefix, false, title_override);
@@ -3218,10 +3230,13 @@ impl From<&AIAgentOutputStatus> for AIQueryHistoryOutputStatus {
 ///
 /// The reconciled result is inserted immediately after its `tool_call` to keep
 /// call/result ordering within the task.
+///
+/// Returns the set of sub-agent subtask ids for which a `Cancel` was
+/// synthesized, so the caller can prune those now-unreachable subtasks.
 fn reconcile_dangling_tool_calls_in_forked_task(
     task: &mut warp_multi_agent_api::Task,
     source_task_messages: &[warp_multi_agent_api::Message],
-) {
+) -> HashSet<String> {
     let resolved_tool_call_ids: HashSet<String> = task
         .messages
         .iter()
@@ -3236,9 +3251,9 @@ fn reconcile_dangling_tool_calls_in_forked_task(
             .filter_map(|m| m.tool_call_result().map(|r| (r.tool_call_id.clone(), m)))
             .collect();
 
-    // Collect each dangling tool_call's position, id, whether it is a sub-agent
-    // call, and its request_id up front so we don't mutate while iterating.
-    let dangling: Vec<(usize, String, bool, String)> = task
+    // Collect each dangling tool_call's position, id, its sub-agent subtask id
+    // (if any), and its request_id up front so we don't mutate while iterating.
+    let dangling: Vec<(usize, String, Option<String>, String)> = task
         .messages
         .iter()
         .enumerate()
@@ -3248,17 +3263,22 @@ fn reconcile_dangling_tool_calls_in_forked_task(
                 (
                     idx,
                     tool_call.tool_call_id.clone(),
-                    tool_call.subagent().is_some(),
+                    tool_call
+                        .subagent()
+                        .map(|subagent| subagent.task_id.clone()),
                     message.request_id.clone(),
                 )
             })
         })
         .collect();
 
+    let mut cancelled_subagent_task_ids: HashSet<String> = HashSet::new();
     // Insert from the back so earlier indices remain valid as we splice.
-    for (idx, tool_call_id, is_subagent, request_id) in dangling.into_iter().rev() {
+    for (idx, tool_call_id, subagent_task_id, request_id) in dangling.into_iter().rev() {
+        let is_subagent = subagent_task_id.is_some();
         // Prefer the real result for non-sub-agent calls; otherwise synthesize
-        // a cancellation.
+        // a cancellation. Sub-agent calls always take the cancellation path so
+        // we never pull a sub-agent result (which would require its subtask).
         let reconciled = source_results_by_tool_call_id
             .get(&tool_call_id)
             .filter(|_| !is_subagent)
@@ -3267,7 +3287,56 @@ fn reconcile_dangling_tool_calls_in_forked_task(
                 synthesized_tool_call_cancellation_message(&task.id, &tool_call_id, &request_id)
             });
         task.messages.insert(idx + 1, reconciled);
+
+        if let Some(subagent_task_id) = subagent_task_id.filter(|id| !id.is_empty()) {
+            cancelled_subagent_task_ids.insert(subagent_task_id);
+        }
     }
+    cancelled_subagent_task_ids
+}
+
+/// Removes `task_ids_to_prune` and their transitive descendant subtasks (linked
+/// by `dependencies.parent_task_id`) from `tasks`. The root task (the one with
+/// no parent) is never removed. No-op when `task_ids_to_prune` is empty.
+fn prune_subtasks_and_descendants(
+    tasks: &mut Vec<warp_multi_agent_api::Task>,
+    task_ids_to_prune: &HashSet<String>,
+) {
+    if task_ids_to_prune.is_empty() {
+        return;
+    }
+
+    // Expand the prune set to include transitive descendants.
+    let mut to_remove: HashSet<String> = task_ids_to_prune.clone();
+    loop {
+        let mut added_any = false;
+        for task in tasks.iter() {
+            let Some(parent_task_id) = task
+                .dependencies
+                .as_ref()
+                .map(|deps| deps.parent_task_id.as_str())
+                .filter(|parent| !parent.is_empty())
+            else {
+                continue;
+            };
+            if to_remove.contains(parent_task_id) && to_remove.insert(task.id.clone()) {
+                added_any = true;
+            }
+        }
+        if !added_any {
+            break;
+        }
+    }
+
+    tasks.retain(|task| {
+        // Never prune the root task (a task with no parent).
+        let is_root = task
+            .dependencies
+            .as_ref()
+            .map(|deps| deps.parent_task_id.is_empty())
+            .unwrap_or(true);
+        is_root || !to_remove.contains(&task.id)
+    });
 }
 
 /// Builds a `Cancel` `tool_call_result` message paired to `tool_call_id`,

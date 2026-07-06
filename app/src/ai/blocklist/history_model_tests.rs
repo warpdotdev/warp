@@ -5074,3 +5074,113 @@ fn fork_exact_does_not_mutate_source_conversation() {
         );
     });
 }
+
+/// HYBRID (sub-agent subtask pruning): when the fork point lands INSIDE a
+/// sub-agent's subtask, the traversal retains that subtask while its parent
+/// sub-agent `tool_call` stays unresolved. Reconciliation synthesizes a Cancel
+/// for the parent call AND prunes the now-unreachable subtask so the fork does
+/// not drag the sub-agent task along.
+#[test]
+fn fork_exact_inside_subtask_prunes_subagent_subtask_on_cancel() {
+    use crate::ai::agent::task::helper::MessageExt;
+    use crate::ai::agent::MessageId;
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let _receiver = install_mock_model_event_sender(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let root_task_id = "root-task";
+        let subtask_id = "sub-1";
+        // Root spawns a sub-agent and never receives its result (in-flight).
+        let (subagent_call, subagent_tool_call_id) =
+            make_subagent_call("m2", root_task_id, subtask_id, "req-1", None);
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
+                create_user_query_message("m1", root_task_id, "req-1", "spawn agent"),
+                subagent_call,
+            ],
+        );
+        // Subtask has its own exchange (message id "s1") that we fork inside of.
+        let subtask = create_api_subtask(
+            subtask_id,
+            root_task_id,
+            vec![agent_output_message("s1", subtask_id, "req-2", "sub work")],
+        );
+        let source =
+            AIConversation::new_restored(AIConversationId::new(), vec![root_task, subtask], None)
+                .expect("source conversation should build");
+
+        let terminal_view_id = EntityId::new();
+        let source_id = source.id();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![source], ctx);
+        });
+
+        // The fork point is the subtask's exchange (the one holding message "s1").
+        let exchange_id = history_model.read(&app, |model, _| {
+            model
+                .conversation(&source_id)
+                .unwrap()
+                .all_exchanges()
+                .into_iter()
+                .find(|e| {
+                    e.added_message_ids
+                        .contains(&MessageId::new("s1".to_string()))
+                })
+                .map(|e| e.id)
+                .expect("subtask exchange should exist")
+        });
+
+        let forked = history_model.update(&mut app, |model, ctx| {
+            let source = model.conversation(&source_id).unwrap().clone();
+            model
+                .fork_conversation_at_exchange(&source, exchange_id, true, "[Fork] ", None, ctx)
+                .expect("fork should succeed")
+        });
+
+        let forked_tasks: Vec<&warp_multi_agent_api::Task> =
+            forked.all_tasks().filter_map(|t| t.source()).collect();
+
+        // (a) The parent sub-agent tool_call gets a synthesized Cancel result.
+        let root = forked_tasks
+            .iter()
+            .find(|t| {
+                t.dependencies
+                    .as_ref()
+                    .is_none_or(|d| d.parent_task_id.is_empty())
+            })
+            .expect("forked root task exists");
+        let cancel = root
+            .messages
+            .iter()
+            .find(|m| {
+                m.tool_call_result()
+                    .is_some_and(|r| r.tool_call_id == subagent_tool_call_id)
+            })
+            .expect("a Cancel result must be synthesized for the sub-agent call");
+        assert!(
+            matches!(
+                cancel.tool_call_result().and_then(|r| r.result.as_ref()),
+                Some(warp_multi_agent_api::message::tool_call_result::Result::Cancel(_))
+            ),
+            "sub-agent call must be reconciled with a synthesized Cancel"
+        );
+
+        // (b) The retained sub-agent subtask must be pruned from the fork. The
+        // subtask id is preserved across the fork (only the root is prefixed),
+        // so its messages' task_id still equals `subtask_id`.
+        assert!(
+            !forked_tasks
+                .iter()
+                .any(|t| t.messages.iter().any(|m| m.task_id == subtask_id)),
+            "the sub-agent subtask must be pruned from the forked conversation, got tasks: {:?}",
+            forked_tasks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+        );
+    });
+}
