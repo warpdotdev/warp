@@ -23893,6 +23893,7 @@ impl TypedActionView for Workspace {
                 self.move_selected_tabs_to_group(*group_id, ctx)
             }
             RemoveSelectedTabsFromGroup => self.remove_selected_tabs_from_group(ctx),
+            MergeSelectedTabs => self.merge_selected_tabs(ctx),
             RemoveActiveOrSelectedTabsFromGroup => {
                 self.remove_active_or_selected_tabs_from_group(ctx)
             }

@@ -4351,6 +4351,64 @@ impl PaneGroup {
         pane_content
     }
 
+    pub(crate) fn can_drain_visible_terminal_panes_for_move(&self) -> bool {
+        let visible_pane_ids = self.visible_pane_ids();
+        !visible_pane_ids.is_empty()
+            && visible_pane_ids.len() == self.pane_contents.len()
+            && visible_pane_ids
+                .iter()
+                .all(|pane_id| pane_id.is_terminal_pane())
+    }
+
+    /// Drains all visible terminal panes for transfer into another pane group.
+    ///
+    /// This intentionally leaves the source pane tree in a transient invalid
+    /// state once the final root pane is drained. Callers must remove the source
+    /// tab immediately after this returns.
+    pub(crate) fn drain_visible_terminal_panes_for_move(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<Box<dyn AnyPaneContent>> {
+        if !self.can_drain_visible_terminal_panes_for_move() {
+            log::warn!("drain_visible_terminal_panes_for_move called on an ineligible pane group");
+            return Vec::new();
+        }
+
+        let pane_ids = self.visible_pane_ids();
+        let mut moved_panes = Vec::with_capacity(pane_ids.len());
+
+        for pane_id in pane_ids {
+            self.panes.remove_hidden_pane(pane_id);
+
+            match self.pane_contents.get(&pane_id) {
+                Some(data) => {
+                    let pane = data.as_pane();
+                    pane.detach(self, DetachType::Moved, ctx);
+                }
+                None => log::error!("Could not find data for pane id: {pane_id:?}"),
+            }
+
+            if self.pane_count() > 1 && !self.panes.remove(pane_id) {
+                log::error!("Pane not found");
+            }
+
+            if let Some(pane_content) = self.pane_contents.remove(&pane_id) {
+                moved_panes.push(pane_content);
+            }
+        }
+
+        self.focus_state.update(ctx, |focus_state, ctx| {
+            focus_state.set_in_split_pane(false, ctx);
+            focus_state.set_focused_pane_maximized(false, ctx);
+        });
+
+        ctx.notify();
+        ctx.emit(Event::TerminalViewStateChanged);
+        ctx.emit(Event::AppStateChanged);
+
+        moved_panes
+    }
+
     pub fn notebook_pane_by_pane_id(&self, pane_id: Option<PaneId>) -> Option<&NotebookPane> {
         self.downcast_pane_by_id(pane_id?)
     }
@@ -6574,6 +6632,16 @@ impl PaneGroup {
         ctx: &mut ViewContext<Self>,
     ) {
         let _ = self.add_pane(direction, None, Box::new(pane), focus_new_pane, ctx);
+    }
+
+    pub(crate) fn add_existing_pane_with_direction(
+        &mut self,
+        direction: Direction,
+        pane: Box<dyn AnyPaneContent>,
+        focus_new_pane: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let _ = self.add_pane(direction, None, pane, focus_new_pane, ctx);
     }
 
     /// Adds a new pane to this group, relative to an existing pane.
