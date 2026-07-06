@@ -1055,6 +1055,9 @@ ru:
     card_detected_from_config: "Обнаружено из конфигурационного файла"
     chip_shared_by_team_member: "Предоставлено участником команды"
     chip_from_another_device: "С другого устройства"
+    section_shared_with_team: "Предоставлено Warp и {}"
+    section_detected_from_provider: "Обнаружено из {}"
+    chip_shared_by_creator: "Автор: {}"
 
   settings.category:
     themes: "Темы"

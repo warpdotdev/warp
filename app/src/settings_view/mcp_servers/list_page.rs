@@ -145,6 +145,15 @@ fn chip_shared_by_team_member() -> &'static str {
 fn chip_from_another_device() -> &'static str {
     crate::menu_label("settings.mcp_servers.chip_from_another_device", "From another device")
 }
+fn section_shared_with_team_template() -> &'static str {
+    crate::menu_label("settings.mcp_servers.section_shared_with_team", "Shared by Warp and {}")
+}
+fn section_detected_from_provider_template() -> &'static str {
+    crate::menu_label("settings.mcp_servers.section_detected_from_provider", "Detected from {}")
+}
+fn chip_shared_by_creator_template() -> &'static str {
+    crate::menu_label("settings.mcp_servers.chip_shared_by_creator", "Shared by: {}")
+}
 
 pub struct MCPServersListPageView {
     server_cards: HashMap<ServerCardItemId, ViewHandle<ServerCardView>>,
@@ -1318,7 +1327,7 @@ impl MCPServersListPageView {
                         .current_team()
                         .map(|team| team.name.clone());
                     let shared_by_text = match team_name {
-                        Some(name) => format!("Shared by Warp and {name}"),
+                        Some(name) => section_shared_with_team_template().replace("{}", &name),
                         None => section_shared_no_team().to_string(),
                     };
 
@@ -1339,7 +1348,7 @@ impl MCPServersListPageView {
 
                 // Render one section per provider (e.g. "Detected from Claude").
                 for (provider, cards) in &filtered_file_based_cards {
-                    let section_title = format!("Detected from {}", provider.display_name());
+                    let section_title = section_detected_from_provider_template().replace("{}", &provider.display_name());
                     page.add_child(self.render_server_cards_section(
                         &section_title,
                         cards,
@@ -1810,7 +1819,7 @@ impl MCPServersListPageView {
 
                 if is_shared {
                     match creator {
-                        Some(creator) => Some(TitleChip::text(format!("Shared by: {creator}"))),
+                        Some(creator) => Some(TitleChip::text(chip_shared_by_creator_template().replace("{}", &creator))),
                         None => Some(TitleChip::text(chip_shared_by_team_member())),
                     }
                 } else if matches!(item_id, ServerCardItemId::TemplatableMCP(_)) {

@@ -1055,6 +1055,9 @@ en:
     card_detected_from_config: "Detected from config file"
     chip_shared_by_team_member: "Shared by a team member"
     chip_from_another_device: "From another device"
+    section_shared_with_team: "Shared by Warp and {}"
+    section_detected_from_provider: "Detected from {}"
+    chip_shared_by_creator: "Shared by: {}"
 
   settings.category:
     themes: "Themes"
