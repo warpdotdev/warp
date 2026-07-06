@@ -1133,7 +1133,7 @@ impl BackingView for FileNotebookView {
                 );
                 actions.extend([
                     MenuItem::Separator,
-                    MenuItemFields::new("Copy file path")
+                    MenuItemFields::new(crate::menu_label("code.copy_file_path", "Copy file path"))
                         .with_on_select_action(FileNotebookAction::CopyFilePath)
                         .into_item(),
                 ]);
