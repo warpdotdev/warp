@@ -2,6 +2,7 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -31,7 +32,6 @@ use warpui_core::{
 use crate::conversation_selection::TuiConversationSelection;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::input::{TuiInputView, TuiInputViewEvent};
-use crate::input_hint_line::InputHintLineView;
 use crate::input_mode_policy::{TuiInputModePolicy, AI_LOCKED_CONFIG};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::transcript_view::TuiTranscriptView;
@@ -70,6 +70,13 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
 /// already running a command.
 const COMMAND_ALREADY_RUNNING_HINT: &str = "cannot run — command already running";
 
+/// Footer hint shown while the input is in `!` shell mode.
+const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
+
+/// How long a transient footer hint stays visible before reverting to the
+/// persistent content.
+const TRANSIENT_HINT_DURATION: Duration = Duration::from_secs(3);
+
 /// Typed actions handled by [`TuiTerminalSessionView`].
 #[derive(Debug, Clone)]
 pub(crate) enum TuiTerminalSessionAction {
@@ -83,7 +90,6 @@ pub(crate) enum TuiTerminalSessionAction {
 pub(crate) struct TuiTerminalSessionView {
     transcript: ViewHandle<TuiTranscriptView>,
     input_view: ViewHandle<TuiInputView>,
-    hint_line: ViewHandle<InputHintLineView>,
     conversation_selection: ConversationSelectionHandle,
     ai_controller: ModelHandle<BlocklistAIController>,
     /// Read by the footer for the active session's working directory.
@@ -96,6 +102,12 @@ pub(crate) struct TuiTerminalSessionView {
     exit_confirmation: ExitConfirmation,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
+    /// Transient notice shown in the footer's hint slot, if any (e.g. a
+    /// rejected shell submission). A reusable pattern for short-lived notices.
+    transient_hint: Option<String>,
+    /// Incremented per transient hint so an expiring timer only clears the
+    /// hint it was started for.
+    transient_hint_generation: u64,
 }
 
 /// Registers the session surface's keybindings. Called once at TUI startup
@@ -207,11 +219,8 @@ impl TuiTerminalSessionView {
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
             TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), ctx),
         });
-        let input_mode_for_hint_line = ai_input_model.clone();
-        let hint_line = ctx.add_typed_action_tui_view(move |ctx| {
-            InputHintLineView::new(input_mode_for_hint_line, ctx)
-        });
-        // The input box border color depends on the input mode.
+        // The input box border color and the footer's shell-mode hint depend
+        // on the input mode.
         ctx.subscribe_to_model(&ai_input_model, |_, _, _, ctx| ctx.notify());
 
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
@@ -264,7 +273,6 @@ impl TuiTerminalSessionView {
         Self {
             transcript,
             input_view,
-            hint_line,
             conversation_selection,
             ai_controller,
             active_session,
@@ -272,7 +280,27 @@ impl TuiTerminalSessionView {
             exit_confirmation: ExitConfirmation::default(),
             ai_input_model,
             terminal_model: model,
+            transient_hint: None,
+            transient_hint_generation: 0,
         }
+    }
+
+    /// Displays `text` in the footer's hint slot for
+    /// [`TRANSIENT_HINT_DURATION`], then reverts to the persistent content.
+    fn show_transient_hint(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        self.transient_hint = Some(text);
+        self.transient_hint_generation += 1;
+        let generation = self.transient_hint_generation;
+        ctx.spawn(
+            Timer::after(TRANSIENT_HINT_DURATION),
+            move |view, _, ctx| {
+                if view.transient_hint_generation == generation {
+                    view.transient_hint = None;
+                    ctx.notify();
+                }
+            },
+        );
+        ctx.notify();
     }
 
     /// Handles a ctrl-c press: a second press within [`CTRL_C_EXIT_WINDOW`]
@@ -329,23 +357,31 @@ impl TuiTerminalSessionView {
         })
     }
 
-    /// Builds the status footer under the input box. The left slot shows the
-    /// ctrl-c exit-confirmation hint while armed (contextual key hints will
-    /// live there later); the active model and working directory are pushed to
-    /// the right edge behind a flex spacer. The caller must cap the row's
-    /// height (a row fills the height it is offered), e.g. with a one-row
-    /// [`TuiConstrainedBox`].
+    /// Builds the status footer under the input box. The left slot shows one
+    /// hint at a time — the ctrl-c exit confirmation while armed, else a
+    /// transient notice, else the shell-mode callout; the active model and
+    /// working directory are pushed to the right edge behind a flex spacer.
+    /// The caller must cap the row's height (a row fills the height it is
+    /// offered), e.g. with a one-row [`TuiConstrainedBox`].
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
         let mut footer = TuiFlex::row();
-        // Left slot: the ctrl-c exit-confirmation hint.
-        if self.exit_confirmation.is_armed() {
-            footer = footer.child(
-                TuiText::new(CTRL_C_EXIT_HINT)
-                    .with_style(dim)
-                    .truncate()
-                    .finish(),
-            );
+        // Left slot, highest priority first: while armed, the ctrl-c hint
+        // replaces the other hints in place.
+        let hint = if self.exit_confirmation.is_armed() {
+            Some((CTRL_C_EXIT_HINT.to_owned(), dim))
+        } else if let Some(transient) = &self.transient_hint {
+            Some((transient.clone(), dim))
+        } else if self.is_shell_mode(ctx) {
+            Some((
+                SHELL_MODE_HINT.to_owned(),
+                TuiUiBuilder::from_app(ctx).shell_mode_accent_style(),
+            ))
+        } else {
+            None
+        };
+        if let Some((text, style)) = hint {
+            footer = footer.child(TuiText::new(text).with_style(style).truncate().finish());
         }
         let model_name = LLMPreferences::as_ref(ctx)
             .get_active_base_model(ctx, Some(self.terminal_surface_id))
@@ -430,9 +466,7 @@ impl TuiTerminalSessionView {
             return;
         };
         if is_pty_busy {
-            self.hint_line.update(ctx, |hint_line, ctx| {
-                hint_line.show_transient(COMMAND_ALREADY_RUNNING_HINT.to_owned(), ctx);
-            });
+            self.show_transient_hint(COMMAND_ALREADY_RUNNING_HINT.to_owned(), ctx);
             return;
         }
 
@@ -569,11 +603,7 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn child_view_ids(&self, _ctx: &AppContext) -> Vec<EntityId> {
-        vec![
-            self.transcript.id(),
-            self.input_view.id(),
-            self.hint_line.id(),
-        ]
+        vec![self.transcript.id(), self.input_view.id()]
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
@@ -598,7 +628,6 @@ impl TuiView for TuiTerminalSessionView {
             TuiFlex::column()
                 .flex_child(TuiChildView::new(&self.transcript).finish())
                 .child(input_box.finish())
-                .child(TuiChildView::new(&self.hint_line).finish())
                 .child(
                     TuiConstrainedBox::new(self.render_footer(ctx).finish())
                         .with_max_rows(1)

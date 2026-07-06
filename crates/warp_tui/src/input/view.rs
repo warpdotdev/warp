@@ -636,6 +636,7 @@ impl TuiInputView {
             let end = r.end.as_usize().saturating_sub(1);
             (start, end)
         });
+
         let shell_mode = self.is_shell_mode(ctx);
         let prefix_style = if shell_mode {
             TuiUiBuilder::from_app(ctx).shell_mode_accent_style()

@@ -19,7 +19,6 @@ mod ui;
 
 mod conversation_selection;
 mod exit_confirmation;
-mod input_hint_line;
 mod input_mode_policy;
 mod keybindings;
 mod terminal_block;
