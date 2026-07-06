@@ -128,6 +128,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
     let task = api::Task {
         id: "root".to_string(),
         messages: vec![api::Message {
+            fetched_memories: vec![],
             id: "m1".to_string(),
             task_id: "root".to_string(),
             server_message_data: String::new(),
@@ -2377,6 +2378,411 @@ fn restored_child_without_children_opens_self_run_id_stream() {
                 assert_eq!(run_ids, vec![own_run_id.to_string()]);
             }
             other => panic!("expected RunIds([self]) filter, got {other:?}"),
+        });
+    });
+}
+
+// ---- wait_for_events parent registration (QUALITY-919) -------------------
+
+/// Builds a streamer wired to a mock `AIClient` whose `get_ambient_agent_task`
+/// must never be called. Used by the synchronous short-circuit tests to assert
+/// no server fetch is spawned.
+fn streamer_with_no_fetch_expected(
+    app: &mut warpui::App,
+) -> warpui::ModelHandle<OrchestrationEventStreamer> {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_ambient_agent_task().times(0);
+    let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+    let server_api = ServerApiProvider::new_for_test().get();
+    app.add_singleton_model(|ctx| {
+        OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+    })
+}
+
+#[test]
+fn wait_registration_root_with_children_opens_ancestor_include_self_stream() {
+    // The completion of the wait-time parent fetch installs server-recorded
+    // children, advances the cursor, and opens the parent-family ancestor
+    // stream — exactly the not-parent -> parent transition QUALITY-919 adds.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440520";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, _| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.event_cursor = 3;
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.consumers.insert(consumer_id);
+        });
+
+        let mut task = make_ambient_task_with_children(vec!["child-run-1".to_string()]);
+        task.last_event_sequence = Some(9);
+        poller.update(&mut app, |me, ctx| {
+            me.finish_register_parent_on_wait(conversation_id, Ok(task), ctx);
+        });
+
+        poller.read(&app, |me, _| {
+            match connected_filter(me, conversation_id) {
+                Some(AgentEventFilter::AncestorRunId {
+                    ancestor_run_id,
+                    include_self,
+                }) => {
+                    assert_eq!(ancestor_run_id, own_run_id);
+                    assert!(include_self);
+                }
+                other => panic!("expected AncestorRunId include_self filter, got {other:?}"),
+            }
+            assert_eq!(
+                me.streams.get(&conversation_id).map(|s| s.event_cursor),
+                Some(9),
+                "cursor must advance to max(local, task.last_event_sequence)"
+            );
+        });
+    });
+}
+
+#[test]
+fn wait_registration_root_without_children_does_not_register() {
+    // An empty children list means the conversation is not an orchestrator:
+    // no parent role is taken and no stream opens.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440521";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, _| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.consumers.insert(consumer_id);
+        });
+
+        poller.update(&mut app, |me, ctx| {
+            me.finish_register_parent_on_wait(
+                conversation_id,
+                Ok(make_ambient_task_with_children(vec![])),
+                ctx,
+            );
+        });
+
+        poller.read(&app, |me, ctx| {
+            assert!(
+                connected_filter(me, conversation_id).is_none(),
+                "a childless root must not open a stream"
+            );
+            assert!(
+                !me.is_parent_agent_conversation(conversation_id, ctx),
+                "a childless root must not take the parent role"
+            );
+        });
+    });
+}
+
+#[test]
+fn wait_registration_fetch_error_does_not_register() {
+    // A failed fetch is a graceful no-op: no parent role, no stream. The next
+    // wait re-checks.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440522";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, _| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.consumers.insert(consumer_id);
+        });
+
+        poller.update(&mut app, |me, ctx| {
+            me.finish_register_parent_on_wait(
+                conversation_id,
+                Err(anyhow::anyhow!("server unavailable")),
+                ctx,
+            );
+        });
+
+        poller.read(&app, |me, ctx| {
+            assert!(connected_filter(me, conversation_id).is_none());
+            assert!(!me.is_parent_agent_conversation(conversation_id, ctx));
+        });
+    });
+}
+
+#[test]
+fn register_parent_on_wait_flag_off_is_noop() {
+    // With the gating flag off, `register_parent_on_wait` does not fetch.
+    App::test((), |mut app| async move {
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440523";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let poller = streamer_with_no_fetch_expected(&mut app);
+        poller.update(&mut app, |me, ctx| {
+            me.register_parent_on_wait(conversation_id, ctx);
+        });
+        poller.read(&app, |me, _| {
+            assert!(connected_filter(me, conversation_id).is_none());
+        });
+    });
+}
+
+#[test]
+fn register_parent_on_wait_child_short_circuits() {
+    // One-level-tree invariant: a child (has_parent_agent) can never be a
+    // parent, so no server fetch is issued and no parent role is taken.
+    App::test((), |mut app| async move {
+        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440524";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        conversation.set_parent_agent_id("550e8400-e29b-41d4-a716-4466554405fd".to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let poller = streamer_with_no_fetch_expected(&mut app);
+        poller.update(&mut app, |me, ctx| {
+            me.register_parent_on_wait(conversation_id, ctx);
+        });
+        poller.read(&app, |me, ctx| {
+            assert!(
+                !me.is_parent_agent_conversation(conversation_id, ctx),
+                "a child must not take the parent role"
+            );
+        });
+    });
+}
+
+#[test]
+fn register_parent_on_wait_already_parent_is_idempotent() {
+    // A second call when the conversation is already a known parent must not
+    // re-fetch or churn the open ancestor stream.
+    App::test((), |mut app| async move {
+        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440525";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let poller = streamer_with_no_fetch_expected(&mut app);
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, ctx| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.consumers.insert(consumer_id);
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.watched_run_ids.insert("child-1".to_string());
+            me.start_sse_connection(conversation_id, ctx);
+        });
+        poller.read(&app, |me, _| {
+            assert_eq!(sse_generation(me, conversation_id), Some(0));
+        });
+
+        poller.update(&mut app, |me, ctx| {
+            me.register_parent_on_wait(conversation_id, ctx);
+        });
+        poller.read(&app, |me, _| {
+            assert_eq!(
+                sse_generation(me, conversation_id),
+                Some(0),
+                "an already-parent wait must not churn the open ancestor stream"
+            );
+        });
+    });
+}
+
+#[test]
+fn register_parent_on_wait_without_self_run_id_is_noop() {
+    // No run_id yet means there is nothing to query the server with; the call
+    // is a no-op and the next wait re-checks.
+    App::test((), |mut app| async move {
+        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        // Intentionally leave run_id unset.
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let poller = streamer_with_no_fetch_expected(&mut app);
+        poller.update(&mut app, |me, ctx| {
+            me.register_parent_on_wait(conversation_id, ctx);
+        });
+        poller.read(&app, |me, _| {
+            assert!(connected_filter(me, conversation_id).is_none());
+        });
+    });
+}
+
+#[test]
+fn wait_registration_runids_fallback_watches_self_for_parent_inbox() {
+    // With OwnerOrchestrationAncestorStreamer disabled, desired_sse_filter
+    // falls back to RunIds(watched_run_ids). The wait-time registration must
+    // also watch self_run_id (not just the children) so the parent's own
+    // inbox events are delivered — mirroring register_watched_run_id.
+    App::test((), |mut app| async move {
+        // OwnerOrchestrationAncestorStreamer intentionally left disabled.
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440527";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        // Only an active consumer — self_run_id is intentionally NOT
+        // pre-watched, so the assertion verifies registration adds it.
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, _| {
+            me.streams
+                .entry(conversation_id)
+                .or_default()
+                .consumers
+                .insert(consumer_id);
+        });
+
+        poller.update(&mut app, |me, ctx| {
+            me.finish_register_parent_on_wait(
+                conversation_id,
+                Ok(make_ambient_task_with_children(vec![
+                    "child-run-1".to_string()
+                ])),
+                ctx,
+            );
+        });
+
+        poller.read(&app, |me, _| match connected_filter(me, conversation_id) {
+            Some(AgentEventFilter::RunIds(run_ids)) => {
+                assert!(
+                    run_ids.contains(&own_run_id.to_string()),
+                    "RunIds fallback must watch self_run_id for the parent's own inbox; got {run_ids:?}"
+                );
+                assert!(
+                    run_ids.contains(&"child-run-1".to_string()),
+                    "RunIds fallback must watch the child; got {run_ids:?}"
+                );
+            }
+            other => panic!("expected RunIds fallback filter, got {other:?}"),
         });
     });
 }

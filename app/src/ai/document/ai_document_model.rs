@@ -454,7 +454,7 @@ impl AIDocumentModel {
         };
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
             let terminal_view_id =
-                history_model.terminal_view_id_for_conversation(&conversation_id);
+                history_model.terminal_surface_id_for_conversation(&conversation_id);
             if let Some(conversation) = history_model.conversation_mut(&conversation_id) {
                 conversation.update_plan_notebook_uid(
                     document_id,

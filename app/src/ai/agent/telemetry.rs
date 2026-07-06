@@ -33,6 +33,14 @@ impl ForTelemetry for AIAgentCitation {
                 Some(CitationForTelemetry::WarpDocs { page: path.clone() })
             }
             Self::WebPage { url } => Some(CitationForTelemetry::WebPage { url: url.clone() }),
+            Self::AgentMemory {
+                memory_store_id,
+                memory_id,
+                ..
+            } => Some(CitationForTelemetry::AgentMemory {
+                memory_store_id: memory_store_id.clone(),
+                memory_id: memory_id.clone(),
+            }),
         }
     }
 }

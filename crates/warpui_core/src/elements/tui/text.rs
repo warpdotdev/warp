@@ -24,6 +24,7 @@
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use super::{TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize, TuiStyle};
+use crate::AppContext;
 
 pub struct TuiText {
     text: String,
@@ -73,7 +74,12 @@ impl TuiText {
 }
 
 impl TuiElement for TuiText {
-    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
         if self.text.is_empty() {
             return constraint.clamp(TuiSize::ZERO);
         }

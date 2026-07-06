@@ -1912,6 +1912,7 @@ fn test_shared_followup_on_existing_conversation_converts_user_query_input() {
                                 api_client_action::AddMessagesToTask {
                                     task_id: root_task_id.to_string(),
                                     messages: vec![api::Message {
+                                        fetched_memories: vec![],
                                         id: "user-message".to_string(),
                                         task_id: root_task_id.to_string(),
                                         server_message_data: String::new(),

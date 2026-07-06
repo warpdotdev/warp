@@ -7,9 +7,36 @@ use super::{
     autotracking, AddWindowOptions, AppContext, StoredView, TypedActionView, ViewContext,
     ViewHandle, Window,
 };
+use crate::keymap::{BindingLens, IsBindingValid};
 use crate::{EntityId, WindowId};
 
 impl AppContext {
+    /// Registers a validator that validates every binding that matches the
+    /// given TUI view's default [`Context`](crate::keymap::Context). The TUI
+    /// counterpart of [`Self::register_binding_validator`]: after the app is
+    /// initialized, the validator runs for every binding matching the view's
+    /// default context, and the app panics on invalid bindings when
+    /// `debug_assertions` are enabled.
+    #[cfg(debug_assertions)]
+    pub fn register_tui_binding_validator<V: crate::TuiView>(
+        &mut self,
+        binding_validator: impl Fn(BindingLens) -> IsBindingValid + 'static,
+    ) {
+        let context = V::default_keymap_context();
+        self.keystroke_matcher
+            .register_binding_validator(context, binding_validator)
+    }
+
+    /// Registers a validator that validates every binding that matches the
+    /// given TUI view's default [`Context`](crate::keymap::Context). Noops if
+    /// `debug_assertions` are disabled.
+    #[cfg(not(debug_assertions))]
+    pub fn register_tui_binding_validator<V: crate::TuiView>(
+        &mut self,
+        binding_validator: impl Fn(BindingLens) -> IsBindingValid + 'static,
+    ) {
+    }
+
     /// Adds a TUI view to the given window.
     pub fn add_tui_view<T, F>(&mut self, window_id: WindowId, build_view: F) -> ViewHandle<T>
     where

@@ -899,8 +899,8 @@ fn delete_conversation_clears_in_flight_command() {
 }
 
 #[test]
-fn clear_conversations_in_terminal_view_drops_every_listed_conversation() {
-    // ClearedConversationsInTerminalView with multiple ids must drop each listed conversation's queue.
+fn clear_conversations_for_terminal_surface_drops_every_listed_conversation() {
+    // ClearedConversationsForTerminalSurface with multiple ids must drop each listed conversation's queue.
     with_model(|mut app, model, _events| {
         let history = BlocklistAIHistoryModel::handle(&app);
         let terminal_view_id = warpui::EntityId::new();
@@ -914,7 +914,7 @@ fn clear_conversations_in_terminal_view_drops_every_listed_conversation() {
         append_user(&model, &mut app, conv_b, "b1");
 
         history.update(&mut app, |h, ctx| {
-            h.clear_conversations_in_terminal_view(terminal_view_id, ctx)
+            h.clear_conversations_for_terminal_surface(terminal_view_id, ctx)
         });
 
         model.read(&app, |m, _| {
@@ -963,5 +963,104 @@ fn has_autofireable_prompt_is_false_when_a_locked_head_precedes_a_prompt() {
         });
         append_user(&model, &mut app, conv, "follow up");
         model.read(&app, |m, _| assert!(!m.has_autofireable_prompt(conv)));
+    });
+}
+
+#[test]
+fn unlock_pending_lrc_rows_transitions_origin_and_enables_autofire() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        let pending_id = model.update(&mut app, |m, ctx| {
+            m.append(
+                conv,
+                QueuedQuery::new("pending".to_owned(), QueuedQueryOrigin::PendingLrcAutoQueue),
+                ctx,
+            )
+        });
+        // Row is locked — peek_autofire returns None and has_autofireable_prompt is false.
+        model.read(&app, |m, _| {
+            assert!(m.peek_autofire(conv).is_none());
+            assert!(!m.has_autofireable_prompt(conv));
+        });
+        events.borrow_mut().clear();
+
+        model.update(&mut app, |m, ctx| m.unlock_pending_lrc_rows(conv, ctx));
+
+        // Row is now LrcAutoQueue — unlocked and auto-fireable.
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue[0].id(), pending_id);
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::LrcAutoQueue);
+            assert!(m.has_autofireable_prompt(conv));
+        });
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.first(),
+            Some(QueuedQueryEvent::RowUnlocked { conversation_id }) if *conversation_id == conv
+        ));
+    });
+}
+
+#[test]
+fn unlock_pending_lrc_rows_no_ops_when_no_pending_rows() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        append_user(&model, &mut app, conv, "normal");
+        events.borrow_mut().clear();
+
+        model.update(&mut app, |m, ctx| m.unlock_pending_lrc_rows(conv, ctx));
+
+        // No RowUnlocked event when nothing was transitioned.
+        assert!(events.borrow().is_empty());
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.queue(conv)[0].origin(),
+                QueuedQueryOrigin::QueueSlashCommand
+            );
+        });
+    });
+}
+
+#[test]
+fn remove_pending_lrc_rows_removes_only_pending_rows_and_emits_removed() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        let normal_id = append_user(&model, &mut app, conv, "normal");
+        let pending_id = model.update(&mut app, |m, ctx| {
+            m.append(
+                conv,
+                QueuedQuery::new("pending".to_owned(), QueuedQueryOrigin::PendingLrcAutoQueue),
+                ctx,
+            )
+        });
+        events.borrow_mut().clear();
+
+        model.update(&mut app, |m, ctx| m.remove_pending_lrc_rows(conv, ctx));
+
+        // Only the PendingLrcAutoQueue row is removed.
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].id(), normal_id);
+        });
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.as_slice(),
+            [QueuedQueryEvent::Removed { query_id, .. }] if *query_id == pending_id
+        ));
+    });
+}
+
+#[test]
+fn remove_pending_lrc_rows_no_ops_when_no_pending_rows() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        append_user(&model, &mut app, conv, "normal");
+        events.borrow_mut().clear();
+
+        model.update(&mut app, |m, ctx| m.remove_pending_lrc_rows(conv, ctx));
+
+        assert!(events.borrow().is_empty());
+        model.read(&app, |m, _| assert_eq!(m.queue(conv).len(), 1));
     });
 }

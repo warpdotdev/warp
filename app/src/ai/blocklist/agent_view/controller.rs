@@ -136,6 +136,8 @@ pub enum AgentViewEntryOrigin {
     ThirdPartyCloudAgent,
     /// Entered agent view via the CLI (e.g. `warp agent run`).
     Cli,
+    /// Entered agent view via the headless TUI frontend.
+    Tui,
     /// Entered agent view by adding an image (drag-and-drop or paste).
     ImageAdded,
     /// Entered agent view by executing a slash command that requires agent mode.

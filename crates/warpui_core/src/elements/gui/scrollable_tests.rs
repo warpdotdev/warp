@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use itertools::Itertools;
@@ -12,7 +12,8 @@ use crate::elements::{
 use crate::platform::WindowStyle;
 use crate::presenter::DispatchedActionKind;
 use crate::{
-    App, AppContext, Entity, Event, Presenter, TypedActionView, ViewContext, WindowInvalidation,
+    App, AppContext, Entity, EntityIdSet, Event, Presenter, TypedActionView, ViewContext,
+    WindowInvalidation,
 };
 
 /// Since we support scrolling in both vertical and horizontal directions,
@@ -55,7 +56,7 @@ where
 
     let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
 
-    let mut updated = HashSet::new();
+    let mut updated = EntityIdSet::default();
     updated.insert(app.root_view_id(window_id).unwrap());
     let invalidation = WindowInvalidation {
         updated,
@@ -264,7 +265,7 @@ fn test_clipped_scrolling(axis: Axis) {
 
         let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -310,7 +311,7 @@ fn test_clipped_scrolling(axis: Axis) {
             assert!(view.clipped_scroll_state.scroll_start() > Pixels::zero());
         });
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -342,7 +343,7 @@ fn test_clipped_scrolling(axis: Axis) {
             assert_eq!(1, *view.mouse_downs.get(&2).unwrap());
         });
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -387,7 +388,7 @@ fn test_clipped_scrolling_no_scrollbars(axis: Axis) {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -431,7 +432,7 @@ fn test_clipped_scrolling_no_scrollbars(axis: Axis) {
 
         presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -474,7 +475,7 @@ fn test_stacked_view_scroll_handling(axis: Axis) {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -528,7 +529,7 @@ fn test_clicks_in_scrollbar_gutter_change_scroll_position(axis: Axis) {
 
         let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,

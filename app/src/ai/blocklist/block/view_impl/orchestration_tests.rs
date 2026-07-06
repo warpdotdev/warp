@@ -306,6 +306,7 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
             tasks: vec![warp_multi_agent_api::Task {
                 id: format!("task-{child_id}"),
                 messages: vec![warp_multi_agent_api::Message {
+                    fetched_memories: vec![],
                     id: "child-msg".to_string(),
                     task_id: format!("task-{child_id}"),
                     server_message_data: String::new(),
@@ -358,6 +359,7 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
             tasks: vec![warp_multi_agent_api::Task {
                 id: format!("task-{parent_id}"),
                 messages: vec![warp_multi_agent_api::Message {
+                    fetched_memories: vec![],
                     id: "parent-msg".to_string(),
                     task_id: format!("task-{parent_id}"),
                     server_message_data: String::new(),

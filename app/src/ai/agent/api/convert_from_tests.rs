@@ -21,6 +21,7 @@ fn start_agent_tool_call_message(
     lifecycle_subscription_event_types: Option<Vec<i32>>,
 ) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: "message-id".to_string(),
         task_id: "task-id".to_string(),
         server_message_data: String::new(),
@@ -67,6 +68,7 @@ fn start_agent_v2_tool_call_message(
     lifecycle_subscription_event_types: Option<Vec<i32>>,
 ) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: "message-id".to_string(),
         task_id: "task-id".to_string(),
         server_message_data: String::new(),
@@ -91,6 +93,7 @@ fn start_agent_v2_tool_call_message(
 
 fn upload_artifact_tool_call_message(path: &str, description: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: "message-id".to_string(),
         task_id: "task-id".to_string(),
         server_message_data: String::new(),
@@ -144,6 +147,7 @@ fn remote_start_agent_v2_execution_mode(
 
 fn file_artifact_created_message(filepath: &str, description: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: "message-id".to_string(),
         task_id: "task-id".to_string(),
         server_message_data: String::new(),
@@ -616,6 +620,7 @@ fn transfer_control_tool_call_converts_to_action_message() {
     let task_id = TaskId::new("task".to_string());
     let reason = "Please finish the interactive flow".to_string();
     let message = api::Message {
+        fetched_memories: vec![],
         id: "message".to_string(),
         task_id: "task".to_string(),
         server_message_data: String::new(),

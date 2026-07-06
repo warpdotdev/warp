@@ -101,6 +101,11 @@ runs:
       with:
         ssh-private-key: ${{ inputs.ssh_key }}
 
+    - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
+      with:
+        xcode-version: '26'
+
     - name: Install dependencies
       shell: bash
       run: |
@@ -175,12 +180,3 @@ runs:
         echo "::error::protoc install step failed on ${{ inputs.target_os }}"
         exit 1
 
-    - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
-      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
-      with:
-        xcode-version: '26'
-
-    - name: Download Metal Toolchain
-      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
-      shell: bash
-      run: xcodebuild -downloadComponent MetalToolchain

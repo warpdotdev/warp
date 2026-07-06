@@ -107,6 +107,7 @@ fn test_from_conversation_prefers_server_creator_profile() {
 
 fn create_message_with_directory(id: &str, task_id: &str, directory: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),
@@ -132,6 +133,7 @@ fn create_message_with_directory(id: &str, task_id: &str, directory: &str) -> ap
 
 fn create_agent_output_message(id: &str, task_id: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),

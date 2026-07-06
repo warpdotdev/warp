@@ -53,6 +53,7 @@ fn restored_conversation_with_root_description(description: &str) -> AIConversat
 
 fn user_query_message(id: &str, request_id: &str, query: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: "root-task".to_string(),
         server_message_data: String::new(),
@@ -71,6 +72,7 @@ fn user_query_message(id: &str, request_id: &str, query: &str) -> api::Message {
 
 fn agent_output_message(id: &str, request_id: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: "root-task".to_string(),
         server_message_data: String::new(),
@@ -183,6 +185,35 @@ fn title_falls_back_to_initial_query_when_root_description_is_empty() {
     let conversation = restored_conversation_with_queries(&["Initial query"]);
 
     assert_eq!(conversation.title().as_deref(), Some("Initial query"));
+}
+
+#[test]
+fn reassign_exchange_ids_keeps_exchange_lookup_consistent() {
+    let mut conversation = restored_conversation_with_queries(&["one", "two"]);
+
+    let old_ids: Vec<_> = conversation.all_exchanges().iter().map(|e| e.id).collect();
+    assert!(!old_ids.is_empty());
+
+    // Pre-condition: every original id resolves via the exchange-id index.
+    for id in &old_ids {
+        assert!(conversation.exchange_with_id(*id).is_some());
+    }
+
+    conversation.reassign_exchange_ids();
+
+    // Reassigning regenerates ids without changing the exchange count, so
+    // `modify_task` does not rebuild the index; correctness relies on the
+    // explicit `rebuild_exchange_id_index()` call. The stale ids must be gone.
+    for id in &old_ids {
+        assert!(conversation.exchange_with_id(*id).is_none());
+    }
+
+    // Every current id resolves via the rebuilt index.
+    let new_ids: Vec<_> = conversation.all_exchanges().iter().map(|e| e.id).collect();
+    assert_eq!(new_ids.len(), old_ids.len());
+    for id in &new_ids {
+        assert!(conversation.exchange_with_id(*id).is_some());
+    }
 }
 
 #[test]
@@ -740,4 +771,116 @@ fn restored_conversation_does_not_re_enter_waiting_for_events() {
     let conversation = restored_conversation(Some(conversation_data));
 
     assert_eq!(conversation.status(), &ConversationStatus::Success);
+}
+
+fn fetched_memory(
+    memory_id: &str,
+    content: &str,
+    memory_store_id: &str,
+    source: Option<api::message::fetched_memory::Source>,
+) -> api::message::FetchedMemory {
+    api::message::FetchedMemory {
+        memory_id: memory_id.to_string(),
+        content: content.to_string(),
+        memory_store_id: memory_store_id.to_string(),
+        source,
+    }
+}
+
+fn conversation_source(conversation_id: &str) -> Option<api::message::fetched_memory::Source> {
+    Some(api::message::fetched_memory::Source::Conversation(
+        api::message::fetched_memory::Conversation {
+            conversation_id: conversation_id.to_string(),
+        },
+    ))
+}
+
+fn restored_conversation_with_memories_per_query(
+    memories_per_query: Vec<Vec<api::message::FetchedMemory>>,
+) -> AIConversation {
+    let messages = memories_per_query
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, memories)| {
+            let request_id = format!("request-{index}");
+            let query = api::Message {
+                fetched_memories: memories,
+                ..user_query_message(&format!("user-{index}"), &request_id, "query")
+            };
+            [
+                query,
+                agent_output_message(&format!("agent-{index}"), &request_id),
+            ]
+        })
+        .collect();
+
+    AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![api::Task {
+            id: "root-task".to_string(),
+            messages,
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap()
+}
+
+#[test]
+fn fetched_memories_is_empty_when_no_message_has_memories() {
+    let conversation = restored_conversation_with_memories_per_query(vec![vec![]]);
+
+    assert_eq!(conversation.fetched_memories(), vec![]);
+}
+
+#[test]
+fn fetched_memories_preserves_order_across_and_within_messages() {
+    let conversation = restored_conversation_with_memories_per_query(vec![
+        vec![
+            fetched_memory("m1", "first", "store-1", None),
+            fetched_memory("m2", "second", "store-1", None),
+        ],
+        vec![fetched_memory("m3", "third", "store-2", None)],
+    ]);
+
+    let ids: Vec<String> = conversation
+        .fetched_memories()
+        .into_iter()
+        .map(|memory| memory.memory_id)
+        .collect();
+    assert_eq!(ids, vec!["m1", "m2", "m3"]);
+}
+
+#[test]
+fn fetched_memories_dedupes_keeping_first_position_and_latest_data() {
+    let conversation = restored_conversation_with_memories_per_query(vec![
+        vec![
+            fetched_memory("m1", "old content", "store-1", None),
+            fetched_memory("m2", "other", "store-1", None),
+        ],
+        vec![
+            fetched_memory(
+                "m1",
+                "new content",
+                "store-1",
+                conversation_source("conversation-1"),
+            ),
+            fetched_memory("m1", "same memory id different store", "store-2", None),
+        ],
+    ]);
+
+    let memories = conversation.fetched_memories();
+    assert_eq!(
+        memories,
+        vec![
+            fetched_memory(
+                "m1",
+                "new content",
+                "store-1",
+                conversation_source("conversation-1"),
+            ),
+            fetched_memory("m2", "other", "store-1", None),
+            fetched_memory("m1", "same memory id different store", "store-2", None),
+        ]
+    );
 }

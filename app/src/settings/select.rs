@@ -11,6 +11,7 @@ define_settings_group!(SelectionSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "terminal.copy_on_select",
         description: "Whether text is automatically copied to the clipboard when selected.",
@@ -20,6 +21,7 @@ define_settings_group!(SelectionSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::LINUX,
         sync_to_cloud: SyncToCloud::PerPlatform(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "system.linux_selection_clipboard",
         description: "Whether the Linux primary selection clipboard is used.",
@@ -32,6 +34,7 @@ define_settings_group!(SelectionSettings, settings: [
             SupportedPlatforms::MAC.into()
         ),
         sync_to_cloud: SyncToCloud::PerPlatform(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "terminal.input.middle_click_paste_enabled",
         description: "Whether middle-click pastes from the clipboard.",

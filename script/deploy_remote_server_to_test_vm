@@ -10,8 +10,7 @@
 # Integration channel's `check_binary` looks.
 #
 # Prerequisites (same as script/deploy_remote_server):
-#   Linux: install an x86_64 musl cross toolchain that includes gcc and g++
-#          (CI uses cross-tools/musl-cross) and sudo apt-get install sshpass
+#   On Linux, install curl, sha256sum, tar, and sshpass.
 #   rustup target add x86_64-unknown-linux-musl
 #   gcloud CLI authenticated for the warp-ssh-integration-testing project
 #
@@ -47,59 +46,6 @@ REMOTE_HOST="ssh-remote-server-testing"
 REMOTE_PORT="22"
 PROXY_COMMAND="gcloud compute start-iap-tunnel ssh-remote-server-testing ${REMOTE_PORT} --listen-on-stdin --project=warp-ssh-integration-testing --zone=us-east4-b"
 
-# ── Helpers ───────────────────────────────────────────────────────
-
-install_musl_help() {
-  case "$(uname -s)" in
-    Linux)
-      echo "Install a musl cross toolchain that includes gcc and g++." >&2
-      ;;
-    *)
-      echo "Install an x86_64 musl C compiler for $TARGET." >&2
-      ;;
-  esac
-}
-
-detect_musl_linker() {
-  if command -v x86_64-linux-musl-gcc &>/dev/null; then
-    echo "x86_64-linux-musl-gcc"
-    return
-  fi
-  if command -v x86_64-unknown-linux-musl-gcc &>/dev/null; then
-    echo "x86_64-unknown-linux-musl-gcc"
-    return
-  fi
-
-  if command -v musl-gcc &>/dev/null; then
-    echo "musl-gcc"
-    return
-  fi
-
-  echo "Error: no musl linker found." >&2
-  install_musl_help
-  exit 1
-}
-detect_musl_cxx() {
-  local linker_cxx="${MUSL_LINKER%gcc}g++"
-  if [[ "$linker_cxx" != "$MUSL_LINKER" ]] && command -v "$linker_cxx" &>/dev/null; then
-    echo "$linker_cxx"
-    return
-  fi
-
-  if command -v x86_64-linux-musl-g++ &>/dev/null; then
-    echo "x86_64-linux-musl-g++"
-    return
-  fi
-
-  if command -v x86_64-unknown-linux-musl-g++ &>/dev/null; then
-    echo "x86_64-unknown-linux-musl-g++"
-    return
-  fi
-
-  echo "Error: no musl C++ compiler found." >&2
-  install_musl_help
-  exit 1
-}
 
 app_version() {
   if [[ -n "${GIT_RELEASE_TAG:-}" ]]; then
@@ -112,9 +58,7 @@ app_version() {
 }
 
 # ── Preflight checks ──────────────────────────────────────────────
-
-MUSL_LINKER="$(detect_musl_linker)"
-MUSL_CXX="$(detect_musl_cxx)"
+source "$SCRIPT_DIR/linux/configure_musl_toolchain" "$TARGET"
 
 if ! rustup target list --installed 2>/dev/null | grep -q "$TARGET"; then
   echo "Error: $TARGET target not installed." >&2
@@ -136,11 +80,7 @@ LOCAL_BUNDLE_TARBALL="$OUTPUT_DIR/remote-server-integration-bundle.tar.gz"
 
 echo "==> Building Integration-channel Oz CLI for $TARGET (profile=$CARGO_PROFILE)"
 
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$MUSL_LINKER" \
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C symbol-mangling-version=v0" \
-CC_x86_64_unknown_linux_musl="$MUSL_LINKER" \
-CXX_x86_64_unknown_linux_musl="$MUSL_CXX" \
-  cargo build \
+cargo build \
     -p warp \
     --bin "$WARP_BIN" \
     --target "$TARGET" \

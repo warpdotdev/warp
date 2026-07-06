@@ -324,7 +324,7 @@ impl SearchCodebaseView {
         icon: warpui::elements::Icon,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        super::search_results_common::render_loading_header(text, icon, app)
+        super::search_results_common::render_status_header(text, icon, app)
     }
 
     pub fn clear_link_tooltip(&mut self, ctx: &mut ViewContext<Self>) {

@@ -18,5 +18,5 @@ fn main() -> Result<()> {
         .with_additional_features(&[features::FeatureFlag::ForceLogin]),
     );
 
-    warp::run_tui()
+    warp_tui::run()
 }
