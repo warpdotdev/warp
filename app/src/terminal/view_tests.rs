@@ -5247,7 +5247,12 @@ fn ctrl_c_after_stop_takeover_cancels_conversation() {
                 .expect("command should become agent monitored");
 
             view.cli_subagent_controller.update(ctx, |controller, ctx| {
-                controller.switch_control_to_user(UserTakeOverReason::Stop, ctx);
+                controller.switch_control_to_user(
+                    UserTakeOverReason::Stop {
+                        should_auto_resume: true,
+                    },
+                    ctx,
+                );
             });
 
             conversation_id
@@ -5362,7 +5367,9 @@ fn completed_user_controlled_lrc_resumes_when_not_suppressed() {
                     )
                     .expect("command should become agent monitored");
                 active_block
-                    .take_over_control_for_user(UserTakeOverReason::Stop)
+                    .take_over_control_for_user(UserTakeOverReason::Stop {
+                        should_auto_resume: true,
+                    })
                     .expect("user takeover should succeed");
                 active_block.id().clone()
             };
@@ -5416,7 +5423,7 @@ fn completed_user_controlled_lrc_skips_resume_when_suppressed() {
                     )
                     .expect("command should become agent monitored");
                 // Mirrors rewind / stop_local_agent_conversation tearing down the conversation.
-                active_block.set_user_control_and_suppress_auto_resume();
+                active_block.set_user_control_for_teardown();
                 active_block.id().clone()
             };
 

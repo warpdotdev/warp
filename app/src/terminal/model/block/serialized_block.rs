@@ -113,9 +113,6 @@ pub struct SerializedAIMetadata {
     /// commands, for example).
     #[serde(default = "default_as_true", skip)]
     should_hide_block: bool,
-
-    #[serde(default)]
-    suppress_auto_resume: bool,
 }
 
 impl From<AgentInteractionMetadata> for SerializedAIMetadata {
@@ -127,25 +124,20 @@ impl From<AgentInteractionMetadata> for SerializedAIMetadata {
             long_running_control_state: value.long_running_control_state().cloned(),
             has_agent_written_to_block: value.has_agent_written_to_block(),
             should_hide_block: value.should_hide_block(),
-            suppress_auto_resume: value.should_suppress_auto_resume(),
         }
     }
 }
 
 impl From<SerializedAIMetadata> for AgentInteractionMetadata {
     fn from(value: SerializedAIMetadata) -> Self {
-        let mut metadata = AgentInteractionMetadata::new(
+        AgentInteractionMetadata::new(
             value.requested_command_action_id,
             value.conversation_id,
             value.subagent_task_id,
             value.long_running_control_state,
             value.has_agent_written_to_block,
             value.should_hide_block,
-        );
-        if value.suppress_auto_resume {
-            metadata.set_suppress_auto_resume();
-        }
-        metadata
+        )
     }
 }
 

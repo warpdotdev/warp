@@ -8444,7 +8444,7 @@ impl TerminalView {
                 || active_block.is_active_and_long_running();
 
             if active_block_matches && command_is_running {
-                active_block.set_user_control_and_suppress_auto_resume();
+                active_block.set_user_control_for_teardown();
                 true
             } else {
                 false
@@ -8648,7 +8648,12 @@ impl TerminalView {
     ) {
         if active_block_state.is_agent_in_control_of_command {
             self.cli_subagent_controller.update(ctx, |controller, ctx| {
-                controller.switch_control_to_user(UserTakeOverReason::Stop, ctx);
+                controller.switch_control_to_user(
+                    UserTakeOverReason::Stop {
+                        should_auto_resume: true,
+                    },
+                    ctx,
+                );
             });
         } else if active_block_state.is_long_running {
             // A second Ctrl+C after Stop takeover should cancel both the command and conversation.
@@ -10868,10 +10873,9 @@ impl TerminalView {
             match ai_metadata {
                 Some(ai_metadata)
                     if ai_metadata.requested_command_action_id().is_some()
-                        && !ai_metadata.should_suppress_auto_resume()
                         && ai_metadata
                             .long_running_control_state()
-                            .is_some_and(|state| state.user_take_over_reason().is_some()) =>
+                            .is_some_and(|state| state.should_auto_resume()) =>
                 {
                     Some(*ai_metadata.conversation_id())
                 }
@@ -24595,7 +24599,7 @@ impl TerminalView {
                 && active_block.ai_conversation_id() == Some(conversation_id);
 
             if is_from_this_conversation {
-                active_block.set_user_control_and_suppress_auto_resume();
+                active_block.set_user_control_for_teardown();
             }
 
             is_from_this_conversation
