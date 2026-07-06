@@ -228,12 +228,31 @@ impl SystemInfo {
             .with_cpu()
     }
 
+    /// Returns the [`sysinfo::ProcessRefreshKind`] to use for a full
+    /// process-table sweep where we only need process identity (e.g. to check
+    /// whether a process with a given name is running).
+    ///
+    /// Unlike [`Self::refresh_kind`], this deliberately excludes CPU and memory
+    /// sampling. On Windows, sampling per-process CPU usage issues an
+    /// `NtQueryInformationProcess(ProcessCycleTime)` call for *every* process,
+    /// and each such call forces `KeFlushProcessWriteBuffers` — a synchronous
+    /// inter-processor interrupt broadcast to all logical cores. Doing that
+    /// across the entire process table (potentially in bursts, e.g. once per
+    /// shell-session bootstrap) can keep every core spinning at
+    /// `DISPATCH_LEVEL` long enough to trip the DPC watchdog and bugcheck the
+    /// machine on high-core-count systems. Enumerating names only avoids those
+    /// per-process syscalls.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn all_processes_refresh_kind() -> sysinfo::ProcessRefreshKind {
+        sysinfo::ProcessRefreshKind::nothing()
+    }
+
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn refresh_all_processes(&mut self) {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true, /* remove_dead_processes */
-            Self::refresh_kind(),
+            Self::all_processes_refresh_kind(),
         );
     }
 
