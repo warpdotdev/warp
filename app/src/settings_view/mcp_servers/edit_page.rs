@@ -58,6 +58,46 @@ use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::GlobalResourceHandlesProvider;
 
+fn edit_save_button() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.save_button", "Save")
+}
+fn edit_edit_variables_button() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.edit_variables_button", "Edit Variables")
+}
+fn edit_delete_mcp_button() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.delete_mcp_button", "Delete MCP")
+}
+fn edit_remove_from_team_button() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.remove_from_team_button", "Remove from team")
+}
+fn edit_editing_disabled_banner() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.editing_disabled_banner", "Only team admins and the creator of the MCP server can edit the MCP server.")
+}
+fn edit_add_new_title() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.add_new_title", "Add New MCP Server")
+}
+fn edit_edit_named_title_template() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.edit_named_title", "Edit {} MCP Server")
+}
+fn edit_edit_title() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.edit_title", "Edit MCP Server")
+}
+fn edit_log_out_tooltip() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.log_out_tooltip", "Log out")
+}
+fn edit_json_label() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.json_label", "JSON")
+}
+fn edit_secrets_error_toast() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.secrets_error_toast", "This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.")
+}
+fn edit_no_server_specified_error() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.no_server_specified_error", "No MCP Server specified.")
+}
+fn edit_multiple_servers_error() -> &'static str {
+    crate::menu_label("settings.mcp_servers.edit_page.multiple_servers_error", "Cannot add multiple MCP servers while editing a single server.")
+}
+
 const DEFAULT_JSON_TEXT: &str = r#"{
     "": {
         "serverUrl": ""
@@ -130,7 +170,7 @@ pub struct MCPServersEditPageView {
 impl MCPServersEditPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let save_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Save", PrimaryTheme)
+            ActionButton::new(edit_save_button(), PrimaryTheme)
                 .with_icon(Icon::Check)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(MCPServersEditPageViewAction::Save);
@@ -138,13 +178,13 @@ impl MCPServersEditPageView {
         });
 
         let reinstall_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Edit Variables", PrimaryTheme).on_click(|ctx| {
+            ActionButton::new(edit_edit_variables_button(), PrimaryTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(MCPServersEditPageViewAction::Reinstall);
             })
         });
 
         let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Delete MCP", DangerSecondaryTheme)
+            ActionButton::new(edit_delete_mcp_button(), DangerSecondaryTheme)
                 .with_icon(Icon::Trash)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(MCPServersEditPageViewAction::Delete);
@@ -152,7 +192,7 @@ impl MCPServersEditPageView {
         });
 
         let unshare_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Remove from team", DangerNakedTheme)
+            ActionButton::new(edit_remove_from_team_button(), DangerNakedTheme)
                 .with_icon(Icon::MinusCircle)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(MCPServersEditPageViewAction::Unshare);
@@ -185,7 +225,7 @@ impl MCPServersEditPageView {
 
         let editing_disabled_banner = ctx.add_typed_action_view(|_| {
             Banner::new_without_close(BannerTextContent::plain_text(
-                "Only team admins and the creator of the MCP server can edit the MCP server.",
+                edit_editing_disabled_banner(),
             ))
             .with_icon(Icon::Warning)
         });
@@ -309,11 +349,11 @@ impl MCPServersEditPageView {
     fn render_header(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let title = if self.server_card_item_id.is_none() {
-            "Add New MCP Server".to_string()
+            edit_add_new_title().to_string()
         } else if let Some(name) = self.server_model.name() {
-            format!("Edit {name} MCP Server")
+            edit_edit_named_title_template().replace("{}", &name)
         } else {
-            "Edit MCP Server".to_string()
+            edit_edit_title().to_string()
         };
 
         let ui_builder = appearance.ui_builder().clone();
@@ -323,7 +363,7 @@ impl MCPServersEditPageView {
             false,
             self.log_out_icon_button_mouse_handle.clone(),
         )
-        .with_tooltip(move || ui_builder.tool_tip("Log out".to_string()).build().finish())
+        .with_tooltip(move || ui_builder.tool_tip(edit_log_out_tooltip().to_string()).build().finish())
         .build()
         .on_click(|ctx, _, _| ctx.dispatch_typed_action(MCPServersEditPageViewAction::LogOut))
         .finish();
@@ -482,7 +522,7 @@ impl MCPServersEditPageView {
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_child(
                     Container::new(
-                        Container::new(Text::new("JSON", ui_font_family, font_size).finish())
+                        Container::new(Text::new(edit_json_label(), ui_font_family, font_size).finish())
                             .with_vertical_padding(10.)
                             .with_horizontal_padding(16.)
                             .finish(),
@@ -538,12 +578,12 @@ impl MCPServersEditPageView {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
-                    DismissibleToast::error("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string()),
+                    DismissibleToast::error(edit_secrets_error_toast().to_string()),
                     window_id,
                     ctx,
                 );
             });
-            return Err("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string());
+            return Err(edit_secrets_error_toast().to_string());
         }
 
         Ok(())
@@ -598,13 +638,13 @@ impl MCPServersEditPageView {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
-                    DismissibleToast::error("No MCP Server specified.".to_string()),
+                    DismissibleToast::error(edit_no_server_specified_error().to_string()),
                     window_id,
                     ctx,
                 );
             });
 
-            return Err("No MCP Server specified.".to_string());
+            return Err(edit_no_server_specified_error().to_string());
         }
 
         if parsed_templatable_mcp_servers.len() > 1 {
@@ -612,8 +652,7 @@ impl MCPServersEditPageView {
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::error(
-                        "Cannot add multiple MCP servers while editing a single server."
-                            .to_string(),
+                        edit_multiple_servers_error().to_string(),
                     ),
                     window_id,
                     ctx,
@@ -621,7 +660,7 @@ impl MCPServersEditPageView {
             });
 
             return Err(
-                "Cannot add multiple MCP servers while editing a single server.".to_string(),
+                edit_multiple_servers_error().to_string(),
             );
         }
 
@@ -895,7 +934,7 @@ impl TypedActionView for MCPServersEditPageView {
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
-                                DismissibleToast::error("No MCP Server specified.".to_string()),
+                                DismissibleToast::error(edit_no_server_specified_error().to_string()),
                                 window_id,
                                 ctx,
                             );
