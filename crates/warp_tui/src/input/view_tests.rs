@@ -747,10 +747,12 @@ fn submit_keeps_buffer_until_cleared() {
     });
 }
 
-/// Esc is not consumed outside shell mode (it stays available to ancestors,
-/// e.g. the demo's quit binding), and `ExitShellMode` is a no-op.
+/// Esc is never consumed by the element — the shell-mode exit is the
+/// `tui:input:exit_shell_mode` keymap binding, gated on the shell-mode
+/// keymap-context flag — and `ExitShellMode` is a no-op without an
+/// input-mode model.
 #[test]
-fn escape_passes_through_outside_shell_mode() {
+fn escape_is_not_consumed_by_the_element() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
@@ -773,18 +775,26 @@ fn escape_passes_through_outside_shell_mode() {
             };
             assert!(
                 !element.dispatch_event(&escape, area, &mut event_ctx, &mut lctx, ctx),
-                "escape must not be consumed outside shell mode"
-            );
-
-            // In shell mode the same key is consumed (mapped to ExitShellMode).
-            element.shell_mode = true;
-            assert!(
-                element.dispatch_event(&escape, area, &mut event_ctx, &mut lctx, ctx),
-                "escape must be consumed in shell mode"
+                "escape must not be consumed by the element"
             );
 
             dispatch(&view, ctx, &[TuiInputAction::ExitShellMode]);
             assert_eq!(text(&view, ctx), "ab", "no-op without an input-mode model");
+        });
+    });
+}
+
+/// Without an input-mode model the view's keymap context carries no
+/// shell-mode flag, so the Esc binding cannot match.
+#[test]
+fn keymap_context_has_no_shell_mode_flag_without_input_mode_model() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            assert_eq!(
+                view.as_ref(ctx).keymap_context(ctx),
+                TuiInputView::default_keymap_context()
+            );
         });
     });
 }

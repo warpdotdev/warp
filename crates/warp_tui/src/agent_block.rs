@@ -26,6 +26,7 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::{
     AppContext, Entity, EntityId, EntityIdMap, ModelHandle, TuiView, ViewContext, ViewHandle,
 };
+use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 
 use super::tui_file_edits_view::TuiFileEditsView;
 use crate::agent_block_sections::{
@@ -444,10 +445,11 @@ impl TuiAIBlock {
                 column.add_child(element);
             }
         }
-        // Blocks space themselves with one blank row on top, matching the
-        // terminal blocks' `padding_top`, so every adjacent block pair
-        // (terminal or agent) is separated by exactly one row.
-        Box::new(TuiContainer::new(column.finish()).with_padding_top(1))
+        // Blocks space themselves with blank rows on top — the same
+        // `BLOCK_TOP_PADDING_ROWS` baked into terminal block heights — so
+        // every adjacent block pair (terminal or agent) is separated by
+        // exactly that many rows.
+        Box::new(TuiContainer::new(column.finish()).with_padding_top(BLOCK_TOP_PADDING_ROWS))
     }
 }
 

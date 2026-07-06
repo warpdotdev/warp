@@ -195,7 +195,7 @@ impl<S> TerminalManager<S> {
             initial_size,
             model_event_sender,
             chosen_shell,
-            None, /* block_spacing */
+            BlockSpacing::from_settings(ctx),
             ctx,
             create_surface,
             |manager| Box::new(manager),
@@ -235,7 +235,7 @@ impl<S> TerminalManager<S> {
             initial_size,
             model_event_sender,
             chosen_shell,
-            Some(block_spacing),
+            block_spacing,
             ctx,
             create_surface,
             |manager| Box::new(TuiTerminalManager(manager)),
@@ -253,7 +253,7 @@ impl<S> TerminalManager<S> {
         initial_size: Vector2F,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
-        block_spacing: Option<BlockSpacing>,
+        block_spacing: BlockSpacing,
         ctx: &mut AppContext,
         create_surface: impl FnOnce(
             TerminalSurfaceInit,

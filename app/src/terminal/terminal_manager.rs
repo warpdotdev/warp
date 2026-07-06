@@ -105,8 +105,8 @@ pub(super) fn compute_block_size(
 
 /// Creates a [`TerminalModel`], the source of truth for the session's state.
 ///
-/// `block_spacing` is the frontend's spacing baked into block heights; pass
-/// `None` to derive it from the user's settings ([`BlockSpacing::from_settings`]).
+/// `block_spacing` is the frontend's spacing baked into block heights;
+/// settings-driven frontends derive it via [`BlockSpacing::from_settings`].
 #[allow(clippy::too_many_arguments)]
 pub(super) fn create_terminal_model(
     startup_directory: Option<PathBuf>,
@@ -114,10 +114,9 @@ pub(super) fn create_terminal_model(
     initial_size: Vector2F,
     channel_event_proxy: ChannelEventListener,
     shell_state: ShellLaunchState,
-    block_spacing: Option<BlockSpacing>,
+    block_spacing: BlockSpacing,
     ctx: &mut AppContext,
 ) -> TerminalModel {
-    let block_spacing = block_spacing.unwrap_or_else(|| BlockSpacing::from_settings(ctx));
     let (should_show_bootstrap_block, should_show_in_band_command_blocks) = {
         let settings = BlockVisibilitySettings::as_ref(ctx);
         (

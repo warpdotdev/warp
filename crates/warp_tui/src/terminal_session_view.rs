@@ -2,7 +2,6 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -32,9 +31,10 @@ use warpui_core::{
 use crate::conversation_selection::TuiConversationSelection;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::input::{TuiInputView, TuiInputViewEvent};
-use crate::input_mode_policy::{TuiInputModePolicy, AI_LOCKED_CONFIG};
+use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::transcript_view::TuiTranscriptView;
+use crate::transient_hint::{TransientHint, TRANSIENT_HINT_DURATION};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 
@@ -73,10 +73,6 @@ const COMMAND_ALREADY_RUNNING_HINT: &str = "cannot run — command already runni
 /// Footer hint shown while the input is in `!` shell mode.
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 
-/// How long a transient footer hint stays visible before reverting to the
-/// persistent content.
-const TRANSIENT_HINT_DURATION: Duration = Duration::from_secs(3);
-
 /// Typed actions handled by [`TuiTerminalSessionView`].
 #[derive(Debug, Clone)]
 pub(crate) enum TuiTerminalSessionAction {
@@ -102,12 +98,9 @@ pub(crate) struct TuiTerminalSessionView {
     exit_confirmation: ExitConfirmation,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
-    /// Transient notice shown in the footer's hint slot, if any (e.g. a
-    /// rejected shell submission). A reusable pattern for short-lived notices.
-    transient_hint: Option<String>,
-    /// Incremented per transient hint so an expiring timer only clears the
-    /// hint it was started for.
-    transient_hint_generation: u64,
+    /// Transient notice shown in the footer's hint slot (e.g. a rejected
+    /// shell submission).
+    transient_hint: TransientHint,
 }
 
 /// Registers the session surface's keybindings. Called once at TUI startup
@@ -278,22 +271,18 @@ impl TuiTerminalSessionView {
             exit_confirmation: ExitConfirmation::default(),
             ai_input_model,
             terminal_model: model,
-            transient_hint: None,
-            transient_hint_generation: 0,
+            transient_hint: TransientHint::default(),
         }
     }
 
     /// Displays `text` in the footer's hint slot for
     /// [`TRANSIENT_HINT_DURATION`], then reverts to the persistent content.
     fn show_transient_hint(&mut self, text: String, ctx: &mut ViewContext<Self>) {
-        self.transient_hint = Some(text);
-        self.transient_hint_generation += 1;
-        let generation = self.transient_hint_generation;
+        let generation = self.transient_hint.show(text);
         ctx.spawn(
             Timer::after(TRANSIENT_HINT_DURATION),
             move |view, _, ctx| {
-                if view.transient_hint_generation == generation {
-                    view.transient_hint = None;
+                if view.transient_hint.clear_expired(generation) {
                     ctx.notify();
                 }
             },
@@ -367,8 +356,8 @@ impl TuiTerminalSessionView {
         // replaces the other hints in place.
         let hint = if self.exit_confirmation.is_armed() {
             Some((CTRL_C_EXIT_HINT.to_owned(), dim))
-        } else if let Some(transient) = &self.transient_hint {
-            Some((transient.clone(), dim))
+        } else if let Some(transient) = self.transient_hint.current() {
+            Some((transient.to_owned(), dim))
         } else if self.is_shell_mode(ctx) {
             Some((
                 SHELL_MODE_HINT.to_owned(),
@@ -411,10 +400,9 @@ impl TuiTerminalSessionView {
         footer
     }
 
-    /// Whether the input is in `!` shell mode (locked, non-AI input type).
+    /// Whether the input is in `!` shell mode (locked shell input).
     fn is_shell_mode(&self, ctx: &AppContext) -> bool {
-        let input_mode = self.ai_input_model.as_ref(ctx);
-        input_mode.is_input_type_locked() && !input_mode.is_ai_input_enabled()
+        input_mode_policy::is_shell_mode(self.ai_input_model.as_ref(ctx))
     }
 
     /// Routes a submission to shell execution or the agent conversation based
@@ -502,14 +490,7 @@ impl TuiTerminalSessionView {
         // The submission was accepted: clear the input and return to agent mode.
         self.input_view.update(ctx, |input_view, ctx| {
             input_view.clear(ctx);
-        });
-        self.ai_input_model.update(ctx, |input_mode, ctx| {
-            input_mode.set_input_config(
-                AI_LOCKED_CONFIG,
-                true, /* is_input_buffer_empty */
-                None,
-                ctx,
-            );
+            input_view.exit_shell_mode(ctx);
         });
     }
 

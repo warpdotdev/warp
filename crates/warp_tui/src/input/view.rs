@@ -36,17 +36,22 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::keymap::macros::*;
-use warpui_core::keymap::EditableBinding;
+use warpui_core::keymap::{Context, EditableBinding};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
 use super::kill_buffer::KillBuffer;
-use crate::input_mode_policy::{AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
+use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::tui_builder::TuiUiBuilder;
 
 /// Logical rows scrolled per mouse-wheel notch (matches `TuiScrollable`).
 const WHEEL_STEP: isize = 2;
+
+/// Keymap-context flag set by [`TuiInputView::keymap_context`] while the input
+/// is in `!` shell mode; gates the `tui:input:exit_shell_mode` binding so Esc
+/// stays available to ancestors otherwise.
+const SHELL_MODE_INPUT_FLAG: &str = "ShellModeInput";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
@@ -440,6 +445,15 @@ pub fn init(app: &mut AppContext) {
             .with_context_predicate(id!("TuiInputView"))
             .with_group(TUI_BINDING_GROUP)
             .with_key_binding("ctrl-shift-Z"),
+        // ── Shell mode ──────────────────────────────────────────────────
+        EditableBinding::new(
+            "tui:input:exit_shell_mode",
+            "Exit shell mode",
+            TuiInputAction::ExitShellMode,
+        )
+        .with_context_predicate(id!("TuiInputView") & id!(SHELL_MODE_INPUT_FLAG))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("escape"),
     ]);
 }
 
@@ -600,12 +614,11 @@ impl TuiInputView {
         }
     }
 
-    /// Whether the input is in `!` shell mode (locked, non-AI input type).
+    /// Whether the input is in `!` shell mode (locked shell input).
     pub(crate) fn is_shell_mode(&self, ctx: &AppContext) -> bool {
-        self.input_mode.as_ref().is_some_and(|input_mode| {
-            let input_mode = input_mode.as_ref(ctx);
-            input_mode.is_input_type_locked() && !input_mode.is_ai_input_enabled()
-        })
+        self.input_mode
+            .as_ref()
+            .is_some_and(|input_mode| input_mode_policy::is_shell_mode(input_mode.as_ref(ctx)))
     }
 
     /// Returns a handle to the backing [`CodeEditorModel`].
@@ -648,7 +661,6 @@ impl TuiInputView {
             scroll_offset: self.scroll_offset,
             max_visible_rows: self.max_visible_rows,
             is_selecting: self.is_selecting,
-            shell_mode: self.is_shell_mode(ctx),
             column: TuiFlex::column(),
             cursor_col: 0,
             cursor_row_in_view: 0,
@@ -692,6 +704,14 @@ impl TuiView for TuiInputView {
         } else {
             Box::new(self.render_element(ctx))
         }
+    }
+
+    fn keymap_context(&self, app: &AppContext) -> Context {
+        let mut ctx = Self::default_keymap_context();
+        if self.is_shell_mode(app) {
+            ctx.set.insert(SHELL_MODE_INPUT_FLAG);
+        }
+        ctx
     }
 }
 
@@ -1026,8 +1046,10 @@ impl TuiInputView {
         }
     }
 
-    /// Restores the TUI's default agent input mode; any typed text is preserved.
-    fn exit_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Restores the TUI's default agent input mode; any typed text is
+    /// preserved. Also called by the session view after an accepted shell
+    /// submission clears the input.
+    pub(crate) fn exit_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
         if let Some(input_mode) = self.input_mode.clone() {
             input_mode.update(ctx, |input_mode, ctx| {
@@ -1244,10 +1266,6 @@ struct TuiInputElement {
     /// Whether a mouse drag-selection is in progress (captured from the view at
     /// render time); gates drag/up handling in `dispatch_event`.
     is_selecting: bool,
-    /// Whether the input is in `!` shell mode (captured at render time). Gates
-    /// the element-level Esc handling; the `!` affordance itself is a sibling
-    /// row child composed by [`TuiInputView::shell_element`].
-    shell_mode: bool,
     /// Visible rows, built during `layout`.
     column: TuiFlex,
     /// The cursor's 0-based column within the visible area (set during `layout`).
@@ -1540,20 +1558,11 @@ impl TuiElement for TuiInputElement {
             // The chorded editing commands (movement, deletion, kill/yank,
             // undo/redo, …) are dispatched by the keymap pass via the
             // `tui:input:*` bindings registered in [`TuiInputView::init`],
-            // which runs before the element pass ever sees the key. Only
-            // printable-character insertion and the shell-mode Esc stay
-            // element-level — text insertion is not a keybinding, matching
-            // the GUI, and Esc is only consumed while in shell mode so it
-            // stays available to ancestors otherwise.
-            if self.shell_mode
-                && !keystroke.ctrl
-                && !keystroke.alt
-                && !keystroke.shift
-                && keystroke.key == "escape"
-            {
-                event_ctx.dispatch_typed_action(TuiInputAction::ExitShellMode);
-                return true;
-            }
+            // which runs before the element pass ever sees the key — including
+            // the shell-mode Esc, whose binding is gated on the view's
+            // shell-mode keymap-context flag. Only printable-character
+            // insertion stays element-level — text insertion is not a
+            // keybinding, matching the GUI.
             if !keystroke.ctrl && !keystroke.alt && !chars.is_empty() {
                 if let Some(char) = chars.chars().next() {
                     event_ctx.dispatch_typed_action(TuiInputAction::InsertChar(char));
