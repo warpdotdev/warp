@@ -36,7 +36,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         },
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            TuiInputView::new(model, ctx)
+            TuiInputView::new(model, None, ctx)
         },
     );
     view

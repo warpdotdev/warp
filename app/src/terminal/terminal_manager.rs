@@ -45,19 +45,40 @@ impl warpui::Entity for Box<dyn TerminalManager> {
 
 /// Spacing baked into block heights: the per-block padding, the height
 /// reserved for the rendered Warp prompt (in lines), and whether blocks
-/// reserve a footer row for the debug memory-stats overlay. Frontends whose
-/// rendering differs from the GUI blocklist (e.g. the row-based TUI) pass
-/// their own spacing when creating the terminal model.
-pub(super) struct BlockSpacing {
-    pub(super) block_padding: BlockPadding,
-    pub(super) warp_prompt_height_lines: f32,
-    pub(super) show_memory_stats: bool,
+/// reserve a footer row for the debug memory-stats overlay.
+///
+/// [`Self::from_settings`] derives the blocklist's spacing from the user's
+/// settings; frontends whose rendering differs (e.g. the row-based TUI
+/// transcript) define their own spacing and pass it when creating the
+/// terminal model.
+pub struct BlockSpacing {
+    pub block_padding: BlockPadding,
+    pub warp_prompt_height_lines: f32,
+    pub show_memory_stats: bool,
 }
 
-pub(super) fn compute_block_size(initial_size: Vector2F, ctx: &mut AppContext) -> BlockSize {
+impl BlockSpacing {
+    /// Block spacing derived from the user's settings: padding from the
+    /// terminal-spacing style, the rendered Warp prompt's height, and the
+    /// debug memory-stats footer toggle.
+    pub(super) fn from_settings(ctx: &AppContext) -> Self {
+        let appearance = Appearance::as_ref(ctx);
+        let terminal_spacing =
+            TerminalSettings::as_ref(ctx).terminal_spacing(appearance.line_height_ratio(), ctx);
+        Self {
+            block_padding: terminal_spacing.block_padding,
+            warp_prompt_height_lines: WARP_PROMPT_HEIGHT_LINES,
+            show_memory_stats: DebugSettings::as_ref(ctx).should_show_memory_stats(),
+        }
+    }
+}
+
+pub(super) fn compute_block_size(
+    initial_size: Vector2F,
+    block_spacing: &BlockSpacing,
+    ctx: &mut AppContext,
+) -> BlockSize {
     let appearance = Appearance::as_ref(ctx);
-    let terminal_spacing =
-        TerminalSettings::as_ref(ctx).terminal_spacing(appearance.line_height_ratio(), ctx);
     let size_info = if ctx.is_headless() {
         // In headless mode, we don't actually have a font since we aren't rendering anything.
         // We skip the font-based size computation and hardcode a terminal size, so that
@@ -75,17 +96,17 @@ pub(super) fn compute_block_size(initial_size: Vector2F, ctx: &mut AppContext) -
     };
     let maximum_grid_size = *TerminalSettings::as_ref(ctx).maximum_grid_size.value();
     BlockSize {
-        block_padding: terminal_spacing.block_padding,
+        block_padding: block_spacing.block_padding,
         size: size_info,
         max_block_scroll_limit: maximum_grid_size,
-        warp_prompt_height_lines: WARP_PROMPT_HEIGHT_LINES,
+        warp_prompt_height_lines: block_spacing.warp_prompt_height_lines,
     }
 }
 
 /// Creates a [`TerminalModel`], the source of truth for the session's state.
 ///
-/// `block_spacing` overrides the GUI-derived spacing baked into block heights;
-/// pass `None` to use the GUI blocklist's spacing.
+/// `block_spacing` is the frontend's spacing baked into block heights; pass
+/// `None` to derive it from the user's settings ([`BlockSpacing::from_settings`]).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn create_terminal_model(
     startup_directory: Option<PathBuf>,
@@ -96,6 +117,7 @@ pub(super) fn create_terminal_model(
     block_spacing: Option<BlockSpacing>,
     ctx: &mut AppContext,
 ) -> TerminalModel {
+    let block_spacing = block_spacing.unwrap_or_else(|| BlockSpacing::from_settings(ctx));
     let (should_show_bootstrap_block, should_show_in_band_command_blocks) = {
         let settings = BlockVisibilitySettings::as_ref(ctx);
         (
@@ -103,19 +125,11 @@ pub(super) fn create_terminal_model(
             *settings.should_show_in_band_command_blocks.value(),
         )
     };
-    let show_memory_stats = match &block_spacing {
-        Some(block_spacing) => block_spacing.show_memory_stats,
-        None => DebugSettings::as_ref(ctx).should_show_memory_stats(),
-    };
     let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
     let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
     let is_inverted = input_mode.is_inverted_blocklist();
 
-    let mut sizes = compute_block_size(initial_size, ctx);
-    if let Some(block_spacing) = block_spacing {
-        sizes.block_padding = block_spacing.block_padding;
-        sizes.warp_prompt_height_lines = block_spacing.warp_prompt_height_lines;
-    }
+    let sizes = compute_block_size(initial_size, &block_spacing, ctx);
 
     let obfuscate_secrets = get_secret_obfuscation_mode(ctx);
     let is_ai_ugc_telemetry_enabled =
@@ -129,7 +143,7 @@ pub(super) fn create_terminal_model(
         ctx.background_executor().clone(),
         should_show_bootstrap_block,
         should_show_in_band_command_blocks,
-        show_memory_stats,
+        block_spacing.show_memory_stats,
         honor_ps1,
         is_inverted,
         obfuscate_secrets,

@@ -212,9 +212,7 @@ impl TuiTerminalSessionView {
         });
         let input_mode_for_input_view = ai_input_model.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
-            let mut input_view = TuiInputView::new(input_editor_model, ctx);
-            input_view.set_input_mode_model(input_mode_for_input_view, ctx);
-            input_view
+            TuiInputView::new(input_editor_model, Some(input_mode_for_input_view), ctx)
         });
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
             TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), ctx),

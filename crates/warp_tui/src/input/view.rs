@@ -568,33 +568,33 @@ impl TuiInputView {
     /// mode). The model carries the terminal width (set via
     /// [`CodeEditorModel::new_tui`]); the view does not keep its own copy.
     ///
+    /// `input_mode` enables `!` shell-mode handling backed by the shared
+    /// input-mode model, re-rendering whenever the mode changes; `None`
+    /// disables shell-mode handling entirely.
+    ///
     /// Subscribes to [`CodeEditorModelEvent::ContentChanged`] to trigger re-renders
     /// whenever the buffer changes from outside `handle_action`.
-    pub fn new(model: ModelHandle<CodeEditorModel>, ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(
+        model: ModelHandle<CodeEditorModel>,
+        input_mode: Option<ModelHandle<BlocklistAIInputModel>>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
             if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 ctx.notify();
             }
         });
+        if let Some(input_mode) = &input_mode {
+            ctx.subscribe_to_model(input_mode, |_, _, _, ctx| ctx.notify());
+        }
         Self {
             model,
-            input_mode: None,
+            input_mode,
             kill_buffer: KillBuffer::default(),
             scroll_offset: 0,
             max_visible_rows: 6,
             is_selecting: false,
         }
-    }
-
-    /// Enables `!` shell-mode handling backed by the shared input-mode model,
-    /// re-rendering whenever the mode changes.
-    pub(crate) fn set_input_mode_model(
-        &mut self,
-        input_mode: ModelHandle<BlocklistAIInputModel>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
-        self.input_mode = Some(input_mode);
     }
 
     /// Whether the input is in `!` shell mode (locked, non-AI input type).

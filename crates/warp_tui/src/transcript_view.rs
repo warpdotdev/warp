@@ -8,8 +8,9 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, RichContentItem, RichContentType, TerminalModel,
+    BlockPadding, BlockSpacing, BlocklistAIActionEvent, BlocklistAIActionModel,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, RichContentItem, RichContentType,
+    TerminalModel,
 };
 use warpui_core::elements::tui::{
     TuiElement, TuiScrollable, TuiScrollableElement, TuiViewportVerticalAlignment,
@@ -22,6 +23,24 @@ use warpui_core::{
 
 use super::agent_block::TuiAIBlock;
 use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
+
+/// Block spacing baked into the terminal model's block heights for this
+/// transcript, passed in at session creation. The transcript renders whole
+/// rows, so fractional pixel-derived padding would ceil into several blank
+/// rows per block; instead every block gets exactly one blank row above it
+/// (agent blocks apply the same one-row top padding), no reserved
+/// Warp-prompt height, and no memory-stats footer row (the transcript
+/// renders neither).
+pub(crate) const TRANSCRIPT_BLOCK_SPACING: BlockSpacing = BlockSpacing {
+    block_padding: BlockPadding {
+        padding_top: 1.0,
+        command_padding_top: 0.0,
+        middle: 0.0,
+        bottom: 0.0,
+    },
+    warp_prompt_height_lines: 0.0,
+    show_memory_stats: false,
+};
 
 /// TUI transcript view over one terminal surface's canonical block-list order.
 pub(super) struct TuiTranscriptView {
