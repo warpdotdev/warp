@@ -71,7 +71,8 @@ fn accept_applies_deltas_to_update_a_file() {
                 DiffType::update(
                     vec![DiffDelta {
                         replacement_line_range: 2..3,
-                        insertion: "TWO\n".to_owned(),
+                        // Production insertions omit the trailing newline.
+                        insertion: "TWO".to_owned(),
                     }],
                     None,
                 ),
@@ -222,4 +223,19 @@ fn final_content_from_op_applies_deltas() {
     let final_content = final_content_from_op("one\ntwo\nthree\n", &op).unwrap();
 
     assert_eq!(final_content, "one\nTWO\nthree\n");
+}
+
+#[test]
+fn apply_deltas_normalizes_newline_less_insertions() {
+    // Insertions commonly omit the trailing newline (e.g. search/replace
+    // blocks are joined with "\n"); a raw splice would run the replacement
+    // into the next preserved line ("one\nTWOthree\n").
+    let deltas = vec![DiffDelta {
+        replacement_line_range: 2..3,
+        insertion: "TWO\nTWO-AND-A-HALF".to_owned(),
+    }];
+
+    let final_content = apply_deltas_to_content("one\ntwo\nthree\n", &deltas).unwrap();
+
+    assert_eq!(final_content, "one\nTWO\nTWO-AND-A-HALF\nthree\n");
 }

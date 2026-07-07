@@ -51,7 +51,13 @@ fn apply_deltas_to_content(content: &str, deltas: &[DiffDelta]) -> Result<String
                 lines.len()
             ));
         }
-        let replacement = split_lines_preserving_newlines(&delta.insertion);
+        let mut insertion = delta.insertion;
+        // Insertions often lack a trailing newline; without one the splice
+        // would run into the next line (mirrors `EditorModel::apply_diffs`).
+        if !insertion.is_empty() && !insertion.ends_with('\n') && !content.is_empty() {
+            insertion.push('\n');
+        }
+        let replacement = split_lines_preserving_newlines(&insertion);
         lines.splice(start..end, replacement);
     }
 
