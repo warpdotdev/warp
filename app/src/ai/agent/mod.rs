@@ -3277,6 +3277,15 @@ impl AIAgentExchange {
         self.finish_time
             .map(|finish_time| finish_time.signed_duration_since(self.start_time))
     }
+
+    /// The elapsed wall-clock time since this exchange started. `None` when
+    /// the clock skewed such that `start_time` is in the future.
+    pub fn time_since_start(&self) -> Option<Duration> {
+        Local::now()
+            .signed_duration_since(self.start_time)
+            .to_std()
+            .ok()
+    }
 }
 
 /// Request-level metadata propagated to the `AIAgentApi` that may be used for logging.

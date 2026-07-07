@@ -1,12 +1,13 @@
-//! The in-progress `⋮ Warping (Ns)` indicator row rendered at the bottom of a
-//! streaming agent block — the TUI counterpart of the GUI's warping indicator.
+//! The in-progress `⋮ Warping (Ns)` indicator row rendered between the
+//! transcript and the input box while the selected conversation is in
+//! progress — the TUI counterpart of the GUI's warping indicator.
 //!
 //! All animation state (spinner frame, shimmer phase, elapsed counter) is
 //! derived from the wall clock against a single anchor, so it advances on
 //! cached-element repaints and survives element-tree rebuilds. The row is
 //! wrapped in a [`TuiLiveElement`], so it keeps requesting repaints while it
-//! is part of the painted tree and stops as soon as the block re-renders
-//! without it.
+//! is part of the painted tree and stops as soon as the session view
+//! re-renders without it.
 
 use std::time::Duration;
 

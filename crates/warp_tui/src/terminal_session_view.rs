@@ -10,10 +10,11 @@ use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
     AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent, AgentInteractionMetadata,
     AgentViewEntryOrigin, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, CommandExecutionSource,
-    ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
-    GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
-    PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason,
+    CommandExecutionSource, ConversationSelection, ConversationSelectionHandle,
+    ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent,
+    ModelEvent, PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel,
+    TerminalSurface, TerminalSurfaceInit,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity;
@@ -37,6 +38,7 @@ use crate::transcript_view::TuiTranscriptView;
 use crate::transient_hint::TransientHint;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
+use crate::warping_indicator::render_warping_indicator;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
@@ -213,6 +215,15 @@ impl TuiTerminalSessionView {
         // The input box border color and the footer's shell-mode hint depend
         // on the input mode.
         ctx.subscribe_to_model(&ai_input_model, |_, _, _, ctx| ctx.notify());
+        // The warping indicator between the transcript and the input box
+        // tracks the selected conversation: re-render when its status changes
+        // or an exchange starts (the elapsed counter's anchor) on this
+        // surface, and when the selected conversation changes.
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |view, _, event, ctx| view.handle_history_event(event, ctx),
+        );
+        ctx.subscribe_to_model(&conversation_selection, |_, _, _, ctx| ctx.notify());
 
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
         let shell_command_executor = action_model.as_ref(ctx).shell_command_executor(ctx);
@@ -272,6 +283,29 @@ impl TuiTerminalSessionView {
             ai_input_model,
             terminal_model: model,
             transient_hint: TransientHint::default(),
+        }
+    }
+
+    /// Re-renders on history events that can change the warping indicator:
+    /// the selected conversation's status changing, or an exchange starting
+    /// (which re-anchors the elapsed counter) on this surface.
+    fn handle_history_event(
+        &mut self,
+        event: &BlocklistAIHistoryEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if event
+            .terminal_surface_id()
+            .is_some_and(|id| id != self.terminal_surface_id)
+        {
+            return;
+        }
+        if matches!(
+            event,
+            BlocklistAIHistoryEvent::AppendedExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+        ) {
+            ctx.notify();
         }
     }
 
@@ -596,9 +630,32 @@ impl TuiView for TuiTerminalSessionView {
         // Ctrl-c (cancel/clear/exit) is handled by the keymap pass via the
         // fixed binding registered in [`Self::init`], so no element-level key
         // handling is needed here.
+        let mut column = TuiFlex::column().flex_child(TuiChildView::new(&self.transcript).finish());
+        // While the selected conversation is in progress (the GUI warping
+        // indicator's core condition), the animated warping indicator sits
+        // between the transcript and the input box. Its elapsed counter is
+        // anchored to the latest exchange's start so animation survives
+        // element-tree rebuilds; the conversation's final status update
+        // re-renders the view without it.
+        let warping_elapsed = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+            .and_then(|conversation_id| {
+                BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
+            })
+            .filter(|conversation| conversation.status().is_in_progress())
+            .and_then(|conversation| conversation.latest_exchange())
+            .and_then(|exchange| exchange.time_since_start());
+        if let Some(elapsed) = warping_elapsed {
+            column = column.child(
+                TuiContainer::new(render_warping_indicator(elapsed, ctx))
+                    .with_padding_top(1)
+                    .finish(),
+            );
+        }
         TuiContainer::new(
-            TuiFlex::column()
-                .flex_child(TuiChildView::new(&self.transcript).finish())
+            column
                 .child(input_box.finish())
                 .child(self.render_footer(ctx).finish())
                 .finish(),

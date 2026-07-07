@@ -34,7 +34,6 @@ use crate::agent_block_sections::{
 };
 use crate::tool_call_labels::{CommandBlockState, ResolvedCommandBlock};
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
-use crate::warping_indicator::render_warping_indicator;
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -402,10 +401,11 @@ impl TuiAIBlock {
     /// Builds this block's generic TUI element tree.
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let output_streaming = self.block_model.status(app).is_streaming();
-        let mut elements: Vec<Box<dyn TuiElement>> = self
-            .sections(app)
-            .iter()
-            .map(|section| match section {
+        let mut column = TuiFlex::column();
+        let sections = self.sections(app);
+        let last_index = sections.len().saturating_sub(1);
+        for (index, section) in sections.iter().enumerate() {
+            let element = match section {
                 TuiAIBlockSection::Input(text) => render_input_section(text, app),
                 TuiAIBlockSection::PlainText(text) => render_plain_text_section(text, app),
                 // Stateful tool calls render their registered child view; every
@@ -435,26 +435,8 @@ impl TuiAIBlock {
                     body,
                     app,
                 ),
-            })
-            .collect();
+            };
 
-        // While the exchange is in flight, the block ends with the animated
-        // warping indicator row (mirroring the GUI's warping indicator). Its
-        // animation is anchored to the request start so it survives
-        // element-tree rebuilds; the exchange's final status update re-renders
-        // the block without it.
-        if output_streaming {
-            let elapsed = self
-                .block_model
-                .time_since_request_start(app)
-                .and_then(|delta| delta.to_std().ok())
-                .unwrap_or_default();
-            elements.push(render_warping_indicator(elapsed, app));
-        }
-
-        let mut column = TuiFlex::column();
-        let last_index = elements.len().saturating_sub(1);
-        for (index, element) in elements.into_iter().enumerate() {
             // One row of bottom padding separates sections; the last section
             // ends flush so blocks don't stack trailing and leading spacing.
             if index < last_index {

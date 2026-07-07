@@ -605,66 +605,6 @@ fn multiple_reasoning_blocks_render_independent_collapse_state() {
     });
 }
 
-#[test]
-fn streaming_block_ends_with_the_warping_indicator_row() {
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
-                inputs: vec![query_input("hello")],
-                status: streaming_output_messages(vec![plain_text_message("m1", "partial")]),
-            });
-
-            let rendered = render_block_lines(&block, 40, app_ctx);
-            let last = rendered.last().expect("block should render rows");
-            assert!(
-                last.contains("Warping (0s)"),
-                "streaming block should end with the warping indicator, got {rendered:?}"
-            );
-        });
-    });
-}
-
-#[test]
-fn pending_block_shows_the_warping_indicator_before_any_output() {
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
-                inputs: vec![query_input("hello")],
-                status: AIBlockOutputStatus::Pending,
-            });
-
-            let rendered = render_block_lines(&block, 40, app_ctx);
-            assert!(
-                rendered.iter().any(|line| line.contains("Warping")),
-                "pending block should show the warping indicator, got {rendered:?}"
-            );
-        });
-    });
-}
-
-#[test]
-fn completed_block_has_no_warping_indicator() {
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
-                inputs: vec![query_input("hello")],
-                status: complete_output(vec![AIAgentTextSection::PlainText {
-                    text: "done".to_owned().into(),
-                }]),
-            });
-
-            let rendered = render_block_lines(&block, 40, app_ctx);
-            assert!(
-                rendered.iter().all(|line| !line.contains("Warping")),
-                "completed block should not show the warping indicator, got {rendered:?}"
-            );
-        });
-    });
-}
-
 struct FakeAgentBlockModel {
     inputs: Vec<AIAgentInput>,
     status: AIBlockOutputStatus,
@@ -743,16 +683,6 @@ fn complete_output(sections: Vec<AIAgentTextSection>) -> AIBlockOutputStatus {
 /// Builds a completed output status from explicit output messages.
 fn complete_output_messages(messages: Vec<AIAgentOutputMessage>) -> AIBlockOutputStatus {
     AIBlockOutputStatus::Complete {
-        output: Shared::new(AIAgentOutput {
-            messages,
-            ..Default::default()
-        }),
-    }
-}
-
-/// Builds a still-streaming output status from explicit output messages.
-fn streaming_output_messages(messages: Vec<AIAgentOutputMessage>) -> AIBlockOutputStatus {
-    AIBlockOutputStatus::PartiallyReceived {
         output: Shared::new(AIAgentOutput {
             messages,
             ..Default::default()
