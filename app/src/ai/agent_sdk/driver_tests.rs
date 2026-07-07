@@ -18,6 +18,7 @@ use warp_cli::{
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
 };
@@ -1135,6 +1136,78 @@ fn write_skill_file(repo: &Path, name: &str) {
     let skill_dir = repo.join(".agents").join("skills").join(name);
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(skill_dir.join("SKILL.md"), format!("Skill: {name}.")).unwrap();
+}
+
+/// With `OnTheFlyStandingQueries` enabled, `load_environment_skills` discovers
+/// skills by walking the cloned repos directly — without any repo metadata
+/// indexing having run (the repo is never registered with `DirectoryWatcher`
+/// or indexed in this test), and while honoring the repo's gitignore rules.
+#[test]
+fn env_skills_load_via_walk_without_indexing_wait() {
+    let _flag = FeatureFlag::OnTheFlyStandingQueries.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Environment repo with two skills plus a gitignored one that must be
+        // excluded by the walk's gitignore handling.
+        let env_repo = working_dir.join("env-repo");
+        write_skill_file(&env_repo, "build");
+        write_skill_file(&env_repo, "deploy");
+        let ignored_dir = env_repo.join("ignored");
+        write_skill_file(&ignored_dir, "hidden");
+        fs::write(env_repo.join(".gitignore"), "/ignored/\n").unwrap();
+
+        // NOTE: unlike the indexing-based tests above, the repo is deliberately
+        // NOT registered or indexed — skills must load from the walk alone.
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        let env_repos = vec![SourceRepo::new(
+            CodeForge::GitHub,
+            "org".to_string(),
+            "env-repo".to_string(),
+        )];
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_environment_skills(&spawner, env_repos).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"build".to_string()),
+            "env skill 'build' should be loaded without indexing; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"deploy".to_string()),
+            "env skill 'deploy' should be loaded without indexing; got: {skill_names:?}"
+        );
+        assert!(
+            !skill_names.contains(&"hidden".to_string()),
+            "gitignored skill 'hidden' should NOT be loaded; got: {skill_names:?}"
+        );
+    });
 }
 
 #[test]

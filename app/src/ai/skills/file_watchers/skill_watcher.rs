@@ -98,6 +98,22 @@ impl SkillWatcher {
         read_skills_from_files(skill_files)
     }
 
+    /// Synchronously reads skills from the given local repo paths by walking
+    /// each repository with the standalone standing-query walk.
+    ///
+    /// Unlike [`Self::read_local_skills_for_repos`], this does not depend on
+    /// repo metadata indexing having completed — it discovers skill files
+    /// directly from the filesystem with the same traversal semantics as the
+    /// eager index's standing queries.
+    pub fn read_local_skills_for_repos_with_walk(repo_paths: &[PathBuf]) -> Vec<ParsedSkill> {
+        let skill_files: Vec<PathBuf> = repo_paths
+            .iter()
+            .flat_map(|repo_path| find_local_project_skill_files_with_walk(repo_path))
+            .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
+            .collect();
+        read_skills_from_files(skill_files)
+    }
+
     pub fn new(ctx: &mut ModelContext<Self>, watcher_event_tx: Sender<SkillWatcherEvent>) -> Self {
         Self::new_internal(ctx, watcher_event_tx, dirs::home_dir())
     }

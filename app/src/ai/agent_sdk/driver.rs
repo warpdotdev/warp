@@ -1779,6 +1779,40 @@ impl AgentDriver {
             )
         );
 
+        // With on-the-fly standing queries, discover skills by walking the
+        // cloned repositories directly instead of waiting for repo metadata
+        // indexing to complete. The flag is read on the foreground executor so
+        // thread-local test overrides are honored.
+        let use_standing_query_walk = foreground
+            .spawn(|_, _| FeatureFlag::OnTheFlyStandingQueries.is_enabled())
+            .await
+            .unwrap_or(false);
+        if use_standing_query_walk {
+            let load_skills_result = foreground
+                .spawn(move |me, ctx| {
+                    let repo_paths: Vec<PathBuf> = repos
+                        .iter()
+                        .map(|repo| me.working_dir.join(&repo.repo))
+                        .collect();
+                    let skills = SkillWatcher::read_local_skills_for_repos_with_walk(&repo_paths);
+                    if !skills.is_empty() {
+                        log::info!("Loaded {} environment skill(s)", skills.len());
+                    } else {
+                        log::info!("No environment skills found");
+                    }
+                    SkillManager::handle(ctx).update(ctx, |manager, _| {
+                        manager.set_cloud_environment(true);
+                        manager.handle_skills_added(skills);
+                    });
+                })
+                .await;
+
+            if let Err(err) = load_skills_result {
+                log::warn!("Failed to load environment skills: {err}");
+            }
+            return;
+        }
+
         // Skill-scanning depends on the in-memory RepoMetadataModel index, so wait for
         // initial indexing of all repos to complete.
         let repo_index_waits = foreground
