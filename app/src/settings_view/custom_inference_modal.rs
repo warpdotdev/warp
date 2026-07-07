@@ -901,7 +901,6 @@ impl View for CustomEndpointModal {
                 .finish(),
                 API_KEY_SCROLL_POSITION_ID,
             )
-            .with_margin_bottom(8.)
             .finish(),
         );
 
