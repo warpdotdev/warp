@@ -201,6 +201,15 @@ pub(crate) fn resolve_ai_query_routing(
         {
             AIQueryRouting::NewCloudVm { task_id }
         }
+        // A third-party harness run (Claude Code, Gemini, Codex) that ended but is cloud-resumable
+        // surfaces a "Continue" tombstone CTA instead of an inline follow-up input. Clicking
+        // Continue clears the finished-viewer read-only state and enables the input, so once the
+        // pane is editable a follow-up must start a new cloud VM (cloud-to-cloud handoff) rather
+        // than be blocked as read-only. While the pane is still read-only (tombstone shown, not yet
+        // continued) this falls through to `UnconnectedReadOnly` below.
+        Ok(CloudConversationContinuationUiState::Tombstone {
+            cta: Some(TombstoneCta::ContinueInCloud { .. }),
+        }) if !terminal_model.is_read_only() => AIQueryRouting::NewCloudVm { task_id },
         // The run still has an active execution but this pane is not attached as a viewer; treat it
         // as a live remote VM (never local) so the submission router surfaces stale-pane guidance
         // rather than letting a follow-up fall through to local submission.
