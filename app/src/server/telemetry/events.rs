@@ -2176,11 +2176,6 @@ pub enum TelemetryEvent {
         is_autoindexing_enabled: bool,
     },
 
-    ActiveIndexedReposChanged {
-        updated_number_of_codebase_indices: usize,
-        hit_max_indices: bool,
-    },
-
     /// Emitted when the user toggles active AI.
     ToggleActiveAI {
         is_active_ai_enabled: bool,
@@ -3896,13 +3891,6 @@ impl TelemetryEvent {
             } => Some(json!({
                 "is_autoindexing_enabled": is_autoindexing_enabled
             })),
-            TelemetryEvent::ActiveIndexedReposChanged {
-                updated_number_of_codebase_indices,
-                hit_max_indices,
-            } => Some(json!({
-                "updated_number_of_codebase_indices": updated_number_of_codebase_indices,
-                "hit_max_indices": hit_max_indices
-            })),
             TelemetryEvent::ToggleLigatureRendering { enabled } => {
                 Some(json!({"enabled": enabled}))
             }
@@ -5198,7 +5186,6 @@ impl TelemetryEvent {
             | TelemetryEvent::VoiceInputUsed { .. }
             | TelemetryEvent::AtMenuInteracted { .. }
             | TelemetryEvent::UserMenuUpgradeClicked
-            | TelemetryEvent::ActiveIndexedReposChanged { .. }
             | TelemetryEvent::TabCloseButtonPositionUpdated { .. }
             | TelemetryEvent::ExpandedCodeSuggestions { .. }
             | TelemetryEvent::AIExecutionProfileCreated
@@ -5760,9 +5747,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ContextChipInteracted { .. } => EnablementState::Always,
             Self::VoiceInputUsed { .. } => EnablementState::Always,
             Self::AtMenuInteracted { .. } => EnablementState::Always,
-            Self::ActiveIndexedReposChanged { .. } => {
-                EnablementState::Flag(FeatureFlag::FullSourceCodeEmbedding)
-            }
             Self::UserMenuUpgradeClicked => EnablementState::Always,
             Self::TabCloseButtonPositionUpdated { .. } => EnablementState::Always,
             Self::ExpandedCodeSuggestions { .. } => EnablementState::Always,
@@ -6291,7 +6275,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ToggleCodebaseContext => "Toggle Agent Mode Codebase Context",
             Self::ToggleAutoIndexing => "Toggle Codebase Context Autoindexing",
-            Self::ActiveIndexedReposChanged => "Active Indexed Repos Changed",
             Self::AttachedImagesToAgentModeQuery => "AgentMode.AttachedImages",
             Self::AgentModeRatedResponse => "AgentMode.RatedResponse",
             Self::ExecutedWarpDrivePrompt => "AgentMode.ExecutedWarpDrivePrompt",
@@ -7102,9 +7085,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ToggleAutoIndexing => {
                 "Toggled on/off the enablement of autoindexing for codebase context."
-            }
-            Self::ActiveIndexedReposChanged => {
-                "Active indexed repositories changed, affecting codebase context."
             }
             Self::ExecutedWarpDrivePrompt => "Executed a saved prompt.",
             Self::ImageReceived => "Received an image through an image protocol over the pty",
