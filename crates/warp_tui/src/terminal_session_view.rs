@@ -638,22 +638,26 @@ impl TuiView for TuiTerminalSessionView {
         // anchored to the latest exchange's start so animation survives
         // element-tree rebuilds; the conversation's final status update
         // re-renders the view without it.
-        let warping_elapsed = self
+        let selected_conversation = self
             .conversation_selection
             .as_ref(ctx)
             .selected_conversation_id(ctx)
             .and_then(|conversation_id| {
                 BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
-            })
-            .filter(|conversation| conversation.status().is_in_progress())
-            .and_then(|conversation| conversation.latest_exchange())
-            .and_then(|exchange| exchange.time_since_start());
-        if let Some(elapsed) = warping_elapsed {
-            column = column.child(
-                TuiContainer::new(render_warping_indicator(elapsed, ctx))
-                    .with_padding_top(1)
-                    .finish(),
-            );
+            });
+        if let Some(in_progress_conversation) =
+            selected_conversation.filter(|conversation| conversation.status().is_in_progress())
+        {
+            let warping_elapsed = in_progress_conversation
+                .latest_exchange()
+                .and_then(|exchange| exchange.time_since_start());
+            if let Some(elapsed) = warping_elapsed {
+                column = column.child(
+                    TuiContainer::new(render_warping_indicator(elapsed, ctx))
+                        .with_padding_top(1)
+                        .finish(),
+                );
+            }
         }
 
         TuiContainer::new(
