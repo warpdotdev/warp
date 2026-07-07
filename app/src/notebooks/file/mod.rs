@@ -55,11 +55,15 @@ use crate::server::telemetry::{NotebookActionEvent, NotebookTelemetryMetadata, T
 use crate::settings::FontSettings;
 use crate::terminal::model::session::Session;
 use crate::ui_components::icons::Icon;
+// `renders_in_warp_notebook_viewer` is only consumed by non-wasm views
+// (`code::view` resolves to `view.rs` off-wasm and to `wasm.rs` on-wasm, and the
+// tooltips helper is `local_fs`-gated). Gate the re-export to match, otherwise it
+// is flagged as an unused import on the wasm build where those consumers are absent.
+#[cfg(not(target_family = "wasm"))]
+pub use crate::util::openable_file_type::renders_in_warp_notebook_viewer;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
-pub use crate::util::openable_file_type::{
-    is_jupyter_notebook_file, is_markdown_file, renders_in_warp_notebook_viewer,
-};
+pub use crate::util::openable_file_type::{is_jupyter_notebook_file, is_markdown_file};
 use crate::view_components::{MarkdownToggleEvent, MarkdownToggleView};
 use crate::workflows::{WorkflowSource, WorkflowType};
 use crate::workspace::ActiveSession;
