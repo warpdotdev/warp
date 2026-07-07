@@ -97,13 +97,18 @@ impl PersistedDataScope {
 }
 
 /// A conversation whose `summary` column had to be derived from its task
-/// snapshot at read time (rows written before the column existed). Sent to
-/// the SQLite writer thread so the derivation happens only once per row.
+/// snapshot at read time (rows written before the column existed, or rows
+/// whose stored summary failed to parse). Sent to the SQLite writer thread
+/// so the derivation happens only once per row.
 #[derive(Debug)]
 pub struct ConversationSummaryBackfill {
     pub conversation_id: String,
     /// Serialized [`model::AgentConversationSummary`].
     pub summary_json: String,
+    /// The `summary` column value observed at read time (`None` or invalid
+    /// JSON). The backfill only applies while the column still holds this
+    /// value, so it never overwrites a newer write.
+    pub previous_summary: Option<String>,
     /// The row's pre-backfill `last_modified_at`, restored after the
     /// update trigger bumps it.
     pub last_modified_at: chrono::NaiveDateTime,

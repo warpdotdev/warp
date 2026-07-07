@@ -121,13 +121,20 @@ impl RestoredAgentConversations {
 
     /// Takes the restored conversation and returns it, if any. Each
     /// conversation is handed out at most once.
+    ///
+    /// The ID is only marked as taken once a conversation was actually
+    /// handed out, so a failed load (e.g. a transient read error) doesn't
+    /// permanently consume the restore opportunity for this session.
     pub fn take_conversation(&mut self, id: &AIConversationId) -> Option<AIConversation> {
-        if !self.taken.insert(*id) {
+        if self.taken.contains(id) {
             return None;
         }
-        self.conversations
+        let conversation = self
+            .conversations
             .remove(id)
-            .or_else(|| self.load_from_db(id))
+            .or_else(|| self.load_from_db(id))?;
+        self.taken.insert(*id);
+        Some(conversation)
     }
 
     /// Takes and returns AIConversations for the given IDs, sorted by first exchange start time.
@@ -157,3 +164,7 @@ impl Entity for RestoredAgentConversations {
 }
 
 impl SingletonEntity for RestoredAgentConversations {}
+
+#[cfg(test)]
+#[path = "restored_conversations_tests.rs"]
+mod tests;

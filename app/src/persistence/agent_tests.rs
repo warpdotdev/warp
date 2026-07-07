@@ -150,17 +150,72 @@ fn backfill_never_overwrites_a_newer_summary() {
     let written_summary = summary_column(&mut conn, "conv-1");
     let written_ts = last_modified_column(&mut conn, "conv-1");
 
-    // A stale backfill (e.g. computed before a newer write landed) must not
-    // clobber the row's summary or timestamp.
-    let stale = ConversationSummaryBackfill {
+    // Stale backfills (computed before a newer write landed) must not
+    // clobber the row's summary or timestamp, regardless of whether the
+    // reader observed a NULL or a since-replaced invalid value.
+    let stale_from_null = ConversationSummaryBackfill {
         conversation_id: "conv-1".to_string(),
         summary_json: "{\"stale\":true}".to_string(),
+        previous_summary: None,
         last_modified_at: ts(1),
     };
-    backfill_conversation_summaries(&mut conn, vec![stale]).expect("backfill should succeed");
+    let stale_from_invalid = ConversationSummaryBackfill {
+        conversation_id: "conv-1".to_string(),
+        summary_json: "{\"stale\":true}".to_string(),
+        previous_summary: Some("{not valid json".to_string()),
+        last_modified_at: ts(1),
+    };
+    backfill_conversation_summaries(&mut conn, vec![stale_from_null, stale_from_invalid])
+        .expect("backfill should succeed");
 
     assert_eq!(summary_column(&mut conn, "conv-1"), written_summary);
     assert_eq!(last_modified_column(&mut conn, "conv-1"), written_ts);
+}
+
+#[test]
+fn metadata_read_heals_invalid_non_null_summaries() {
+    use schema::agent_conversations::dsl::*;
+
+    let mut conn = test_connection();
+    let task = task_with_user_query("task-1", "Initial query", "Root title");
+    upsert_agent_conversation(&mut conn, "conv-1", [&task], empty_conversation_data())
+        .expect("upsert should succeed");
+
+    // Corrupt the summary with unparseable JSON.
+    let legacy_ts = ts(1_000);
+    diesel::update(agent_conversations.filter(conversation_id.eq("conv-1")))
+        .set((
+            summary.eq(Some("{not valid json")),
+            last_modified_at.eq(legacy_ts),
+        ))
+        .execute(&mut conn)
+        .expect("corrupt summary setup should succeed");
+
+    let (_, backfills) =
+        read_agent_conversation_metadata(&mut conn).expect("metadata read should succeed");
+    assert_eq!(backfills.len(), 1);
+    assert_eq!(
+        backfills[0].previous_summary.as_deref(),
+        Some("{not valid json"),
+        "the backfill must carry the observed invalid value for its compare-and-set"
+    );
+
+    backfill_conversation_summaries(&mut conn, backfills).expect("backfill should succeed");
+
+    // The invalid summary healed in place and history order is preserved.
+    let healed: AgentConversationSummary = serde_json::from_str(
+        summary_column(&mut conn, "conv-1")
+            .as_deref()
+            .expect("summary should be present after healing"),
+    )
+    .expect("healed summary should be valid JSON");
+    assert_eq!(healed.initial_query, "Initial query");
+    assert_eq!(last_modified_column(&mut conn, "conv-1"), legacy_ts);
+
+    // Subsequent startups stay metadata-only.
+    let (_, backfills) =
+        read_agent_conversation_metadata(&mut conn).expect("metadata read should succeed");
+    assert!(backfills.is_empty());
 }
 
 fn data_with_parent(parent: Option<&str>) -> String {

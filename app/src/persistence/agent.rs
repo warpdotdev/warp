@@ -286,10 +286,11 @@ pub(super) fn read_agent_conversation_metadata(
             let Ok(summary_json) = serde_json::to_string(&derived) else {
                 continue;
             };
-            record.summary = Some(summary_json.clone());
+            let previous_summary = record.summary.replace(summary_json.clone());
             backfills.push(ConversationSummaryBackfill {
                 conversation_id: record.conversation_id.clone(),
                 summary_json,
+                previous_summary,
                 last_modified_at: record.last_modified_at,
             });
         }
@@ -314,15 +315,21 @@ pub(super) fn backfill_conversation_summaries(
 
     conn.transaction::<_, Error, _>(|conn| {
         for backfill in backfills {
-            // Only fill rows that still have no summary, so a newer write
-            // that already computed one is never overwritten.
-            let updated = diesel::update(
-                agent_conversations
-                    .filter(conversation_id.eq(&backfill.conversation_id))
-                    .filter(summary.is_null()),
-            )
-            .set(summary.eq(&backfill.summary_json))
-            .execute(conn)?;
+            // Compare-and-set against the value observed at read time (NULL
+            // or invalid JSON), so invalid summaries heal while a newer
+            // write's summary is never overwritten.
+            let update_target =
+                agent_conversations.filter(conversation_id.eq(&backfill.conversation_id));
+            let updated = match &backfill.previous_summary {
+                Some(previous_summary) => {
+                    diesel::update(update_target.filter(summary.eq(previous_summary)))
+                        .set(summary.eq(&backfill.summary_json))
+                        .execute(conn)?
+                }
+                None => diesel::update(update_target.filter(summary.is_null()))
+                    .set(summary.eq(&backfill.summary_json))
+                    .execute(conn)?,
+            };
 
             // The `update_last_modified_at_for_agent_conversations` trigger
             // bumps `last_modified_at` on any update that leaves it
