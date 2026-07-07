@@ -782,12 +782,17 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             ));
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
-                            action: AIAgentActionType::StartRecording { .. },
+                            action: AIAgentActionType::StartRecording { summary, .. },
                             id,
                             ..
                         }) => {
                             should_render_footer = false;
-                            output_items.add_child(render_start_recording(props, id, app));
+                            output_items.add_child(render_start_recording(
+                                props,
+                                id,
+                                summary.as_deref(),
+                                app,
+                            ));
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
                             action: AIAgentActionType::StopRecording { .. },
@@ -2936,13 +2941,27 @@ fn render_upload_artifact(
 
     renderable_action.render(app).finish()
 }
-fn recording_summary(props: Props, app: &AppContext) -> String {
-    // TODO(vkodithala): Replace conversation.title() with StartRecording's agent-supplied description once available.
-    props
+
+fn recording_summary(props: Props, agent_summary: Option<&str>, app: &AppContext) -> String {
+    let title = props
         .model
         .conversation(app)
-        .and_then(|conversation| conversation.title())
-        .filter(|title| !title.trim().is_empty())
+        .and_then(|conversation| conversation.title());
+    resolve_recording_summary(agent_summary, title.as_deref())
+}
+
+/// Resolves the recording card's summary, preferring the agent-authored summary
+/// and falling back to the conversation title, then a generic default.
+fn resolve_recording_summary(
+    agent_summary: Option<&str>,
+    conversation_title: Option<&str>,
+) -> String {
+    [agent_summary, conversation_title]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|text| !text.is_empty())
+        .map(ToString::to_string)
         .unwrap_or_else(|| "Recording computer-use session".to_string())
 }
 
@@ -3060,6 +3079,7 @@ fn recording_card(
 fn render_start_recording(
     props: Props,
     action_id: &AIAgentActionId,
+    agent_summary: Option<&str>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let result = props
@@ -3070,7 +3090,7 @@ fn render_start_recording(
             AIAgentActionResultType::StartRecording(result) => Some(result),
             _ => None,
         });
-    let text = start_recording_card_text(&recording_summary(props, app), result);
+    let text = start_recording_card_text(&recording_summary(props, agent_summary, app), result);
     recording_card(text, None, app)
 }
 
