@@ -104,11 +104,12 @@ impl WaitForEventsExecutor {
         let conversation_id = input.conversation_id;
         let timeout = watchdog_timeout_for_stamped_seconds(*idle_timeout_seconds);
 
-        // Blocking on descendants is the trigger to confirm parent status
-        // against the server and register for the owner-side ancestor stream,
-        // so children created out-of-band (Oz CLI / web API) are delivered.
+        // Blocking on descendants is the trigger to open the owner-side
+        // ancestor stream for a root, so children created by any path
+        // (run_agents, Oz CLI, web API) are delivered via push instead of
+        // polling.
         OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
-            streamer.register_parent_on_wait(conversation_id, ctx);
+            streamer.register_root_on_wait(conversation_id, ctx);
         });
 
         // Bump the counter so any prior watchdog closure observes a

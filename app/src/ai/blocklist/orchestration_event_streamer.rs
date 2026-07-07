@@ -42,8 +42,6 @@ const RESTORE_FETCH_PERMANENT_BACKOFF_STEPS: &[u64] = &[30];
 const SSE_DRAIN_INTERVAL_MS: u64 = 500;
 /// Cap killed-run tombstones while keeping normal sessions well below the limit.
 const MAX_KILLED_RUN_IDS: usize = 1024;
-/// Maximum number of explicit run IDs the server accepts on a `run_ids[]` SSE stream.
-const MAX_RUN_ID_STREAM_FILTER: usize = 100;
 /// Max child runs fetched per cold-start `?ancestor_run_id=` REST seed in
 /// viewer mode. Matches the legacy `OrchestrationViewerModel` poller's value
 /// (the server caps at 100 anyway).
@@ -229,6 +227,12 @@ struct ConversationStreamState {
     /// Consecutive `get_ambient_agent_task` failure count for the
     /// post-restore retry loop; resets on success.
     restore_fetch_failures: usize,
+    /// True once this non-child root registered for the owner-side ancestor
+    /// stream from `wait_for_events` (see `register_root_on_wait`). Makes the
+    /// conversation eligible and selects the ancestor filter before any child is
+    /// known, so the stream never widens later (avoids the cursor-handoff gap in
+    /// Risks).
+    ancestor_on_wait: bool,
 }
 
 /// Per-orchestrator SSE stream state. Parallels [`ConversationStreamState`]
@@ -324,11 +328,6 @@ enum DesiredSseFilter {
     Filter(AgentEventFilter),
     /// Nothing to watch yet (no watched run IDs); do not open a stream.
     NoFilter,
-    /// The conversation is a parent with more watched children than the
-    /// explicit `run_ids[]` stream allows and parent-family ancestor
-    /// streaming is unavailable. The payload is the watched-run-id total,
-    /// used only for diagnostics.
-    UnsupportedRunIdCount(usize),
 }
 
 impl OrchestrationEventStreamer {
@@ -553,14 +552,10 @@ impl OrchestrationEventStreamer {
         }
     }
 
-    /// Confirms parent status against the server when an orchestrator blocks
-    /// on `wait_for_events`, registering it for the owner-side ancestor
-    /// stream. This is the trigger that lets a parent learn about children
-    /// created out-of-band (Oz CLI / web API), which never flowed through
-    /// [`Self::register_watched_run_id`]. Once the parent role is established
-    /// it is permanent for the conversation's life, so subsequent waits
-    /// short-circuit on the already-parent check below.
-    pub fn register_parent_on_wait(
+    /// Registers a non-child root for the owner-side ancestor stream when it
+    /// blocks on `wait_for_events`, so children created by any path (run_agents,
+    /// Oz CLI, web API) are delivered without polling. Idempotent across waits.
+    pub fn register_root_on_wait(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -568,85 +563,32 @@ impl OrchestrationEventStreamer {
         if !FeatureFlag::WaitForEventsParentRegistration.is_enabled() {
             return;
         }
-        // One-level-tree invariant: a child can never also be a parent, so
-        // skip the server fetch. The child still receives its own inbox via
-        // the existing `is_eligible` -> `RunIds(self)` stream, so there is no
-        // regression.
+        // One-level-tree invariant: a child can never be a root parent. It
+        // already receives its own inbox via the child eligibility path.
         let is_child = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .is_some_and(|c| c.has_parent_agent());
         if is_child {
             return;
         }
-        // Passive views of a run hosted elsewhere (shared-session viewers,
-        // remote-child placeholders) must not register: the owning process
-        // owns the inbox. Mirrors the `is_eligible` exclusion and avoids a
-        // wasted `get_ambient_agent_task` fetch.
+        // Passive view of a run hosted elsewhere: the owning process holds the
+        // inbox.
         if self.is_remote_run_view(conversation_id, ctx) {
             return;
         }
-        // Already a known parent: the live ancestor stream already discovers
-        // new children via the server `parent_run_id` JOIN, so no re-fetch is
-        // needed. The fetch below exists only to make the initial
-        // not-parent -> parent transition.
-        if self.is_parent_agent_conversation(conversation_id, ctx) {
-            return;
-        }
-        // No run_id yet (rare): nothing to query the server with; the next
-        // wait re-checks.
+        // Need a run id to scope the ancestor stream; the next wait re-checks.
         let Some(self_run_id) = self.self_run_id(conversation_id, ctx) else {
             return;
         };
-        let Ok(task_id) = self_run_id.parse::<AmbientAgentTaskId>() else {
-            return;
-        };
-        let ai_client = self.ai_client.clone();
-        ctx.spawn(
-            async move { ai_client.get_ambient_agent_task(&task_id).await },
-            move |me, result, ctx| {
-                me.finish_register_parent_on_wait(conversation_id, result, ctx);
-            },
-        );
-    }
-
-    /// Completes the wait-time parent registration fetch. A non-empty
-    /// `children` list confirms the conversation is an orchestrator: install
-    /// the children and reevaluate eligibility, which (with
-    /// `OwnerOrchestrationAncestorStreamer` on) opens the
-    /// `AncestorRunId { include_self: true }` stream that thereafter tracks
-    /// all children dynamically. Empty children means it is not a parent; an
-    /// error is a graceful no-op (the next wait re-checks).
-    fn finish_register_parent_on_wait(
-        &mut self,
-        conversation_id: AIConversationId,
-        result: anyhow::Result<crate::ai::ambient_agents::task::AmbientAgentTask>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let task = match result {
-            Ok(task) => task,
-            Err(err) => {
-                log::warn!(
-                    "wait_for_events parent registration fetch failed for \
-                     {conversation_id:?}: {err:#}; will re-check on next wait"
-                );
-                return;
-            }
-        };
-        if task.children.is_empty() {
-            return;
+        let stream = self.streams.entry(conversation_id).or_default();
+        if stream.ancestor_on_wait {
+            return; // already registered; subsequent waits are no-ops
         }
-        let base_cursor = self
-            .streams
-            .get(&conversation_id)
-            .map(|stream| stream.event_cursor)
-            .unwrap_or(0);
-        self.apply_task_children(conversation_id, &task, base_cursor);
-        // Mirror `register_watched_run_id`: also watch `self_run_id` so the
-        // parent's own inbox is delivered if `desired_sse_filter` falls back to
-        // `RunIds` (i.e. `OwnerOrchestrationAncestorStreamer` disabled, where
-        // the filter would otherwise watch only children). A no-op in the
-        // ancestor-stream path, which already covers self via `include_self`.
-        self.ensure_self_run_id_watched(conversation_id, ctx);
+        stream.ancestor_on_wait = true;
+        // Watch self so the parent's own inbox is covered even if the filter
+        // ever falls back to RunIds; redundant under the ancestor
+        // (include_self) filter.
+        stream.watched_run_ids.insert(self_run_id);
         self.reevaluate_eligibility(conversation_id, ctx);
     }
 
@@ -1654,7 +1596,11 @@ impl OrchestrationEventStreamer {
         let has_parent = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .is_some_and(|c| c.has_parent_agent());
-        has_parent || self.is_parent_agent_conversation(conversation_id, ctx)
+        let wait_root = self
+            .streams
+            .get(&conversation_id)
+            .is_some_and(|s| s.ancestor_on_wait);
+        has_parent || self.is_parent_agent_conversation(conversation_id, ctx) || wait_root
     }
 
     /// True iff this conversation should hold the wake-only listener used for
@@ -1691,7 +1637,11 @@ impl OrchestrationEventStreamer {
         ctx: &warpui::AppContext,
     ) -> DesiredSseFilter {
         let is_parent = self.is_parent_agent_conversation(conversation_id, ctx);
-        if is_parent && FeatureFlag::OwnerOrchestrationAncestorStreamer.is_enabled() {
+        let wait_root = self
+            .streams
+            .get(&conversation_id)
+            .is_some_and(|s| s.ancestor_on_wait);
+        if is_parent || wait_root {
             if let Some(self_run_id) = self.self_run_id(conversation_id, ctx) {
                 return DesiredSseFilter::Filter(AgentEventFilter::AncestorRunId {
                     ancestor_run_id: self_run_id,
@@ -1699,13 +1649,9 @@ impl OrchestrationEventStreamer {
                 });
             }
         }
-
         let run_ids = self.run_ids_for_sse(conversation_id);
         if run_ids.is_empty() {
             return DesiredSseFilter::NoFilter;
-        }
-        if is_parent && run_ids.len() > MAX_RUN_ID_STREAM_FILTER {
-            return DesiredSseFilter::UnsupportedRunIdCount(run_ids.len());
         }
         DesiredSseFilter::Filter(AgentEventFilter::RunIds(run_ids))
     }
@@ -1891,15 +1837,6 @@ impl OrchestrationEventStreamer {
         let filter = match self.desired_sse_filter(conversation_id, ctx) {
             DesiredSseFilter::Filter(filter) => filter,
             DesiredSseFilter::NoFilter => return,
-            DesiredSseFilter::UnsupportedRunIdCount(count) => {
-                log::error!(
-                    "Owner-side SSE delivery blocked for {conversation_id:?}: {count} watched \
-                     run IDs exceed the {MAX_RUN_ID_STREAM_FILTER} explicit-run-id limit and \
-                     parent-family ancestor streaming is disabled; enable \
-                     OwnerOrchestrationAncestorStreamer to deliver events for large orchestrators"
-                );
-                return;
-            }
         };
 
         let cursor = self
@@ -1991,7 +1928,6 @@ impl OrchestrationEventStreamer {
             }
             // Nothing watchable tears down through the eligibility predicate.
             DesiredSseFilter::NoFilter => false,
-            DesiredSseFilter::UnsupportedRunIdCount(_) => true,
         }
     }
 
@@ -2056,9 +1992,49 @@ impl OrchestrationEventStreamer {
             return;
         }
 
+        self.register_children_from_events(conversation_id, &events, ctx);
+
         let self_run_id = self.self_run_id(conversation_id, ctx).unwrap_or_default();
 
         self.handle_event_batch(conversation_id, &self_run_id, cursor, events, messages, ctx);
+    }
+
+    /// Registers children announced by `child_agent_started`. The event is on
+    /// the parent run; the child run id is in `ref_id`. Idempotent
+    /// (`watched_run_ids` is a set). Flips `is_parent_agent_conversation` to
+    /// true permanently; the ancestor stream is already open, so the filter
+    /// shape is unchanged and no reconnect happens. The event itself is not
+    /// surfaced as a lifecycle/message item — `convert_lifecycle_events`
+    /// already drops it (its `run_id` equals `self_run_id`, and
+    /// `lifecycle_event_type_from_wire` returns `None`), so it only advances
+    /// the cursor and registers the child.
+    fn register_children_from_events(
+        &mut self,
+        conversation_id: AIConversationId,
+        events: &[AgentRunEvent],
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let mut registered_new = false;
+        for event in events {
+            if event.event_type != CHILD_AGENT_STARTED_EVENT {
+                continue;
+            }
+            let Some(child_run_id) = event.ref_id.clone() else {
+                continue;
+            };
+            if self
+                .streams
+                .entry(conversation_id)
+                .or_default()
+                .watched_run_ids
+                .insert(child_run_id)
+            {
+                registered_new = true;
+            }
+        }
+        if registered_new {
+            self.reevaluate_eligibility(conversation_id, ctx);
+        }
     }
 
     /// Feeds a batch of fetched events through the OrchestrationEventService,
@@ -2272,6 +2248,12 @@ pub(super) fn conversation_status_from_lifecycle_event_type(
         api::LifecycleEventType::Unspecified => ConversationStatus::Error,
     }
 }
+
+/// Wire `event_type` emitted on a parent run when a child task is created.
+/// The child run id is in `ref_id`. Not a lifecycle status, so it is handled
+/// as a discovery signal and `lifecycle_event_type_from_wire` keeps returning
+/// `None` for it (that function is unchanged).
+const CHILD_AGENT_STARTED_EVENT: &str = "child_agent_started";
 
 /// Maps a wire `event_type` string from the server's `AgentRunEvent`
 /// payload onto the corresponding [`api::LifecycleEventType`]. Returns

@@ -709,19 +709,12 @@ pub enum FeatureFlag {
     /// `OrchestrationV2`; has no effect when v2 is off.
     RunAgentsTool,
 
-    /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
-    /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
-    /// viewer-mode entry. Off by default; flipping it on activates the
-    /// per-orchestrator viewer-mode consumer and the broadcast `ChildSpawned`
-    /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
-    OrchestrationViewerStreamer,
-
-    /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
-    OwnerOrchestrationAncestorStreamer,
-
-    /// On `wait_for_events`, confirms parent status against the server and
-    /// registers an orchestrator for the owner-side ancestor stream so it
-    /// receives events for children created out-of-band (Oz CLI / web API).
+    /// On a root's first `wait_for_events`, opens the owner-side ancestor
+    /// stream (`AncestorRunId { include_self: true }`) so children created by
+    /// any path (run_agents, Oz CLI, web API) are discovered via the pushed
+    /// `child_agent_started` event instead of polling. When off, reverts to
+    /// pre-#13208 behavior: roots are discovered only via `run_agents` /
+    /// restore and no wait-time stream is opened.
     WaitForEventsParentRegistration,
 
     /// Shows a pending user query indicator during summarization when a follow-up
