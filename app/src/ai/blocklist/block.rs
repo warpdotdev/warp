@@ -165,6 +165,7 @@ use crate::editor::InteractionState;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{
     AgentModeRewindEntrypoint, AutonomySettingToggleSource, InteractionSource, TelemetryEvent,
 };
@@ -1041,6 +1042,9 @@ pub struct AIBlock {
     /// Per-action button components for "View screenshot" buttons on UseComputer actions.
     view_screenshot_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
 
+    /// Per-action button components for "Open recording" buttons on StopRecording actions.
+    open_recording_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
+
     /// Stores the last command that was right-clicked by a child component.
     /// When set, CopyCommand will copy this specific command instead of all commands.
     last_right_clicked_command: Option<String>,
@@ -1508,6 +1512,7 @@ impl AIBlock {
             disable_rule_suggestions_button,
             rewind_button,
             view_screenshot_buttons: Default::default(),
+            open_recording_buttons: Default::default(),
             last_right_clicked_command: None,
             is_usage_footer_expanded: false,
             agent_view_controller,
@@ -2036,6 +2041,12 @@ impl AIBlock {
             // Ensure a button component exists for UseComputer actions.
             if matches!(&action.action, AIAgentActionType::UseComputer(_)) {
                 self.view_screenshot_buttons
+                    .entry(action.id.clone())
+                    .or_default();
+            }
+
+            if matches!(&action.action, AIAgentActionType::StopRecording { .. }) {
+                self.open_recording_buttons
                     .entry(action.id.clone())
                     .or_default();
             }
@@ -6233,6 +6244,9 @@ pub enum AIBlockAction {
     OpenCommentInGitHub {
         url: String,
     },
+    OpenRecordingArtifact {
+        artifact_uid: String,
+    },
 }
 
 impl TypedActionView for AIBlock {
@@ -6819,6 +6833,34 @@ impl TypedActionView for AIBlock {
             }
             AIBlockAction::OpenCommentInGitHub { url } => {
                 ctx.open_url(url);
+            }
+            AIBlockAction::OpenRecordingArtifact { artifact_uid } => {
+                let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+                let artifact_uid = artifact_uid.clone();
+                let artifact_uid_for_error = artifact_uid.clone();
+                ctx.spawn(
+                    async move { ai_client.get_artifact_download(&artifact_uid).await },
+                    move |_, result, ctx| match result {
+                        Ok(artifact) => {
+                            ctx.open_url(artifact.download_url());
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "Failed to prepare recording artifact {artifact_uid_for_error}: {error:#}"
+                            );
+                            let window_id = ctx.window_id();
+                            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::error(
+                                        "Failed to open recording.".to_string(),
+                                    ),
+                                    window_id,
+                                    ctx,
+                                );
+                            });
+                        }
+                    },
+                );
             }
             AIBlockAction::ViewScreenshot { action_id } => {
                 // Collect all UseComputer action IDs across the entire conversation

@@ -32,10 +32,11 @@ use super::task::{
 };
 use super::task_store::TaskStore;
 use super::{
-    AIAgentAction, AIAgentActionId, AIAgentContext, AIAgentExchange, AIAgentExchangeId,
-    AIAgentInput, AIAgentOutput, AIAgentOutputStatus, AIAgentTodo, AIAgentTodoId,
-    FinishedAIAgentOutput, MessageId, OutputModelInfo, RenderableAIError, RequestCost,
-    ServerOutputId, Shared, SuggestedLoggingId, Suggestions,
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentContext,
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
+    AIAgentTodo, AIAgentTodoId, FinishedAIAgentOutput, MessageId, OutputModelInfo,
+    RenderableAIError, RequestCost, ServerOutputId, Shared, StartRecordingResult,
+    StopRecordingResult, SuggestedLoggingId, Suggestions,
 };
 use crate::ai::agent::api::convert_conversation::{
     compute_time_to_first_token_ms_from_messages, proto_timestamp_to_local_datetime,
@@ -87,6 +88,20 @@ pub enum TodoStatus {
 impl TodoStatus {
     pub fn is_cancelled(&self) -> bool {
         matches!(self, TodoStatus::Cancelled)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingSpanInfo {
+    pub recording_id: String,
+    pub start_action_id: AIAgentActionId,
+    pub stop_action_id: Option<AIAgentActionId>,
+    pub artifact_uid: Option<String>,
+}
+
+impl RecordingSpanInfo {
+    pub fn is_open(&self) -> bool {
+        self.stop_action_id.is_none()
     }
 }
 
@@ -1701,6 +1716,116 @@ impl AIConversation {
                         .collect::<Vec<_>>()
                 })
         })
+    }
+
+    pub fn recording_span_for_action(
+        &self,
+        action_id: &AIAgentActionId,
+        action_model: Option<&crate::ai::blocklist::BlocklistAIActionModel>,
+    ) -> Option<RecordingSpanInfo> {
+        let mut active_span: Option<RecordingSpanInfo> = None;
+        let mut matched_span: Option<RecordingSpanInfo> = None;
+
+        for exchange in self.all_exchanges() {
+            let Some(output) = exchange.output_status.output() else {
+                continue;
+            };
+            for output_message in &output.get().messages {
+                let AIAgentOutputMessageType::Action(action) = &output_message.message else {
+                    continue;
+                };
+
+                match &action.action {
+                    AIAgentActionType::StartRecording { .. } => {
+                        if let Some(AIAgentActionResultType::StartRecording(
+                            StartRecordingResult::Success(started),
+                        )) = self.action_result_type_for_action(&action.id, action_model)
+                        {
+                            active_span = Some(RecordingSpanInfo {
+                                recording_id: started.recording_id.clone(),
+                                start_action_id: action.id.clone(),
+                                stop_action_id: None,
+                                artifact_uid: None,
+                            });
+                            if &action.id == action_id {
+                                matched_span = active_span.clone();
+                            }
+                        }
+                    }
+                    AIAgentActionType::UseComputer(_) => {
+                        if &action.id == action_id {
+                            matched_span = active_span.clone();
+                        }
+                    }
+                    AIAgentActionType::StopRecording { recording_id } => {
+                        let Some(span) = active_span.as_ref() else {
+                            continue;
+                        };
+                        if span.recording_id != *recording_id {
+                            continue;
+                        }
+
+                        let mut stopped_span = span.clone();
+                        let should_close =
+                            match self.action_result_type_for_action(&action.id, action_model) {
+                                Some(AIAgentActionResultType::StopRecording(
+                                    StopRecordingResult::Success(stopped),
+                                )) => {
+                                    stopped_span.stop_action_id = Some(action.id.clone());
+                                    stopped_span.artifact_uid = Some(stopped.artifact_uid.clone());
+                                    true
+                                }
+                                Some(AIAgentActionResultType::StopRecording(
+                                    StopRecordingResult::Error(_),
+                                ))
+                                | Some(AIAgentActionResultType::StopRecording(
+                                    StopRecordingResult::Cancelled,
+                                )) => {
+                                    stopped_span.stop_action_id = Some(action.id.clone());
+                                    true
+                                }
+                                _ => false,
+                            };
+                        if should_close
+                            && (matched_span.as_ref().is_some_and(|matched| {
+                                matched.recording_id == stopped_span.recording_id
+                            }) || &action.id == action_id)
+                        {
+                            matched_span = Some(stopped_span.clone());
+                        }
+
+                        if should_close {
+                            active_span = None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        matched_span
+    }
+
+    fn action_result_type_for_action<'a>(
+        &'a self,
+        action_id: &AIAgentActionId,
+        action_model: Option<&'a crate::ai::blocklist::BlocklistAIActionModel>,
+    ) -> Option<&'a AIAgentActionResultType> {
+        if let Some(result) = action_model.and_then(|model| model.get_action_result(action_id)) {
+            return Some(&result.result);
+        }
+
+        for exchange in self.all_exchanges() {
+            for input in &exchange.input {
+                let AIAgentInput::ActionResult { result, .. } = input else {
+                    continue;
+                };
+                if &result.id == action_id {
+                    return Some(&result.result);
+                }
+            }
+        }
+        None
     }
 
     pub fn contains_action(&self, action_id: &AIAgentActionId) -> bool {

@@ -60,9 +60,9 @@ use crate::ai::agent::{
     AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome,
     CreateDocumentsResult, EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult,
-    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult, SubagentCall,
-    SubagentType, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UploadArtifactResult,
+    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult,
+    StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
+    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -136,6 +136,7 @@ pub(crate) struct Props<'a> {
     pub(super) state_handles: &'a AIBlockStateHandles,
     pub(super) action_buttons: &'a HashMap<AIAgentActionId, ActionButtons>,
     pub(super) view_screenshot_buttons: &'a HashMap<AIAgentActionId, ui_components::button::Button>,
+    pub(super) open_recording_buttons: &'a HashMap<AIAgentActionId, ui_components::button::Button>,
     pub(crate) action_model: &'a ModelHandle<BlocklistAIActionModel>,
     pub(crate) active_session: &'a ModelHandle<ActiveSession>,
     pub(super) editor_views: &'a [EmbeddedCodeEditorView],
@@ -198,6 +199,10 @@ pub(crate) struct Props<'a> {
     /// `true` when this block belongs to a cloud agent pane that is still in its setup phase
     /// (running environment startup commands before the first agent turn).
     pub(super) is_cloud_agent_pre_first_exchange: bool,
+}
+
+fn should_decorate_recorded_use_computer(request: &UseComputerRequest) -> bool {
+    !request.actions.is_empty()
 }
 
 pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
@@ -742,6 +747,22 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                         }) => {
                             should_render_footer = false;
                             output_items.add_child(render_use_computer(props, id, request, app));
+                        }
+                        AIAgentOutputMessageType::Action(AIAgentAction {
+                            action: AIAgentActionType::StartRecording { .. },
+                            id,
+                            ..
+                        }) => {
+                            should_render_footer = false;
+                            output_items.add_child(render_start_recording(props, id, app));
+                        }
+                        AIAgentOutputMessageType::Action(AIAgentAction {
+                            action: AIAgentActionType::StopRecording { .. },
+                            id,
+                            ..
+                        }) => {
+                            should_render_footer = false;
+                            output_items.add_child(render_stop_recording(props, id, app));
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
                             action: AIAgentActionType::ReadSkill(request),
@@ -2860,6 +2881,208 @@ fn render_upload_artifact(
 
     renderable_action.render(app).finish()
 }
+fn recording_description(props: Props, app: &AppContext) -> String {
+    // TODO: Replace conversation.title() with StartRecording's agent-supplied description once available.
+    props
+        .model
+        .conversation(app)
+        .and_then(|conversation| conversation.title())
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| "Recording computer-use session".to_string())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RecordingCardText {
+    primary: String,
+    subtext: Option<String>,
+}
+
+fn start_recording_card_text(
+    description: &str,
+    result: Option<&StartRecordingResult>,
+) -> RecordingCardText {
+    match result {
+        Some(StartRecordingResult::Success(_)) => RecordingCardText {
+            primary: "Recording started".to_string(),
+            subtext: Some(description.to_string()),
+        },
+        Some(StartRecordingResult::Error(error)) => RecordingCardText {
+            primary: "Recording failed to start".to_string(),
+            subtext: Some(error.clone()),
+        },
+        Some(StartRecordingResult::Cancelled) => RecordingCardText {
+            primary: "Recording cancelled".to_string(),
+            subtext: None,
+        },
+        None => RecordingCardText {
+            primary: "Starting recording".to_string(),
+            subtext: Some(description.to_string()),
+        },
+    }
+}
+
+fn stop_recording_card_text(result: Option<&StopRecordingResult>) -> RecordingCardText {
+    match result {
+        Some(StopRecordingResult::Success(stopped)) => {
+            let duration = format_video_duration(stopped.duration);
+            let subtext = if matches!(
+                stopped.completion_status,
+                computer_use::RecordingCompletionStatus::Completed
+            ) {
+                duration
+            } else {
+                // TODO: Switch to typed, user-facing termination copy once finalization emits structured reasons.
+                format!("Partial recording • {duration}")
+            };
+            RecordingCardText {
+                primary: "Recording saved".to_string(),
+                subtext: Some(subtext),
+            }
+        }
+        Some(StopRecordingResult::Error(_)) | Some(StopRecordingResult::Cancelled) => {
+            RecordingCardText {
+                primary: "Recording could not be saved".to_string(),
+                subtext: None,
+            }
+        }
+        None => RecordingCardText {
+            primary: "Saving recording".to_string(),
+            subtext: None,
+        },
+    }
+}
+
+fn format_video_duration(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn recording_icon(app: &AppContext) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let color = appearance.theme().ansi_fg_red();
+    ConstrainedBox::new(Icon::CircleFilled.to_warpui_icon(color.into()).finish())
+        .with_width(icon_size(app))
+        .with_height(icon_size(app))
+        .finish()
+}
+
+fn recording_card(
+    text: RecordingCardText,
+    action_button: Option<Box<dyn Element>>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let primary = Text::new(
+        text.primary,
+        appearance.ui_font_family(),
+        appearance.monospace_font_size(),
+    )
+    .with_color(blended_colors::text_main(theme, theme.background()))
+    .finish();
+    let mut body = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+    body.add_child(primary);
+    if let Some(subtext) = text.subtext.filter(|subtext| !subtext.trim().is_empty()) {
+        body.add_child(
+            Text::new(
+                subtext,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(blended_colors::text_disabled(theme, theme.surface_2()))
+            .finish(),
+        );
+    }
+
+    let mut action =
+        RenderableAction::new_with_element(body.finish(), app).with_icon(recording_icon(app));
+    if let Some(action_button) = action_button {
+        action = action.with_action_button(action_button);
+    }
+    action.render(app).finish()
+}
+
+fn render_start_recording(
+    props: Props,
+    action_id: &AIAgentActionId,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let result = props
+        .action_model
+        .as_ref(app)
+        .get_action_result(action_id)
+        .and_then(|result| match &result.result {
+            AIAgentActionResultType::StartRecording(result) => Some(result),
+            _ => None,
+        });
+    let text = start_recording_card_text(&recording_description(props, app), result);
+    recording_card(text, None, app)
+}
+
+fn render_recording_footer(is_open: bool, app: &AppContext) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let icon_offset =
+        icon_size(app) + crate::ai::blocklist::inline_action::inline_action_header::ICON_MARGIN;
+    let text = if is_open {
+        "Recording active"
+    } else {
+        "Captured in recording"
+    };
+    Container::new(
+        Text::new(
+            text.to_string(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(theme.sub_text_color(theme.surface_1()).into())
+        .finish(),
+    )
+    .with_margin_left(icon_offset)
+    .finish()
+}
+
+fn render_stop_recording(
+    props: Props,
+    action_id: &AIAgentActionId,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::handle(app).as_ref(app);
+    let result = props
+        .action_model
+        .as_ref(app)
+        .get_action_result(action_id)
+        .and_then(|result| match &result.result {
+            AIAgentActionResultType::StopRecording(result) => Some(result),
+            _ => None,
+        });
+    let mut action_button = None;
+    if let Some(StopRecordingResult::Success(stopped)) = result {
+        if !stopped.artifact_uid.trim().is_empty() {
+            let artifact_uid = stopped.artifact_uid.clone();
+            action_button = props.open_recording_buttons.get(action_id).map(|btn| {
+                btn.render(
+                    appearance,
+                    button::Params {
+                        content: button::Content::Label("Open recording".into()),
+                        theme: &button::themes::Secondary,
+                        options: button::Options {
+                            size: button::Size::Small,
+                            on_click: Some(Box::new(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(AIBlockAction::OpenRecordingArtifact {
+                                    artifact_uid: artifact_uid.clone(),
+                                });
+                            })),
+                            ..button::Options::default(appearance)
+                        },
+                    },
+                )
+            });
+        }
+    }
+
+    recording_card(stop_recording_card_text(result), action_button, app)
+}
 
 fn render_use_computer(
     props: Props,
@@ -2871,6 +3094,16 @@ fn render_use_computer(
 
     let mut renderable_action = RenderableAction::new(&request.action_summary, app)
         .with_icon(action_icon(action_id, props.action_model, props.model, app).finish());
+
+    let recording_span = props.model.conversation(app).and_then(|conversation| {
+        conversation.recording_span_for_action(action_id, Some(props.action_model.as_ref(app)))
+    });
+    if should_decorate_recorded_use_computer(request) {
+        if let Some(recording_span) = recording_span {
+            renderable_action = renderable_action
+                .with_footer(render_recording_footer(recording_span.is_open(), app));
+        }
+    }
 
     // Add a "View screenshot" button if the action result contains a screenshot.
     let has_screenshot = props
