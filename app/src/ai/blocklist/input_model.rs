@@ -637,7 +637,9 @@ impl BlocklistAIInputModel {
             return;
         }
 
-        // If we have a session, gather command history entries
+        // If we have a session, gather command history entries. `History::commands`
+        // returns entries in ascending (oldest-first) order, so downstream matching
+        // reverses them to iterate newest-first.
         let history_entries = session_id.map(|sid| {
             History::as_ref(ctx)
                 .commands(sid)
@@ -734,7 +736,9 @@ impl BlocklistAIInputModel {
                             {
                                 return decision;
                             }
-                        } else if let Some(decision) = resolve_history_match(command_match, None) {
+                        } else if let Some(decision) =
+                            resolve_history_match(command_match, HistoryMatch::NoMatch)
+                        {
                             // Feature disabled: preserve the command-only behavior.
                             return decision;
                         }
@@ -845,9 +849,26 @@ impl Entity for BlocklistAIInputModel {
     type Event = BlocklistAIInputEvent;
 }
 
-/// Returns the timestamp of the most-recent entry that closely matches the
-/// provided word, using the given similarity threshold, or `None` if no entry
-/// matches. The possibilities must be ordered newest-first.
+/// The outcome of matching the input buffer against a single history source
+/// (command history or agent prompt history) via [`most_recent_close_match`].
+///
+/// This replaces a nested `Option<Option<DateTime<Local>>>`, making the three
+/// distinct states explicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HistoryMatch {
+    /// No entry in this source closely matched the input.
+    NoMatch,
+    /// An entry matched, and its recency is known via `start_ts`.
+    MatchedAt(DateTime<Local>),
+    /// An entry matched, but the source has no timestamp for it (e.g. a command
+    /// read from a shell history file such as `.zsh_history`).
+    MatchedWithoutTimestamp,
+}
+
+/// Returns the [`HistoryMatch`] for the most-recent entry that closely matches
+/// the provided word, using the given similarity threshold, or
+/// [`HistoryMatch::NoMatch`] if no entry matches. The possibilities must be
+/// ordered newest-first.
 ///
 /// Adapted from [`difflib::get_close_matches`], but an async function with
 /// periodic yields such that the operation can be aborted if necessary.  Also,
@@ -858,7 +879,7 @@ async fn most_recent_close_match<'a>(
     word: &str,
     possibilities: impl Iterator<Item = (&'a str, Option<DateTime<Local>>)>,
     cutoff: f32,
-) -> Option<Option<DateTime<Local>>> {
+) -> HistoryMatch {
     const BATCH_SIZE: usize = 50;
 
     if !(0.0..=1.0).contains(&cutoff) {
@@ -877,11 +898,14 @@ async fn most_recent_close_match<'a>(
         // ratio, so if a faster check fails, the slower checks are guaranteed
         // to also fail.
         if matcher.real_quick_ratio() >= cutoff && matcher.ratio() >= cutoff {
-            return Some(start_ts);
+            return match start_ts {
+                Some(ts) => HistoryMatch::MatchedAt(ts),
+                None => HistoryMatch::MatchedWithoutTimestamp,
+            };
         }
     }
 
-    None
+    HistoryMatch::NoMatch
 }
 
 /// Resolves the history-match decision from the command-history and agent
@@ -894,17 +918,20 @@ async fn most_recent_close_match<'a>(
 ///   has no timestamp (e.g. a history-file entry) but the prompt does, the
 ///   prompt is treated as more recent (AI).
 fn resolve_history_match(
-    command_match: Option<Option<DateTime<Local>>>,
-    prompt_match: Option<Option<DateTime<Local>>>,
+    command_match: HistoryMatch,
+    prompt_match: HistoryMatch,
 ) -> Option<(InputType, InputTypeAutoDetectionSource)> {
+    use HistoryMatch::{MatchedAt, MatchedWithoutTimestamp, NoMatch};
+
     match (command_match, prompt_match) {
-        (Some(command_ts), Some(prompt_ts)) => {
-            let prompt_is_newer = match (command_ts, prompt_ts) {
-                (Some(command_ts), Some(prompt_ts)) => prompt_ts > command_ts,
-                (None, Some(_)) => true,
-                (Some(_), None) | (None, None) => false,
-            };
-            if prompt_is_newer {
+        (NoMatch, NoMatch) => None,
+        // Both sources matched: the entry with the later timestamp wins. When
+        // the command has no timestamp (e.g. a shell history-file entry) but the
+        // prompt does, the prompt is treated as more recent (AI). Without a
+        // prompt timestamp we cannot prove the prompt is newer, so we preserve
+        // the Shell short-circuit.
+        (MatchedAt(command_ts), MatchedAt(prompt_ts)) => {
+            if prompt_ts > command_ts {
                 log::debug!("found match from prompt history at {prompt_ts:?}");
                 Some((InputType::AI, InputTypeAutoDetectionSource::HistoryMatch))
             } else {
@@ -912,15 +939,24 @@ fn resolve_history_match(
                 Some((InputType::Shell, InputTypeAutoDetectionSource::HistoryMatch))
             }
         }
-        (Some(command_ts), None) => {
-            log::debug!("found match from command history at {command_ts:?}");
-            Some((InputType::Shell, InputTypeAutoDetectionSource::HistoryMatch))
-        }
-        (None, Some(prompt_ts)) => {
+        (MatchedWithoutTimestamp, MatchedAt(prompt_ts)) => {
             log::debug!("found match from prompt history at {prompt_ts:?}");
             Some((InputType::AI, InputTypeAutoDetectionSource::HistoryMatch))
         }
-        (None, None) => None,
+        (MatchedAt(_) | MatchedWithoutTimestamp, MatchedWithoutTimestamp) => {
+            log::debug!("found match from command history");
+            Some((InputType::Shell, InputTypeAutoDetectionSource::HistoryMatch))
+        }
+        // Command-only match -> Shell.
+        (MatchedAt(_) | MatchedWithoutTimestamp, NoMatch) => {
+            log::debug!("found match from command history");
+            Some((InputType::Shell, InputTypeAutoDetectionSource::HistoryMatch))
+        }
+        // Prompt-only match -> AI.
+        (NoMatch, MatchedAt(_) | MatchedWithoutTimestamp) => {
+            log::debug!("found match from prompt history");
+            Some((InputType::AI, InputTypeAutoDetectionSource::HistoryMatch))
+        }
     }
 }
 

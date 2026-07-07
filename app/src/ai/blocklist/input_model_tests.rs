@@ -5,11 +5,11 @@
 //! policy-driven mechanism where the initial config, the locked-AI gate, and
 //! the reactive subscriptions all defer to the injected [`InputModePolicy`].
 //!
-//! For [`resolve_history_match`], each `Option<Option<DateTime<Local>>>`
-//! argument models one history source: the outer `Option` is whether that
-//! source had a close match, and the inner `Option` is that match's timestamp
-//! (command-history-file entries may have no timestamp; agent prompt entries
-//! always carry one).
+//! For [`resolve_history_match`], each [`HistoryMatch`] argument models one
+//! history source: `NoMatch` means the source had no close match, `MatchedAt`
+//! carries the matched entry's timestamp, and `MatchedWithoutTimestamp` is a
+//! match with no timestamp (command-history-file entries may have no timestamp;
+//! agent prompt entries always carry one).
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -53,14 +53,17 @@ const HISTORY_MATCH_SHELL: Option<(InputType, InputTypeAutoDetectionSource)> =
 fn no_match_from_either_source_is_not_history_match() {
     // Neither command nor prompt history matched: the caller must fall through
     // to the classifier, so we cannot report a `HistoryMatch` decision.
-    assert_eq!(resolve_history_match(None, None), None);
+    assert_eq!(
+        resolve_history_match(HistoryMatch::NoMatch, HistoryMatch::NoMatch),
+        None,
+    );
 }
 
 #[test]
 fn prompt_only_match_locks_to_ai_history_match() {
     let (_, prompt_ts) = earlier_and_later();
     assert_eq!(
-        resolve_history_match(None, Some(Some(prompt_ts))),
+        resolve_history_match(HistoryMatch::NoMatch, HistoryMatch::MatchedAt(prompt_ts)),
         HISTORY_MATCH_AI,
     );
 }
@@ -69,7 +72,7 @@ fn prompt_only_match_locks_to_ai_history_match() {
 fn command_only_match_locks_to_shell_history_match() {
     let (command_ts, _) = earlier_and_later();
     assert_eq!(
-        resolve_history_match(Some(Some(command_ts)), None),
+        resolve_history_match(HistoryMatch::MatchedAt(command_ts), HistoryMatch::NoMatch),
         HISTORY_MATCH_SHELL,
     );
 }
@@ -77,14 +80,20 @@ fn command_only_match_locks_to_shell_history_match() {
 #[test]
 fn command_only_match_without_timestamp_locks_to_shell_history_match() {
     // History-file commands can match without carrying a timestamp.
-    assert_eq!(resolve_history_match(Some(None), None), HISTORY_MATCH_SHELL);
+    assert_eq!(
+        resolve_history_match(HistoryMatch::MatchedWithoutTimestamp, HistoryMatch::NoMatch),
+        HISTORY_MATCH_SHELL,
+    );
 }
 
 #[test]
 fn both_match_prompt_newer_locks_to_ai() {
     let (command_ts, prompt_ts) = earlier_and_later();
     assert_eq!(
-        resolve_history_match(Some(Some(command_ts)), Some(Some(prompt_ts))),
+        resolve_history_match(
+            HistoryMatch::MatchedAt(command_ts),
+            HistoryMatch::MatchedAt(prompt_ts),
+        ),
         HISTORY_MATCH_AI,
     );
 }
@@ -93,7 +102,10 @@ fn both_match_prompt_newer_locks_to_ai() {
 fn both_match_command_newer_locks_to_shell() {
     let (prompt_ts, command_ts) = earlier_and_later();
     assert_eq!(
-        resolve_history_match(Some(Some(command_ts)), Some(Some(prompt_ts))),
+        resolve_history_match(
+            HistoryMatch::MatchedAt(command_ts),
+            HistoryMatch::MatchedAt(prompt_ts),
+        ),
         HISTORY_MATCH_SHELL,
     );
 }
@@ -104,7 +116,7 @@ fn both_match_equal_timestamps_prefer_shell() {
     // recent and we preserve the Shell short-circuit.
     let ts = Local::now();
     assert_eq!(
-        resolve_history_match(Some(Some(ts)), Some(Some(ts))),
+        resolve_history_match(HistoryMatch::MatchedAt(ts), HistoryMatch::MatchedAt(ts)),
         HISTORY_MATCH_SHELL,
     );
 }
@@ -116,7 +128,10 @@ fn both_match_command_without_timestamp_locks_to_ai() {
     // recency we can establish, so it is treated as more recent.
     let (_, prompt_ts) = earlier_and_later();
     assert_eq!(
-        resolve_history_match(Some(None), Some(Some(prompt_ts))),
+        resolve_history_match(
+            HistoryMatch::MatchedWithoutTimestamp,
+            HistoryMatch::MatchedAt(prompt_ts),
+        ),
         HISTORY_MATCH_AI,
     );
 }
@@ -128,11 +143,17 @@ fn both_match_prompt_without_timestamp_prefer_shell() {
     // in practice; this pins the defensive fallback).
     let (command_ts, _) = earlier_and_later();
     assert_eq!(
-        resolve_history_match(Some(Some(command_ts)), Some(None)),
+        resolve_history_match(
+            HistoryMatch::MatchedAt(command_ts),
+            HistoryMatch::MatchedWithoutTimestamp,
+        ),
         HISTORY_MATCH_SHELL,
     );
     assert_eq!(
-        resolve_history_match(Some(None), Some(None)),
+        resolve_history_match(
+            HistoryMatch::MatchedWithoutTimestamp,
+            HistoryMatch::MatchedWithoutTimestamp,
+        ),
         HISTORY_MATCH_SHELL,
     );
 }
