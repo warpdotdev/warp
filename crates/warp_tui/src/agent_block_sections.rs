@@ -14,7 +14,8 @@ use warpui_core::AppContext;
 
 use crate::agent_block::ThinkingBlockStates;
 use crate::tool_call_labels::{
-    tool_call_display_state, tool_call_label, CommandBlockState, ToolCallDisplayState,
+    tool_call_display_state, tool_call_glyph, tool_call_label, CommandBlockState,
+    ToolCallDisplayState,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -51,12 +52,15 @@ pub(crate) fn render_plain_text_section(text: &str, app: &AppContext) -> Box<dyn
         .finish()
 }
 
-/// Renders a one-line status row for an agent tool call: per-tool, per-state
-/// text with de-emphasized styling for non-final states and cancellations,
-/// and error styling for failures. `output_streaming` marks tool calls whose
-/// arguments are still streaming in (see `ToolCallDisplayState::Constructing`);
-/// `block_state` carries the terminal block's ground truth for shell-command
-/// tool calls (see `CommandBlockState`).
+/// Renders a status row for an agent tool call: a colored state glyph in a
+/// two-cell gutter (mirroring the GUI's inline action icons), then per-tool,
+/// per-state label text that wraps with a hanging indent under itself. State
+/// lives in the glyph, so labels keep the normal foreground except in-flight
+/// rows, which stay dim until execution starts. `output_streaming` marks tool
+/// calls whose arguments are still streaming in (see
+/// `ToolCallDisplayState::Constructing`); `block_state` carries the terminal
+/// block's ground truth for shell-command tool calls (see
+/// `CommandBlockState`).
 pub(crate) fn render_tool_call_section(
     action: &AIAgentAction,
     status: Option<&AIActionStatus>,
@@ -65,23 +69,37 @@ pub(crate) fn render_tool_call_section(
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    let style = match tool_call_display_state(status, output_streaming, block_state) {
-        ToolCallDisplayState::Constructing
-        | ToolCallDisplayState::Pending
-        | ToolCallDisplayState::AwaitingApproval
-        | ToolCallDisplayState::Running
-        | ToolCallDisplayState::Cancelled => builder.dim_text_style(),
-        ToolCallDisplayState::Succeeded => builder.muted_text_style(),
+    let state = tool_call_display_state(status, output_streaming, block_state);
+    let glyph_style = match state {
+        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
+            builder.dim_text_style()
+        }
+        ToolCallDisplayState::AwaitingApproval | ToolCallDisplayState::Running => {
+            builder.attention_glyph_style()
+        }
+        ToolCallDisplayState::Succeeded => builder.success_glyph_style(),
         ToolCallDisplayState::Failed => builder.error_text_style(),
+        ToolCallDisplayState::Cancelled => builder.muted_text_style(),
     };
-    TuiText::new(tool_call_label(
-        action,
-        status,
-        output_streaming,
-        block_state,
-    ))
-    .with_style(style)
-    .finish()
+    let label_style = match state {
+        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
+            builder.dim_text_style()
+        }
+        ToolCallDisplayState::AwaitingApproval
+        | ToolCallDisplayState::Running
+        | ToolCallDisplayState::Succeeded
+        | ToolCallDisplayState::Failed
+        | ToolCallDisplayState::Cancelled => builder.primary_text_style(),
+    };
+    let label = tool_call_label(action, status, output_streaming, block_state);
+    TuiFlex::row()
+        .child(
+            TuiText::new(format!("{} ", tool_call_glyph(state)))
+                .with_style(glyph_style)
+                .finish(),
+        )
+        .child(TuiText::new(label).with_style(label_style).finish())
+        .finish()
 }
 
 /// Renders a reasoning message as a collapsible thinking block. The header

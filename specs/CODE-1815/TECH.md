@@ -2,7 +2,7 @@
 
 ## Context
 
-The TUI transcript previously rendered every agent tool call as a static dim row reading "executed a tool call". This change gives each tool call a one-line, per-state label (pending / awaiting approval / running / succeeded / failed / cancelled), modeled on the GUI's inline action text.
+The TUI transcript previously rendered every agent tool call as a static dim row reading "executed a tool call". This change gives each tool call a one-line row with a colored status glyph and per-state label (pending / awaiting approval / running / succeeded / failed / cancelled), modeled on the GUI's inline action text and status icons.
 
 How the surrounding system works:
 
@@ -86,11 +86,18 @@ Footnotes:
 
 ### Rendering and styling
 
-`render_tool_call_section(action, status, output_streaming, block_state, app)` in `crates/warp_tui/src/agent_block_sections.rs` styles the label by display state:
+`render_tool_call_section(action, status, output_streaming, block_state, app)` in `crates/warp_tui/src/agent_block_sections.rs` renders a `TuiFlex::row()` of a two-cell status-glyph gutter followed by the label, so a wrapping label keeps a hanging indent under its own first column. The glyph mirrors the GUI's inline action icons (`action_icon` in `app/src/ai/blocklist/block/view_impl/output.rs:3501`, `inline_action_icons.rs`), per display state (`tool_call_glyph` in `crates/warp_tui/src/tool_call_labels.rs`):
 
-- Constructing / Pending / AwaitingApproval / Running / Cancelled → `TuiUiBuilder::dim_text_style()`
-- Succeeded → `TuiUiBuilder::muted_text_style()`
-- Failed → `TuiUiBuilder::error_text_style()` (new; `terminal_colors().normal.red`, `crates/warp_tui/src/tui_builder.rs`)
+- Constructing / Pending → `○` in `TuiUiBuilder::dim_text_style()` (GUI: grey circle)
+- AwaitingApproval → `■` in `TuiUiBuilder::attention_glyph_style()` (`terminal_colors().normal.yellow`; GUI: yellow stop)
+- Running → `●` in `attention_glyph_style()` (GUI: yellow running circle)
+- Succeeded → `✓` in `TuiUiBuilder::success_glyph_style()` (`terminal_colors().normal.green`; GUI: green check)
+- Failed → `✗` in `TuiUiBuilder::error_text_style()` (`terminal_colors().normal.red`; GUI: red x)
+- Cancelled → `■` in `TuiUiBuilder::muted_text_style()` (`terminal_colors().bright.black`; GUI: grey cancelled block)
+
+State lives in the glyph, so the label keeps `TuiUiBuilder::primary_text_style()` (normal foreground) for every state except Constructing / Pending, which use `dim_text_style()` until execution starts (GUI parity: labels are not tinted by outcome; only queued/streaming-not-first rows dim).
+
+`TuiText` (`crates/warpui_core/src/elements/tui/text.rs`) additionally supports multiple styled runs via `TuiText::from_spans`, flowing as one wrapped paragraph with per-run styles patching over the base style. The tool-call row itself uses two single-style texts in the flex row; `from_spans` exists for upcoming rows that need mid-line colored fragments (e.g. the file-edits `+a −r` counts).
 
 ### Status plumbing and re-render
 
@@ -101,8 +108,9 @@ Footnotes:
 ## Testing and validation
 
 - `crates/warp_tui/src/tool_call_labels_tests.rs` — a single lifecycle test asserting the label text changes as one action moves through constructing → pending → awaiting approval → running → cancelled/failed, plus the block-state overrides for a snapshot result (no block / running / exit 0 / exit 1 / exit 130). Per-tool string variants are intentionally not unit-tested; the table above is the source of truth for copy.
-- `crates/warp_tui/src/agent_block_tests.rs` — transcript rendering asserts label text, dim styling, and message ordering through the real `BlocklistAIActionModel` fixture.
-- `cargo nextest run -p warp_tui`, `./script/format --check`, and presubmit-style clippy on `warp` + `warp_tui` all pass.
+- `crates/warp_tui/src/agent_block_tests.rs` — transcript rendering asserts label text, glyph prefixes, per-state glyph/label colors (`tool_call_row_glyph_and_colors_reflect_state`), and message ordering through the real `BlocklistAIActionModel` fixture.
+- `crates/warpui_core/src/elements/tui/text_tests.rs` — span construction: per-span styles patching the base style, wrapping across span boundaries, hard newlines inside spans, and empty spans occupying no rows.
+- `cargo nextest run -p warp_tui`, `cargo nextest run -p warpui_core --features tui`, `./script/format --check`, and presubmit-style clippy on `warp` + `warp_tui` all pass.
 
 No parallelization was used: the change is a single-crate feature plus a small export surface, implemented sequentially.
 

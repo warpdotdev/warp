@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
-    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection,
-    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, Appearance, LLMId,
-    MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared, TaskId, TerminalModel,
-    UserQueryMode,
+    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIBlockModel, AIBlockOutputStatus,
+    AIConversationId, AIRequestType, Appearance, LLMId, MessageId, OutputStatusUpdateCallback,
+    RequestCommandOutputResult, ServerOutputId, Shared, TaskId, TerminalModel, UserQueryMode,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -24,6 +24,7 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext, ViewHandle};
 
 use super::{TuiAIBlock, TuiAIBlockSection};
+use crate::agent_block_sections::render_tool_call_section;
 use crate::test_fixtures::{add_test_action_model, TestHostView};
 
 #[test]
@@ -187,13 +188,19 @@ fn agent_block_renders_tool_calls_in_message_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["before", "", "Init project", "", "after", ""],
+                vec!["before", "", "○ Init project", "", "after", ""],
             );
+            // A pending tool call renders a dim grey glyph and a dim label.
             assert_eq!(
                 frame.buffer[(0, 2)].fg,
                 expected_tool_call_text_color(app_ctx)
             );
             assert!(frame.buffer[(0, 2)].modifier.contains(Modifier::DIM));
+            assert_eq!(
+                frame.buffer[(2, 2)].fg,
+                expected_tool_call_text_color(app_ctx)
+            );
+            assert!(frame.buffer[(2, 2)].modifier.contains(Modifier::DIM));
         });
     });
 }
@@ -237,8 +244,89 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["Init project", "", "Init project", ""],
+                vec!["○ Init project", "", "○ Init project", ""],
             );
+        });
+    });
+}
+
+#[test]
+fn tool_call_row_glyph_and_colors_reflect_state() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let theme = Appearance::as_ref(app_ctx).theme();
+            let green: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.green)).into();
+            let yellow: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.yellow)).into();
+            let red: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.red)).into();
+            let white: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into();
+            let grey: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into();
+
+            let render = |action: &AIAgentAction, status: Option<&AIActionStatus>| {
+                let mut presenter = TuiPresenter::new();
+                presenter.present_element(
+                    render_tool_call_section(action, status, false, None, app_ctx),
+                    TuiRect::new(0, 0, 40, 1),
+                    app_ctx,
+                )
+            };
+
+            // Succeeded: green check in the gutter, normal-foreground label.
+            let action = test_action("action-1");
+            let succeeded = finished_status(&action, AIAgentActionResultType::InitProject);
+            let frame = render(&action, Some(&succeeded));
+            assert_eq!(
+                frame.buffer.to_lines()[0].trim_end(),
+                "✓ Init project — done"
+            );
+            assert_eq!(frame.buffer[(0, 0)].fg, green);
+            assert_eq!(frame.buffer[(2, 0)].fg, white);
+            assert!(!frame.buffer[(2, 0)].modifier.contains(Modifier::DIM));
+
+            // Running: yellow dot.
+            let frame = render(&action, Some(&AIActionStatus::RunningAsync));
+            assert_eq!(frame.buffer.to_lines()[0].trim_end(), "● Init project…");
+            assert_eq!(frame.buffer[(0, 0)].fg, yellow);
+            assert_eq!(frame.buffer[(2, 0)].fg, white);
+
+            // Failed (denylisted command): red x, normal-foreground label.
+            let command_action = test_command_action("action-2", "git status");
+            let failed = finished_status(
+                &command_action,
+                AIAgentActionResultType::RequestCommandOutput(
+                    RequestCommandOutputResult::Denylisted {
+                        command: "git status".to_owned(),
+                    },
+                ),
+            );
+            let frame = render(&command_action, Some(&failed));
+            assert_eq!(
+                frame.buffer.to_lines()[0].trim_end(),
+                "✗ `git status` denied (denylisted)"
+            );
+            assert_eq!(frame.buffer[(0, 0)].fg, red);
+            assert_eq!(frame.buffer[(2, 0)].fg, white);
+
+            // Cancelled: grey block, normal-foreground label.
+            let cancelled = finished_status(
+                &command_action,
+                AIAgentActionResultType::RequestCommandOutput(
+                    RequestCommandOutputResult::CancelledBeforeExecution,
+                ),
+            );
+            let frame = render(&command_action, Some(&cancelled));
+            assert_eq!(
+                frame.buffer.to_lines()[0].trim_end(),
+                "■ Cancelled `git status`"
+            );
+            assert_eq!(frame.buffer[(0, 0)].fg, grey);
+            assert!(!frame.buffer[(0, 0)].modifier.contains(Modifier::DIM));
+            assert_eq!(frame.buffer[(2, 0)].fg, white);
         });
     });
 }
@@ -626,6 +714,33 @@ fn test_action(id: &str) -> AIAgentAction {
         action: AIAgentActionType::InitProject,
         requires_result: true,
     }
+}
+
+/// Builds a shell-command tool-call action.
+fn test_command_action(id: &str, command: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::RequestCommandOutput {
+            command: command.to_owned(),
+            is_read_only: None,
+            is_risky: None,
+            wait_until_completion: true,
+            uses_pager: None,
+            rationale: None,
+            citations: Vec::new(),
+        },
+        requires_result: true,
+    }
+}
+
+/// Builds a `Finished` status carrying `result` for `action`.
+fn finished_status(action: &AIAgentAction, result: AIAgentActionResultType) -> AIActionStatus {
+    AIActionStatus::Finished(Arc::new(AIAgentActionResult {
+        id: action.id.clone(),
+        task_id: action.task_id.clone(),
+        result,
+    }))
 }
 
 /// Builds an output status with a single reasoning message (id `reasoning-1`)

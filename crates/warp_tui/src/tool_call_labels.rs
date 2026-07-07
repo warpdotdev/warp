@@ -96,6 +96,21 @@ pub(crate) fn tool_call_display_state(
     }
 }
 
+/// The leading status glyph for a tool-call row; the caller colors it to
+/// mirror the GUI's inline action icons (`action_icon` in the GUI's
+/// `output.rs`): grey circle while pending, yellow block awaiting approval,
+/// yellow dot running, green check on success, red x on failure, grey block
+/// on cancellation.
+pub(crate) fn tool_call_glyph(state: ToolCallDisplayState) -> &'static str {
+    match state {
+        State::Constructing | State::Pending => "○",
+        State::AwaitingApproval | State::Cancelled => "■",
+        State::Running => "●",
+        State::Succeeded => "✓",
+        State::Failed => "✗",
+    }
+}
+
 /// Returns the one-line transcript label for a tool call in its current state.
 pub(crate) fn tool_call_label(
     action: &AIAgentAction,
