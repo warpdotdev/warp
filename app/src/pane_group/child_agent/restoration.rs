@@ -123,7 +123,7 @@ impl PaneGroup {
                         history_model.resolved_parent_conversation_id_for_conversation(conversation)
                     })
                     .or_else(|| {
-                        RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
+                        RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
                             store.get_conversation(&child_conversation_id).and_then(
                                 |conversation| {
                                     history_model.resolved_parent_conversation_id_for_conversation(

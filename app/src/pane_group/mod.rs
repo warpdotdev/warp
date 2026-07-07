@@ -1635,7 +1635,7 @@ impl PaneGroup {
                     .conversation_ids_to_restore
                     .iter()
                     .filter(|&conversation_id| {
-                        RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
+                        RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
                             store
                                 .get_conversation(conversation_id)
                                 .is_some_and(|persisted_conv| {
