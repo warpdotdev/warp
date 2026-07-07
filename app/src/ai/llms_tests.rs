@@ -392,6 +392,24 @@ fn available(default_id: &str, choices: Vec<LLMInfo>) -> AvailableLLMs {
 }
 
 #[test]
+fn deserialized_available_llms_with_missing_default_does_not_panic() {
+    // `AvailableLLMs::new()` guarantees `default_id` is one of `choices`, but
+    // deserialization (e.g. a stale persisted cache or a server payload)
+    // bypasses `new()`. Build such a struct, round-trip it through serde, and
+    // confirm `default_llm_info()` falls back to the first choice instead of
+    // panicking (Sentry: "Default LLM ID must be present in choices").
+    let original = available(
+        "missing-default",
+        vec![server_llm("gpt-x", None), server_llm("gpt-y", None)],
+    );
+    let json = serde_json::to_string(&original).expect("should serialize");
+    let deserialized: AvailableLLMs = serde_json::from_str(&json).expect("should deserialize");
+
+    assert_eq!(deserialized.default_id.as_str(), "missing-default");
+    assert_eq!(deserialized.default_llm_info().id.as_str(), "gpt-x");
+}
+
+#[test]
 fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disabled() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
