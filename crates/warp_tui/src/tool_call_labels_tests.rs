@@ -6,7 +6,7 @@ use warp::tui_export::{
 };
 use warp_core::command::ExitCode;
 
-use super::{tool_call_label, LrcCommandState};
+use super::{tool_call_label, CommandBlockState};
 
 /// Builds a `Finished` status wrapping the given result.
 fn finished(result: AIAgentActionResultType) -> AIActionStatus {
@@ -71,7 +71,8 @@ fn label_changes_across_action_lifecycle() {
     );
 
     // Agent-monitored command: the stored result stays a snapshot forever, so
-    // the terminal block's resolved state drives the label.
+    // the terminal block's resolved state drives the label whenever the block
+    // exists; the snapshot is only the no-block fallback.
     let snapshot = finished(AIAgentActionResultType::RequestCommandOutput(
         RequestCommandOutputResult::LongRunningCommandSnapshot {
             block_id: BlockId::new(),
@@ -90,16 +91,16 @@ fn label_changes_across_action_lifecycle() {
             &action,
             Some(&snapshot),
             false,
-            Some(LrcCommandState::StillRunning)
+            Some(CommandBlockState::Running)
         ),
-        "`git status` is still running"
+        "Running `git status`"
     );
     assert_eq!(
         tool_call_label(
             &action,
             Some(&snapshot),
             false,
-            Some(LrcCommandState::Finished {
+            Some(CommandBlockState::Finished {
                 exit_code: ExitCode::from(0)
             })
         ),
@@ -110,7 +111,7 @@ fn label_changes_across_action_lifecycle() {
             &action,
             Some(&snapshot),
             false,
-            Some(LrcCommandState::Finished {
+            Some(CommandBlockState::Finished {
                 exit_code: ExitCode::from(1)
             })
         ),
@@ -121,7 +122,7 @@ fn label_changes_across_action_lifecycle() {
             &action,
             Some(&snapshot),
             false,
-            Some(LrcCommandState::Finished {
+            Some(CommandBlockState::Finished {
                 exit_code: ExitCode::from(130)
             })
         ),

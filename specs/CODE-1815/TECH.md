@@ -15,7 +15,7 @@ How the surrounding system works:
 
 ### Display state
 
-`crates/warp_tui/src/tool_call_labels.rs` defines `ToolCallDisplayState` and collapses `Option<&AIActionStatus>` plus the exchange's output-streaming flag into it:
+`crates/warp_tui/src/tool_call_labels.rs` defines `ToolCallDisplayState` and collapses `Option<&AIActionStatus>`, the exchange's output-streaming flag, and (for shell-command rows) the backing terminal block's `CommandBlockState` into it. A resolved block state supersedes the status entirely — `Running` → `Running`; `Finished` → `Cancelled` (SIGINT) / `Succeeded` (`was_successful`) / `Failed` per exit code (see footnote 1). Otherwise:
 
 - `None` while the exchange output is still streaming → `Constructing`: the tool call's arguments are still streaming in and may be empty/partial, so labels never interpolate them. Each tool has an arg-free loading label in `label_for_action`, indexed on the GUI's loading copy (`common.rs` `LOAD_OUTPUT_MESSAGE_*`, e.g. "Generating command…", "Grepping…", "Finding files…", "Reading files…", "Searching codebase…", "Preparing question…"). This mirrors the GUI's `get_action_status(id).is_none() && status.is_streaming()` gating (and fixes the blank-args window the GUI itself still has for Grep/FileGlob).
 - `None` (stream finished) / `Preprocessing` / `Queued` → `Pending`
@@ -23,11 +23,11 @@ How the surrounding system works:
 - `RunningAsync` → `Running`
 - `Finished(result)` → `Cancelled` / `Failed` / `Succeeded` via `is_cancelled()` / `is_failed()`, else success
 
-Per-tool special results are handled inside the per-tool match: `RunAgentsResult::Denied` (a failed state with its own copy), `SuggestNewConversationResult::Rejected` (a success-state user decision, not a failure), denylisted commands, and long-running command snapshots.
+Per-tool special results are handled inside the per-tool match: `RunAgentsResult::Denied` (a failed state with its own copy), `SuggestNewConversationResult::Rejected` (a success-state user decision, not a failure), denylisted commands, and long-running command snapshots (no-block fallback).
 
 ### Label function
 
-`tool_call_label(action: &AIAgentAction, status: Option<&AIActionStatus>, output_streaming: bool) -> String` is a pure function matching exhaustively over all `AIAgentActionType` variants (no `_` arm); `output_streaming` comes from `AIBlockOutputStatus::is_streaming()` at render time. Helpers:
+`tool_call_label(action: &AIAgentAction, status: Option<&AIActionStatus>, output_streaming: bool, block_state: Option<CommandBlockState>) -> String` is a pure function matching exhaustively over all `AIAgentActionType` variants (no `_` arm); `output_streaming` comes from `AIBlockOutputStatus::is_streaming()` and `block_state` from `TuiAIBlock::command_block_state` at render time. Helpers:
 
 - `single_line`: first line only, capped at 80 chars, `…` appended when trimmed (mirrors the GUI's `format_command_text`).
 - `display_path`: `"."` → "the current directory" (mirrors `app/src/ai/blocklist/block/view_impl/output.rs:2425-2433`).
@@ -71,7 +71,7 @@ Placeholders: `{cmd}`=command, `{q}`=query, `{qs}`/`{pats}`=comma-joined queries
 
 Footnotes:
 
-1. `LongRunningCommandSnapshot` (agent-monitored command) counts as success. The stored action result is never superseded when the command later finishes, so the label consults the terminal `Block` (looked up by the snapshot's `block_id`, mirroring the GUI's stale-result override in `RequestedCommandView`, requested_command.rs:1368-1376): block still running → "`{cmd}` is still running"; finished → "Ran `{cmd}`" / "`{cmd}` exited with code {n}" / "Cancelled `{cmd}`" (SIGINT), per the block's exit code.
+1. For `RequestCommandOutput` rows, the terminal `Block` backing the command supersedes the action status/result for execution states whenever it exists (GUI parity: `RequestedCommandView` derives icon and expandability from the block, requested_command.rs:1148-1154, 1275-1307). Block running → "Running `{cmd}`"; finished → "Ran `{cmd}`" / "`{cmd}` exited with code {n}" / "Cancelled `{cmd}`" (SIGINT), per the block's exit code. This matters especially for agent-monitored commands, whose stored result stays a `LongRunningCommandSnapshot` forever; with no local block (viewers, restored sessions) that snapshot result falls back to "`{cmd}` is still running".
 2. `{code}` from the completed exit code; `Denylisted` → "`{cmd}` denied (denylisted)". Exit code 130 is classified as cancelled by `AIAgentActionResultType::is_cancelled`.
 3. 0 results → "…, no results". `{repo}` = file name of the request's `codebase_path`; the " in {repo}" segment is omitted when absent.
 4. `CodebaseNotIndexed` appends " because the codebase isn't indexed".
@@ -86,21 +86,21 @@ Footnotes:
 
 ### Rendering and styling
 
-`render_tool_call_section(action, status, app)` in `crates/warp_tui/src/agent_block_sections.rs` styles the label by display state:
+`render_tool_call_section(action, status, output_streaming, block_state, app)` in `crates/warp_tui/src/agent_block_sections.rs` styles the label by display state:
 
-- Pending / AwaitingApproval / Running / Cancelled → `TuiUiBuilder::dim_text_style()`
+- Constructing / Pending / AwaitingApproval / Running / Cancelled → `TuiUiBuilder::dim_text_style()`
 - Succeeded → `TuiUiBuilder::muted_text_style()`
 - Failed → `TuiUiBuilder::error_text_style()` (new; `terminal_colors().normal.red`, `crates/warp_tui/src/tui_builder.rs`)
 
 ### Status plumbing and re-render
 
-- `TuiAIBlock` stores the `ModelHandle<BlocklistAIActionModel>` and looks up `get_action_status(&action.id)` at render time for each tool-call section (`crates/warp_tui/src/agent_block.rs`). It also holds the surface's `Arc<FairMutex<TerminalModel>>`: for long-running-snapshot results it resolves the command block's ground truth via `lrc_command_state`.
+- `TuiAIBlock` stores the `ModelHandle<BlocklistAIActionModel>` and looks up `get_action_status(&action.id)` at render time for each tool-call section (`crates/warp_tui/src/agent_block.rs`). It also holds the surface's `Arc<FairMutex<TerminalModel>>`: for every shell-command action it resolves the backing block's ground truth via `command_block_state` (lookup by `block_for_ai_action_id`, with the snapshot result's `block_id` as fallback).
 - `TuiTranscriptView` subscribes to `BlocklistAIActionEvent`; on any transition it finds the agent block whose output contains that action id (`TuiAIBlock::renders_action`), calls `mark_rich_content_dirty(view_id)`, and notifies (`crates/warp_tui/src/transcript_view.rs`). Dirty-marking is required because label text changes can change wrapped height, and block heights are cached in the block list. Each block maintains a `HashSet` of its action ids (populated by `sync_action_views` as output streams in, mirroring the GUI `AIBlock`'s `requested_action_ids`), so the per-event check is an O(1) set lookup per block rather than an output-message scan.
 - `app/src/tui_export.rs` additionally exports `AIActionStatus`, `BlocklistAIActionEvent`, and the request/result types the label logic and its tests consume; `app/src/ai/blocklist/mod.rs` re-exports `AIActionStatus` and `BlocklistAIActionEvent` publicly.
 
 ## Testing and validation
 
-- `crates/warp_tui/src/tool_call_labels_tests.rs` — a single lifecycle test asserting the label text changes as one action moves through pending → awaiting approval → running → cancelled/failed. Per-tool string variants are intentionally not unit-tested; the table above is the source of truth for copy.
+- `crates/warp_tui/src/tool_call_labels_tests.rs` — a single lifecycle test asserting the label text changes as one action moves through constructing → pending → awaiting approval → running → cancelled/failed, plus the block-state overrides for a snapshot result (no block / running / exit 0 / exit 1 / exit 130). Per-tool string variants are intentionally not unit-tested; the table above is the source of truth for copy.
 - `crates/warp_tui/src/agent_block_tests.rs` — transcript rendering asserts label text, dim styling, and message ordering through the real `BlocklistAIActionModel` fixture.
 - `cargo nextest run -p warp_tui`, `./script/format --check`, and presubmit-style clippy on `warp` + `warp_tui` all pass.
 

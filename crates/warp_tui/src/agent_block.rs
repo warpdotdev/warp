@@ -32,7 +32,7 @@ use crate::agent_block_sections::{
     render_input_section, render_plain_text_section, render_thinking_section,
     render_tool_call_section,
 };
-use crate::tool_call_labels::LrcCommandState;
+use crate::tool_call_labels::CommandBlockState;
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -248,29 +248,45 @@ impl TuiAIBlock {
         self.action_ids.contains(action_id)
     }
 
-    /// Resolves the terminal block's ground-truth state for an agent-monitored
-    /// command whose stored result is a long-running snapshot. The action
-    /// model's result is never updated after the snapshot, so the block itself
-    /// is the source of truth (mirroring the GUI's stale-result override in
-    /// `RequestedCommandView`).
-    fn lrc_command_state(&self, status: Option<&AIActionStatus>) -> Option<LrcCommandState> {
-        let result = status.and_then(AIActionStatus::finished_result)?;
-        let AIAgentActionResultType::RequestCommandOutput(
-            RequestCommandOutputResult::LongRunningCommandSnapshot { block_id, .. },
-        ) = &result.result
-        else {
+    /// Resolves the ground-truth state of the terminal block backing a
+    /// shell-command tool call. When a block exists it supersedes the stored
+    /// action status/result for execution states (mirroring the GUI's
+    /// `RequestedCommandView`, which derives the row's icon and expandability
+    /// from the block whenever one exists); the stored result only covers
+    /// rows without a local block (e.g. viewers, restored sessions).
+    fn command_block_state(
+        &self,
+        action: &AIAgentAction,
+        status: Option<&AIActionStatus>,
+    ) -> Option<CommandBlockState> {
+        if !action.action.is_request_command_output() {
             return None;
+        }
+        // Long-running snapshot results carry the block id directly; used as
+        // a fallback when the block can't be found by agent-interaction
+        // metadata.
+        let snapshot_block_id = match status
+            .and_then(AIActionStatus::finished_result)
+            .map(|result| &result.result)
+        {
+            Some(AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::LongRunningCommandSnapshot { block_id, .. },
+            )) => Some(block_id),
+            _ => None,
         };
         // Short-lived lock: the TUI layout/render pipeline drops its own model
         // guards before rich content measures or renders, so this never nests.
         let model = self.terminal_model.lock();
-        let block = model.block_list().block_with_id(block_id)?;
+        let block_list = model.block_list();
+        let block = block_list
+            .block_for_ai_action_id(&action.id)
+            .or_else(|| snapshot_block_id.and_then(|id| block_list.block_with_id(id)))?;
         Some(if block.finished() {
-            LrcCommandState::Finished {
+            CommandBlockState::Finished {
                 exit_code: block.exit_code(),
             }
         } else {
-            LrcCommandState::StillRunning
+            CommandBlockState::Running
         })
     }
 
@@ -384,12 +400,12 @@ impl TuiAIBlock {
                     Some(view) => TuiContainer::new(Box::new(view.render_child())).finish(),
                     None => {
                         let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        let lrc_state = self.lrc_command_state(status.as_ref());
+                        let block_state = self.command_block_state(action, status.as_ref());
                         render_tool_call_section(
                             action,
                             status.as_ref(),
                             output_streaming,
-                            lrc_state,
+                            block_state,
                             app,
                         )
                     }
