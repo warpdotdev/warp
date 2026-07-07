@@ -347,6 +347,7 @@ impl RegisteredDiffStorage for WeakViewHandle<CodeDiffView> {
         app: &mut AppContext,
     ) {
         let Some(view) = self.upgrade(app) else {
+            log::error!("RequestFileEdits review view vanished before diffs resolved");
             return;
         };
         view.update(app, |view, ctx| {
@@ -627,12 +628,6 @@ impl CodeDiffView {
                             } else if status.is_cancelled() {
                                 me.state = CodeDiffState::Rejected;
                                 me.should_expand_when_complete = false;
-                            } else if status.is_success() {
-                                // Terminal success that didn't flow through this
-                                // view's save (e.g. a restored conversation whose
-                                // edits already executed): stop offering Accept.
-                                me.state = CodeDiffState::Accepted;
-                                me.minimize(ctx);
                             }
                             ctx.notify();
                         }
@@ -988,9 +983,7 @@ impl CodeDiffView {
         // [`DiffStorageHelper`] flow once the executor (or the passive
         // handler) calls `accept_and_save`. Optimistically mark the diff
         // accepted and minimize the review UI.
-        self.state = CodeDiffState::Accepted;
-        self.minimize(ctx);
-        ctx.notify();
+        self.mark_accepted_for_save(ctx);
         Ok(())
     }
 
