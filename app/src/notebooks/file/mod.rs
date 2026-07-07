@@ -1048,7 +1048,9 @@ impl TypedActionView for FileNotebookView {
             }
             #[cfg(feature = "local_fs")]
             FileNotebookAction::OpenInEditor => {
-                if let Some(local_path) = self.local_path() {
+                if self.is_jupyter_notebook_file() {
+                    self.open_as_code(ctx);
+                } else if let Some(local_path) = self.local_path() {
                     use crate::util::file::external_editor::EditorSettings;
                     use crate::util::openable_file_type::resolve_file_target;
                     // Resolve target and emit event - workspace will handle all cases
