@@ -18371,8 +18371,7 @@ impl TerminalView {
                 ctx.open_url(&uri);
             }
             GridHighlightedLink::Hyperlink { link, uri } if link.contains(position) => {
-                ctx.notify();
-                ctx.open_url(uri);
+                self.open_hyperlink_uri(uri, ctx);
             }
             _ => (),
         }
@@ -18381,6 +18380,16 @@ impl TerminalView {
             ctx.reset_cursor();
             ctx.notify();
         }
+    }
+
+    /// Open an OSC 8 hyperlink URI. The URI comes from untrusted terminal
+    /// output, so it is only opened if it parses as a URL.
+    fn open_hyperlink_uri(&self, uri: &str, ctx: &mut ViewContext<Self>) {
+        if url::Url::parse(uri).is_err() {
+            return;
+        }
+        ctx.notify();
+        ctx.open_url(uri);
     }
 
     fn middle_click_on_grid(
@@ -26916,8 +26925,7 @@ impl TypedActionView for TerminalView {
                 }
             }
             HyperlinkClick(hyperlink) => {
-                ctx.notify();
-                ctx.open_url(&hyperlink.url);
+                self.open_hyperlink_uri(&hyperlink.url, ctx);
             }
             AttemptLoginGatedFeature => {
                 AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
