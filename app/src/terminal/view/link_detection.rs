@@ -474,7 +474,7 @@ impl super::TerminalView {
                 ctx.open_url(&uri);
             }
             GridHighlightedLink::Hyperlink { uri, .. } => {
-                ctx.open_url(uri);
+                self.open_hyperlink_uri(uri, ctx);
             }
         };
     }
