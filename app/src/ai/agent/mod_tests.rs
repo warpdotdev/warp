@@ -285,6 +285,8 @@ fn test_programming_language_to_extension() {
         ("tf", "hcl"),
         ("docker", "dockerfile"),
         ("containerfile", "dockerfile"),
+        ("markdown", "md"),
+        ("md", "md"),
     ];
     for (token, expected_extension) in cases {
         let language = ProgrammingLanguage::from((*token).to_string());

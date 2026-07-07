@@ -1650,6 +1650,12 @@ impl RichTextEditorView {
         });
     }
 
+    pub fn reset_with_ipynb(&mut self, ipynb: &str, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |model, ctx| {
+            model.reset_with_ipynb(ipynb, ctx);
+        });
+    }
+
     /// Open the link editor modal. If `require_existing` is `true`, there *must* be an existing
     /// link to edit at the cursor (for example, we're opening a link from the tooltip). Otherwise,
     /// the link editor is always opened (for example, to insert a new link).

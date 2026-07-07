@@ -152,12 +152,14 @@ impl Entry {
         )
     }
     /// Builds the materialized tree and standing results during the same filesystem traversal.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_tree_with_standing_queries(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
+        ancestor_is_ignored: bool,
         standing_results: &mut StandingQueryResults,
         definitions: &StandingQueryDefinitions,
     ) -> Result<Self, BuildTreeError> {
@@ -171,7 +173,7 @@ impl Entry {
             gitignores,
             remaining_file_quota,
             options,
-            false,
+            ancestor_is_ignored,
             Some(&mut standing_queries),
         )
     }
@@ -691,7 +693,7 @@ pub fn is_git_internal_path(path: &Path) -> bool {
 /// `force_included_paths`. Each force-included path is a relative component
 /// sequence (e.g. `.agents/skills`) matched against the tail of `path`, so a
 /// match also holds for the ancestor prefixes leading to it.
-fn matches_force_included_path(path: &Path, force_included_paths: &[PathBuf]) -> bool {
+pub(crate) fn matches_force_included_path(path: &Path, force_included_paths: &[PathBuf]) -> bool {
     let path_components: Vec<_> = path
         .components()
         .filter_map(|component| match component {

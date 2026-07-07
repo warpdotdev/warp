@@ -11,6 +11,8 @@ use crate::elements::tui::{
     TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext,
     TuiStyle, TuiText,
 };
+use crate::keymap::macros::*;
+use crate::keymap::FixedBinding;
 use crate::platform::WindowStyle;
 use crate::{AddWindowOptions, AppContext, Entity, TypedActionView, ViewContext};
 
@@ -151,7 +153,7 @@ impl TuiView for BumpChildView {
 
     fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
         Box::new(
-            TuiEventHandler::new(TuiText::new("child"))
+            TuiEventHandler::new(TuiText::new("child").finish())
                 .on_key("b", |_, ctx, _| ctx.dispatch_typed_action(Bump)),
         )
     }
@@ -183,6 +185,88 @@ impl TypedActionView for BumpParentView {
     fn handle_action(&mut self, _action: &Bump, _ctx: &mut ViewContext<Self>) {
         self.bumps += 1;
     }
+}
+
+/// The keymap pass: a keystroke binding whose context predicate matches a TUI
+/// view's keymap context dispatches its typed action through the responder
+/// chain — no element-level key handler is involved.
+#[test]
+fn keymap_binding_dispatches_typed_action_to_tui_view() {
+    App::test((), |mut app| async move {
+        let (window_id, root) = app.update(|ctx| {
+            ctx.register_fixed_bindings([FixedBinding::new("ctrl-c", Bump, id!("BumpParentView"))]);
+            ctx.add_tui_window(window_options(), |view_ctx| {
+                let child = view_ctx.add_tui_view(|_| BumpChildView);
+                BumpParentView { child, bumps: 0 }
+            })
+        });
+
+        let mut terminal = TestTerminal::new(TuiSize::new(20, 3));
+        terminal.events.push_back(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        let root_for_runtime = root.clone();
+        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root_for_runtime, terminal);
+
+        let mut iterations = 0;
+        runtime
+            .run_until(&mut app, |_| {
+                iterations += 1;
+                iterations > 1
+            })
+            .unwrap();
+
+        assert_eq!(
+            root.read(&app, |view, _| view.bumps),
+            1,
+            "the keymap pass should dispatch the bound action to the focused TUI view"
+        );
+    });
+}
+
+/// A binding with a permissive (always-true) context predicate whose action
+/// type has no handler on any view in the TUI responder chain must not swallow
+/// the keystroke: the keymap pass reports it unhandled and the element pass
+/// still runs. This is what keeps GUI-registered bindings inert in the TUI
+/// even when they are missing a context predicate.
+#[test]
+fn unhandled_keymap_binding_falls_through_to_element_pass() {
+    /// An action type no TUI view registers a handler for.
+    #[derive(Debug)]
+    struct GuiOnlyAction;
+
+    App::test((), |mut app| async move {
+        let (window_id, root) = app.update(|ctx| {
+            ctx.register_fixed_bindings([FixedBinding::new("b", GuiOnlyAction, always!())]);
+            ctx.add_tui_window(window_options(), |view_ctx| {
+                let child = view_ctx.add_tui_view(|_| BumpChildView);
+                BumpParentView { child, bumps: 0 }
+            })
+        });
+
+        let mut terminal = TestTerminal::new(TuiSize::new(20, 3));
+        terminal.events.push_back(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Char('b'),
+            KeyModifiers::empty(),
+        )));
+        let root_for_runtime = root.clone();
+        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root_for_runtime, terminal);
+
+        let mut iterations = 0;
+        runtime
+            .run_until(&mut app, |_| {
+                iterations += 1;
+                iterations > 1
+            })
+            .unwrap();
+
+        assert_eq!(
+            root.read(&app, |view, _| view.bumps),
+            1,
+            "a matched-but-unhandled binding must fall through to the element pass"
+        );
+    });
 }
 
 #[test]

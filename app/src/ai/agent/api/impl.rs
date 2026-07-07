@@ -101,10 +101,10 @@ pub async fn generate_multi_agent_output(
             supports_bundled_skills: FeatureFlag::BundledSkills.is_enabled(),
             supports_research_agent: params.research_agent_enabled,
             supports_orchestration_v2: supports_orchestration_v2(params.orchestration_enabled),
+            supports_background_computer_use: FeatureFlag::BackgroundComputerUse.is_enabled()
+                && computer_use::background_supported(),
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,
-            // Background computer use is not supported by the local client yet.
-            supports_background_computer_use: false,
         }),
         metadata: Some(api::request::Metadata {
             logging: logging_metadata,
@@ -252,7 +252,11 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
 
     if FeatureFlag::AgentModeComputerUse.is_enabled() && params.computer_use_enabled {
         supported_tools.extend(&[api::ToolType::UseComputer]);
-        supported_tools.extend(&[api::ToolType::RequestComputerUse])
+        supported_tools.extend(&[api::ToolType::RequestComputerUse]);
+
+        if FeatureFlag::VideoRecording.is_enabled() {
+            supported_tools.extend(&[api::ToolType::StartRecording, api::ToolType::StopRecording]);
+        }
     }
 
     if FeatureFlag::PRCommentsSlashCommand.is_enabled() {

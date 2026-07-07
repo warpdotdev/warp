@@ -97,7 +97,7 @@ impl PlanAndTodoListView {
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
                 if event
-                    .terminal_view_id()
+                    .terminal_surface_id()
                     .is_some_and(|id| id != me.terminal_view_id)
                 {
                     return;
@@ -108,7 +108,7 @@ impl PlanAndTodoListView {
                 match event.clone() {
                     BlocklistAIHistoryEvent::StartedNewConversation { .. }
                     | BlocklistAIHistoryEvent::SetActiveConversation { .. }
-                    | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+                    | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                     | BlocklistAIHistoryEvent::AppendedExchange { .. }
                     | BlocklistAIHistoryEvent::UpdatedTodoList { .. } => {
                         ctx.notify();

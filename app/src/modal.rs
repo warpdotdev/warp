@@ -3,7 +3,7 @@ use warpui::color::ColorU;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Dismiss, Element, Flex, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
+    ParentElement, ParentOffsetBounds, Percentage, Radius, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::{FixedBinding, Keystroke};
@@ -22,6 +22,7 @@ pub const MODAL_WIDTH: f32 = 440.;
 pub const MODAL_HEADER_HEIGHT: f32 = 70.;
 pub const MODAL_PADDING: f32 = 28.;
 pub const MODAL_BACKDROP_OPACITY: u8 = 179;
+const MODAL_TOP_MARGIN: f32 = 35.;
 
 #[derive(Clone)]
 pub struct Modal<T> {
@@ -37,6 +38,7 @@ pub struct Modal<T> {
     close_modal_hover_state: MouseStateHandle,
     background_opacity: u8,
     offset_positioning: OffsetPositioning,
+    max_height_percentage: Option<f32>,
     /// Optional keystroke to display alongside the close button.
     dismiss_keystroke: Option<Keystroke>,
 }
@@ -163,6 +165,7 @@ impl<T: View> Modal<T> {
             close_modal_hover_state: Default::default(),
             background_opacity: MODAL_BACKDROP_OPACITY,
             offset_positioning: Self::default_offset_positioning(),
+            max_height_percentage: None,
             dismiss_keystroke: None,
         }
     }
@@ -199,6 +202,11 @@ impl<T: View> Modal<T> {
 
     pub fn with_background_opacity(mut self, opacity: u8) -> Self {
         self.background_opacity = opacity;
+        self
+    }
+    /// Caps the modal height at a percentage of the containing window height.
+    pub fn with_max_height_percentage(mut self, percentage: f32) -> Self {
+        self.max_height_percentage = Some(percentage.clamp(0., 1.));
         self
     }
 
@@ -388,7 +396,7 @@ impl<T: View> Modal<T> {
         }
     }
 
-    fn render_body(&self) -> Box<dyn Element> {
+    fn render_body(&self, max_height: f32) -> Box<dyn Element> {
         let mut container = Container::new(ChildView::new(&self.body).finish());
 
         if self.title.is_some() {
@@ -408,7 +416,7 @@ impl<T: View> Modal<T> {
                 .with_padding_bottom(padding.bottom);
         }
         ConstrainedBox::new(container.finish())
-            .with_max_height(self.body_styles.height.unwrap())
+            .with_max_height(max_height)
             .finish()
     }
 
@@ -456,17 +464,32 @@ impl<T: View> View for Modal<T> {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let has_relative_max_height = self.max_height_percentage.is_some();
+        let body_max_height = if has_relative_max_height {
+            f32::INFINITY
+        } else {
+            self.body_styles.height.unwrap()
+        };
+        let modal_max_height = if has_relative_max_height {
+            f32::INFINITY
+        } else {
+            self.modal_styles.height.unwrap()
+        };
+        let body = self.render_body(body_max_height);
         let header = self.render_header(appearance);
         let contents = if let Some(header) = header {
-            Flex::column()
-                .with_child(header)
-                .with_child(self.render_body())
-                .finish()
+            let mut contents = Flex::column().with_child(header);
+            if has_relative_max_height {
+                contents.add_child(Shrinkable::new(1., body).finish());
+            } else {
+                contents.add_child(body);
+            }
+            contents.finish()
         } else {
-            self.render_body()
+            body
         };
 
-        let mut modal = ConstrainedBox::new(
+        let modal = ConstrainedBox::new(
             Container::new(contents)
                 .with_background(blended_colors::neutral_2(appearance.theme()))
                 .with_corner_radius(self.modal_styles.border_radius.unwrap_or_default())
@@ -474,12 +497,17 @@ impl<T: View> View for Modal<T> {
                     Border::all(self.modal_styles.border_width.unwrap())
                         .with_border_fill(self.modal_styles.border_color.unwrap()),
                 )
-                .with_margin_top(35.)
+                .with_margin_top(MODAL_TOP_MARGIN)
                 .finish(),
         )
         .with_max_width(self.modal_styles.width.unwrap())
-        .with_max_height(self.modal_styles.height.unwrap())
+        .with_max_height(modal_max_height)
         .finish();
+        let mut modal = if let Some(max_height_percentage) = self.max_height_percentage {
+            Percentage::height(max_height_percentage, modal).finish()
+        } else {
+            modal
+        };
 
         if self.dismiss_on_click {
             modal = Dismiss::new(modal)

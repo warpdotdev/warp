@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use pathfinder_geometry::vector::vec2f;
@@ -10,7 +10,10 @@ use crate::elements::{
     ParentAnchor, ParentElement, ParentOffsetBounds, Rect, Stack,
 };
 use crate::platform::WindowStyle;
-use crate::{App, AppContext, Entity, Presenter, TypedActionView, ViewContext, WindowInvalidation};
+use crate::{
+    App, AppContext, Entity, EntityIdSet, Presenter, TypedActionView, ViewContext,
+    WindowInvalidation,
+};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 enum ElementIdentifier {
@@ -130,7 +133,7 @@ fn test_uniform_layered_click_handling() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,

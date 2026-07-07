@@ -6,9 +6,15 @@
 # is available (mirroring `./script/run`), otherwise falls back to the OSS
 # channel so contributors without repo access can still run the TUI. Unlike the
 # GUI `./script/run`, the TUI is a console binary, so there is no `.app` bundle
-# step — it just runs the appropriate `cargo` binary.
+# step.
 #
-# Extra arguments are forwarded to `cargo run` (e.g. `--release`); use `--` to
+# On macOS the binary is built with `cargo build` and then codesigned with a
+# stable "Apple Development" identity (mirroring `./script/macos/run`). Keychain
+# item ACLs key off the code signature, so a stable signature means rebuilds
+# don't re-prompt for your keychain password. Ad-hoc signatures from a plain
+# `cargo run` change on every build, which is what causes repeated prompts.
+#
+# Extra arguments are forwarded to `cargo` (e.g. `--release`); use `--` to
 # pass arguments through to the binary itself.
 
 set -e
@@ -26,5 +32,66 @@ else
     CHANNEL="oss"
 fi
 
-echo "Running cargo run -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
-exec cargo run -p warp_tui --bin "${BIN}" "$@"
+# Split cargo arguments from binary arguments (after `--`), tracking the
+# profile so we can locate the built binary for codesigning on macOS.
+CARGO_ARGS=()
+BIN_ARGS=()
+PROFILE_DIR="debug"
+while (( "$#" )); do
+  case "$1" in
+    --)
+      shift
+      BIN_ARGS=("$@")
+      break
+      ;;
+    --release)
+      PROFILE_DIR="release"
+      CARGO_ARGS+=("$1")
+      shift
+      ;;
+    --profile)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        PROFILE_DIR="$2"
+        CARGO_ARGS+=("$1" "$2")
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      CARGO_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ "$(uname -s)" = "Darwin" ]]; then
+  echo "Building cargo build -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
+  cargo build -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
+
+  # Resolve Cargo's actual target directory rather than assuming ./target
+  # (honors CARGO_TARGET_DIR / build.target-dir).
+  TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+  if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
+    TARGET_DIR="${REPO_ROOT}/target"
+  fi
+  TUI_BIN_PATH="${TARGET_DIR}/${PROFILE_DIR}/${BIN}"
+
+  SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
+  if [ -n "$SIGNING_CERT" ]; then
+    echo "Codesigning ${TUI_BIN_PATH}..."
+    codesign --force --sign "$SIGNING_CERT" "$TUI_BIN_PATH"
+  else
+    echo "Warning: no Apple Development signing identity found; skipping codesign (keychain may re-prompt on rebuilds)." >&2
+  fi
+
+  exec "$TUI_BIN_PATH" "${BIN_ARGS[@]}"
+else
+  echo "Running cargo run -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
+  if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
+    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}" -- "${BIN_ARGS[@]}"
+  else
+    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
+  fi
+fi

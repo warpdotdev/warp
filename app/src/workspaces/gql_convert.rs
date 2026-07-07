@@ -6,8 +6,8 @@ use warp_graphql::billing::{
     AiAutonomyPolicy as GqlAiAutonomyPolicy, AmbientAgentsPolicy as GqlAmbientAgentsPolicy,
     BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
     BonusGrant as GqlBonusGrant, ByoApiKeyPolicy as GqlByoApiKeyPolicy,
-    CodebaseContextPolicy as GqlCodebaseContextPolicy, CustomerType as GqlCustomerType,
-    DelinquencyStatus as GqlDelinquencyStatus,
+    ByoEndpointPolicy as GqlByoEndpointPolicy, CodebaseContextPolicy as GqlCodebaseContextPolicy,
+    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
     EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
     MultiAdminPolicy as GqlMultiAdminPolicy,
@@ -68,7 +68,7 @@ use crate::server::graphql::schema::object_action_history_from_gql;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::workspace::{
-    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, CodebaseContextPolicy,
+    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
     EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, MultiAdminPolicy,
     PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
 };
@@ -391,6 +391,14 @@ impl From<GqlByoApiKeyPolicy> for ByoApiKeyPolicy {
     }
 }
 
+impl From<GqlByoEndpointPolicy> for ByoEndpointPolicy {
+    fn from(gql_byo_endpoint_policy: GqlByoEndpointPolicy) -> ByoEndpointPolicy {
+        Self {
+            enabled: gql_byo_endpoint_policy.enabled,
+        }
+    }
+}
+
 impl From<GqlPurchaseAddOnCreditsPolicy> for PurchaseAddOnCreditsPolicy {
     fn from(
         gql_purchase_add_on_credits_policy: GqlPurchaseAddOnCreditsPolicy,
@@ -540,6 +548,7 @@ impl From<GqlTier> for Tier {
             usage_based_pricing_policy: gql_tier.usage_based_pricing_policy.map(From::from),
             codebase_context_policy: gql_tier.codebase_context_policy.map(From::from),
             byo_api_key_policy: gql_tier.byo_api_key_policy.map(From::from),
+            byo_endpoint_policy: gql_tier.byo_endpoint_policy.map(From::from),
             purchase_add_on_credits_policy: gql_tier.purchase_add_on_credits_policy.map(From::from),
             enterprise_pay_as_you_go_policy: gql_tier
                 .enterprise_pay_as_you_go_policy

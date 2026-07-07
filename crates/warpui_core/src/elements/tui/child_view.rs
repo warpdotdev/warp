@@ -17,10 +17,12 @@
 //!   the action origin for the duration of the subtree's dispatch.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiSize,
 };
-use crate::{AppContext, EntityId, Event, TuiView, ViewHandle};
+#[cfg(test)]
+use crate::EntityIdMap;
+use crate::{AppContext, EntityId, TuiView, ViewHandle};
 
 /// Embeds a registered [`TuiView`] as a node in the element tree, mirroring
 /// the GUI's `ChildView` design: the child element is never cached in this
@@ -48,7 +50,7 @@ impl TuiChildView {
     pub(crate) fn from_rendered(
         view_id: EntityId,
         child: Box<dyn TuiElement>,
-        rendered_views: &mut std::collections::HashMap<EntityId, Box<dyn TuiElement>>,
+        rendered_views: &mut EntityIdMap<Box<dyn TuiElement>>,
     ) -> Self {
         rendered_views.insert(view_id, child);
         Self { view_id }
@@ -95,7 +97,7 @@ impl TuiElement for TuiChildView {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,

@@ -585,7 +585,12 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
         }
         match hook {
             Ok(DProtoHook::CommandFinished { value }) => self.handler.command_finished(value),
-            Ok(DProtoHook::Precmd { value }) => self.handler.precmd(value),
+            Ok(DProtoHook::Precmd { value }) => match value {
+                PrecmdHookValue::WithCompletionMetadata(value) => {
+                    self.handler.precmd_with_completion_metadata(value)
+                }
+                PrecmdHookValue::PromptOnly(value) => self.handler.prompt_only_precmd(value),
+            },
             Ok(DProtoHook::Preexec { value }) => self.handler.preexec(value),
             Ok(DProtoHook::Bootstrapped { value }) => self.handler.bootstrapped(*value),
             Ok(DProtoHook::PreInteractiveSSHSession { value }) => {
@@ -679,7 +684,13 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
                 let Some(pending_shell_hook) = self.handler.finish_receiving_hook() else {
                     return;
                 };
-                let hook = pending_shell_hook.finish();
+                let hook = match pending_shell_hook.finish() {
+                    Ok(hook) => hook,
+                    Err(error) => {
+                        log::warn!("Rejected malformed key-value hook: {error}");
+                        return;
+                    }
+                };
                 safe_debug!(
                     safe: ("Decoded payload"),
                     full: ("Decoded payload string: {:?}", serde_json::to_string(&hook))

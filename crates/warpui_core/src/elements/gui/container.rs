@@ -22,6 +22,7 @@ pub struct Container {
     corner_radius: CornerRadius,
     drop_shadow: Option<DropShadow>,
     foreground_overlay: Option<Fill>,
+    foreground_border: Option<Border>,
     child: Box<dyn Element>,
     size: Option<Vector2F>,
     origin: Option<Point>,
@@ -41,6 +42,7 @@ impl Container {
             border: Border::default(),
             corner_radius: CornerRadius::default(),
             foreground_overlay: None,
+            foreground_border: None,
             drop_shadow: None,
             child,
             size: None,
@@ -60,6 +62,14 @@ impl Container {
         F: Into<Fill>,
     {
         self.foreground_overlay = Some(overlay.into());
+        self
+    }
+
+    /// Draws a border on top of the container without reserving layout space
+    /// (unlike [`Self::with_border`], which insets the child by the border
+    /// width).
+    pub fn with_foreground_border(mut self, border: impl Into<Border>) -> Self {
+        self.foreground_border = Some(border.into());
         self
     }
 
@@ -326,6 +336,22 @@ impl Element for Container {
             ctx.scene
                 .draw_rect_with_hit_recording(RectF::new(origin, size))
                 .with_background(overlay)
+                .with_corner_radius(self.corner_radius);
+            ctx.scene.stop_layer();
+        }
+
+        // Draw a foreground border on top of the container.
+        if let Some(foreground_border) = self.foreground_border {
+            ctx.scene.start_layer(ClipBounds::ActiveLayer);
+            ctx.scene.set_active_layer_click_through();
+
+            #[cfg(debug_assertions)]
+            ctx.scene
+                .set_location_for_panic_logging(self.construction_location);
+
+            ctx.scene
+                .draw_rect_with_hit_recording(RectF::new(origin, size))
+                .with_border(foreground_border)
                 .with_corner_radius(self.corner_radius);
             ctx.scene.stop_layer();
         }

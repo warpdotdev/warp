@@ -17,21 +17,31 @@ test-util = []
 async-trait.workspace = true
 cfg-if.workspace = true
 clap.workspace = true
+instant.workspace = true
 log.workspace = true
 pathfinder_geometry.workspace = true
 serde.workspace = true
 serde_with.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 command.workspace = true
-dispatch2 = "0.3.0"
 image.workspace = true
-instant.workspace = true
+# `instant` is already provided by the common [dependencies] table above.
+libc.workspace = true
 objc2.workspace = true
-objc2-app-kit.workspace = true
+# `NSEvent`/`NSGraphicsContext`/`objc2-core-graphics` are needed to build window-targeted mouse
+# events via `NSEvent::mouseEventWithType_...` and bridge to `CGEvent` for PID-targeted posting.
+objc2-app-kit = { workspace = true, features = [
+    "NSEvent",
+    "NSGraphicsContext",
+    "objc2-core-graphics",
+] }
 objc2-core-foundation.workspace = true
-objc2-core-graphics.workspace = true
+# The `libc` feature is required for `CGEvent::post_to_pid`, which delivers events to a
+# specific process without moving the global cursor.
+objc2-core-graphics = { workspace = true, features = ["libc"] }
 tempfile.workspace = true
 warpui_core.workspace = true
 
@@ -39,7 +49,10 @@ warpui_core.workspace = true
 ashpd.workspace = true
 futures.workspace = true
 image.workspace = true
+nix = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["process", "time"] }
 url.workspace = true
+uuid.workspace = true
 warpui_core.workspace = true
 x11rb = { workspace = true, features = ["xtest"] }
 zbus.workspace = true

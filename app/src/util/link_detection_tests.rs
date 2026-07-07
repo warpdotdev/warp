@@ -166,3 +166,41 @@ fn test_possible_file_paths_in_word_accepts_token_at_separator_count_cap() {
     }
     assert!(possible_file_paths_in_word(&at_cap).next().is_some());
 }
+
+/// Regression guard for link tooltips not appearing in multi-block Agent Mode conversations.
+///
+/// The bug: every AI block anchored its link tooltip overlay to a single shared, global
+/// save-position id. With 2+ rich-content blocks in a conversation, those anchors collided, so
+/// the overlay could not position itself on the clicked link and no tooltip appeared. The fix
+/// gives each block a per-view-unique anchor id (`tooltip_position_id`), so distinct blocks must
+/// resolve to distinct anchor ids.
+#[test]
+fn link_tooltip_anchor_ids_are_unique_per_block() {
+    // Two AI blocks each set their own per-view anchor id (as `show_link_tooltip` does using the
+    // block's view id).
+    let mut block_a = DetectedLinksState::default();
+    let mut block_b = DetectedLinksState::default();
+    block_a.tooltip_position_id = format!("{RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID}_1");
+    block_b.tooltip_position_id = format!("{RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID}_2");
+
+    assert_ne!(
+        block_a.resolved_tooltip_position_id(),
+        block_b.resolved_tooltip_position_id(),
+        "distinct AI blocks must resolve to distinct link tooltip anchor ids so their tooltip \
+         overlays don't collide in a multi-block conversation"
+    );
+    assert_eq!(
+        block_a.resolved_tooltip_position_id(),
+        block_a.tooltip_position_id,
+        "a block with an assigned anchor id must resolve to exactly that id"
+    );
+
+    // A block that has never opened a tooltip falls back to the shared constant. This is harmless
+    // because registration of the anchor only happens alongside an open tooltip, which always
+    // assigns a per-view id first.
+    let unset = DetectedLinksState::default();
+    assert_eq!(
+        unset.resolved_tooltip_position_id(),
+        RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID
+    );
+}

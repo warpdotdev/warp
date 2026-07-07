@@ -81,7 +81,7 @@ impl Body {
         ctx: &ViewContext<Self>,
     ) -> Byte {
         let conversations: Vec<_> = BlocklistAIHistoryModel::as_ref(ctx)
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
             .filter(|conv| conv.exchange_count() > 0)
             .cloned()
             .collect();
@@ -121,7 +121,7 @@ impl Body {
         // Check if agent shared sessions is enabled and there are active conversations
         self.has_agent_conversations = if FeatureFlag::AgentSharedSessions.is_enabled() {
             BlocklistAIHistoryModel::as_ref(ctx)
-                .all_live_conversations_for_terminal_view(terminal_view_id)
+                .all_live_conversations_for_terminal_surface(terminal_view_id)
                 .any(|conv| conv.exchange_count() > 0)
         } else {
             false

@@ -98,6 +98,8 @@ integration_tests! {
     // Tests of custom prompt behavior.
     test_copy_prompt_from_block_honor_ps1_enabled,
     test_copy_prompt_from_input_honor_ps1_enabled,
+    test_copy_block_command_and_output_honor_ps1_disabled,
+    test_copy_block_command_and_output_honor_ps1_enabled,
     // Tests zsh-specific right-prompt behavior in Warp prompt mode.
     test_warp_prompt_unsets_zsh_rprompt,
 

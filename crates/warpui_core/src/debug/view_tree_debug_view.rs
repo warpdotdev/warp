@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use itertools::Itertools;
 use pathfinder_color::ColorU;
 
@@ -8,14 +6,14 @@ use crate::elements::{
     ScrollableElement, ScrollbarWidth, Text, UniformList, UniformListState,
 };
 use crate::{
-    AppContext, Element, Entity, EntityId, TypedActionView, View, ViewContext, WeakViewHandle,
-    WindowId,
+    AppContext, Element, Entity, EntityId, EntityIdMap, TypedActionView, View, ViewContext,
+    WeakViewHandle, WindowId,
 };
 
 /// Turns a map of parent->children into a list of (view, tree_depth) pairs,
 /// ordered via depth-first traversal of the input map.
 fn populate_view_list(
-    view_children_map: &HashMap<EntityId, Vec<EntityId>>,
+    view_children_map: &EntityIdMap<Vec<EntityId>>,
     current_view_id: EntityId,
     depth: usize,
     view_list: &mut Vec<(EntityId, usize)>,
@@ -96,11 +94,11 @@ pub(super) struct ViewTreeDebugView {
 impl ViewTreeDebugView {
     pub fn new(
         target_window_id: WindowId,
-        view_parent_map: HashMap<EntityId, EntityId>,
+        view_parent_map: EntityIdMap<EntityId>,
         root_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let mut view_children_map: HashMap<EntityId, Vec<EntityId>> = Default::default();
+        let mut view_children_map: EntityIdMap<Vec<EntityId>> = Default::default();
         for (child, parent) in view_parent_map.into_iter() {
             view_children_map.entry(parent).or_default().push(child);
         }

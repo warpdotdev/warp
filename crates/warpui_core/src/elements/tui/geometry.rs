@@ -10,7 +10,7 @@
 //! against. [`TuiRectExt`] adds the few slicing helpers the hand-rolled
 //! column/container layout needs that ratatui's `Rect` does not provide.
 
-pub use ratatui::layout::{Rect as TuiRect, Size as TuiSize};
+pub use ratatui::layout::{Position as TuiPoint, Rect as TuiRect, Size as TuiSize};
 
 /// A layout constraint: an element handed a `TuiConstraint` must return a
 /// [`TuiSize`] with `min.width <= width <= max.width` and
@@ -88,6 +88,9 @@ pub trait TuiRectExt: Sized {
 
     /// Splits off the left `width` columns, returning `(left, remainder)`.
     fn split_left(self, width: u16) -> (Self, Self);
+
+    /// Returns whether `position` is inside the rect's half-open cell bounds.
+    fn contains_point(self, position: TuiPoint) -> bool;
 }
 
 impl TuiRectExt for TuiRect {
@@ -123,6 +126,28 @@ impl TuiRectExt for TuiRect {
             self.height,
         );
         (left, remainder)
+    }
+
+    fn contains_point(self, position: TuiPoint) -> bool {
+        position.x >= self.x
+            && position.x < self.right()
+            && position.y >= self.y
+            && position.y < self.bottom()
+    }
+}
+
+/// Helpers for [`TuiPoint`] (a terminal cell position) beyond what ratatui's
+/// `Position` provides.
+pub trait TuiPointExt {
+    /// Whether `self` and `other` are the same cell or immediate neighbours
+    /// (Chebyshev distance <= 1). Handy for tolerating small pointer jitter,
+    /// e.g. when detecting multi-clicks.
+    fn is_adjacent(&self, other: TuiPoint) -> bool;
+}
+
+impl TuiPointExt for TuiPoint {
+    fn is_adjacent(&self, other: TuiPoint) -> bool {
+        self.x.abs_diff(other.x) <= 1 && self.y.abs_diff(other.y) <= 1
     }
 }
 

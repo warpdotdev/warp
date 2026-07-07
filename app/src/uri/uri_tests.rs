@@ -731,6 +731,49 @@ fn test_parse_tab_path_bare_tilde() {
     assert_eq!(parse_tab_path(&url), Some(home));
 }
 
+// -- warp://settings deeplink parsing ----------------------------------------
+
+#[test]
+fn test_settings_widget_deeplink_target() {
+    assert_eq!(
+        settings_widget_deeplink_target("global_hotkey").map(|(section, _)| section),
+        Some(SettingsSection::Features),
+    );
+    assert_eq!(
+        settings_widget_deeplink_target("custom_router").map(|(section, _)| section),
+        Some(SettingsSection::WarpAgent),
+    );
+    #[cfg(not(target_family = "wasm"))]
+    assert_eq!(
+        settings_widget_deeplink_target("cli_agents").map(|(section, _)| section),
+        Some(SettingsSection::ThirdPartyCLIAgents),
+    );
+    // Unknown / empty slugs are not linkable (allowlist only).
+    assert!(settings_widget_deeplink_target("not_a_widget").is_none());
+    assert!(settings_widget_deeplink_target("").is_none());
+}
+
+#[test]
+fn test_settings_section_for_simple_subpage() {
+    assert_eq!(
+        settings_section_for_simple_subpage("appearance"),
+        Some(SettingsSection::Appearance),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("billing_and_usage"),
+        Some(SettingsSection::BillingAndUsage),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("platform"),
+        Some(SettingsSection::OzCloudAPIKeys),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("warp_agent"),
+        Some(SettingsSection::WarpAgent),
+    );
+    assert!(settings_section_for_simple_subpage("not_a_subpage").is_none());
+}
+
 // Regression coverage for issue #9005: shell scripts opened via `file://` should run,
 // not open in the editor. Exercised through the pure routing helper to avoid standing
 // up a full `AppContext`.
@@ -781,6 +824,28 @@ fn test_open_file_markdown_unchanged() {
     let p = dir.path().join("README.md");
     std::fs::write(&p, b"# hi\n").unwrap();
     assert_eq!(classify_open_file_action(&p), OpenFileAction::Notebook);
+}
+
+#[test]
+fn test_open_file_ipynb_routes_to_notebook_when_enabled() {
+    // A `.ipynb` opened via `file://` (e.g. "Open with Warp" from Finder) opens
+    // in the notebook viewer, not the raw-JSON code editor.
+    let _flag = crate::features::FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("analysis.ipynb");
+    std::fs::write(&p, b"{\"nbformat\": 4, \"cells\": []}\n").unwrap();
+    assert_eq!(classify_open_file_action(&p), OpenFileAction::Notebook);
+}
+
+#[test]
+fn test_open_file_ipynb_opens_in_editor_when_disabled() {
+    // Without the feature flag, `.ipynb` is not rendered in the notebook viewer
+    // and falls through to the code editor.
+    let _flag = crate::features::FeatureFlag::JupyterNotebookRendering.override_enabled(false);
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("analysis.ipynb");
+    std::fs::write(&p, b"{\"nbformat\": 4, \"cells\": []}\n").unwrap();
+    assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
 }
 
 #[test]

@@ -5587,6 +5587,13 @@ impl SettingsWidget for ExtraMetaKeysWidget {
     }
 }
 
+/// Stable `&'static str` id for the global-hotkey settings widget, exposed for
+/// the `warp://settings?widget=global_hotkey` deeplink (see
+/// `settings_widget_deeplink_target`).
+pub(crate) fn global_hotkey_widget_id() -> &'static str {
+    GlobalHotkeyWidget::static_widget_id()
+}
+
 #[derive(Default)]
 struct GlobalHotkeyWidget {}
 

@@ -34,6 +34,9 @@ pub enum QueuedQueryOrigin {
     AutoQueueToggle,
     /// Filed because auto-queue was in effect during an agent-requested long-running command.
     LrcAutoQueue,
+    /// Filed while an agent-requested run_shell_command action's snapshot has not yet fired.
+    /// Locked for manual push and auto-fire until the snapshot fires.
+    PendingLrcAutoQueue,
     /// Filed as the follow-up prompt of a `/compact-and <prompt>` slash command, waiting for
     /// the summarize to finish.
     CompactAndSlashCommand,
@@ -115,10 +118,14 @@ impl QueuedQuery {
     }
 
     /// Returns true if this row is locked from user mutation, reorder, and auto-fire.
-    /// Currently only the locked initial Cloud Mode row is non-mutable; lifecycle code
-    /// removes it explicitly via [`QueuedQueryModel::remove_initial_cloud_mode_row`].
+    /// Locked rows cannot be edited, deleted, reordered, pushed manually, or auto-fired by
+    /// the drain mechanism. The initial Cloud Mode row is locked permanently; PendingLrcAutoQueue
+    /// rows are locked only until the action snapshot fires.
     pub fn is_locked(&self) -> bool {
-        matches!(self.origin, QueuedQueryOrigin::InitialCloudMode)
+        matches!(
+            self.origin,
+            QueuedQueryOrigin::InitialCloudMode | QueuedQueryOrigin::PendingLrcAutoQueue
+        )
     }
 }
 
@@ -193,6 +200,11 @@ pub enum QueuedQueryEvent {
     Appended {
         conversation_id: AIConversationId,
         query_id: QueuedQueryId,
+    },
+    /// Emitted when PendingLrcAutoQueue rows are transitioned to LrcAutoQueue after
+    /// the action snapshot fires.
+    RowUnlocked {
+        conversation_id: AIConversationId,
     },
     Removed {
         conversation_id: AIConversationId,
@@ -281,7 +293,7 @@ impl QueuedQueryModel {
             } => {
                 self.drop_conversation(*conversation_id, ctx);
             }
-            BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
+            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
                 cleared_conversation_ids,
                 ..
             } => {
@@ -360,7 +372,7 @@ impl QueuedQueryModel {
         history_model: &BlocklistAIHistoryModel,
     ) -> Option<AIConversationId> {
         history_model
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
             .find_map(|conversation| {
                 self.has_command_in_flight(conversation.id())
                     .then_some(conversation.id())
@@ -463,6 +475,56 @@ impl QueuedQueryModel {
         };
         if state.queue_next_lrc_prompt_override.take().is_some() {
             ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
+        }
+    }
+
+    /// Transitions all `PendingLrcAutoQueue` rows for `conversation_id` to `LrcAutoQueue`,
+    /// unlocking them for auto-fire when the command completes. Emits `RowUnlocked` if any
+    /// rows were changed.
+    pub fn unlock_pending_lrc_rows(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
+            return;
+        };
+        let mut unlocked = false;
+        for row in state.queue.iter_mut() {
+            if row.origin == QueuedQueryOrigin::PendingLrcAutoQueue {
+                row.origin = QueuedQueryOrigin::LrcAutoQueue;
+                unlocked = true;
+            }
+        }
+        if unlocked {
+            ctx.emit(QueuedQueryEvent::RowUnlocked { conversation_id });
+        }
+    }
+
+    /// Removes all `PendingLrcAutoQueue` rows for `conversation_id` so stale locked
+    /// rows do not linger.
+    pub fn remove_pending_lrc_rows(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
+            return;
+        };
+        let mut removed_ids = Vec::new();
+        state.queue.retain(|row| {
+            if row.origin == QueuedQueryOrigin::PendingLrcAutoQueue {
+                removed_ids.push(row.id);
+                false
+            } else {
+                true
+            }
+        });
+        for query_id in removed_ids {
+            ctx.emit(QueuedQueryEvent::Removed {
+                conversation_id,
+                query_id,
+            });
         }
     }
 

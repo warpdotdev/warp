@@ -276,6 +276,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_color_overrides_in_prompt_dont_crash);
     register_test!(test_copy_prompt_from_block_honor_ps1_disabled);
     register_test!(test_copy_prompt_from_block_honor_ps1_enabled);
+    register_test!(test_copy_block_command_and_output_honor_ps1_disabled);
+    register_test!(test_copy_block_command_and_output_honor_ps1_enabled);
     register_test!(test_copy_prompt_from_input_honor_ps1_disabled);
     register_test!(test_warp_prompt_unsets_zsh_rprompt);
     register_test!(test_copy_prompt_from_input_honor_ps1_enabled);
@@ -462,6 +464,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_goto_line_clamps_out_of_range);
     register_test!(test_code_editor_line_numbers_default_to_absolute);
     register_test!(test_code_editor_relative_line_numbers_follow_cursor);
+
+    // AI document tests
+    register_test!(test_copy_ai_document_as_markdown_from_overflow_menu);
 
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);
