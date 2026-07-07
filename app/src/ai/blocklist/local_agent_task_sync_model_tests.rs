@@ -336,7 +336,8 @@ fn map_conversation_status_error_classifies_agent_exited_shell() {
 #[test]
 fn map_conversation_status_error_classifies_status_error_via_setter() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let conversation = AIConversation::new(false, false);
         let conversation_id = conversation.id();

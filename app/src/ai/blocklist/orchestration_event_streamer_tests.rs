@@ -2407,7 +2407,8 @@ fn wait_registration_root_with_children_opens_ancestor_include_self_stream() {
     App::test((), |mut app| async move {
         let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
 
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440520";
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(own_run_id.to_string());
@@ -2470,7 +2471,8 @@ fn wait_registration_root_without_children_does_not_register() {
     App::test((), |mut app| async move {
         let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
 
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440521";
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(own_run_id.to_string());
@@ -2527,7 +2529,8 @@ fn wait_registration_fetch_error_does_not_register() {
     App::test((), |mut app| async move {
         let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
 
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440522";
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(own_run_id.to_string());
@@ -2575,7 +2578,8 @@ fn wait_registration_fetch_error_does_not_register() {
 fn register_parent_on_wait_flag_off_is_noop() {
     // With the gating flag off, `register_parent_on_wait` does not fetch.
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440523";
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(own_run_id.to_string());
@@ -2608,7 +2612,8 @@ fn register_parent_on_wait_child_short_circuits() {
     App::test((), |mut app| async move {
         let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
 
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440524";
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(own_run_id.to_string());
@@ -2646,7 +2651,8 @@ fn register_parent_on_wait_already_parent_is_idempotent() {
         let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
         let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
 
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440525";
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(own_run_id.to_string());
@@ -2695,7 +2701,8 @@ fn register_parent_on_wait_without_self_run_id_is_noop() {
     App::test((), |mut app| async move {
         let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
 
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         // Intentionally leave run_id unset.
         let conversation = AIConversation::new(false, false);
         let conversation_id = conversation.id();
@@ -2728,7 +2735,8 @@ fn wait_registration_runids_fallback_watches_self_for_parent_inbox() {
     // inbox events are delivered — mirroring register_watched_run_id.
     App::test((), |mut app| async move {
         // OwnerOrchestrationAncestorStreamer intentionally left disabled.
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440527";
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(own_run_id.to_string());
