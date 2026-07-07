@@ -28,7 +28,10 @@ use std::mem;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use super::{TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize, TuiStyle};
+use super::{
+    TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect, TuiSize,
+    TuiStyle,
+};
 use crate::AppContext;
 
 pub struct TuiText {
@@ -137,7 +140,7 @@ impl TuiElement for TuiText {
         )
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
         if area.is_empty() {
             return;
         }

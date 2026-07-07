@@ -21,6 +21,10 @@
 //!   [`add_child`](TuiParentElement::add_child) /
 //!   [`add_children`](TuiParentElement::add_children).
 
+use std::time::Duration;
+
+use instant::Instant;
+
 use crate::{AppContext, EntityId, EntityIdMap};
 
 mod buffer;
@@ -35,8 +39,10 @@ mod event_handler;
 mod flex;
 mod geometry;
 mod hoverable;
+mod live;
 mod parent;
 mod scrollable;
+mod shimmering_text;
 mod text;
 mod viewported_list;
 
@@ -53,8 +59,10 @@ pub use event_handler::TuiEventHandler;
 pub use flex::TuiFlex;
 pub use geometry::{TuiConstraint, TuiPoint, TuiPointExt, TuiRect, TuiRectExt, TuiSize};
 pub use hoverable::TuiHoverable;
+pub use live::TuiLiveElement;
 pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
+pub use shimmering_text::TuiShimmeringText;
 pub use text::TuiText;
 pub use viewported_list::{
     TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,
@@ -79,6 +87,68 @@ impl<'a> TuiLayoutContext<'a> {
     /// GUI's `LayoutContext::layout` / `PaintContext::paint` /
     /// `EventContext::dispatch_event_on_view` pattern. Returns the value
     /// produced by `f`, or `None` if no element was registered for `view_id`.
+    pub(crate) fn use_view<R>(
+        &mut self,
+        view_id: EntityId,
+        f: impl FnOnce(&mut Box<dyn TuiElement>, &mut Self) -> R,
+    ) -> Option<R> {
+        let mut element = self.rendered_views.remove(&view_id)?;
+        let result = f(&mut element, self);
+        self.rendered_views.insert(view_id, element);
+        Some(result)
+    }
+}
+
+/// Carries the pre-rendered per-view element map through the paint pass and
+/// accumulates repaint requests, mirroring the GUI's `PaintContext`.
+///
+/// [`TuiChildView`] uses the view map to look up its child element; animated
+/// elements call [`repaint_after`](Self::repaint_after) during
+/// [`TuiElement::render`] to request a timed redraw. Requests coalesce with
+/// earliest-deadline-wins, and the presenter surfaces the winning deadline on
+/// the painted frame so the runtime can schedule exactly one repaint timer.
+pub struct TuiPaintContext<'a> {
+    /// Pre-rendered elements keyed by view id, consumed during paint.
+    pub rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
+    /// The earliest repaint deadline requested by any element this frame.
+    repaint_at: Option<Instant>,
+}
+
+impl<'a> TuiPaintContext<'a> {
+    /// Creates a paint context over the presenter's pre-rendered view map with
+    /// no repaint requested.
+    pub fn new(rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>) -> Self {
+        Self {
+            rendered_views,
+            repaint_at: None,
+        }
+    }
+
+    /// Requests a repaint after `delay`, keeping the earliest pending deadline.
+    pub fn repaint_after(&mut self, delay: Duration) {
+        self.repaint_at(Instant::now() + delay);
+    }
+
+    /// Requests a repaint at `new_repaint_at`, keeping the earlier deadline if
+    /// one is already pending.
+    pub fn repaint_at(&mut self, new_repaint_at: Instant) {
+        if self
+            .repaint_at
+            .is_some_and(|repaint_at| repaint_at <= new_repaint_at)
+        {
+            return;
+        }
+        self.repaint_at = Some(new_repaint_at);
+    }
+
+    /// The earliest repaint deadline requested during this paint, if any.
+    pub(crate) fn requested_repaint_at(&self) -> Option<Instant> {
+        self.repaint_at
+    }
+
+    /// Temporarily removes the element for `view_id` from `rendered_views`,
+    /// passes it (along with `self`) to `f`, then returns it — the same
+    /// move-in/move-out pattern as [`TuiLayoutContext::use_view`].
     pub(crate) fn use_view<R>(
         &mut self,
         view_id: EntityId,
@@ -124,17 +194,19 @@ pub trait TuiElement {
 
     /// Paints this element into `area` of `buffer`. `ctx` carries the
     /// presenter's pre-rendered view map so [`TuiChildView`] can look up and
-    /// render its child element without caching it locally.
+    /// render its child element without caching it locally, and collects
+    /// repaint requests from animated elements
+    /// ([`TuiPaintContext::repaint_after`]).
     ///
     /// [`TuiChildView`]: crate::elements::tui::TuiChildView
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext);
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext);
 
     /// The `(x, y)` cell, within `area`, where the terminal cursor should be
     /// placed for this element, if it owns the cursor. `ctx` is passed through
     /// so [`TuiChildView`] can delegate to its child without caching it.
     ///
     /// [`TuiChildView`]: crate::elements::tui::TuiChildView
-    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         None
     }
 
@@ -185,7 +257,7 @@ impl TuiElement for () {
         TuiSize::ZERO
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {}
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
 }
 
 /// Threads the current view ancestry through the element tree during the

@@ -31,8 +31,8 @@ use warp_editor::render::model::{
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext,
-    TuiFlex, TuiHoverable, TuiLayoutContext, TuiParentElement, TuiPoint, TuiRect, TuiRectExt,
-    TuiSize, TuiStyle, TuiText,
+    TuiFlex, TuiHoverable, TuiLayoutContext, TuiPaintContext, TuiParentElement, TuiPoint, TuiRect,
+    TuiRectExt, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::keymap::macros::*;
@@ -1506,7 +1506,7 @@ impl TuiElement for TuiInputElement {
         TuiSize::new(editor_width, content_size.height)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         self.column.render(area, buffer, ctx);
         if !self.selected_spans.is_empty() {
             let reversed = TuiStyle::default().add_modifier(Modifier::REVERSED);
@@ -1523,7 +1523,7 @@ impl TuiElement for TuiInputElement {
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         if !self.cursor_visible
             || self.cursor_col >= area.width
             || self.cursor_row_in_view >= area.height

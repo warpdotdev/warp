@@ -9,8 +9,8 @@ use warp_terminal::model::ansi::{Color, NamedColor};
 use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
 use warpui_core::elements::tui::{
-    Color as TuiColor, Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect,
-    TuiSize, TuiStyle,
+    Color as TuiColor, Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext,
+    TuiPaintContext, TuiRect, TuiSize, TuiStyle,
 };
 use warpui_core::AppContext;
 
@@ -61,7 +61,7 @@ impl TuiElement for TerminalBlockVisibleRowsElement {
         ))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
         let model = self.model.lock();
         let colors = model.colors();
         let Some(block) = model.block_list().block_with_id(&self.block_id) else {

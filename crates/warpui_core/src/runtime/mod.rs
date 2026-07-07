@@ -37,8 +37,8 @@ use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScr
 
 use crate::elements::tui::{TuiEvent, TuiEventContext, TuiLayoutContext, TuiRect, TuiSize};
 use crate::presenter::tui::TuiPresenter;
-use crate::r#async::block_on;
 use crate::r#async::executor::ForegroundTask;
+use crate::r#async::{block_on, Timer};
 use crate::{App, AppContext, TuiView, ViewHandle, WindowId};
 
 mod event_conversion;
@@ -96,8 +96,10 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     /// Lays out and paints the root view through the presenter, then flushes the
     /// frame to the terminal. Draining this window's invalidations keeps the
     /// manual + autotracking sets from accumulating (the frame is repainted in
-    /// full regardless).
-    fn draw(&mut self, ctx: &mut AppContext) -> io::Result<()> {
+    /// full regardless). Returns the earliest repaint deadline requested by an
+    /// animated element during paint, if any, so the caller can schedule a
+    /// timed redraw.
+    fn draw(&mut self, ctx: &mut AppContext) -> io::Result<Option<Instant>> {
         let size = self.terminal.size()?;
         let area = TuiRect::new(0, 0, size.width, size.height);
         let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
@@ -105,7 +107,9 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             .invalidate(&invalidation, ctx, self.window_id);
         let frame = self.presenter.present(ctx, &self.root_view, area);
         let mut writer = self.terminal.writer();
-        self.renderer.draw(&mut writer, &frame.buffer, frame.cursor)
+        self.renderer
+            .draw(&mut writer, &frame.buffer, frame.cursor)?;
+        Ok(frame.repaint_at)
     }
 
     /// Converts a raw crossterm event into the TUI vocabulary, annotating left
@@ -182,6 +186,9 @@ where
     screen: TuiScreen<T, R>,
     dirty: Rc<Cell<bool>>,
     last_size: Option<TuiSize>,
+    /// The earliest element-requested repaint deadline from the last draw; the
+    /// loop marks itself dirty once it passes.
+    pending_repaint: Option<Instant>,
     /// Restores the terminal when the runtime is dropped (the `enter` path).
     /// Held only for its `Drop`.
     _terminal_guard: Option<TuiTerminalGuard>,
@@ -222,6 +229,7 @@ where
             screen: TuiScreen::new(window_id, root_view, terminal),
             dirty,
             last_size: None,
+            pending_repaint: None,
             _terminal_guard: None,
         }
     }
@@ -238,8 +246,22 @@ where
             // 250 ms is a standard event-poll heartbeat: short enough to feel
             // responsive to resize, long enough to avoid busy-waiting. A timeout
             // is not an error — `poll_event` returns `Ok(None)`, making the loop
-            // iteration a no-op before the next draw-if-dirty check.
-            self.poll_and_dispatch(app, Duration::from_millis(250))?;
+            // iteration a no-op before the next draw-if-dirty check. A pending
+            // element-requested repaint shortens the wait so the redraw lands
+            // on time.
+            let heartbeat = Duration::from_millis(250);
+            let timeout = match self.pending_repaint {
+                Some(deadline) => {
+                    let now = Instant::now();
+                    if deadline > now {
+                        (deadline - now).min(heartbeat)
+                    } else {
+                        Duration::ZERO
+                    }
+                }
+                None => heartbeat,
+            };
+            self.poll_and_dispatch(app, timeout)?;
         }
         Ok(())
     }
@@ -255,11 +277,18 @@ where
         if self.last_size != Some(size) {
             self.dirty.set(true);
         }
+        if self
+            .pending_repaint
+            .is_some_and(|deadline| deadline <= Instant::now())
+        {
+            self.pending_repaint = None;
+            self.dirty.set(true);
+        }
         if !self.dirty.replace(false) {
             return Ok(());
         }
         let screen = &mut self.screen;
-        app.update(|ctx| screen.draw(ctx))?;
+        self.pending_repaint = app.update(|ctx| screen.draw(ctx))?;
         self.last_size = Some(size);
         Ok(())
     }
@@ -357,6 +386,9 @@ impl TuiTerminalGuard {
 /// - `_guard`: restores raw mode + the alternate screen on drop.
 pub struct TuiDriverHandle {
     _task: ForegroundTask,
+    /// The repaint loop that redraws at element-requested deadlines. An
+    /// [`async_task::Task`] like `_task`, so dropping it cancels the loop.
+    _repaint_task: ForegroundTask,
     _reader: thread::JoinHandle<()>,
     _guard: TuiTerminalGuard,
 }
@@ -394,14 +426,22 @@ pub fn spawn_tui_driver<T: TuiView>(
         CrosstermTerminal::new(),
     )));
 
+    // Repaint scheduling: every draw reports the earliest element-requested
+    // repaint deadline, which is forwarded here; a single loop task sleeps
+    // until the earliest pending deadline and redraws. The cycle is
+    // self-sustaining (a repaint's own draw reports the next deadline) and
+    // fully idle when no element is animating.
+    let (repaint_tx, repaint_rx) = async_channel::unbounded::<Instant>();
+
     // Redraw whenever the window is invalidated. `update_windows` invokes this at
     // the end of every `flush_effects`, so any `notify()` repaints. (The callback
     // is removed from the registry while it runs, so a draw that itself
     // invalidates can't re-enter it.)
     {
         let screen = screen.clone();
+        let repaint_tx = repaint_tx.clone();
         ctx.on_window_invalidated(window_id, move |_, ctx| {
-            if let Err(error) = screen.borrow_mut().draw(ctx) {
+            if let Err(error) = draw_and_forward_repaint(&screen, &repaint_tx, ctx) {
                 log::error!("failed to draw a TUI frame: {error}");
             }
         });
@@ -414,7 +454,40 @@ pub fn spawn_tui_driver<T: TuiView>(
     // returning `Err` here drops `guard` (restoring the terminal) and lets the
     // caller surface the error, rather than leaving a live raw-mode session with
     // no usable frame.
-    screen.borrow_mut().draw(ctx)?;
+    draw_and_forward_repaint(&screen, &repaint_tx, ctx)?;
+
+    let repaint_task = {
+        let screen = screen.clone();
+        let weak_app = ctx.weak_app();
+        ctx.foreground_executor().spawn(async move {
+            while let Ok(mut deadline) = repaint_rx.recv().await {
+                // Coalesce all pending requests down to the earliest deadline.
+                // A request that arrives *while sleeping* with an earlier
+                // deadline is served late (at this deadline) — at worst one
+                // repaint interval, which is fine for animation cadences.
+                while let Ok(next) = repaint_rx.try_recv() {
+                    deadline = deadline.min(next);
+                }
+                let now = Instant::now();
+                if deadline > now {
+                    Timer::after(deadline - now).await;
+                }
+                // Requests that arrived while sleeping are superseded by the
+                // fresh draw below, which reports its own next deadline.
+                while repaint_rx.try_recv().is_ok() {}
+                let Some(mut app) = weak_app.upgrade() else {
+                    break;
+                };
+                let screen = screen.clone();
+                let repaint_tx = repaint_tx.clone();
+                app.update(move |ctx| {
+                    if let Err(error) = draw_and_forward_repaint(&screen, &repaint_tx, ctx) {
+                        log::error!("failed to draw a TUI frame: {error}");
+                    }
+                });
+            }
+        })
+    };
 
     let weak_app = ctx.weak_app();
     let (sender, receiver) = async_channel::unbounded::<CrosstermEvent>();
@@ -465,9 +538,24 @@ pub fn spawn_tui_driver<T: TuiView>(
 
     Ok(TuiDriverHandle {
         _task: task,
+        _repaint_task: repaint_task,
         _reader: reader,
         _guard: guard,
     })
+}
+
+/// Draws a frame and forwards any element-requested repaint deadline to the
+/// driver's repaint loop. A send can only fail during teardown (the receiver
+/// lives in the loop task), when the repaint is moot anyway.
+fn draw_and_forward_repaint<T: TuiView, R: TuiTerminal>(
+    screen: &Rc<RefCell<TuiScreen<T, R>>>,
+    repaint_tx: &async_channel::Sender<Instant>,
+    ctx: &mut AppContext,
+) -> io::Result<()> {
+    if let Some(deadline) = screen.borrow_mut().draw(ctx)? {
+        let _ = repaint_tx.try_send(deadline);
+    }
+    Ok(())
 }
 
 /// The alternate-screen + raw-mode operations a [`RawModeGuard`] toggles.

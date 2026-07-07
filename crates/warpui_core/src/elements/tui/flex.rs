@@ -41,7 +41,7 @@
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
 use crate::elements::{Axis, CrossAxisAlignment};
 use crate::AppContext;
@@ -335,7 +335,7 @@ impl TuiElement for TuiFlex {
         )
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         let mut remaining = area;
         for (child, size) in self.children.iter().zip(&self.child_sizes) {
             if remaining.is_empty() {
@@ -350,7 +350,7 @@ impl TuiElement for TuiFlex {
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         let mut remaining = area;
         for (child, size) in self.children.iter().zip(&self.child_sizes) {
             if remaining.is_empty() {

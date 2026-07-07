@@ -4,10 +4,15 @@
 //! [`TuiView`]s in a test [`App`] and resolve them through the app, exactly as
 //! the live elements do.
 
+use std::time::Duration;
+
+use instant::Instant;
+
 use super::TuiPresenter;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize, TuiStyle,
+    TuiLiveElement, TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiStyle,
 };
 use crate::platform::WindowStyle;
 use crate::{
@@ -44,7 +49,7 @@ impl TuiElement for TextDouble {
         constraint.clamp(TuiSize::new(self.width(), 1))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
         buffer.set_stringn(
             area.x,
             area.y,
@@ -95,7 +100,7 @@ impl TuiElement for ColumnDouble {
         constraint.clamp(TuiSize::new(max_width, total_height))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         let mut remaining = area;
         for (child, size) in self.children.iter().zip(&self.child_sizes) {
             let (row, rest) = remaining.split_top(size.height);
@@ -111,7 +116,7 @@ impl TuiElement for ColumnDouble {
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         let mut remaining = area;
         for (child, size) in self.children.iter().zip(&self.child_sizes) {
             let (row, rest) = remaining.split_top(size.height);
@@ -165,7 +170,7 @@ impl TuiElement for ContainerDouble {
         ))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         let fill = self.fill.to_string();
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
@@ -210,7 +215,7 @@ impl TuiElement for CursorDouble {
         constraint.clamp(TuiSize::new(5, 1))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
         buffer.set_stringn(
             area.x,
             area.y,
@@ -220,8 +225,28 @@ impl TuiElement for CursorDouble {
         );
     }
 
-    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         Some(self.offset)
+    }
+}
+
+/// A leaf that requests a repaint `delay` after every paint.
+struct RepaintDouble {
+    delay: Duration,
+}
+
+impl TuiElement for RepaintDouble {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        constraint.clamp(TuiSize::new(1, 1))
+    }
+
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
+        ctx.repaint_after(self.delay);
     }
 }
 
@@ -359,6 +384,63 @@ fn surfaces_cursor_at_absolute_coordinates() {
 
             // The cursor element sits on row 1 (below the header) at column 2.
             assert_eq!(frame.cursor, Some((2, 1)));
+        });
+    });
+}
+
+#[test]
+fn frames_without_animated_elements_request_no_repaint() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                Box::new(TextDouble::new("STATIC")),
+                TuiRect::new(0, 0, 10, 1),
+                app_ctx,
+            );
+            assert_eq!(frame.repaint_at, None);
+        });
+    });
+}
+
+#[test]
+fn frame_surfaces_the_earliest_requested_repaint_deadline() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let before = Instant::now();
+            let column = ColumnDouble::new(vec![
+                Box::new(RepaintDouble {
+                    delay: Duration::from_secs(60),
+                }),
+                Box::new(RepaintDouble {
+                    delay: Duration::from_millis(10),
+                }),
+            ]);
+
+            let mut presenter = TuiPresenter::new();
+            let frame =
+                presenter.present_element(Box::new(column), TuiRect::new(0, 0, 4, 2), app_ctx);
+
+            let repaint_at = frame.repaint_at.expect("a repaint should be requested");
+            // Earliest-deadline-wins: the 10ms request beats the 60s one.
+            assert!(repaint_at <= before + Duration::from_secs(1));
+        });
+    });
+}
+
+#[test]
+fn live_element_requests_a_repaint_every_paint() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let live =
+                TuiLiveElement::new(Box::new(TextDouble::new("LIVE")), Duration::from_millis(50));
+
+            let mut presenter = TuiPresenter::new();
+            let frame =
+                presenter.present_element(Box::new(live), TuiRect::new(0, 0, 10, 1), app_ctx);
+
+            assert!(frame.repaint_at.is_some());
+            assert_eq!(frame.buffer.to_lines(), vec!["LIVE      "]);
         });
     });
 }

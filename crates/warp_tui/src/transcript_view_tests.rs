@@ -12,7 +12,7 @@ use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, EntityId, EntityIdMap, TuiView};
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiRect, TuiSize,
+    TuiLayoutContext, TuiPaintContext, TuiRect, TuiSize,
 };
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -241,7 +241,8 @@ fn render_element(app: &App, element: &mut dyn TuiElement, area: TuiRect) -> Vec
             app,
         );
         let mut buffer = TuiBuffer::empty(area);
-        element.render(area, &mut buffer, &mut ctx);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        element.render(area, &mut buffer, &mut paint_ctx);
         buffer.to_lines()
     })
 }

@@ -38,8 +38,11 @@
 //!
 //! [`TuiChildView`]: crate::elements::tui::TuiChildView
 
+use instant::Instant;
+
 use crate::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPresentationContext, TuiRect,
+    TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPresentationContext, TuiRect,
 };
 use crate::{AppContext, EntityIdMap, TuiView, ViewHandle, WindowId, WindowInvalidation};
 
@@ -52,6 +55,10 @@ pub struct TuiFrame {
     pub buffer: TuiBuffer,
     /// The absolute `(x, y)` cell the terminal cursor should occupy, if any.
     pub cursor: Option<(u16, u16)>,
+    /// The earliest repaint deadline requested by an animated element during
+    /// paint ([`TuiPaintContext::repaint_after`]), if any. The runtime
+    /// schedules a redraw at this instant.
+    pub repaint_at: Option<Instant>,
 }
 
 impl TuiFrame {
@@ -60,6 +67,7 @@ impl TuiFrame {
         Self {
             buffer: TuiBuffer::empty(buffer_rect_for(area)),
             cursor: None,
+            repaint_at: None,
         }
     }
 }
@@ -230,7 +238,9 @@ fn arrange(
 
 /// Composite the tree into a fresh buffer and lift the root-relative cursor
 /// offset to absolute coordinates. `rendered_views` is threaded through so
-/// [`TuiChildView`] can look up its child during render and cursor passes.
+/// [`TuiChildView`] can look up its child during render and cursor passes,
+/// and the paint context's earliest requested repaint deadline is surfaced on
+/// the frame.
 ///
 /// [`TuiChildView`]: crate::elements::tui::TuiChildView
 fn paint(
@@ -240,14 +250,18 @@ fn paint(
     rendered_views: &mut EntityIdMap<Box<dyn TuiElement>>,
 ) -> TuiFrame {
     let mut buffer = TuiBuffer::empty(buffer_rect_for(area));
-    let mut ctx = TuiLayoutContext { rendered_views };
+    let mut ctx = TuiPaintContext::new(rendered_views);
     root.render(arranged, &mut buffer, &mut ctx);
 
     let cursor = root
         .cursor_position(arranged, &mut ctx)
         .map(|(x, y)| (arranged.x.saturating_add(x), arranged.y.saturating_add(y)));
 
-    TuiFrame { buffer, cursor }
+    TuiFrame {
+        buffer,
+        cursor,
+        repaint_at: ctx.requested_repaint_at(),
+    }
 }
 
 /// The buffer rect needed to hold everything painted within `area`: it spans

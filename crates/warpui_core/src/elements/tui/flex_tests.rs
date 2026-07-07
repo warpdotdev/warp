@@ -6,8 +6,8 @@ use ratatui::style::{Color, Modifier, Style};
 use super::TuiFlex;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiEventHandler, TuiLayoutContext, TuiParentElement, TuiPresentationContext, TuiRect, TuiSize,
-    TuiText,
+    TuiEventHandler, TuiLayoutContext, TuiPaintContext, TuiParentElement, TuiPresentationContext,
+    TuiRect, TuiSize, TuiText,
 };
 use crate::elements::CrossAxisAlignment;
 use crate::event::KeyEventDetails;
@@ -17,9 +17,7 @@ use crate::{App, EntityId, EntityIdMap};
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
     let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
     element.render(
         TuiRect::new(0, 0, size.width, size.height),
         &mut buffer,
@@ -305,9 +303,7 @@ fn row_children_keep_their_own_styles() {
 
             let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 4, 1));
             let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
+            let mut ctx = TuiPaintContext::new(&mut rendered_views);
             row.render(TuiRect::new(0, 0, 4, 1), &mut buffer, &mut ctx);
 
             let left_cell = &buffer[(0, 0)];

@@ -14,8 +14,8 @@ use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPoint, TuiRect,
-    TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPoint, TuiRect, TuiSize,
 };
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
@@ -72,7 +72,9 @@ fn cursor_and_height(
         rendered_views: &mut rendered_views,
     };
     let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
-    let cursor = element.cursor_position(TuiRect::new(0, 0, size.width, size.height), &mut lctx);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    let cursor =
+        element.cursor_position(TuiRect::new(0, 0, size.width, size.height), &mut paint_ctx);
     (cursor, size.height)
 }
 
@@ -869,10 +871,8 @@ fn shell_mode_offsets_cursor_by_gutter() {
             type_str(&view, ctx, "ab");
             let (element, area) = laid_out_shell_row(&view, ctx);
             let mut rendered_views = EntityIdMap::default();
-            let mut lctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            assert_eq!(element.cursor_position(area, &mut lctx), Some((4, 0)));
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            assert_eq!(element.cursor_position(area, &mut paint_ctx), Some((4, 0)));
         });
     });
 }

@@ -15,7 +15,7 @@
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiSize,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize,
 };
 use crate::AppContext;
 
@@ -84,11 +84,11 @@ impl TuiElement for TuiConstrainedBox {
         self.child.layout(self.cap_constraint(constraint), ctx, app)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         self.child.render(self.capped_area(area), buffer, ctx);
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         self.child.cursor_position(self.capped_area(area), ctx)
     }
 

@@ -3,8 +3,8 @@ use std::rc::Rc;
 
 use super::TuiHoverable;
 use crate::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPoint, TuiRect,
-    TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPoint, TuiRect, TuiSize,
 };
 use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
@@ -238,7 +238,7 @@ impl TuiElement for AlwaysHandles {
         &self,
         _area: TuiRect,
         _buffer: &mut crate::elements::tui::TuiBuffer,
-        _ctx: &mut TuiLayoutContext,
+        _ctx: &mut TuiPaintContext,
     ) {
     }
 

@@ -3,5 +3,7 @@
 mod gui;
 pub use gui::*;
 
+pub mod shimmer_math;
+
 #[cfg(feature = "tui")]
 pub mod tui;

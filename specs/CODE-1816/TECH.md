@@ -5,7 +5,7 @@
 While an agent turn is running, the TUI shows no in-progress indicator. Per the Figma design ([TUI file, node 323-17216](https://www.figma.com/design/yg5nbPZuGoAszHS3Rhvehu/TUI?node-id=323-17216&m=dev)), a `⋮ Warping (1s)` row should render at the bottom of the streaming agent block, directly above the input box:
 
 - Layout: `<spinner> <Warping> <(Ns)>` on one row, one space (1 cell) between parts, one blank row above (the existing inter-section padding).
-- Spinner: cycles through `⋮ ⋰ ⋱ ⋮ ⋱ ⋰` (from the design's 7 CharAni variants; the 7th is `⋮`, the loop point), non-bold, ANSI normal yellow.
+- Spinner: follows the prototype's rotation choreography — a 180° rotation right, a 180° rotation back left, a rest at vertical, then fast spins right (one and a half turns), restarting. The prototype's motion data isn't machine-readable via the Figma API (the CharAni variants only expose per-frame glyphs), so the choreography is encoded from designer/user observation, mapping each 45° step to the nearest three-dot orientation glyph (`⋮ ⋰ ⋯ ⋱`, repeating every 180°). Non-bold, ANSI normal yellow.
 - "Warping": bold, base ANSI normal yellow, with a shimmer band sweeping left→right whose peak is ANSI bright white. The Figma hex values (`#fefdc2`, `#feffff`, `#8e8e8e`) are exactly the dark theme's `normal.yellow` / `bright.white` / `bright.black` ([`app/src/themes/default_themes.rs:11-30 @ fbe26f9`](https://github.com/warpdotdev/warp/blob/fbe26f99c2b508c2e450db4ceccfbdb2a0c8766e/app/src/themes/default_themes.rs#L11-L30)) — so colors come from the theme, not hardcoded hex.
 - `(Ns)`: elapsed whole seconds since the request started, ANSI bright black (the existing muted style).
 
@@ -44,14 +44,14 @@ There is no `PRODUCT.md`; the Figma node above is the behavior source of truth.
 
 ### 4. Warping indicator section in `warp_tui`
 
-- `crates/warp_tui/src/tui_builder.rs`: add semantic styles — warping yellow (`terminal_colors().normal.yellow`), shimmer peak (`bright.white`); the timer suffix reuses `muted_text_style`.
-- `crates/warp_tui/src/agent_block_sections.rs`: new `render_warping_indicator_section(elapsed, app)` composing a `TuiFlex::row()`: spinner element (frame chosen from the wall clock against the same animation anchor), a space, `TuiShimmeringText::new("Warping")` (bold, yellow→bright-white), a space, and the `(Ns)` counter. Spinner + counter are wrapped in `TuiLiveElement` for their repaint cadence; the counter derives its seconds at paint time (elapsed-at-build + time since build) so it ticks on cached-element repaints.
-- `crates/warp_tui/src/agent_block.rs`: in `render_element`, when `self.model.status(app).is_streaming()`, append the indicator as a final section (the composer already inserts the one-row gap between sections), anchored to `time_since_request_start` so animation survives element-tree rebuilds. Removal needs no timer: the exchange's final streaming/status events already mark the block dirty and re-render it without the section.
+- `crates/warp_tui/src/tui_builder.rs`: semantic style additions — `warping_base_color` / `warping_spinner_style` (`terminal_colors().normal.yellow`) and `warping_shimmer_color` (`bright.white`); the timer suffix reuses `muted_text_style`.
+- New module `crates/warp_tui/src/warping_indicator.rs`: `render_warping_indicator(elapsed, app)` composes a `TuiFlex::row()`: spinner, a space, `TuiShimmeringText::new("Warping")` (bold, yellow→bright-white), a space, and the `(Ns)` counter. The spinner and counter are `LiveText` leaves (a private element whose string is recomputed from the wall clock on every layout/paint pass, so cached-element repaints show the current frame), and the whole row is wrapped in one `TuiLiveElement` for the repaint cadence.
+- `crates/warp_tui/src/agent_block.rs`: `render_element` appends the indicator as a final section when `self.model.status(app).is_streaming()` (the composer already inserts the one-row gap between sections), anchored to `time_since_request_start` so animation survives element-tree rebuilds. Removal needs no timer: the exchange's final streaming/status events already mark the block dirty and re-render it without the section.
 - `TuiTranscriptView` needs no changes.
 
 ### 5. Constants
 
-Spinner frame list (`["⋮","⋰","⋱","⋮","⋱","⋰"]`), spinner frame duration (200ms), shimmer repaint interval (~100ms), and shimmer config (`ShimmerConfig::default()`: 3s period, radius 6, padding 8) live together in `agent_block_sections.rs` (or a small `warping_indicator` module) with doc comments. The Figma prototype's frame timings aren't readable via the MCP API, so these are tunable defaults to adjust by eye. (The GUI shimmer repaints at 32ms/30fps; a TUI band over a 7-char string moves ~1 cell per 140ms at the 3s period, so ~100ms repaints are visually equivalent and cheaper.)
+The spinner keyframe timeline (`SPINNER_TIMELINE`: 200ms per 45° step for the two half-turns, a 200ms rest at vertical, 50ms per step for the 540° fast spin; 2.35s total loop) and the row's repaint interval (50ms, matching the timeline's shortest frame) live together in `warping_indicator.rs` with doc comments; the shimmer uses `ShimmerConfig::default()` (3s period, radius 6, padding 8) and its own 100ms repaint constant inside `TuiShimmeringText`. The Figma prototype's frame timings aren't readable via the MCP API, so these are tunable defaults to adjust by eye. (The GUI shimmer repaints at 32ms/30fps; a TUI band over a 7-char string moves ~1 cell per 140ms at the 3s period, so ~100ms repaints are visually equivalent and cheaper.)
 
 Open question: elapsed format for long turns — the design shows `(1s)`; the proposal keeps plain seconds (`(94s)`) rather than `1m 34s`.
 
@@ -59,11 +59,11 @@ Open question: elapsed format for long turns — the design shows `(1s)`; the pr
 
 - Build/lint: `cargo check -p warp_tui -p warpui_core`, then `./script/format` and the presubmit clippy invocation.
 - Unit tests (`*_tests.rs` convention):
-  - Shimmer-math extraction parity: the GUI element produces identical color overrides before/after the refactor.
-  - Spinner frame selection from elapsed time (loop order and frame duration).
-  - `TuiShimmeringText` cell colors: all-base at band-outside positions, peak lerp mid-band.
-  - `TuiAIBlock` sections include the indicator iff `is_streaming()` (extend `crates/warp_tui/src/agent_block_tests.rs`).
-  - Repaint plumbing: `TuiFrame` carries the earliest requested deadline; `TuiLiveElement` requests one (extend `crates/warpui_core/src/presenter/tui_tests.rs`).
+  - Shimmer math (`crates/warpui_core/src/elements/shimmer_math_tests.rs`): band center sweep/loop, single-glyph degenerate case, intensity peak/radius falloff, color-lerp endpoints.
+  - Spinner frame selection from elapsed time and a rendered `⋮ Warping (0s)` row that requests a repaint (`crates/warp_tui/src/warping_indicator_tests.rs`).
+  - `TuiShimmeringText` cell colors: all-base before the band reaches the text, peak at mid-band, bold modifier, repaint request (`crates/warpui_core/src/elements/tui/shimmering_text_tests.rs`).
+  - `TuiAIBlock` renders the indicator iff `is_streaming()` — streaming, pending, and completed cases (`crates/warp_tui/src/agent_block_tests.rs`).
+  - Repaint plumbing: static frames carry no deadline, `TuiFrame` carries the earliest requested deadline, `TuiLiveElement` requests one every paint (`crates/warpui_core/src/presenter/tui_tests.rs`).
 - Manual: `script/run-tui`, run a prompt, verify spinner rotation, shimmer sweep, ticking `(Ns)`, spacing/colors against the Figma node, the row disappearing when the turn completes, and that an idle TUI schedules no repaints (no busy redraw loop).
 
 ## Parallelization

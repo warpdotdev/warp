@@ -2,16 +2,15 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiText;
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect,
+    TuiSize,
 };
 use crate::{App, EntityIdMap};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
     let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
     element.render(
         TuiRect::new(0, 0, size.width, size.height),
         &mut buffer,
@@ -99,9 +98,7 @@ fn applies_its_style_to_painted_cells() {
 
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 1, 1));
     let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
     text.render(TuiRect::new(0, 0, 1, 1), &mut buffer, &mut ctx);
 
     let cell = &buffer[(0, 0)];

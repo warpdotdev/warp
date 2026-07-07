@@ -4,7 +4,7 @@ use std::rc::Rc;
 use super::TuiClipped;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPoint, TuiRect, TuiSize, TuiText,
+    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiSize, TuiText,
 };
 use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
@@ -12,9 +12,7 @@ use crate::{App, AppContext, EntityIdMap};
 
 fn render_to_lines(element: &mut dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
     let area = TuiRect::new(0, 0, size.width, size.height);
     let mut buffer = TuiBuffer::empty(area);
     element.render(area, &mut buffer, &mut ctx);
@@ -64,9 +62,9 @@ impl TuiElement for CursorElement {
         constraint.clamp(TuiSize::new(1, 3))
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {}
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
 
-    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         Some(self.cursor)
     }
 }
@@ -76,9 +74,7 @@ fn cursor_position_is_shifted_into_the_visible_window() {
     let clipped =
         TuiClipped::new(CursorElement { cursor: (0, 2) }.finish()).with_viewport_origin_y(1);
     let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
 
     assert_eq!(
         clipped.cursor_position(TuiRect::new(0, 0, 3, 2), &mut ctx),
@@ -91,9 +87,7 @@ fn cursor_position_above_the_visible_window_is_hidden() {
     let clipped =
         TuiClipped::new(CursorElement { cursor: (0, 0) }.finish()).with_viewport_origin_y(1);
     let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
 
     assert_eq!(
         clipped.cursor_position(TuiRect::new(0, 0, 3, 2), &mut ctx),
@@ -119,7 +113,7 @@ impl TuiElement for DispatchRecorder {
         constraint.clamp(TuiSize::new(1, 3))
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {}
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
 
     fn dispatch_event(
         &mut self,
