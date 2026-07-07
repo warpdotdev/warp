@@ -30,6 +30,7 @@ jobs:
   get_config:
     name: Get release configuration
     runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'warpdotdev' }}
     env:
       SCHEDULE: ${{ github.event.schedule }}
       TARGETS: ${{ inputs.targets }}
@@ -71,6 +72,7 @@ jobs:
     name: Create Release
     uses: ./.github/workflows/create_release.yml
     needs: get_config
+    if: ${{ github.repository_owner == 'warpdotdev' }}
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +85,7 @@ jobs:
     name: Update channel_versions.json
     needs:
       - create_release
+    if: ${{ github.repository_owner == 'warpdotdev' }}
     runs-on: ubuntu-latest
     steps:
       - name: Invoke update workflow in channel-versions repository
