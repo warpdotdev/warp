@@ -6,9 +6,8 @@ use std::path::Path;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
     AskUserQuestionResult, FileGlobV2Result, GrepResult, RequestCommandOutputResult,
-    RequestFileEditsResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, StartAgentExecutionMode,
-    SuggestNewConversationResult,
+    RunAgentsAgentOutcomeKind, RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult,
+    StartAgentExecutionMode, SuggestNewConversationResult,
 };
 
 use self::ToolCallDisplayState as State;
@@ -196,29 +195,12 @@ fn label_for_action(
                 State::Cancelled => format!("Search for \"{query}\"{scope} cancelled"),
             }
         }
-        AIAgentActionType::RequestFileEdits { file_edits, .. } => match state {
-            State::Constructing => "Creating diff…".to_owned(),
-            State::Pending | State::AwaitingApproval | State::Running => {
-                "Preparing edits…".to_owned()
-            }
-            State::Succeeded => match result {
-                Some(AIAgentActionResultType::RequestFileEdits(
-                    RequestFileEditsResult::Success {
-                        updated_files,
-                        deleted_files,
-                        lines_added,
-                        lines_removed,
-                        ..
-                    },
-                )) => format!(
-                    "Edited {} (+{lines_added} −{lines_removed})",
-                    count_label(updated_files.len() + deleted_files.len(), "file", "files")
-                ),
-                _ => format!("Edited {}", count_label(file_edits.len(), "file", "files")),
-            },
-            State::Failed => "File edits failed".to_owned(),
-            State::Cancelled => "File edits cancelled".to_owned(),
-        },
+        // Rendered by its own stateful child view (`TuiFileEditsView`); the
+        // label path should never be reached for it.
+        AIAgentActionType::RequestFileEdits { .. } => {
+            log::warn!("tool_call_label called for RequestFileEdits, which has custom rendering");
+            String::new()
+        }
         AIAgentActionType::Grep { queries, path } => {
             let queries = single_line(&queries.join(", "));
             let path = display_path(path);

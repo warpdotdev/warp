@@ -48,7 +48,7 @@ Placeholders: `{cmd}`=command, `{q}`=query, `{qs}`/`{pats}`=comma-joined queries
 | CallMCPTool | Call MCP tool {name} | Calling MCP tool {name} | Called MCP tool {name} | MCP tool {name} failed | MCP tool {name} cancelled |
 | ReadMCPResource | Read MCP resource {uri} | Reading MCP resource {uri} | Read MCP resource {uri} | MCP resource {uri} failed | MCP resource {uri} cancelled |
 | ReadSkill | Read skill {skill} | Reading skill {skill} | Read skill {skill} | Failed to read skill {skill} | Cancelled reading skill {skill} |
-| RequestFileEdits [6] | Preparing edits… | Preparing edits… | Edited {n} file(s) (+a −r) | File edits failed | File edits cancelled |
+| RequestFileEdits [6] | Preparing edits… | Preparing edits… | Edited {n} file(s) (+a −r) | — | — |
 | CreateDocuments | Create plan | Generating plan… | Created plan [7] | Failed to create plan | Create plan cancelled |
 | EditDocuments | Update plan | Updating plan… | Updated plan ({n} edits) | Failed to update plan | Update plan cancelled |
 | ReadDocuments | Read {n} document(s) | Reading {n} document(s) | Read {n} document(s) | Failed to read documents | Cancelled reading documents |
@@ -76,7 +76,7 @@ Footnotes:
 3. 0 results → "…, no results". `{repo}` = file name of the request's `codebase_path`; the " in {repo}" segment is omitted when absent.
 4. `CodebaseNotIndexed` appends " because the codebase isn't indexed".
 5. Legacy `FileGlob` success carries no count: "Found files matching {pats}". Missing path defaults to "the current directory".
-6. Normally rendered by the existing `TuiFileEditsView` child view (unchanged); these labels are the fallback when no child view is registered for the action.
+6. Rendered by the existing `TuiFileEditsView` child view (unchanged); the shown copy comes from that view. The label fn intentionally has no copy for tools with custom rendering — its `RequestFileEdits` arm returns an empty string and logs a warning if ever reached.
 7. More than one document → "Created {n} documents".
 8. Partial → "Spawned {launched} of {total} agents"; none launched → "Failed to spawn {n} agent(s)" (still a Succeeded display state, since `RunAgentsResult::Launched` is a successful result).
 9. `Failure` appends ": {error}" when present; `Denied` → "Orchestration disabled — agents not launched".

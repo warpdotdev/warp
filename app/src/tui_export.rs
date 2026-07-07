@@ -10,7 +10,7 @@ pub use crate::ai::agent::{
     AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText, AIAgentTextSection,
     AskUserQuestionResult, CancellationReason, FileGlobV2Result, GrepResult, MessageId,
-    RequestCommandOutputResult, RequestFileEditsResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
+    RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
     StartAgentExecutionMode, SuggestNewConversationResult, UserQueryMode,
 };
