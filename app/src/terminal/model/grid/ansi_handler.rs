@@ -855,11 +855,20 @@ impl ansi::Handler for GridHandler {
             }
             ansi::ClearMode::All => {
                 if self.ansi_handler_state.is_alt_screen {
+                    // Alt-screen apps redraw with a full clear constantly and
+                    // manage their own OSC 8 spans, so the active link is left
+                    // intact here; alt-screen content is not persisted or shared.
                     self.grid.region_mut(..).each(|cell| *cell = bg.into());
-                } else if self.full_grid_clear_behavior == FullGridClearBehavior::Clear {
-                    self.clear_visible_rows_in_place(bg);
                 } else {
-                    self.clear_viewport();
+                    if self.full_grid_clear_behavior == FullGridClearBehavior::Clear {
+                        self.clear_visible_rows_in_place(bg);
+                    } else {
+                        self.clear_viewport();
+                    }
+                    // Don't carry an unclosed OSC 8 link past a full-screen clear
+                    // of the primary screen, so output after `clear` can't inherit
+                    // a stale URI.
+                    self.active_hyperlink_id = None;
                 }
             }
             ansi::ClearMode::Saved if self.history_size() > 0 => {
