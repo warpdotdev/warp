@@ -1234,18 +1234,14 @@ impl AgentConversationsModel {
         }
     }
 
-    /// Returns true if we have any *visible* tasks or local conversations in this
-    /// view. Mirrors the child-agent exclusion applied in [`Self::get_entries`]
-    /// so a model containing only child (orchestrated) agents — which produce no
-    /// list entries — is treated as empty rather than as a non-empty list with
-    /// no filter matches.
-    pub fn has_items(&self, app: &AppContext) -> bool {
-        let history_model = BlocklistAIHistoryModel::as_ref(app);
+    /// Returns true if we have any *visible* tasks or local conversations in
+    /// this view. Child (orchestrated) agent tasks produce no list entries
+    /// (see [`Self::get_entries`]), so they don't count; child conversations
+    /// never enter `self.conversations` because they are filtered at the
+    /// source (`ConversationNavigationData::all_conversations`).
+    pub fn has_items(&self) -> bool {
         self.tasks.values().any(|task| task.parent_run_id.is_none())
-            || self
-                .conversations
-                .keys()
-                .any(|conversation_id| !history_model.is_child_conversation(conversation_id))
+            || !self.conversations.is_empty()
     }
 
     /// Returns an iterator over all ambient agent tasks.
@@ -1281,24 +1277,23 @@ impl AgentConversationsModel {
     ) -> Vec<AgentConversationEntry> {
         let history_model = BlocklistAIHistoryModel::as_ref(app);
         let mut entries = Vec::new();
+        // Local conversation IDs represented by a task — either shown as a
+        // task entry or hidden along with a child task — and therefore not
+        // emitted as standalone conversation entries by the loops below.
         let mut attached_conversation_ids = HashSet::new();
         let mut emitted_conversation_ids = HashSet::new();
-        // Local conversation IDs of child (orchestrated) agents discovered while
-        // iterating tasks. They are recorded so the conversation/metadata loops
-        // below also skip a child that additionally surfaces as conversation
-        // metadata, keeping cross-loop dedupe consistent.
-        let mut suppressed_child_conversation_ids = HashSet::new();
 
         for task in self.tasks.values() {
             // Child agents (cloud runs carry `parent_run_id`) are represented
             // under their parent's status card and must not appear as standalone
             // entries — this mirrors the local navigation path's exclusion via
-            // `AIConversation::should_exclude_from_navigation`.
+            // `AIConversation::should_exclude_from_navigation`. Any local
+            // conversation shadowed by a child task is hidden along with it.
             if task.parent_run_id.is_some() {
                 if let Some(conversation_id) =
                     entry::conversation_id_shadowed_by_task(task, history_model)
                 {
-                    suppressed_child_conversation_ids.insert(conversation_id);
+                    attached_conversation_ids.insert(conversation_id);
                 }
                 continue;
             }
@@ -1311,10 +1306,7 @@ impl AgentConversationsModel {
 
         for metadata in self.conversations.values() {
             let conversation_id = metadata.nav_data.id;
-            if attached_conversation_ids.contains(&conversation_id)
-                || suppressed_child_conversation_ids.contains(&conversation_id)
-                || history_model.is_child_conversation(&conversation_id)
-            {
+            if attached_conversation_ids.contains(&conversation_id) {
                 continue;
             }
             let entry = entry::entry_for_conversation(metadata, history_model, app);
@@ -1325,8 +1317,6 @@ impl AgentConversationsModel {
         for metadata in history_model.get_local_conversations_metadata() {
             if attached_conversation_ids.contains(&metadata.id)
                 || emitted_conversation_ids.contains(&metadata.id)
-                || suppressed_child_conversation_ids.contains(&metadata.id)
-                || metadata.is_child_agent_conversation()
             {
                 continue;
             }

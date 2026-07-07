@@ -1004,19 +1004,21 @@ fn test_get_entries_excludes_child_agent_task() {
 }
 
 #[test]
-fn test_get_entries_excludes_child_agent_conversation() {
+fn test_get_entries_excludes_conversation_shadowed_by_child_task() {
     App::test((), |mut app| async move {
         add_entry_projection_test_models(&mut app);
         let history_model = BlocklistAIHistoryModel::handle(&app);
         let terminal_view_id = EntityId::new();
+        let now = Utc::now();
 
-        let parent_id = AIConversationId::new();
-        let child_id = AIConversationId::new();
-        let child = create_restored_conversation(
-            child_id,
-            "child-root",
+        // A local conversation whose own metadata carries no parent linkage;
+        // its only orchestration tie is that a child task points at it via
+        // the server conversation token.
+        let conversation_id = AIConversationId::new();
+        let conversation = create_restored_conversation(
+            conversation_id,
+            "shadowed-root",
             AgentConversationData {
-                // A server token would otherwise classify this as a cloud entry.
                 server_conversation_token: Some("child-token".to_string()),
                 conversation_usage_metadata: None,
                 reverted_action_ids: None,
@@ -1025,7 +1027,7 @@ fn test_get_entries_excludes_child_agent_conversation() {
                 parent_agent_id: None,
                 agent_name: Some("Agent 1".to_string()),
                 orchestration_harness_type: None,
-                parent_conversation_id: Some(parent_id.to_string()),
+                parent_conversation_id: None,
                 is_remote_child: false,
                 root_task_is_optimistic: None,
                 run_id: None,
@@ -1035,33 +1037,23 @@ fn test_get_entries_excludes_child_agent_conversation() {
             },
         );
         history_model.update(&mut app, |model, ctx| {
-            model.restore_conversations(terminal_view_id, vec![child], ctx);
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
 
         let mut model = create_test_model();
-        let normal_id = AIConversationId::new();
         model.conversations.insert(
-            child_id,
-            create_test_conversation_metadata(child_id, "Child agent"),
+            conversation_id,
+            create_test_conversation_metadata(conversation_id, "Shadowed conversation"),
         );
-        model.conversations.insert(
-            normal_id,
-            create_test_conversation_metadata(normal_id, "Normal conversation"),
-        );
+        let mut child_task = create_test_task(&make_uuid(9002), "user-a", now);
+        child_task.parent_run_id = Some(make_uuid(9001));
+        child_task.conversation_id = Some("child-token".to_string());
+        model.tasks.insert(child_task.task_id, child_task);
 
         app.update(|ctx| {
-            let ids: Vec<_> = model
-                .get_entries(&all_owner_filters(), ctx)
-                .into_iter()
-                .map(|entry| entry.id)
-                .collect();
             assert!(
-                ids.contains(&AgentConversationEntryId::Conversation(normal_id)),
-                "non-child conversation should still be listed"
-            );
-            assert!(
-                !ids.contains(&AgentConversationEntryId::Conversation(child_id)),
-                "child agent conversation must be excluded from the list"
+                model.get_entries(&all_owner_filters(), ctx).is_empty(),
+                "a conversation shadowed by a child task must be hidden with it"
             );
         });
     });
@@ -1092,34 +1084,28 @@ fn test_conversation_metadata_child_predicate_matches_conversation() {
 }
 
 #[test]
-fn test_has_items_excludes_child_only_model() {
-    App::test((), |mut app| async move {
-        add_entry_projection_test_models(&mut app);
-        let now = Utc::now();
+fn test_has_items_ignores_child_agent_tasks() {
+    let now = Utc::now();
 
-        // A model containing only a child task produces no visible entries, so
-        // `has_items` must report empty (matching `get_entries`).
-        let mut child_only = create_test_model();
-        let mut child_task = create_test_task(&make_uuid(9101), "user-a", now);
-        child_task.parent_run_id = Some(make_uuid(9100));
-        child_only.tasks.insert(child_task.task_id, child_task);
+    // A model containing only a child task produces no visible entries, so
+    // `has_items` must report empty (matching `get_entries`).
+    let mut child_only = create_test_model();
+    let mut child_task = create_test_task(&make_uuid(9101), "user-a", now);
+    child_task.parent_run_id = Some(make_uuid(9100));
+    child_only.tasks.insert(child_task.task_id, child_task);
+    assert!(
+        !child_only.has_items(),
+        "a child-only model should be treated as empty"
+    );
 
-        // A model with a normal (non-child) task has visible items.
-        let mut with_parent = create_test_model();
-        let parent_task = create_test_task(&make_uuid(9102), "user-a", now);
-        with_parent.tasks.insert(parent_task.task_id, parent_task);
-
-        app.update(|ctx| {
-            assert!(
-                !child_only.has_items(ctx),
-                "a child-only model should be treated as empty"
-            );
-            assert!(
-                with_parent.has_items(ctx),
-                "a model with a non-child task should have items"
-            );
-        });
-    });
+    // A model with a normal (non-child) task has visible items.
+    let mut with_parent = create_test_model();
+    let parent_task = create_test_task(&make_uuid(9102), "user-a", now);
+    with_parent.tasks.insert(parent_task.task_id, parent_task);
+    assert!(
+        with_parent.has_items(),
+        "a model with a non-child task should have items"
+    );
 }
 
 #[test]

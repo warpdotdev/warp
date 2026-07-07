@@ -390,7 +390,7 @@ impl AgentManagementView {
 
     fn get_view_state(&self, app: &AppContext) -> ViewState {
         let model = AgentConversationsModel::as_ref(app);
-        let has_items = model.has_items(app);
+        let has_items = model.has_items();
 
         // If loading with zero items, show skeleton cards
         // If loading with items, show list of interactive conversations (with loading indicator in header)

@@ -2501,27 +2501,19 @@ impl BlocklistAIHistoryModel {
             .copied()
     }
 
-    /// Returns local conversation metadata,
-    /// (excluding conversations from ambient agent runs).
+    /// Returns local conversation metadata, excluding conversations that are
+    /// not navigable: ambient agent runs (represented by their task) and
+    /// child (orchestrated) agent conversations (represented under their
+    /// parent's status card). This is the canonical filter for unloaded
+    /// conversations, mirroring `AIConversation::should_exclude_from_navigation`
+    /// for loaded ones. Individual conversations remain accessible by ID via
+    /// [`Self::get_conversation_metadata`].
     pub fn get_local_conversations_metadata(
         &self,
     ) -> impl Iterator<Item = &AIConversationMetadata> {
         self.all_conversations_metadata
             .values()
-            .filter(|m| !m.is_ambient_agent_conversation())
-    }
-
-    /// Whether the conversation is a child (orchestrated) agent, determined from
-    /// the loaded conversation when present and otherwise from its persisted /
-    /// cloud metadata. Lets navigation surfaces exclude children consistently
-    /// regardless of whether the full conversation has been loaded into memory.
-    pub fn is_child_conversation(&self, conversation_id: &AIConversationId) -> bool {
-        if let Some(conversation) = self.conversations_by_id.get(conversation_id) {
-            return conversation.is_child_agent_conversation();
-        }
-        self.all_conversations_metadata
-            .get(conversation_id)
-            .is_some_and(AIConversationMetadata::is_child_agent_conversation)
+            .filter(|m| !m.is_ambient_agent_conversation() && !m.is_child_agent_conversation())
     }
 
     /// Returns conversation metadata for a specific conversation ID.

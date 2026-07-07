@@ -567,7 +567,7 @@ impl OrchestrationEventStreamer {
         // regression.
         let is_child = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|c| c.has_parent_agent());
+            .is_some_and(|c| c.is_child_agent_conversation());
         if is_child {
             return;
         }
@@ -1216,7 +1216,7 @@ impl OrchestrationEventStreamer {
             let Some(run_id) = conversation.run_id() else {
                 return false;
             };
-            (run_id, conversation.has_parent_agent())
+            (run_id, conversation.is_child_agent_conversation())
         };
 
         // Parent role: any watched run_id that isn't this conversation's
@@ -1644,7 +1644,7 @@ impl OrchestrationEventStreamer {
         }
         let has_parent = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|c| c.has_parent_agent());
+            .is_some_and(|c| c.is_child_agent_conversation());
         has_parent || self.is_parent_agent_conversation(conversation_id, ctx)
     }
 

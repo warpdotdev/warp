@@ -1152,16 +1152,12 @@ impl AIConversation {
         self.pinned = pinned;
     }
 
-    /// Returns true if this conversation was spawned by a parent orchestrator agent.
+    /// Returns true if this conversation was spawned by a parent orchestrator
+    /// agent — either via a local parent placeholder
+    /// (`parent_conversation_id`, set in the GUI parent) or via the parent's
+    /// server-side run identifier (`parent_agent_id`, stamped in
+    /// driver-hosted processes).
     pub fn is_child_agent_conversation(&self) -> bool {
-        self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
-    }
-
-    /// True iff this conversation knows about a parent agent — either via a
-    /// local parent placeholder (`parent_conversation_id`, set in the GUI
-    /// parent) or via the parent's server-side run identifier
-    /// (`parent_agent_id`, stamped in driver-hosted processes).
-    pub fn has_parent_agent(&self) -> bool {
         self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
     }
 
