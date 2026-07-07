@@ -13,7 +13,9 @@ use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::AppContext;
 
 use crate::agent_block::ThinkingBlockStates;
-use crate::tool_call_labels::{tool_call_display_state, tool_call_label, ToolCallDisplayState};
+use crate::tool_call_labels::{
+    tool_call_display_state, tool_call_label, LrcCommandState, ToolCallDisplayState,
+};
 use crate::tui_builder::TuiUiBuilder;
 
 const INPUT_PREFIX: &str = "≫ ";
@@ -52,15 +54,18 @@ pub(crate) fn render_plain_text_section(text: &str, app: &AppContext) -> Box<dyn
 /// Renders a one-line status row for an agent tool call: per-tool, per-state
 /// text with de-emphasized styling for non-final states and cancellations,
 /// and error styling for failures. `output_streaming` marks tool calls whose
-/// arguments are still streaming in (see `ToolCallDisplayState::Constructing`).
+/// arguments are still streaming in (see `ToolCallDisplayState::Constructing`);
+/// `lrc_state` carries the terminal block's ground truth for agent-monitored
+/// commands (see `LrcCommandState`).
 pub(crate) fn render_tool_call_section(
     action: &AIAgentAction,
     status: Option<&AIActionStatus>,
     output_streaming: bool,
+    lrc_state: Option<LrcCommandState>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    let style = match tool_call_display_state(status, output_streaming) {
+    let style = match tool_call_display_state(status, output_streaming, lrc_state) {
         ToolCallDisplayState::Constructing
         | ToolCallDisplayState::Pending
         | ToolCallDisplayState::AwaitingApproval
@@ -69,7 +74,7 @@ pub(crate) fn render_tool_call_section(
         ToolCallDisplayState::Succeeded => builder.muted_text_style(),
         ToolCallDisplayState::Failed => builder.error_text_style(),
     };
-    TuiText::new(tool_call_label(action, status, output_streaming))
+    TuiText::new(tool_call_label(action, status, output_streaming, lrc_state))
         .with_style(style)
         .finish()
 }

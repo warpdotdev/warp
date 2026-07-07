@@ -71,7 +71,7 @@ Placeholders: `{cmd}`=command, `{q}`=query, `{qs}`/`{pats}`=comma-joined queries
 
 Footnotes:
 
-1. `LongRunningCommandSnapshot` counts as success: "`{cmd}` is still running".
+1. `LongRunningCommandSnapshot` (agent-monitored command) counts as success. The stored action result is never superseded when the command later finishes, so the label consults the terminal `Block` (looked up by the snapshot's `block_id`, mirroring the GUI's stale-result override in `RequestedCommandView`, requested_command.rs:1368-1376): block still running → "`{cmd}` is still running"; finished → "Ran `{cmd}`" / "`{cmd}` exited with code {n}" / "Cancelled `{cmd}`" (SIGINT), per the block's exit code.
 2. `{code}` from the completed exit code; `Denylisted` → "`{cmd}` denied (denylisted)". Exit code 130 is classified as cancelled by `AIAgentActionResultType::is_cancelled`.
 3. 0 results → "…, no results". `{repo}` = file name of the request's `codebase_path`; the " in {repo}" segment is omitted when absent.
 4. `CodebaseNotIndexed` appends " because the codebase isn't indexed".
@@ -94,7 +94,7 @@ Footnotes:
 
 ### Status plumbing and re-render
 
-- `TuiAIBlock` stores the `ModelHandle<BlocklistAIActionModel>` and looks up `get_action_status(&action.id)` at render time for each tool-call section (`crates/warp_tui/src/agent_block.rs`).
+- `TuiAIBlock` stores the `ModelHandle<BlocklistAIActionModel>` and looks up `get_action_status(&action.id)` at render time for each tool-call section (`crates/warp_tui/src/agent_block.rs`). It also holds the surface's `Arc<FairMutex<TerminalModel>>`: for long-running-snapshot results it resolves the command block's ground truth via `lrc_command_state`.
 - `TuiTranscriptView` subscribes to `BlocklistAIActionEvent`; on any transition it finds the agent block whose output contains that action id (`TuiAIBlock::renders_action`), calls `mark_rich_content_dirty(view_id)`, and notifies (`crates/warp_tui/src/transcript_view.rs`). Dirty-marking is required because label text changes can change wrapped height, and block heights are cached in the block list. Each block maintains a `HashSet` of its action ids (populated by `sync_action_views` as output streams in, mirroring the GUI `AIBlock`'s `requested_action_ids`), so the per-event check is an O(1) set lookup per block rather than an output-message scan.
 - `app/src/tui_export.rs` additionally exports `AIActionStatus`, `BlocklistAIActionEvent`, and the request/result types the label logic and its tests consume; `app/src/ai/blocklist/mod.rs` re-exports `AIActionStatus` and `BlocklistAIActionEvent` publicly.
 

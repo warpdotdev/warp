@@ -190,8 +190,16 @@ impl TuiTranscriptView {
 
         let block_model = Rc::new(block_model);
         let action_model = self.action_model.clone();
+        let terminal_model = self.model.clone();
         let view = ctx.add_tui_view(|ctx| {
-            TuiAIBlock::new(conversation_id, exchange_id, block_model, action_model, ctx)
+            TuiAIBlock::new(
+                conversation_id,
+                exchange_id,
+                block_model,
+                action_model,
+                terminal_model,
+                ctx,
+            )
         });
         let view_id = view.id();
         self.agent_blocks.borrow_mut().insert(view_id, view);

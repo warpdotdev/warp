@@ -9,8 +9,20 @@ use warp::tui_export::{
     RunAgentsAgentOutcomeKind, RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult,
     StartAgentExecutionMode, SuggestNewConversationResult,
 };
+use warp_core::command::ExitCode;
 
 use self::ToolCallDisplayState as State;
+
+/// Ground-truth state of an agent-monitored command's terminal block,
+/// resolved by the caller from the block itself. Needed because the action
+/// model's stored result stays a `LongRunningCommandSnapshot` forever — it is
+/// never superseded when the command finishes — so the block is the source of
+/// truth (mirroring the GUI's stale-result override in `RequestedCommandView`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LrcCommandState {
+    StillRunning,
+    Finished { exit_code: ExitCode },
+}
 
 /// Longest rendered length for interpolated values (commands, queries, paths)
 /// so tool-call rows stay scannable one-liners.
@@ -43,9 +55,12 @@ pub(crate) enum ToolCallDisplayState {
 /// `output_streaming` is whether the exchange output is still streaming;
 /// a status-less action in a streaming output is still being constructed
 /// (mirroring the GUI's `status.is_none() && is_streaming()` gating).
+/// `lrc_state` refines snapshot results with the terminal block's ground
+/// truth (see [`LrcCommandState`]).
 pub(crate) fn tool_call_display_state(
     status: Option<&AIActionStatus>,
     output_streaming: bool,
+    lrc_state: Option<LrcCommandState>,
 ) -> ToolCallDisplayState {
     match status {
         None if output_streaming => State::Constructing,
@@ -58,10 +73,32 @@ pub(crate) fn tool_call_display_state(
             } else if finished.is_failed() {
                 State::Failed
             } else {
-                State::Succeeded
+                match lrc_state {
+                    Some(LrcCommandState::Finished { exit_code }) if is_lrc_snapshot(finished) => {
+                        if exit_code.is_sigint() {
+                            State::Cancelled
+                        } else if exit_code.was_successful() {
+                            State::Succeeded
+                        } else {
+                            State::Failed
+                        }
+                    }
+                    Some(LrcCommandState::Finished { .. } | LrcCommandState::StillRunning)
+                    | None => State::Succeeded,
+                }
             }
         }
     }
+}
+
+/// Whether a finished status holds a long-running command snapshot result.
+fn is_lrc_snapshot(status: &AIActionStatus) -> bool {
+    matches!(
+        status.finished_result().map(|result| &result.result),
+        Some(AIAgentActionResultType::RequestCommandOutput(
+            RequestCommandOutputResult::LongRunningCommandSnapshot { .. }
+        ))
+    )
 }
 
 /// Returns the one-line transcript label for a tool call in its current state.
@@ -69,12 +106,13 @@ pub(crate) fn tool_call_label(
     action: &AIAgentAction,
     status: Option<&AIActionStatus>,
     output_streaming: bool,
+    lrc_state: Option<LrcCommandState>,
 ) -> String {
-    let state = tool_call_display_state(status, output_streaming);
+    let state = tool_call_display_state(status, output_streaming, lrc_state);
     let result = status
         .and_then(AIActionStatus::finished_result)
         .map(|result| &result.result);
-    let label = label_for_action(&action.action, state, result);
+    let label = label_for_action(&action.action, state, result, lrc_state);
     match state {
         State::AwaitingApproval => format!("{label} (awaiting approval)"),
         State::Constructing
@@ -97,6 +135,7 @@ fn label_for_action(
     action: &AIAgentActionType,
     state: ToolCallDisplayState,
     result: Option<&AIAgentActionResultType>,
+    lrc_state: Option<LrcCommandState>,
 ) -> String {
     match action {
         AIAgentActionType::RequestCommandOutput { command, .. } => {
@@ -108,7 +147,13 @@ fn label_for_action(
                 State::Succeeded => match result {
                     Some(AIAgentActionResultType::RequestCommandOutput(
                         RequestCommandOutputResult::LongRunningCommandSnapshot { .. },
-                    )) => format!("`{cmd}` is still running"),
+                    )) => match lrc_state {
+                        // Block ground truth: the monitored command finished.
+                        Some(LrcCommandState::Finished { .. }) => format!("Ran `{cmd}`"),
+                        Some(LrcCommandState::StillRunning) | None => {
+                            format!("`{cmd}` is still running")
+                        }
+                    },
                     _ => format!("Ran `{cmd}`"),
                 },
                 State::Failed => match result {
@@ -118,6 +163,14 @@ fn label_for_action(
                     Some(AIAgentActionResultType::RequestCommandOutput(
                         RequestCommandOutputResult::Denylisted { .. },
                     )) => format!("`{cmd}` denied (denylisted)"),
+                    Some(AIAgentActionResultType::RequestCommandOutput(
+                        RequestCommandOutputResult::LongRunningCommandSnapshot { .. },
+                    )) => match lrc_state {
+                        Some(LrcCommandState::Finished { exit_code }) => {
+                            format!("`{cmd}` exited with code {}", exit_code.value())
+                        }
+                        Some(LrcCommandState::StillRunning) | None => format!("`{cmd}` failed"),
+                    },
                     _ => format!("`{cmd}` failed"),
                 },
                 State::Cancelled => format!("Cancelled `{cmd}`"),

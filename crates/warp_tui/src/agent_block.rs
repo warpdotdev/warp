@@ -8,12 +8,15 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use itertools::Itertools;
+use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentOutputMessageType,
-    AIAgentTextSection, AIBlockModel, AIConversationId, BlocklistAIActionModel, MessageId,
+    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
+    AIAgentExchangeId, AIAgentOutputMessageType, AIAgentTextSection, AIBlockModel,
+    AIConversationId, BlocklistAIActionModel, MessageId, RequestCommandOutputResult, TerminalModel,
 };
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
@@ -29,6 +32,7 @@ use crate::agent_block_sections::{
     render_input_section, render_plain_text_section, render_thinking_section,
     render_tool_call_section,
 };
+use crate::tool_call_labels::LrcCommandState;
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -132,6 +136,10 @@ pub(super) struct TuiAIBlock {
     /// Source of truth for per-action execution status, consulted at render
     /// time to pick each tool-call row's text and styling.
     action_model: ModelHandle<BlocklistAIActionModel>,
+    /// The owning surface's terminal model, used to read a command block's
+    /// ground-truth state for agent-monitored commands (see
+    /// [`Self::lrc_command_state`]). Locked only in short, render-time scopes.
+    terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Per-message UI state for this exchange's thinking blocks.
     thinking_states: ThinkingBlockStates,
     /// Every tool-call action id seen in this exchange's output, maintained by
@@ -156,6 +164,7 @@ impl TuiAIBlock {
         exchange_id: AIAgentExchangeId,
         block_model: Rc<dyn AIBlockModel<View = Self>>,
         action_model: ModelHandle<BlocklistAIActionModel>,
+        terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let mut block = Self {
@@ -163,6 +172,7 @@ impl TuiAIBlock {
             exchange_id,
             block_model,
             action_model: action_model.clone(),
+            terminal_model,
             thinking_states: Default::default(),
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
@@ -236,6 +246,32 @@ impl TuiAIBlock {
     /// [`Self::sync_action_views`], so per-action-event checks stay cheap.
     pub(super) fn renders_action(&self, action_id: &AIAgentActionId) -> bool {
         self.action_ids.contains(action_id)
+    }
+
+    /// Resolves the terminal block's ground-truth state for an agent-monitored
+    /// command whose stored result is a long-running snapshot. The action
+    /// model's result is never updated after the snapshot, so the block itself
+    /// is the source of truth (mirroring the GUI's stale-result override in
+    /// `RequestedCommandView`).
+    fn lrc_command_state(&self, status: Option<&AIActionStatus>) -> Option<LrcCommandState> {
+        let result = status.and_then(AIActionStatus::finished_result)?;
+        let AIAgentActionResultType::RequestCommandOutput(
+            RequestCommandOutputResult::LongRunningCommandSnapshot { block_id, .. },
+        ) = &result.result
+        else {
+            return None;
+        };
+        // Short-lived lock: the TUI layout/render pipeline drops its own model
+        // guards before rich content measures or renders, so this never nests.
+        let model = self.terminal_model.lock();
+        let block = model.block_list().block_with_id(block_id)?;
+        Some(if block.finished() {
+            LrcCommandState::Finished {
+                exit_code: block.exit_code(),
+            }
+        } else {
+            LrcCommandState::StillRunning
+        })
     }
 
     /// Returns this block's wrapped height at the given width.
@@ -348,7 +384,14 @@ impl TuiAIBlock {
                     Some(view) => TuiContainer::new(Box::new(view.render_child())).finish(),
                     None => {
                         let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        render_tool_call_section(action, status.as_ref(), output_streaming, app)
+                        let lrc_state = self.lrc_command_state(status.as_ref());
+                        render_tool_call_section(
+                            action,
+                            status.as_ref(),
+                            output_streaming,
+                            lrc_state,
+                            app,
+                        )
                     }
                 },
                 TuiAIBlockSection::Thinking {

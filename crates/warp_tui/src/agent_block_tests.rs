@@ -1,11 +1,14 @@
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
     AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection,
     AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, Appearance, LLMId,
-    MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared, TaskId, UserQueryMode,
+    MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared, TaskId, TerminalModel,
+    UserQueryMode,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -510,6 +513,7 @@ struct FakeAgentBlockModel {
 /// window and backed by a real action model.
 fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<TuiAIBlock> {
     let action_model = add_test_action_model(app);
+    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
             AddWindowOptions {
@@ -524,6 +528,7 @@ fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<Tui
                 AIAgentExchangeId::new(),
                 Rc::new(model),
                 action_model,
+                terminal_model,
                 ctx,
             )
         })
