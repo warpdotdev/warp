@@ -906,8 +906,8 @@ impl FileModel {
                 ctx.spawn(
                     async move { handle.delete_file(path).await },
                     move |me, result, ctx| {
-                        let result = result
-                            .map_err(|e| Arc::new(FileSaveError::RemoteError(e.to_string())));
+                        let result =
+                            result.map_err(|e| Arc::new(FileSaveError::RemoteError(e.to_string())));
                         match &result {
                             Ok(()) => {
                                 me.set_version(file_id, version);

@@ -31,8 +31,7 @@ impl TuiFileEditsView {
         action_model: &ModelHandle<BlocklistAIActionModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let storage =
-            ctx.add_model(|_| TuiDiffStorage::new(Vec::new(), DiffSessionType::Local));
+        let storage = ctx.add_model(|_| TuiDiffStorage::new(Vec::new(), DiffSessionType::Local));
 
         // The storage emits when the executor seeds it with resolved diffs;
         // re-render the summary.
