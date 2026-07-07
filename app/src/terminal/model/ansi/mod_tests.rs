@@ -1091,6 +1091,23 @@ fn parse_osc8_dropped_when_feature_flag_disabled() {
 }
 
 #[test]
+fn parse_osc8_malformed_sequence_clears_active_hyperlink() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // Open a valid link, then send a malformed (non-UTF-8 URI) sequence. The
+    // parse error must clear the active hyperlink so subsequent output can't
+    // inherit the stale URI.
+    let bytes: &[u8] = b"\x1b]8;;https://example.com\x1b\\text\x1b]8;;\xff\xfe\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 2);
+    assert_eq!(
+        handler.hyperlink_events[0].as_ref().map(|h| h.uri.as_str()),
+        Some("https://example.com")
+    );
+    assert!(handler.hyperlink_events[1].is_none());
+}
+
+#[test]
 fn parse_osc9_notification() {
     let bytes: &[u8] = b"\x1b]9;Hello from OSC 9\x07";
     let (_, handler) = parse_bytes(bytes);
