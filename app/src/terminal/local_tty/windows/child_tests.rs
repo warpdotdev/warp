@@ -1,8 +1,9 @@
-use std::os::windows::io::AsRawHandle;
 use std::time::Duration;
 
-use command::blocking::Command;
 use instant::Instant;
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::System::Threading::{CreateEventW, SetEvent};
 
 use super::*;
 use crate::terminal::local_tty::event_loop::CHANNEL_TOKEN;
@@ -15,9 +16,8 @@ pub fn test_event_is_emitted_when_child_exits() {
 
     let (tx, mut rx) = mio_channel::channel();
 
-    let mut child = Command::new("cmd.exe").spawn().unwrap();
-    let child_handle = HANDLE(child.as_raw_handle());
-    let mut child_exit_watcher = ChildExitWatcher::new(child_handle, tx).unwrap();
+    let event_handle = unsafe { CreateEventW(None, true, false, PCWSTR::null()).unwrap() };
+    let mut child_exit_watcher = ChildExitWatcher::new(event_handle, tx).unwrap();
     // We need to register the receiver with the poller so that it can be woken up when the child exits.
     poll.registry()
         .register(&mut rx, CHANNEL_TOKEN, Interest::READABLE)
@@ -27,7 +27,7 @@ pub fn test_event_is_emitted_when_child_exits() {
         .register(poll.registry(), CHANNEL_TOKEN, Interest::READABLE)
         .unwrap();
 
-    child.kill().unwrap();
+    unsafe { SetEvent(event_handle).unwrap() };
 
     // Poll until the event arrives or the overall timeout elapses.
     let mut events = mio::Events::with_capacity(10);
@@ -52,4 +52,9 @@ pub fn test_event_is_emitted_when_child_exits() {
     }
     // Verify that at least one `ChildEvent::Exited` was received.
     assert!(matches!(rx.try_recv(), Ok(Message::ChildExited)));
+
+    drop(child_exit_watcher);
+    unsafe {
+        CloseHandle(event_handle).unwrap();
+    }
 }

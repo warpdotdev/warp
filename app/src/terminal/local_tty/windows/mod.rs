@@ -4,11 +4,13 @@ mod environment;
 mod pipes;
 mod proc_thread_attribute_list;
 
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle as _;
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use child::ChildExitWatcher;
 pub use conpty_api::ConptyApi;
 use conpty_api::ConptyApiError;
@@ -17,12 +19,16 @@ pub use environment::get_user_and_system_env_variable;
 use thiserror::Error;
 use warpui::{AppContext, SingletonEntity};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Console::{COORD, HPCON};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Threading::{
-    CreateProcessW, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_UNICODE_ENVIRONMENT,
-    EXTENDED_STARTUPINFO_PRESENT, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+    CreateProcessW, OpenProcess, TerminateProcess, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB,
+    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, PROCESS_CREATION_FLAGS,
+    PROCESS_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, STARTUPINFOW,
 };
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
@@ -75,6 +81,8 @@ unsafe impl Send for PseudoConsoleChild {}
 unsafe impl Sync for PseudoConsoleChild {}
 
 impl PseudoConsoleChild {
+    const TERMINATE_WAIT_MS: u32 = 5_000;
+
     pub fn id(&self) -> u32 {
         self.process_info.dwProcessId
     }
@@ -83,6 +91,129 @@ impl PseudoConsoleChild {
         let wait_event = unsafe { WaitForSingleObject(self.process_info.hProcess, 0) };
         wait_event == WAIT_OBJECT_0
     }
+
+    pub fn kill(&mut self) -> anyhow::Result<()> {
+        if self.is_terminated() {
+            return Ok(());
+        }
+
+        match descendant_process_ids(self.id()) {
+            Ok(descendant_process_ids) => {
+                for pid in descendant_process_ids.iter().rev() {
+                    if let Err(err) = terminate_process_by_pid(*pid) {
+                        log::warn!("Failed to terminate PTY descendant process {pid}: {err:#}");
+                    }
+                }
+            }
+            Err(err) => {
+                log::warn!(
+                    "Failed to enumerate PTY descendant processes for {}: {err:#}",
+                    self.id()
+                );
+            }
+        }
+
+        unsafe {
+            TerminateProcess(self.process_info.hProcess, 1)
+                .map_err(anyhow::Error::from)
+                .with_context(|| format!("Failed to terminate PTY root process {}", self.id()))?;
+        }
+
+        match unsafe { WaitForSingleObject(self.process_info.hProcess, Self::TERMINATE_WAIT_MS) } {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_TIMEOUT => {
+                anyhow::bail!(
+                    "Timed out waiting for PTY root process {} to exit",
+                    self.id()
+                )
+            }
+            wait_result => anyhow::bail!(
+                "Unexpected wait result {wait_result:?} while terminating PTY root process {}",
+                self.id()
+            ),
+        }
+    }
+}
+
+impl Drop for PseudoConsoleChild {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.process_info.hThread);
+            let _ = CloseHandle(self.process_info.hProcess);
+        }
+    }
+}
+
+fn terminate_process_by_pid(pid: u32) -> windows::core::Result<()> {
+    unsafe {
+        let process = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid)?;
+        let result = TerminateProcess(process, 1);
+        if result.is_ok() {
+            let wait_result = WaitForSingleObject(process, PseudoConsoleChild::TERMINATE_WAIT_MS);
+            if wait_result == WAIT_TIMEOUT {
+                log::warn!("Timed out waiting for PTY descendant process {pid} to exit");
+            }
+        }
+        let _ = CloseHandle(process);
+        result
+    }
+}
+
+fn descendant_process_ids(root_pid: u32) -> windows::core::Result<Vec<u32>> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)? };
+    let mut process_entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut child_processes_by_parent = HashMap::<u32, Vec<u32>>::new();
+
+    unsafe {
+        if Process32FirstW(snapshot, &mut process_entry).is_ok() {
+            loop {
+                child_processes_by_parent
+                    .entry(process_entry.th32ParentProcessID)
+                    .or_default()
+                    .push(process_entry.th32ProcessID);
+
+                if Process32NextW(snapshot, &mut process_entry).is_err() {
+                    break;
+                }
+            }
+        }
+
+        let _ = CloseHandle(snapshot);
+    }
+
+    Ok(collect_descendant_process_ids(
+        root_pid,
+        &child_processes_by_parent,
+    ))
+}
+
+fn collect_descendant_process_ids(
+    root_pid: u32,
+    child_processes_by_parent: &HashMap<u32, Vec<u32>>,
+) -> Vec<u32> {
+    let mut descendants = Vec::new();
+    let mut visited = HashSet::new();
+    let mut stack = child_processes_by_parent
+        .get(&root_pid)
+        .cloned()
+        .unwrap_or_default();
+
+    while let Some(pid) = stack.pop() {
+        if pid == root_pid || !visited.insert(pid) {
+            continue;
+        }
+
+        descendants.push(pid);
+
+        if let Some(children) = child_processes_by_parent.get(&pid) {
+            stack.extend(children.iter().copied());
+        }
+    }
+
+    descendants
 }
 
 #[derive(Error, Debug)]
@@ -326,13 +457,13 @@ fn append_quoted(arg: &OsStr, cmdline: &mut Vec<u16>) {
 }
 
 pub struct Pty {
+    child_exit_watcher: ChildExitWatcher,
     handle: Box<dyn PtyHandle>,
     /// An arbitrary type on Windows used to interact with the psuedoconsole.
     pty_handle: HPCON,
     pipe: mio::windows::NamedPipe,
     token: mio::Token,
     conpty_api: ConptyApi,
-    child_exit_watcher: ChildExitWatcher,
 }
 
 impl Pty {
@@ -358,12 +489,12 @@ impl Pty {
                     handle,
                 )| {
                     let mut pty = Self {
+                        child_exit_watcher,
                         handle,
                         pty_handle,
                         pipe,
                         token: PTY_TOKEN,
                         conpty_api,
-                        child_exit_watcher,
                     };
                     pty.on_resize(&size);
                     pty
@@ -437,8 +568,8 @@ impl EventedPty for Pty {
         }
     }
 
-    fn kill(self) -> anyhow::Result<()> {
-        Ok(())
+    fn kill(mut self) -> anyhow::Result<()> {
+        self.handle.kill()
     }
 }
 
@@ -464,3 +595,7 @@ impl Drop for Pty {
         let _ = self.pipe.disconnect();
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
