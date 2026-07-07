@@ -19,6 +19,7 @@ chrono.workspace = true
 clap.workspace = true
 command.workspace = true
 directories.workspace = true
+dunce.workspace = true
 itertools.workspace = true
 float-cmp.workspace = true
 instant.workspace = true
@@ -29,6 +30,7 @@ parking_lot = { version = "0.12.1", features = ["serde"] }
 pathfinder_geometry.workspace = true
 rand = "0.8.2"
 regex.workspace = true
+repo_metadata.workspace = true
 rust-embed.workspace = true
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json.workspace = true
