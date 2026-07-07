@@ -9,7 +9,8 @@ use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
     Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPaintContext, TuiRect, TuiSize, TuiStyle,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
+    TuiStyle,
 };
 use warpui_core::{App, AppContext, ModelHandle};
 
@@ -83,7 +84,14 @@ fn render_buffer(
     let area = TuiRect::new(0, 0, size.width, size.height);
     let mut buffer = TuiBuffer::empty(area);
     let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-    element.render(area, &mut buffer, &mut paint_ctx);
+    {
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(
+            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+            &mut surface,
+            &mut paint_ctx,
+        );
+    }
     buffer
 }
 
@@ -111,13 +119,20 @@ fn dispatch_event(ctx: &AppContext, mut element: TuiEditorElement, event: &TuiEv
         ctx,
     );
     let area = TuiRect::new(0, 0, size.width, size.height);
-    element.dispatch_event(
-        event,
-        area,
-        &mut TuiEventContext::default(),
-        &mut layout_ctx,
-        ctx,
-    )
+    // Paint once so the element retains its scene geometry for hit-testing.
+    let scene = {
+        let mut buffer = TuiBuffer::empty(area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(
+            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+            &mut surface,
+            &mut paint_ctx,
+        );
+        Rc::new(paint_ctx.scene.clone())
+    };
+    let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+    element.dispatch_event(event, &mut event_ctx, ctx)
 }
 
 #[test]

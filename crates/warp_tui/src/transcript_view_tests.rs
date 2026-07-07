@@ -14,7 +14,7 @@ use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, EntityId, EntityIdMap, TuiView};
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPaintContext, TuiRect, TuiSize,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -552,7 +552,14 @@ fn render_element(app: &App, element: &mut dyn TuiElement, area: TuiRect) -> Vec
         );
         let mut buffer = TuiBuffer::empty(area);
         let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-        element.render(area, &mut buffer, &mut paint_ctx);
+        {
+            let mut surface = TuiPaintSurface::new(&mut buffer);
+            element.render(
+                TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+                &mut surface,
+                &mut paint_ctx,
+            );
+        }
         buffer.to_lines()
     })
 }
@@ -581,12 +588,21 @@ fn dispatch_event(
 ) -> bool {
     app.read(|app| {
         let mut rendered_views = EntityIdMap::default();
-        let mut layout_ctx = TuiLayoutContext {
-            rendered_views: &mut rendered_views,
-        };
-        let mut event_ctx = TuiEventContext::default();
+        let mut buffer = TuiBuffer::empty(area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        {
+            let mut surface = TuiPaintSurface::new(&mut buffer);
+            element.render(
+                TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+                &mut surface,
+                &mut paint_ctx,
+            );
+        }
+        let scene = Rc::new(paint_ctx.scene.clone());
+        drop(paint_ctx);
+        let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
         event_ctx.set_origin_view(Some(EntityId::new()));
-        element.dispatch_event(event, area, &mut event_ctx, &mut layout_ctx, app)
+        element.dispatch_event(event, &mut event_ctx, app)
     })
 }
 

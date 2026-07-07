@@ -9,8 +9,8 @@ use warp_terminal::model::ansi::{Color, NamedColor};
 use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
 use warpui_core::elements::tui::{
-    Color as TuiColor, Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext,
-    TuiPaintContext, TuiRect, TuiSize, TuiStyle,
+    Color as TuiColor, Modifier, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
 use warpui_core::AppContext;
 
@@ -20,6 +20,13 @@ enum TerminalBlockRows {
     Visible { rows: Range<usize>, width: u16 },
     /// Every currently displayed command/output row, derived live.
     Content,
+}
+
+/// Absolute bounds used while painting one terminal block.
+#[derive(Clone, Copy)]
+struct TerminalBlockPaintBounds {
+    origin: TuiScreenPosition,
+    size: TuiSize,
 }
 
 /// Paints terminal cells from one block using either a pre-clipped transcript
@@ -36,6 +43,8 @@ pub(super) struct TerminalBlockElement {
     model: Arc<FairMutex<TerminalModel>>,
     block_id: BlockId,
     rows: TerminalBlockRows,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TerminalBlockElement {
@@ -53,6 +62,8 @@ impl TerminalBlockElement {
                 rows: visible_rows,
                 width,
             },
+            size: None,
+            origin: None,
         }
     }
     /// Creates an element for all currently displayed command/output rows.
@@ -61,6 +72,8 @@ impl TerminalBlockElement {
             model,
             block_id,
             rows: TerminalBlockRows::Content,
+            size: None,
+            origin: None,
         }
     }
 }
@@ -83,25 +96,51 @@ impl TuiElement for TerminalBlockElement {
                     .unwrap_or_default()
             }
         };
-        constraint.clamp(TuiSize::new(
+        let size = constraint.clamp(TuiSize::new(
             constraint.max.width,
             rows.end
                 .saturating_sub(rows.start)
                 .min(usize::from(u16::MAX)) as u16,
-        ))
+        ));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
         let model = self.model.lock();
         let colors = model.colors();
         let Some(block) = model.block_list().block_with_id(&self.block_id) else {
             return;
         };
         let (rows, width) = match &self.rows {
-            TerminalBlockRows::Visible { rows, width } => (rows.clone(), (*width).min(area.width)),
-            TerminalBlockRows::Content => (block_content_rows(block), area.width),
+            TerminalBlockRows::Visible { rows, width } => (rows.clone(), (*width).min(size.width)),
+            TerminalBlockRows::Content => (block_content_rows(block), size.width),
         };
-        render_block_rows(block, rows, width, area, buffer, &colors);
+        render_block_rows(
+            block,
+            rows,
+            width,
+            TerminalBlockPaintBounds { origin, size },
+            surface,
+            &colors,
+        );
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 
@@ -140,14 +179,14 @@ fn block_content_rows(block: &Block) -> Range<usize> {
 
 /// Paints the requested block-relative rows from a terminal block. A block
 /// stacks its prompt/command grid above its output grid; each call paints only
-/// the rows overlapping `visible_rows`, positioned within `area` so the two
+/// rows overlapping `visible_rows`, positioned within `size` so the two
 /// grids don't overlap.
 fn render_block_rows(
     block: &Block,
     visible_rows: Range<usize>,
     max_width: u16,
-    area: TuiRect,
-    buffer: &mut TuiBuffer,
+    bounds: TerminalBlockPaintBounds,
+    surface: &mut TuiPaintSurface<'_>,
     colors: &TerminalColorList,
 ) {
     if !block.should_hide_command_grid() {
@@ -160,8 +199,8 @@ fn render_block_rows(
                 .max(0.0) as usize,
             visible_rows.clone(),
             max_width,
-            area,
-            buffer,
+            bounds,
+            surface,
             colors,
         );
     }
@@ -172,8 +211,8 @@ fn render_block_rows(
             block.output_grid_offset().as_f64().ceil().max(0.0) as usize,
             visible_rows,
             max_width,
-            area,
-            buffer,
+            bounds,
+            surface,
             colors,
         );
     }
@@ -194,20 +233,20 @@ pub(super) fn should_render_terminal_block(block: &Block, block_list: &BlockList
 }
 
 /// Paints consecutive displayed rows of one grid starting at `*y`, advancing
-/// `y` past each row drawn and stopping at the bottom of `area`.
+/// `y` past each row drawn and stopping at the bottom of `size`.
 fn render_displayed_rows(
     block_grid: &BlockGrid,
     displayed_rows: Range<usize>,
     max_width: u16,
-    area: TuiRect,
-    buffer: &mut TuiBuffer,
+    bounds: TerminalBlockPaintBounds,
+    surface: &mut TuiPaintSurface<'_>,
     colors: &TerminalColorList,
     y: &mut u16,
 ) {
     let grid = block_grid.grid_handler();
     let end = displayed_rows.end.min(block_grid.len_displayed());
     for displayed_row in displayed_rows.start.min(end)..end {
-        if *y >= area.bottom() {
+        if *y >= bounds.size.height {
             break;
         }
         let original_row = grid.maybe_translate_row_from_displayed_to_original(displayed_row);
@@ -216,7 +255,11 @@ fn render_displayed_rows(
         };
         for column in 0..grid.columns().min(usize::from(max_width)) {
             let cell = &row[column];
-            if let Some(buffer_cell) = buffer.cell_mut((area.x.saturating_add(column as u16), *y)) {
+            if let Some(buffer_cell) = surface.cell_mut(
+                bounds
+                    .origin
+                    .offset(i32::try_from(column).unwrap_or(i32::MAX), i32::from(*y)),
+            ) {
                 buffer_cell
                     .set_symbol(&sanitized_symbol(cell))
                     .set_style(cell_to_style(cell, colors));
@@ -231,14 +274,14 @@ fn render_displayed_rows(
 /// `grid_start_row` is where this grid begins relative to the top of the block
 /// (the command grid starts at 0; the output grid starts below it). Only the
 /// intersection of the grid's rows with `visible_rows` is drawn, offset within
-/// `area` so it lands at the correct vertical position.
+/// `size` so it lands at the correct vertical position.
 fn render_grid_rows(
     block_grid: &BlockGrid,
     grid_start_row: usize,
     visible_rows: Range<usize>,
     max_width: u16,
-    area: TuiRect,
-    buffer: &mut TuiBuffer,
+    bounds: TerminalBlockPaintBounds,
+    surface: &mut TuiPaintSurface<'_>,
     colors: &TerminalColorList,
 ) {
     let grid_end_row = grid_start_row.saturating_add(block_grid.len_displayed());
@@ -251,15 +294,13 @@ fn render_grid_rows(
     let displayed_rows =
         visible_start.saturating_sub(grid_start_row)..visible_end.saturating_sub(grid_start_row);
     let y_offset = visible_start.saturating_sub(visible_rows.start);
-    let mut y = area
-        .y
-        .saturating_add(y_offset.min(usize::from(u16::MAX)) as u16);
+    let mut y = y_offset.min(usize::from(u16::MAX)) as u16;
     render_displayed_rows(
         block_grid,
         displayed_rows,
         max_width,
-        area,
-        buffer,
+        bounds,
+        surface,
         colors,
         &mut y,
     );
