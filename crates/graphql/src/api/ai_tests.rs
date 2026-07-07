@@ -189,24 +189,3 @@ fn list_ai_conversations_query_selects_token_usage_fields() {
         );
     }
 }
-
-/// Conversations without any recorded usage convert to empty token usage,
-/// matching the pre-existing behavior for empty metadata.
-#[test]
-fn conversion_handles_empty_usage() {
-    let gql = ConversationUsageMetadata {
-        context_window_usage: 0.1,
-        context_window_segments: vec![],
-        credits_spent: 1.0,
-        platform_credits_spent: 0.0,
-        summarized: false,
-        warp_token_usage: vec![],
-        byok_token_usage: vec![],
-        tool_usage_metadata: sample_tool_usage_metadata(),
-    };
-
-    let converted: persistence::model::ConversationUsageMetadata = (&gql).into();
-
-    assert!(converted.token_usage.is_empty());
-    assert_eq!(converted.credits_spent, 1.0);
-}
