@@ -312,6 +312,18 @@ pub async fn extract_gz(data: &[u8], dest_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Maximum uncompressed size allowed for a single zip entry.
+///
+/// Guards against decompression bombs and pathological/corrupt LZMA streams that
+/// otherwise decode into many gigabytes of memory. Language-server and Node.js
+/// archives (e.g. the clangd binary) extract well under this limit.
+#[cfg(feature = "local_fs")]
+const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
+
+/// Maximum total uncompressed size allowed across all extracted zip entries.
+#[cfg(feature = "local_fs")]
+const MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+
 /// Extracts files from a zip archive to the destination directory.
 ///
 /// # Arguments
@@ -323,21 +335,50 @@ pub async fn extract_gz(data: &[u8], dest_path: &Path) -> Result<()> {
 /// # Returns
 /// Returns Ok(()) on success, or an error if extraction fails or if a filter is provided but no files match.
 ///
-/// Note: This function performs synchronous zip reading (which is CPU-bound) followed by
-/// async file I/O. Similar to `extract_gz`, this approach is acceptable for reasonably-sized
-/// archives since the zip reading is relatively fast.
+/// Note: Entries are decompressed and written one at a time (rather than buffering the
+/// entire archive in memory) and both per-entry and total uncompressed sizes are capped.
+/// This bounds memory usage and protects against decompression bombs / corrupt streams,
+/// which have caused multi-gigabyte spikes and OOMs during language-server installs.
 #[cfg(feature = "local_fs")]
 pub async fn extract_zip<F>(data: &[u8], dest_dir: &Path, file_filter: Option<F>) -> Result<()>
 where
     F: Fn(&str) -> bool,
 {
-    // Extract all file data synchronously first
-    let files_to_write: Vec<(PathBuf, Vec<u8>)> = {
-        let cursor = std::io::Cursor::new(data);
-        let mut archive = zip::ZipArchive::new(cursor).context("Failed to read zip archive")?;
-        let mut result = Vec::new();
+    extract_zip_with_limits(
+        data,
+        dest_dir,
+        file_filter,
+        MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES,
+        MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES,
+    )
+    .await
+}
 
-        for i in 0..archive.len() {
+/// Implementation of [`extract_zip`] with explicit size limits (in bytes) so the
+/// bomb-protection behavior can be unit-tested without huge fixtures.
+#[cfg(feature = "local_fs")]
+async fn extract_zip_with_limits<F>(
+    data: &[u8],
+    dest_dir: &Path,
+    file_filter: Option<F>,
+    max_entry_bytes: u64,
+    max_total_bytes: u64,
+) -> Result<()>
+where
+    F: Fn(&str) -> bool,
+{
+    let cursor = std::io::Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).context("Failed to read zip archive")?;
+
+    let mut matched_any = false;
+    let mut total_uncompressed: u64 = 0;
+
+    for i in 0..archive.len() {
+        // Decompress the entry into a bounded buffer, then drop the entry reader
+        // before doing async I/O so we never hold the (potentially non-Send)
+        // decompressor across an await point, and never buffer more than one
+        // entry at a time.
+        let (outpath, contents) = {
             let mut file = archive.by_index(i).context("Failed to read zip entry")?;
             let file_name = file.name().to_string();
 
@@ -352,23 +393,45 @@ where
                 None => continue,
             };
 
-            if !file.is_dir() {
-                let mut data = Vec::new();
-                file.read_to_end(&mut data)
-                    .context("Failed to read file from zip")?;
-                result.push((outpath, data));
+            if file.is_dir() {
+                continue;
             }
-        }
-        result
-    }; // archive is dropped here
 
-    // If a filter was provided but no files matched, return an error
-    if file_filter.is_some() && files_to_write.is_empty() {
-        bail!("No files matched the filter in the zip archive");
-    }
+            matched_any = true;
 
-    // Now do async file I/O
-    for (outpath, data) in files_to_write {
+            // Reject entries whose declared uncompressed size is implausibly
+            // large before allocating anything for them.
+            let declared_size = file.size();
+            if declared_size > max_entry_bytes {
+                bail!(
+                    "Zip entry {file_name:?} declares uncompressed size {declared_size} bytes, exceeding the per-entry limit of {max_entry_bytes} bytes"
+                );
+            }
+
+            // Read with a hard cap (+1 to detect overflow) so a missing or
+            // dishonest size field can't drive unbounded allocation.
+            let mut contents = Vec::new();
+            let read = (&mut file)
+                .take(max_entry_bytes + 1)
+                .read_to_end(&mut contents)
+                .with_context(|| format!("Failed to read file from zip: {file_name:?}"))?
+                as u64;
+            if read > max_entry_bytes {
+                bail!(
+                    "Zip entry {file_name:?} exceeded the per-entry decompression limit of {max_entry_bytes} bytes"
+                );
+            }
+
+            total_uncompressed = total_uncompressed.saturating_add(read);
+            if total_uncompressed > max_total_bytes {
+                bail!(
+                    "Zip archive exceeded the total decompression limit of {max_total_bytes} bytes"
+                );
+            }
+
+            (outpath, contents)
+        }; // entry reader dropped here
+
         if let Some(parent) = outpath.parent() {
             async_fs::create_dir_all(parent).await.ok();
         }
@@ -377,13 +440,18 @@ where
             .await
             .with_context(|| format!("Failed to create file: {:?}", outpath))?;
         outfile
-            .write_all(&data)
+            .write_all(&contents)
             .await
             .with_context(|| format!("Failed to write file: {:?}", outpath))?;
         outfile
             .flush()
             .await
             .with_context(|| format!("Failed to flush file: {:?}", outpath))?;
+    }
+
+    // If a filter was provided but no files matched, return an error
+    if file_filter.is_some() && !matched_any {
+        bail!("No files matched the filter in the zip archive");
     }
 
     Ok(())
@@ -533,3 +601,7 @@ pub async fn fetch_npm_package_version(
         .map(|s| s.to_string())
         .with_context(|| format!("No version found for npm package {}", package_name))
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "lib_tests.rs"]
+mod tests;
