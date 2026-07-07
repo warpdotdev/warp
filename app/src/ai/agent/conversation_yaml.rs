@@ -524,6 +524,8 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
         Tool::ReadShellCommandOutput(_)
         | Tool::UseComputer(_)
         | Tool::RequestComputerUse(_)
+        | Tool::StartRecording(_)
+        | Tool::StopRecording(_)
         | Tool::SuggestPlan(_)
         | Tool::SuggestCreatePlan(_)
         | Tool::SuggestNewConversation(_)
@@ -601,6 +603,7 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
             None => {}
         },
         ToolCallResultType::WaitForEvents(_) => {}
+        ToolCallResultType::StartRecording(_) | ToolCallResultType::StopRecording(_) => {}
         ToolCallResultType::RunShellCommand(r) => {
             if let Some(res) = &r.result {
                 use api::run_shell_command_result::Result;

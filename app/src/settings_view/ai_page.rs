@@ -187,6 +187,7 @@ const CUSTOM_INFERENCE_LEARN_MORE_URL: &str =
     "https://docs.warp.dev/agent-platform/inference/custom-inference-endpoint/";
 const CUSTOM_INFERENCE_TERMS_URL: &str = "https://www.warp.dev/legal/terms-of-service";
 const CUSTOM_INFERENCE_INFO_TOOLTIP_MAX_WIDTH: f32 = 320.;
+const CUSTOM_ENDPOINT_MODAL_MAX_HEIGHT_PERCENTAGE: f32 = 0.8;
 
 pub fn init_actions_from_parent_view<T: Action + Clone>(
     app: &mut AppContext,
@@ -602,8 +603,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             .with_group(bindings::BindingGroup::WarpAi)
             .is_supported_on_current_platform(
                 UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
-                    || (FeatureFlag::CustomInferenceEndpoints.is_enabled()
-                        && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)),
+                    || UserWorkspaces::as_ref(app).is_custom_inference_enabled(app),
             ),
             ToggleSettingActionPair::new(
                 "auto show or hide Rich Input based on agent status",
@@ -1765,7 +1765,6 @@ impl AISettingsPageView {
             )
             .with_modal_style(UiComponentStyles {
                 width: Some(560.),
-                height: Some(600.),
                 ..Default::default()
             })
             .with_header_style(UiComponentStyles {
@@ -1784,11 +1783,12 @@ impl AISettingsPageView {
                     top: 0.,
                     bottom: 24.,
                     left: 24.,
-                    right: 24.,
+                    right: 0.,
                 }),
                 ..Default::default()
             })
             .with_background_opacity(100)
+            .with_max_height_percentage(CUSTOM_ENDPOINT_MODAL_MAX_HEIGHT_PERCENTAGE)
             .with_dismiss_on_click()
             .with_dismiss_keystroke(Keystroke::parse("escape").unwrap())
         });
@@ -2282,8 +2282,7 @@ impl AISettingsPageView {
             .collect()
     }
     fn can_use_custom_inference_controls(app: &AppContext) -> bool {
-        FeatureFlag::CustomInferenceEndpoints.is_enabled()
-            && AISettings::as_ref(app).is_any_ai_enabled(app)
+        AISettings::as_ref(app).is_any_ai_enabled(app)
             && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
     }
 
@@ -8742,8 +8741,7 @@ impl SettingsWidget for ApiKeysWidget {
             UserWorkspaces::as_ref(app).is_custom_inference_enabled(app);
         let provider_keys_enabled = is_any_ai_enabled && is_byo_enabled;
         let custom_inference_controls_enabled = is_any_ai_enabled && is_custom_inference_enabled;
-        let custom_inference_flag_on = FeatureFlag::CustomInferenceEndpoints.is_enabled();
-        let show_custom_inference = custom_inference_flag_on && is_custom_inference_enabled;
+        let show_custom_inference = is_custom_inference_enabled;
 
         let mut column = Flex::column().with_child(render_separator(appearance));
 
@@ -9389,6 +9387,13 @@ impl SettingsWidget for AwsBedrockWidget {
     }
 }
 
+/// Stable `&'static str` id for the custom model routers settings widget,
+/// exposed for the `warp://settings?widget=custom_router` deeplink (see
+/// `settings_widget_deeplink_target`).
+pub(crate) fn custom_model_routers_widget_id() -> &'static str {
+    CustomModelRoutersWidget::static_widget_id()
+}
+
 #[derive(Default)]
 struct CustomModelRoutersWidget;
 
@@ -9418,18 +9423,13 @@ impl SettingsWidget for CustomModelRoutersWidget {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                warpui::elements::Shrinkable::new(
-                    1.,
-                    build_sub_header(appearance, "Custom Routers", Some(header_color)).finish(),
-                )
-                .finish(),
-            )
+            .with_child(build_sub_header(appearance, "Custom Routers", Some(header_color)).finish())
             .with_child({
                 #[cfg(feature = "local_fs")]
                 {
                     warpui::elements::Container::new(view.add_router_button.as_ref(app).render(app))
-                        .with_margin_left(16.)
+                        .with_margin_bottom(4.)
+                        .with_margin_top(-4.)
                         .finish()
                 }
                 #[cfg(not(feature = "local_fs"))]

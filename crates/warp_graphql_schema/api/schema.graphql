@@ -618,6 +618,10 @@ type ByoApiKeyPolicy {
   enabled: Boolean!
 }
 
+type ByoEndpointPolicy {
+  enabled: Boolean!
+}
+
 """Token count for a specific usage category."""
 type CategoryTokenBreakdown {
   category: String!
@@ -3611,6 +3615,7 @@ type Tier {
   ambientAgentsPolicy: AmbientAgentsPolicy
   anyoneWithLinkSharingPolicy: AnyoneWithLinkSharingPolicy
   byoApiKeyPolicy: ByoApiKeyPolicy
+  byoEndpointPolicy: ByoEndpointPolicy
   cloudConversationStoragePolicy: CloudConversationStoragePolicy
   codebaseContextPolicy: CodebaseContextPolicy
   customLlmPolicy: CustomLlmPolicy

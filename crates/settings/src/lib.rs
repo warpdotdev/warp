@@ -6,6 +6,7 @@ pub mod schema;
 // Re-export commonly used types and traits
 use std::fmt::Debug;
 use std::ops::Deref;
+use std::sync::OnceLock;
 
 // Re-export crates used by macro expansions in downstream crates.
 #[doc(hidden)]
@@ -172,6 +173,91 @@ pub enum RespectUserSyncSetting {
 
     /// Sync regardless of the user's setting
     No,
+}
+
+/// The surface the settings system is running in. Set once at startup by the
+/// start-app logic (see [`set_settings_mode`]) and consulted by the settings
+/// infrastructure to vary behavior per surface (cloud sync, native-store
+/// migration, and which config directory the settings file lives in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsMode {
+    /// The full desktop GUI application.
+    Gui,
+    /// The headless terminal-UI front-end (the `warp_tui` crate).
+    Tui,
+}
+
+impl SettingsMode {
+    /// Whether settings for this mode are synced to the cloud (Warp Drive). The
+    /// GUI syncs; the TUI keeps its config local so the two surfaces never
+    /// clobber shared cloud state.
+    pub fn should_sync_to_cloud(self) -> bool {
+        match self {
+            SettingsMode::Gui => true,
+            SettingsMode::Tui => false,
+        }
+    }
+
+    /// Whether this surface performs the one-time native-store → TOML settings
+    /// migration. Only the GUI has legacy native-store settings to migrate;
+    /// other surfaces (e.g. the TUI) start fresh and must never migrate or touch
+    /// the shared migration-complete marker.
+    pub fn should_migrate_native_settings(self) -> bool {
+        match self {
+            SettingsMode::Gui => true,
+            SettingsMode::Tui => false,
+        }
+    }
+}
+
+/// Process-wide settings mode, established once at startup.
+static SETTINGS_MODE: OnceLock<SettingsMode> = OnceLock::new();
+
+/// Sets the process-wide [`SettingsMode`]. Called once by the start-app logic
+/// before settings are initialized; later calls are ignored.
+pub fn set_settings_mode(mode: SettingsMode) {
+    if SETTINGS_MODE.set(mode).is_err() {
+        debug_assert_eq!(
+            settings_mode(),
+            mode,
+            "settings mode was already set to a different value"
+        );
+    }
+}
+
+/// Returns the process-wide [`SettingsMode`], falling back to
+/// [`SettingsMode::Gui`] when it has not been explicitly set (e.g. in unit
+/// tests that don't run start-app). Production processes always set the mode
+/// via [`set_settings_mode`] during startup.
+pub fn settings_mode() -> SettingsMode {
+    SETTINGS_MODE.get().copied().unwrap_or(SettingsMode::Gui)
+}
+
+/// The set of surfaces a setting applies to.
+///
+/// Declared per-setting via the required `surface:` attribute in
+/// `define_settings_group!` and used — like `feature_flag` — at schema /
+/// default-file generation time to decide which settings belong in a given
+/// surface's file. Combine surfaces with [`SettingSurfaces::ALL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingSurfaces(u8);
+
+impl SettingSurfaces {
+    /// The desktop GUI application only.
+    pub const GUI: Self = Self(1 << 0);
+    /// The headless terminal-UI front-end (the `warp_tui` crate) only.
+    pub const TUI: Self = Self(1 << 1);
+    /// Every surface (currently GUI and TUI).
+    pub const ALL: Self = Self(Self::GUI.0 | Self::TUI.0);
+
+    /// Whether the given runtime [`SettingsMode`] is included in this set.
+    pub fn includes(self, mode: SettingsMode) -> bool {
+        let bit = match mode {
+            SettingsMode::Gui => Self::GUI.0,
+            SettingsMode::Tui => Self::TUI.0,
+        };
+        self.0 & bit != 0
+    }
 }
 
 impl SupportedPlatforms {

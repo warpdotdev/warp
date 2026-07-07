@@ -12,6 +12,7 @@ use instant::SystemTime;
 use selection::BlockListSelection;
 pub use selection::SelectionRange;
 use sum_tree::{Dimension, Item, SeekBias, SumTree};
+use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::color::ColorU;
@@ -26,6 +27,7 @@ use super::grid::grid_handler::{FragmentBoundary, GridHandler, Link, PossiblePat
 use super::grid::RespectDisplayedOutput;
 use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
+use super::lifecycle::NextBlockIdDisposition;
 use super::rich_content::RichContentType;
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
@@ -41,9 +43,9 @@ use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, Event as Termi
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
-    Attr, BootstrappedValue, CharsetIndex, ClearMode, CommandFinishedValue, CursorShape,
-    CursorStyle, LineClearMode, Mode, PrecmdValue, PreexecValue, Processor, StandardCharset,
-    TabulationClearMode,
+    Attr, BootstrappedValue, CharsetIndex, ClearMode, CommandFinishedValue, CompletionMetadata,
+    CursorShape, CursorStyle, LineClearMode, Mode, PrecmdValue, PreexecValue, Processor,
+    PromptMetadata, StandardCharset, TabulationClearMode,
 };
 use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock};
 use crate::terminal::model::blockgrid::BlockGrid;
@@ -59,6 +61,11 @@ use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
 #[cfg(feature = "local_fs")]
 const RESTORED_BLOCK_SEPARATOR_HEIGHT: f64 = 1.5;
 pub(in crate::terminal) const INLINE_BANNER_HEIGHT: f64 = 2.5;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ActiveBlockCompletion {
+    AlreadyFinished,
+    NewlyFinished,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RichContentItem {
@@ -292,6 +299,9 @@ pub struct BlockList {
     restored_session_ts: Option<DateTime<Local>>,
 
     latest_block_finished_time: Option<SystemTime>,
+    /// Whether the next prompt must avoid repeating deferred completion work for an already-finished
+    /// active block that recovery advanced past.
+    skip_next_after_block_completed_event: bool,
 
     /// The number of in-band commands that are "in-flight", where "in-flight" is defined as
     /// written to the PTY without yet a completed block.
@@ -311,7 +321,7 @@ pub struct BlockList {
     /// necessary to recompute the precmd payload after an in-band command runs. Thus we send an
     /// unpopulated precmd payload for in-band commands to make their execution as fast as
     /// possible.
-    last_populated_precmd_payload: Option<PrecmdValue>,
+    last_populated_precmd_payload: Option<PromptMetadata>,
 
     /// Cached data about the prompt that was visible in the input the last time
     /// the user submitted a command.  Some prompt tools update the prompt just
@@ -599,16 +609,16 @@ impl BlockList {
     ///
     /// 1. Create the block list.
     /// 2. Add any restored blocks via `restore_block`. Note that this works
-    /// in a different way from the `finalize_block_and_advance_list` function. `restore_block` will take
+    /// in a different way from the `complete_active_block_and_advance` function. `restore_block` will take
     /// the block as the input and consider that one whole block to create,
-    /// feed input into, and finish whereas `finalize_block_and_advance_list` will create the _subsequent_
+    /// feed input into, and finish whereas `complete_active_block_and_advance` will create the _subsequent_
     /// block.
     /// 3. Create the `BootstrapStage::WarpInput` block through
     /// `create_warp_input_block`. From here on, there is always a default
     /// block which is hidden while it is empty.
-    /// 4. We progress through the bootstrap stages with the `finalize_block_and_advance_list` function.
+    /// 4. We progress through the bootstrap stages with the `complete_active_block_and_advance` function.
     /// 5. After we hit `BootstrapStage::PostBootstrapPrecmd`, it's normal
-    /// execution. `finalize_block_and_advance_list` is still the main function to advance the block list.
+    /// execution. `complete_active_block_and_advance` is still the main function to advance the block list.
     /// 6. If `reinit_shell` is called, we are bootstrapping another shell
     /// session. We would revert back to step 3. The invariant of the default
     /// block always being there is unchanged.
@@ -652,6 +662,7 @@ impl BlockList {
             is_restored_session: false,
             restored_session_ts: None,
             latest_block_finished_time: None,
+            skip_next_after_block_completed_event: false,
             early_output: EarlyOutput::new(event_proxy),
             in_flight_in_band_command_count: 0,
             last_populated_precmd_payload: None,
@@ -858,6 +869,25 @@ impl BlockList {
 
     pub fn active_block_id(&self) -> &BlockId {
         self.active_block().id()
+    }
+    pub(super) fn classify_next_block_id(&self, next_block_id: &BlockId) -> NextBlockIdDisposition {
+        if self.active_block_id() == next_block_id {
+            NextBlockIdDisposition::ActiveDuplicate
+        } else if self.block_index_for_id(next_block_id).is_some() {
+            NextBlockIdDisposition::ExistingCollision
+        } else {
+            NextBlockIdDisposition::Novel
+        }
+    }
+
+    /// Returns the exit code of the completed command immediately preceding the active block.
+    pub(super) fn previous_command_exit_code(&self) -> Option<ExitCode> {
+        [2usize, 3usize]
+            .into_iter()
+            .flat_map(|offset| self.blocks.len().checked_sub(offset))
+            .map(|idx| &self.blocks[idx])
+            .find(|block| !block.is_background() && block.finished())
+            .map(Block::exit_code)
     }
 
     fn next_gap_height(&self) -> Option<Lines> {
@@ -1175,7 +1205,7 @@ impl BlockList {
     }
 
     /// Takes and clears the set of dirty rich content view IDs.
-    pub(in crate::terminal) fn take_dirty_rich_content_items(&mut self) -> HashSet<EntityId> {
+    pub fn take_dirty_rich_content_items(&mut self) -> HashSet<EntityId> {
         std::mem::take(&mut self.dirty_rich_content_items)
     }
 
@@ -2152,7 +2182,7 @@ impl BlockList {
     fn update_blocks_and_sumtree<F, G>(
         &mut self,
         subshell_separator_height: Option<f32>,
-        rich_content_heights: Option<&HashMap<EntityId, f64>>,
+        rich_content_heights: Option<&HashMap<EntityId, BlockHeight>>,
         block_update_fn: F,
         gap_update_fn: G,
     ) where
@@ -2222,16 +2252,10 @@ impl BlockList {
                             should_hide: false,
                         }
                         .should_hide_for_agent_view_state(agent_view_state);
-                        let updated_height = if let Some(updated_height) =
-                            rich_content_heights.and_then(|heights| heights.get(view_id))
-                        {
-                            updated_height
-                                .into_pixels()
-                                .to_lines(self.size().cell_height_px())
-                                .into()
-                        } else {
-                            *last_laid_out_height
-                        };
+                        let updated_height = rich_content_heights
+                            .and_then(|heights| heights.get(view_id))
+                            .copied()
+                            .unwrap_or(*last_laid_out_height);
 
                         new_sum_tree.push(BlockHeightItem::RichContent(RichContentItem {
                             content_type: *content_type,
@@ -2346,7 +2370,28 @@ impl BlockList {
         );
     }
 
+    /// Updates rich-content heights from GUI pixel measurements, converting to
+    /// the canonical line unit at the boundary.
     pub fn update_rich_content_heights(&mut self, updated_heights: &HashMap<EntityId, f64>) {
+        let cell_height_px = self.size().cell_height_px();
+        let updated_heights = updated_heights
+            .iter()
+            .map(|(view_id, height)| {
+                (
+                    *view_id,
+                    height.into_pixels().to_lines(cell_height_px).into(),
+                )
+            })
+            .collect::<HashMap<EntityId, BlockHeight>>();
+        self.update_rich_content_heights_in_lines(&updated_heights);
+    }
+
+    /// Updates rich-content heights already measured in the canonical line unit
+    /// (used by the TUI, whose layout is row-based).
+    pub fn update_rich_content_heights_in_lines(
+        &mut self,
+        updated_heights: &HashMap<EntityId, BlockHeight>,
+    ) {
         self.update_blocks_and_sumtree(None, Some(updated_heights), |_| {}, |_| {});
     }
 
@@ -2610,18 +2655,18 @@ impl BlockList {
         &mut self,
         block_id: BlockId,
         bootstrap_stage: BootstrapStage,
-        precmd_value: Option<PrecmdValue>,
+        prompt_metadata: Option<PromptMetadata>,
         restored_block_was_local: bool,
     ) {
         self.create_new_block(
             block_id,
             bootstrap_stage,
-            precmd_value,
+            prompt_metadata,
             Some(restored_block_was_local),
         );
     }
 
-    /// If a precmd_value is provided, then we delegate the precmd
+    /// If prompt metadata is provided, then we delegate the precmd
     /// message to the block. In normal execution, we don't have
     /// this data here because it comes from a different hook dedicated
     /// to precmd itself. One place we provide the value is session
@@ -2631,7 +2676,7 @@ impl BlockList {
         &mut self,
         block_id: BlockId,
         bootstrap_stage: BootstrapStage,
-        precmd_value: Option<PrecmdValue>,
+        prompt_metadata: Option<PromptMetadata>,
         restored_block_was_local: Option<bool>,
     ) {
         let honor_ps1 = self.honor_ps1;
@@ -2679,8 +2724,8 @@ impl BlockList {
             .insert(block.id().clone(), block.index());
         self.blocks.push(block);
 
-        if let Some(precmd_value) = precmd_value {
-            delegate_to_block!(self.precmd(precmd_value));
+        if let Some(prompt_metadata) = prompt_metadata {
+            delegate_to_block!(self.prompt_only_precmd(prompt_metadata));
         }
     }
 
@@ -2817,25 +2862,39 @@ impl BlockList {
     ///
     /// This should usually not be called directly. Call start_command_execution in [`super::TerminalModel`] instead so relevant terminal events are emitted.
     pub(super) fn start_active_block(&mut self) {
-        // Cache the prompt in preexec. By the time preexec is called, the shell should have
-        // emitted the prompt (either via precmd or in between precmd and preexec).
-        let active_block = self.active_block();
-        let previous_prompt_grid = active_block.prompt_grid().clone();
-        let previous_rprompt_grid = active_block.rprompt_grid().clone();
-        self.cached_prompt_data = Some(CachedPromptData {
-            prompt_grid: previous_prompt_grid,
-            rprompt_grid: previous_rprompt_grid,
-            block_creation_time: *active_block.creation_ts(),
-        });
+        self.cache_active_prompt_data();
 
         self.active_block_mut().start();
         self.early_output.reset_user_input();
     }
+    /// Prepares an active block whose command start was not observed.
+    pub(super) fn ensure_active_block_started(&mut self) {
+        self.active_block_mut().ensure_started_for_preexec();
+    }
+
+    /// Moves an unfinished active block through a minimal preexec-equivalent transition so its
+    /// completion records that execution occurred.
+    pub(super) fn ensure_active_block_executing_for_completion(&mut self) {
+        if self.active_block().finished() || self.active_block().state() == BlockState::Executing {
+            return;
+        }
+        if self.is_bootstrapping_precmd_done() {
+            EarlyOutput::preexec(self);
+        }
+        self.ensure_active_block_started();
+        self.active_block_mut().ensure_executing_for_completion();
+    }
 
     /// Increments `self.in_flight_in_band_command_count` and starts the active block as usual.
     pub fn start_active_block_for_in_band_command(&mut self) {
-        // Cache the prompt in preexec. By the time preexec is called, the shell should have
-        // emitted the prompt (either via precmd or in between precmd and preexec).
+        self.cache_active_prompt_data();
+
+        self.in_flight_in_band_command_count += 1;
+        self.active_block_mut().start_for_in_band_command();
+    }
+    fn cache_active_prompt_data(&mut self) {
+        // Cache the prompt before command execution. By the time preexec is called, the shell
+        // should have emitted the prompt either via precmd or between precmd and preexec.
         let active_block = self.active_block();
         let previous_prompt_grid = active_block.prompt_grid().clone();
         let previous_rprompt_grid = active_block.rprompt_grid().clone();
@@ -2844,9 +2903,6 @@ impl BlockList {
             rprompt_grid: previous_rprompt_grid,
             block_creation_time: *active_block.creation_ts(),
         });
-
-        self.in_flight_in_band_command_count += 1;
-        self.active_block_mut().start_for_in_band_command();
     }
 
     /// Sets the shell host for the active block.
@@ -2921,7 +2977,7 @@ impl BlockList {
         bootstrap_stage: BootstrapStage,
         processor: &mut Processor,
     ) {
-        let precmd_value = PrecmdValue {
+        let prompt_metadata = PromptMetadata {
             pwd: block.pwd.clone(),
             git_head: block.git_head.clone(),
             git_branch: block.git_branch_name.clone(),
@@ -2940,7 +2996,7 @@ impl BlockList {
         self.create_new_block(
             block.id.clone(),
             bootstrap_stage,
-            Some(precmd_value),
+            Some(prompt_metadata),
             block.is_local,
         );
         if let Some(shell_host) = &block.shell_host {
@@ -3036,14 +3092,26 @@ impl BlockList {
         }
     }
 
-    /// This is the main function that marks the end of a block, and the beginning of a new block.
+    /// Marks the end of the active block and creates the next block.
     /// 1. Increment stage if we should.
     /// 2. Finish the active block.
     /// 3. Update block heights.
     /// 4. Adjust selection based on changed heights.
     /// 5. Create a new block.
-    fn finalize_block_and_advance_list(&mut self, data: CommandFinishedValue) {
-        record_trace_event!("command_execution:blocks:finalize_block_and_advance_list");
+    pub(super) fn complete_active_block_and_advance(
+        &mut self,
+        data: CompletionMetadata,
+    ) -> ActiveBlockCompletion {
+        record_trace_event!("command_execution:blocks:complete_active_block_and_advance");
+        let next_block_id_disposition = self.classify_next_block_id(&data.next_block_id);
+        log::trace!(
+            "Completing active block with next ID disposition {next_block_id_disposition:?}"
+        );
+        let active_block_was_finished = self.active_block().finished();
+        if self.active_block().is_for_in_band_command {
+            self.in_flight_in_band_command_count =
+                self.in_flight_in_band_command_count.saturating_sub(1);
+        }
         let next_bootstrap_stage = if !self.bootstrap_stage.is_done() {
             self.bootstrap_stage.next_stage()
         } else {
@@ -3054,14 +3122,21 @@ impl BlockList {
             self.finish_background_block();
         }
 
-        self.active_block_mut().finish(data.exit_code);
+        if active_block_was_finished {
+            self.skip_next_after_block_completed_event = true;
+            self.latest_block_finished_time = None;
+        } else {
+            self.skip_next_after_block_completed_event = false;
+            self.active_block_mut().finish(data.exit_code);
+            self.latest_block_finished_time = Some(instant::SystemTime::now());
+        }
         self.update_active_block_height();
 
         self.update_selection_after_height_change();
         self.create_new_block(
             data.next_block_id,
             next_bootstrap_stage,
-            None, /*precmd_value*/
+            None, /* prompt_metadata */
             None, /* restored_block_was_local */
         );
         if next_bootstrap_stage == BootstrapStage::ScriptExecution {
@@ -3076,6 +3151,75 @@ impl BlockList {
             );
             self.bootstrap_stage = next_bootstrap_stage;
         }
+        if active_block_was_finished {
+            ActiveBlockCompletion::AlreadyFinished
+        } else {
+            ActiveBlockCompletion::NewlyFinished
+        }
+    }
+
+    /// Applies normal prompt metadata to the active block and finalizes the previous block's
+    /// deferred completion work.
+    pub(super) fn apply_precmd_to_active(&mut self, data: PromptMetadata) {
+        let latest_block_finished_time = self.latest_block_finished_time.take();
+        // We don't need to log this delay during the bootstrapping process, since these
+        // are not blocks that the user has created. The delay here also can be very high
+        // and skews the metrics.
+        let block_finished_to_precmd_delay = if self.bootstrap_stage.is_done() {
+            latest_block_finished_time.and_then(|instant| instant.elapsed().ok())
+        } else {
+            None
+        };
+
+        // Since typeahead is only generated by user input, we don't start collecting
+        // it (or separating it from background output) until the session is fully bootstrapped.
+        if self.is_bootstrapping_precmd_done() {
+            self.early_output.precmd();
+        }
+
+        // If this is the Precmd following an in-band command, the payload is not populated. If the payload
+        // is not populated, use the last populated Precmd payload to initialize the new active block.
+        //
+        // In-band commands are guaranteed not to modify the context for which information is sent
+        // in the Precmd payload, so it's not necessary to recompute the precmd payload after an
+        // in-band command runs. Thus we send an unpopulated precmd payload for in-band commands to
+        // make their execution as fast as possible.
+        if data.was_sent_after_in_band_command() {
+            let mut prompt_metadata = self.last_populated_precmd_payload.clone().unwrap_or(data);
+            prompt_metadata.is_after_in_band_command = true;
+            self.active_block_mut().apply_precmd(prompt_metadata);
+        } else {
+            self.active_block_mut().apply_precmd(data.clone());
+            self.last_populated_precmd_payload = Some(data);
+        }
+
+        // Depending on whether or not there's a background block active, the previous
+        // completed block is at blocks.len - 2 or blocks.len - 3.
+        let previous_block = [2usize, 3usize]
+            .into_iter()
+            .flat_map(|offset| self.blocks.len().checked_sub(offset))
+            .map(|idx| &self.blocks[idx])
+            .find(|block| !block.is_background());
+        if self.skip_next_after_block_completed_event {
+            self.skip_next_after_block_completed_event = false;
+        } else if let Some(previous_block) = previous_block {
+            self.send_after_block_completed_event(previous_block, block_finished_to_precmd_delay);
+        } else {
+            self.event_proxy
+                .send_terminal_event(TerminalEvent::BootstrapPrecmdDone);
+        }
+    }
+
+    pub(super) fn apply_preexec_to_active(&mut self, data: PreexecValue) {
+        // We don't start handling early output until the session is fully bootstrapped,
+        // because the distinction between typeahead and background output only
+        // matters for user input.
+        if self.is_bootstrapping_precmd_done() {
+            EarlyOutput::preexec(self);
+        }
+        self.ensure_active_block_started();
+
+        self.active_block_mut().apply_preexec(data);
     }
 
     /// Sends the `AfterBlockCompleted` event to the view.
@@ -3735,12 +3879,7 @@ impl ansi::Handler for BlockList {
     /// possible. Anything that could be costly should be handled in
     /// precmd / `AfterBlockCompleted` instead.
     fn command_finished(&mut self, data: CommandFinishedValue) {
-        if self.active_block().is_for_in_band_command {
-            self.in_flight_in_band_command_count =
-                self.in_flight_in_band_command_count.saturating_sub(1);
-        }
-        self.finalize_block_and_advance_list(data);
-        self.latest_block_finished_time = Some(instant::SystemTime::now());
+        self.complete_active_block_and_advance(data.completion_metadata);
     }
 
     fn set_current_working_directory(&mut self, path: String) {
@@ -3751,63 +3890,16 @@ impl ansi::Handler for BlockList {
     /// responsible for sending the `AfterBlockCompleted` event to
     /// the view. This is where we want to perform any costly
     /// operations relevant to the _previous_ block.
-    fn precmd(&mut self, data: PrecmdValue) {
-        let latest_block_finished_time = self.latest_block_finished_time.take();
-        // We don't need to log this delay during the bootstrapping process, since these
-        // are not blocks that the user has created. The delay here also can be very high
-        // and skews the metrics.
-        let block_finished_to_precmd_delay = if self.bootstrap_stage.is_done() {
-            latest_block_finished_time.and_then(|instant| instant.elapsed().ok())
-        } else {
-            None
-        };
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        self.apply_precmd_to_active(data.prompt_metadata);
+    }
 
-        // Since typeahead is only generated by user input, we don't start collecting
-        // it (or separating it from background output) until the session is fully bootstrapped.
-        if self.is_bootstrapping_precmd_done() {
-            self.early_output.precmd();
-        }
-
-        // If this is the Precmd following an in-band command, the payload is not populated. If the payload
-        // is not populated, use the last populated Precmd payload to initialize the new active block.
-        //
-        // In-band commands are guaranteed not to modify the context for which information is sent
-        // in the Precmd payload, so it's not necessary to recompute the precmd payload after an
-        // in-band command runs. Thus we send an unpopulated precmd payload for in-band commands to
-        // make their execution as fast as possible.
-        if data.was_sent_after_in_band_command() {
-            let mut precmd_value = self.last_populated_precmd_payload.clone().unwrap_or(data);
-            precmd_value.is_after_in_band_command = true;
-            delegate_to_block!(self.precmd(precmd_value));
-        } else {
-            delegate_to_block!(self.precmd(data.clone()));
-            self.last_populated_precmd_payload = Some(data);
-        }
-
-        // Depending on whether or not there's a background block active, the previous
-        // completed block is at blocks.len - 2 or blocks.len - 3.
-        let previous_block = [2usize, 3usize]
-            .into_iter()
-            .flat_map(|offset| self.blocks.len().checked_sub(offset))
-            .map(|idx| &self.blocks[idx])
-            .find(|block| !block.is_background());
-        if let Some(previous_block) = previous_block {
-            self.send_after_block_completed_event(previous_block, block_finished_to_precmd_delay);
-        } else {
-            self.event_proxy
-                .send_terminal_event(TerminalEvent::BootstrapPrecmdDone);
-        }
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
+        self.apply_precmd_to_active(data);
     }
 
     fn preexec(&mut self, data: PreexecValue) {
-        // We don't start handling early output until the session is fully bootstrapped,
-        // because the distinction between typeahead and background output only
-        // matters for user input.
-        if self.is_bootstrapping_precmd_done() {
-            EarlyOutput::preexec(self);
-        }
-
-        delegate_to_block!(self.preexec(data));
+        self.apply_preexec_to_active(data);
     }
 
     fn bootstrapped(&mut self, _data: BootstrappedValue) {

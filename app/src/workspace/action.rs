@@ -186,6 +186,10 @@ pub enum WorkspaceAction {
     ToggleTabGroupCollapsed(TabGroupId),
     /// Opens an inline editor over the given group's header for renaming.
     RenameTabGroup(TabGroupId),
+    /// Cancels any active rename (tab, pane, or group) without committing the
+    /// new name. Dispatched when clicking on the vtab panel background while a
+    /// rename editor is open.
+    CancelActiveRename,
     /// Creates a new tab group containing the tab at the given index.
     NewTabGroupFromTab(usize),
     /// Moves the tab at `tab_index` into `group_id`, appending it to the
@@ -369,7 +373,10 @@ pub enum WorkspaceAction {
     StartGroupDrag(TabGroupId),
     DragGroup {
         group_id: TabGroupId,
+        /// The dragged group's painted rect.
         position: RectF,
+        /// The position of the cursor while dragging a group.
+        cursor_position: Vector2F,
     },
     DropGroup,
     /// Toggles the left panel. In Code Mode V1 this toggles Warp Drive.
@@ -411,8 +418,7 @@ pub enum WorkspaceAction {
     /// An action only registered in dev and local builds, which triggers a
     /// panic immediately when called.
     Panic,
-    /// Stops the heap profiler (if one is running) and writes the profiling
-    /// data to disk.
+    /// Writes a heap profile to disk.
     DumpHeapProfile,
     ShowAIAssistantWarmWelcome,
     ClickedAIAssistantWarmWelcome,
@@ -1133,6 +1139,7 @@ impl WorkspaceAction {
             | ShiftSelectTabRange { .. }
             | ToggleTabMultiSelection { .. }
             | ClearTabMultiSelection
+            | CancelActiveRename
             | StartNewConversation { .. }
             | UndoRevertInCodeReviewPane { .. }
             | JumpToLatestToast

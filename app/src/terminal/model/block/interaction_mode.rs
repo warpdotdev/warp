@@ -156,16 +156,18 @@ impl Block {
         }
     }
 
-    /// Sets control to user with Stop reason if a long-running control state exists.
-    pub fn set_user_control_with_stop_reason(&mut self) {
-        if let InteractionMode::Agent(AgentInteractionMetadata {
-            long_running_control_state: Some(ref mut state),
-            ..
-        }) = self.interaction_mode
-        {
-            *state = LongRunningCommandControlState::User {
-                reason: UserTakeOverReason::Stop,
-            };
+    /// Hands control to the user with a non-resuming `Stop`. Used by teardown paths (rewind,
+    /// stop) where the conversation has been cancelled and must not resume when the command
+    /// completes.
+    pub fn set_user_control_for_teardown(&mut self) {
+        if let InteractionMode::Agent(metadata) = &mut self.interaction_mode {
+            if let Some(state) = &mut metadata.long_running_control_state {
+                *state = LongRunningCommandControlState::User {
+                    reason: UserTakeOverReason::Stop {
+                        should_auto_resume: false,
+                    },
+                };
+            }
         }
     }
 

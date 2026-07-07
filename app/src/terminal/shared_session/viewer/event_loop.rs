@@ -192,44 +192,7 @@ impl EventLoop {
                     participant_id,
                     ai_metadata,
                 } => {
-                    // When a non-agent command starts, clear the loading state and input buffer.
-                    // We don't clear for agent commands because the viewer may be typing a follow-up.
-                    if ai_metadata.is_none() {
-                        if let Some(view) = self.terminal_view.upgrade(ctx) {
-                            view.update(ctx, |view, ctx| {
-                                // Skip during cloud setup: clearing on every setup command would
-                                // wipe a follow-up the viewer is composing. Mirrors the
-                                // `InputUpdated` guard.
-                                let skip_clear_during_setup =
-                                    FeatureFlag::CloudModeSetupV2.is_enabled() && {
-                                        let model = view.model.lock();
-                                        is_cloud_agent_pre_first_exchange(
-                                            view.ambient_agent_view_model(),
-                                            view.agent_view_controller(),
-                                            &model,
-                                            ctx,
-                                        )
-                                    };
-                                if skip_clear_during_setup || view.has_queued_command_in_flight(ctx)
-                                {
-                                    return;
-                                }
-                                view.input().update(ctx, |input, ctx| {
-                                    // Restore frozen visual state. Then also reinitialize the
-                                    // buffer here: for shell commands the block transition will
-                                    // reset the CRDT with a new block ID shortly after, so the
-                                    // brief CRDT inconsistency is harmless. This pre-emptive
-                                    // clear gives the viewer an empty buffer while the command
-                                    // runs rather than showing the command text.
-                                    input.unfreeze_agent_input(false, ctx);
-                                    let editor = input.editor().clone();
-                                    editor.update(ctx, |editor, ctx| {
-                                        editor.reinitialize_buffer(None, ctx);
-                                    });
-                                });
-                            });
-                        }
-                    }
+                    let should_clear_input = ai_metadata.is_none();
 
                     // If we have AI metadata, map the tool_call_id back to the owning conversation
                     let reconstructed_ai_metadata = ai_metadata.and_then(|ai_metadata| {
@@ -274,7 +237,8 @@ impl EventLoop {
                         ))
                     });
 
-                    self.terminal_model
+                    let start_outcome = self
+                        .terminal_model
                         .lock()
                         .start_command_execution_for_shared_session(
                             participant_id,
@@ -284,19 +248,61 @@ impl EventLoop {
                     // Notify the action model that the action is now executing on the sharer's side
                     // This allows the viewer's UI to show the command as running rather than queued
                     // (which is essential for long running commands to be expandable in the UI).
-                    if let Some(ai_metadata) = reconstructed_ai_metadata {
-                        if let Some(view) = self.terminal_view.upgrade(ctx) {
-                            if let Some(action_id) = ai_metadata.requested_command_action_id() {
+                    if start_outcome.is_accepted() {
+                        // When a non-agent command starts, clear the loading state and input buffer.
+                        // We don't clear for agent commands because the viewer may be typing a
+                        // follow-up.
+                        if should_clear_input {
+                            if let Some(view) = self.terminal_view.upgrade(ctx) {
                                 view.update(ctx, |view, ctx| {
-                                    view.ai_controller().update(ctx, |controller, ctx| {
-                                        controller
-                                            .mark_action_as_remotely_executing_in_shared_session(
-                                                action_id,
-                                                *ai_metadata.conversation_id(),
+                                    // Skip during cloud setup: clearing on every setup command would
+                                    // wipe a follow-up the viewer is composing. Mirrors the
+                                    // `InputUpdated` guard.
+                                    let skip_clear_during_setup =
+                                        FeatureFlag::CloudModeSetupV2.is_enabled() && {
+                                            let model = view.model.lock();
+                                            is_cloud_agent_pre_first_exchange(
+                                                view.ambient_agent_view_model(),
+                                                view.agent_view_controller(),
+                                                &model,
                                                 ctx,
-                                            );
+                                            )
+                                        };
+                                    if skip_clear_during_setup
+                                        || view.has_queued_command_in_flight(ctx)
+                                    {
+                                        return;
+                                    }
+                                    view.input().update(ctx, |input, ctx| {
+                                        // Restore frozen visual state. Then also reinitialize the
+                                        // buffer here: for shell commands the block transition will
+                                        // reset the CRDT with a new block ID shortly after, so the
+                                        // brief CRDT inconsistency is harmless. This pre-emptive
+                                        // clear gives the viewer an empty buffer while the command
+                                        // runs rather than showing the command text.
+                                        input.unfreeze_agent_input(false, ctx);
+                                        let editor = input.editor().clone();
+                                        editor.update(ctx, |editor, ctx| {
+                                            editor.reinitialize_buffer(None, ctx);
+                                        });
                                     });
                                 });
+                            }
+                        }
+                        if let Some(ai_metadata) = reconstructed_ai_metadata {
+                            if let Some(view) = self.terminal_view.upgrade(ctx) {
+                                if let Some(action_id) = ai_metadata.requested_command_action_id() {
+                                    view.update(ctx, |view, ctx| {
+                                        view.ai_controller().update(ctx, |controller, ctx| {
+                                            controller
+                                                .mark_action_as_remotely_executing_in_shared_session(
+                                                    action_id,
+                                                    *ai_metadata.conversation_id(),
+                                                    ctx,
+                                                );
+                                        });
+                                    });
+                                }
                             }
                         }
                     }

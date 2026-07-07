@@ -136,6 +136,7 @@ fn restored_user_query_message(task_id: &str, request_id: &str, directory: &str)
         })),
         request_id: request_id.to_string(),
         timestamp: None,
+        fetched_memories: vec![],
     }
 }
 
@@ -161,6 +162,7 @@ fn restored_agent_output_message(task_id: &str, request_id: &str) -> api::Messag
         )),
         request_id: request_id.to_string(),
         timestamp: None,
+        fetched_memories: vec![],
     }
 }
 

@@ -28,6 +28,7 @@ jobs:
   label-external-contributor:
     name: Label external-contributor PRs
     runs-on: ubuntu-latest
+    if: github.repository == 'warpdotdev/warp'
     permissions:
       pull-requests: write
     steps:

@@ -102,6 +102,11 @@ const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
 pub(crate) const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
 // Horizontal inset for the tab close button
 const TAB_CLOSE_BUTTON_HORIZONTAL_INSET: f32 = 2.0;
+// Padding on each side of a pinned tab, reserving the pin's footprint so the title clips before it.
+const TAB_PINNED_CONTENT_HORIZONTAL_PADDING: f32 = 26.0;
+// Width below which a pinned tab/group header drops its idle pin (shared so both
+// vanish together), early enough that the pin never overlaps the centered title/icon.
+pub(crate) const TAB_PIN_VANISH_THRESHOLD: f32 = 70.0;
 
 /// Represents the user's manual tab-color selection state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +213,21 @@ impl TabData {
     /// The resolved tab color: manual selection takes priority over directory default.
     pub fn color(&self) -> Option<AnsiColorIdentifier> {
         self.selected_color.resolve(self.default_directory_color)
+    }
+
+    /// True when this tab's top-level name is not shown because it is a member of
+    /// a tab group rendered in vertical-tabs Panes view. In that layout the group
+    /// owns the container and only individual pane names are displayed, so
+    /// tab-level rename/reset should not be possible.
+    pub fn tab_name_hidden_in_grouped_pane_view(&self, ctx: &AppContext) -> bool {
+        self.group_id.is_some()
+            && uses_vertical_tabs(ctx)
+            && matches!(
+                *TabSettings::as_ref(ctx)
+                    .vertical_tabs_display_granularity
+                    .value(),
+                VerticalTabsDisplayGranularity::Panes
+            )
     }
 
     /// Returns the menu items for the context menu on right mouse click.
@@ -470,20 +490,25 @@ impl TabData {
         let mut menu_items = vec![];
         let uses_vertical_tabs = uses_vertical_tabs(ctx);
 
-        // TODO add option to show the keybinding once we figure out a nice API to retrieve
-        // the actual keybinding (based on the user's preferences etc.)
-        menu_items.append(&mut vec![MenuItemFields::new("Rename tab")
-            .with_on_select_action(WorkspaceAction::RenameTab(index))
-            .into_item()]);
-        // Group together with rename option (note, resetting doesn't make
-        // sense unless you're able to rename a tab).
-        let title = self.pane_group.as_ref(ctx).custom_title(ctx);
-        if title.is_some() {
-            menu_items.push(
-                MenuItemFields::new("Reset tab name")
-                    .with_on_select_action(WorkspaceAction::ResetTabName(index))
-                    .into_item(),
-            );
+        // In Panes view the tab in a group has no visible top-level name (only pane
+        // rows are shown), so skip tab rename/reset and rely on the pane name
+        // items below instead.
+        if !self.tab_name_hidden_in_grouped_pane_view(ctx) {
+            // TODO add option to show the keybinding once we figure out a nice API to retrieve
+            // the actual keybinding (based on the user's preferences etc.)
+            menu_items.append(&mut vec![MenuItemFields::new("Rename tab")
+                .with_on_select_action(WorkspaceAction::RenameTab(index))
+                .into_item()]);
+            // Group together with rename option (note, resetting doesn't make
+            // sense unless you're able to rename a tab).
+            let title = self.pane_group.as_ref(ctx).custom_title(ctx);
+            if title.is_some() {
+                menu_items.push(
+                    MenuItemFields::new("Reset tab name")
+                        .with_on_select_action(WorkspaceAction::ResetTabName(index))
+                        .into_item(),
+                );
+            }
         }
         if let Some(pane_name_target) = pane_name_target {
             menu_items.extend(self.pane_name_menu_items(pane_name_target, ctx));
@@ -655,10 +680,6 @@ impl TabData {
         index: usize,
         terminal_colors: AnsiColors,
     ) -> Vec<MenuItem<WorkspaceAction>> {
-        // Tabs inside a group have their color controlled by the group.
-        if self.group_id.is_some() {
-            return vec![];
-        }
         if FeatureFlag::DirectoryTabColors.is_enabled() {
             color_picker_menu_items(
                 self.color(),
@@ -1302,11 +1323,12 @@ impl<'a> TabComponent<'a> {
     }
 
     /// Renders the close-button slot for the tab: the close button when
-    /// hovered, a pin indicator when the tab is pinned, or an empty
+    /// hovered, a pin when pinned (unless the tab is too narrow), or an empty
     /// width-reserving placeholder otherwise.
     fn render_close_button_or_pin_icon(
         &self,
         background: Option<Fill>,
+        is_narrow: bool,
         is_hovered: bool,
     ) -> Box<dyn Element> {
         let should_render = {
@@ -1377,7 +1399,7 @@ impl<'a> TabComponent<'a> {
                     ctx.dispatch_typed_action(WorkspaceAction::CloseTab(tab_index))
                 })
                 .finish()
-        } else if self.show_pin_indicator() {
+        } else if !is_narrow && self.show_pin_indicator() {
             // Pinned: render the pin in the exact slot the close button uses so
             // hovering swaps icons in place without changing the layout.
             let theme = self.appearance.theme();
@@ -1556,35 +1578,29 @@ impl<'a> TabComponent<'a> {
             let bg = if let Some(custom_background) = self.styles.background {
                 let base_opacity = if is_active || (is_in_multi_tab_selection && is_hovered) {
                     60
+                } else if is_in_multi_tab_selection {
+                    // Multi-selected (but not hovered): brighter than the resting
+                    // tint. A grouped member sits on the group's color backdrop,
+                    // so it needs a bigger step to read as selected against it;
+                    // at rest it just shows its own color over that backdrop.
+                    if self.grouped_member {
+                        55
+                    } else {
+                        30
+                    }
                 } else if is_hovered {
                     40
-                } else if is_in_multi_tab_selection {
-                    // A saturated color reads louder than the neutral multi-select
-                    // overlay regular tabs use, so keep multi-selection to just a
-                    // tiny bump above the resting color rather than the hover tier.
-                    25
-                } else if self.grouped_member {
-                    // Member of a colored group: the group container paints the
-                    // idle color behind this tab, so stay transparent at rest.
-                    // Painting the color again here would double-tint and make
-                    // the member look a shade lighter than the container.
-                    0
                 } else {
                     20
                 };
-                if base_opacity == 0 {
-                    Fill::None
-                } else {
-                    let opacity =
-                        (base_opacity as f32 * self.background_opacity as f32 / 100.) as u8;
-                    match custom_background {
-                        ThemeFill::Solid(color) => coloru_with_opacity(color, opacity).into(),
-                        ThemeFill::VerticalGradient(gradient) => {
-                            coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
-                        }
-                        ThemeFill::HorizontalGradient(gradient) => {
-                            coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
-                        }
+                let opacity = (base_opacity as f32 * self.background_opacity as f32 / 100.) as u8;
+                match custom_background {
+                    ThemeFill::Solid(color) => coloru_with_opacity(color, opacity).into(),
+                    ThemeFill::VerticalGradient(gradient) => {
+                        coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
+                    }
+                    ThemeFill::HorizontalGradient(gradient) => {
+                        coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
                     }
                 }
             } else if is_active {
@@ -1600,9 +1616,9 @@ impl<'a> TabComponent<'a> {
             };
 
             let border = if is_active {
-                internal_colors::fg_overlay_2(theme)
+                internal_colors::fg_overlay_4(theme)
             } else {
-                internal_colors::fg_overlay_1(theme)
+                internal_colors::fg_overlay_3(theme)
             };
 
             (bg, border)
@@ -1614,20 +1630,13 @@ impl<'a> TabComponent<'a> {
             };
 
             let bg = if let Some(custom_background) = self.styles.background {
-                if self.grouped_member && !is_active && !is_hovered {
-                    // Member of a colored group: the group container paints the
-                    // idle color behind this tab, so stay transparent at rest to
-                    // avoid double-tinting.
-                    Fill::None
-                } else {
-                    match custom_background {
-                        ThemeFill::Solid(color) => coloru_with_opacity(color, tab_opacity).into(),
-                        ThemeFill::VerticalGradient(gradient) => {
-                            coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
-                        }
-                        ThemeFill::HorizontalGradient(gradient) => {
-                            coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
-                        }
+                match custom_background {
+                    ThemeFill::Solid(color) => coloru_with_opacity(color, tab_opacity).into(),
+                    ThemeFill::VerticalGradient(gradient) => {
+                        coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
+                    }
+                    ThemeFill::HorizontalGradient(gradient) => {
+                        coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
                     }
                 }
             } else {
@@ -1643,7 +1652,7 @@ impl<'a> TabComponent<'a> {
             (bg, border)
         };
 
-        let full_tab_content = {
+        let build_full_content = |reserve_pin_space: bool| -> Box<dyn Element> {
             let mut flex_row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::Center)
@@ -1659,7 +1668,15 @@ impl<'a> TabComponent<'a> {
                 )
                 .finish(),
             );
-            let mut container = Container::new(flex_row.finish()).with_horizontal_padding(8.);
+            // Equal padding on both sides so the title stays centered; the pin
+            // vanishes before it can reach the title.
+            let horizontal_padding = if reserve_pin_space {
+                TAB_PINNED_CONTENT_HORIZONTAL_PADDING
+            } else {
+                8.
+            };
+            let mut container =
+                Container::new(flex_row.finish()).with_horizontal_padding(horizontal_padding);
             // Pad inside the Stack so the close-button overlay (anchored to
             // the Stack) stays vertically centered within the visible pill.
             if self.grouped_member {
@@ -1755,11 +1772,13 @@ impl<'a> TabComponent<'a> {
                 )
             };
 
-        let build_close_button_overlay = |is_hovered: bool| {
+        let build_close_button_overlay = |is_narrow: bool, is_hovered: bool| {
             Container::new(
-                ConstrainedBox::new(
-                    self.render_close_button_or_pin_icon(Some(close_button_background), is_hovered),
-                )
+                ConstrainedBox::new(self.render_close_button_or_pin_icon(
+                    Some(close_button_background),
+                    is_narrow,
+                    is_hovered,
+                ))
                 .with_width(TAB_CLOSE_BUTTON_WIDTH)
                 .with_height(TAB_CLOSE_BUTTON_WIDTH)
                 .finish(),
@@ -1767,23 +1786,28 @@ impl<'a> TabComponent<'a> {
             .finish()
         };
 
-        let mut full_stack = Stack::new().with_child(full_tab_content);
-        full_stack.add_positioned_child(
-            build_close_button_overlay(is_hovered),
-            OffsetPositioning::offset_from_parent(
-                vec2f(horizontal_inset, 0.0),
-                ParentOffsetBounds::ParentByPosition,
-                parent_anchor,
-                child_anchor,
-            ),
-        );
+        let build_full_stack = |is_narrow: bool| {
+            let reserve_pin_space = self.show_pin_indicator() && !is_narrow;
+            let mut full_stack = Stack::new().with_child(build_full_content(reserve_pin_space));
+            full_stack.add_positioned_child(
+                build_close_button_overlay(is_narrow, is_hovered),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(horizontal_inset, 0.0),
+                    ParentOffsetBounds::ParentByPosition,
+                    parent_anchor,
+                    child_anchor,
+                ),
+            );
+            full_stack.finish()
+        };
 
         let mut compact_stack = Stack::new().with_child(compact_tab_content);
         // Only show the close button on the active tab for narrow width
         // to prevent accidental clicks
         if self.is_active_tab() {
             compact_stack.add_positioned_child(
-                build_close_button_overlay(is_hovered),
+                // Compact tabs are too narrow to show a pin icon.
+                build_close_button_overlay(true, is_hovered),
                 OffsetPositioning::offset_from_parent(
                     vec2f(horizontal_inset, 0.0),
                     ParentOffsetBounds::ParentByPosition,
@@ -1792,15 +1816,37 @@ impl<'a> TabComponent<'a> {
                 ),
             );
         }
+        let compact_stack = compact_stack.finish();
 
-        let stack = SizeConstraintSwitch::new(
-            full_stack.finish(),
-            vec![(
-                SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
-                compact_stack.finish(),
-            )],
-        )
-        .finish();
+        let stack = if self.show_pin_indicator() {
+            // There are three cases here that conditionally render based on tab size:
+            // 1. The original tab container (displays tab name and pin icon if pinned)
+            // 2. A narrow tab container (hides pin icon)
+            // 3. A very narrow tab container (displays tab icon only)
+            SizeConstraintSwitch::new(
+                build_full_stack(false),
+                vec![
+                    (
+                        SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
+                        compact_stack,
+                    ),
+                    (
+                        SizeConstraintCondition::WidthLessThan(TAB_PIN_VANISH_THRESHOLD),
+                        build_full_stack(true),
+                    ),
+                ],
+            )
+            .finish()
+        } else {
+            SizeConstraintSwitch::new(
+                build_full_stack(false),
+                vec![(
+                    SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
+                    compact_stack,
+                )],
+            )
+            .finish()
+        };
 
         // Grouped member: inset rounded highlight, no side dividers. It still
         // gets its own drop target so a dragged pane can land at this member's

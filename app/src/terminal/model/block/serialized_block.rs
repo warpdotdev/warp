@@ -210,7 +210,7 @@ pub struct SerializedBlock {
 impl SerializedBlock {
     /// Sets the command & output and `did_execute` to true.
     /// Everything else is a default value.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test(stylized_command: Vec<u8>, stylized_output: Vec<u8>) -> SerializedBlock {
         SerializedBlock {
             stylized_command,

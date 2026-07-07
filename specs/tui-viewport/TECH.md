@@ -13,6 +13,7 @@ The content source API is absolute-row based:
 - `TuiVisibleViewportItem { origin_y, element }` gives each returned child element's top row in content coordinates.
 This keeps the generic viewport API clean: consumers answer “which elements are visible for this row window?” instead of adapting their model to a seekable cursor interface. A terminal-backed source may still use stable block IDs, a sum tree, and scoped model borrows internally, but those implementation details do not leak into the reusable TUI viewport element.
 The source returns full child elements, not row-sliced elements. `TuiViewportedList` lays each returned child out, intersects the child's content-space range with the viewport window, and renders only the visible rows. That keeps partial visibility and event/cursor translation in the viewport layer instead of requiring every consumer to call `TuiClipped` or slice text by hand.
+`TuiViewportedList` performs a single layout pass and does not reconcile heights after layout: the source must return correct heights up front. This keeps the generic viewport simple and assumes the source owns a cheap, exact height predictor. A source with width-dependent item heights refreshes its own height cache inside `visible_items` (for both visible and near-off-screen items) before returning content, so windowing and `content_height` use current heights without a second pass.
 ### Viewport position and scrolling
 Use a simple absolute-row viewport position model:
 - `TuiViewportPosition::End` follows the bottom of the content.

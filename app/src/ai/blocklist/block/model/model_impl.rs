@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use chrono::{Local, TimeDelta};
 use history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use session_sharing_protocol::common::ParticipantId;
-use warpui::{AppContext, SingletonEntity, View, ViewContext};
+use warpui::{AppContext, Entity, SingletonEntity, ViewContext};
 
 use super::{AIBlockModel, AIBlockOutputStatus, OutputStatusUpdateCallback};
 use crate::ai::agent::conversation::AIConversationId;
@@ -27,7 +27,7 @@ pub struct AIBlockModelImpl<V> {
 
 impl<V> AIBlockModelImpl<V>
 where
-    V: View,
+    V: Entity,
 {
     pub fn new(
         exchange_id: AIAgentExchangeId,
@@ -81,7 +81,7 @@ where
 
 impl<V> AIBlockModel for AIBlockModelImpl<V>
 where
-    V: View,
+    V: Entity,
 {
     type View = V;
 

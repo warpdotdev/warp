@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, TuiBufferExt, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiRect,
+    Modifier, TuiBufferExt, TuiElement, TuiEventHandler, TuiFlex, TuiParentElement, TuiRect,
     TuiStyle, TuiText,
 };
 use warpui_core::platform::WindowStyle;
@@ -128,14 +128,14 @@ impl TuiView for ExplorerView {
                 .truncate(),
         ));
 
-        let body = TuiColumn::new().with_children(rows);
+        let body = TuiFlex::column().with_children(rows);
 
         // Wire keyboard input: navigation keys dispatch a typed action through
         // the shared core; quit keys flip the shared quit flag the runtime
         // polls.
         let quit_for_q = self.quit.clone();
         let quit_for_esc = self.quit.clone();
-        let handler = TuiEventHandler::new(body)
+        let handler = TuiEventHandler::new(body.finish())
             .on_key("j", |_, ctx, _| {
                 ctx.dispatch_typed_action(NavAction::SelectNext)
             })

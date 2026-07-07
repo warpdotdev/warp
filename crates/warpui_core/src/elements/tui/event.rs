@@ -159,7 +159,7 @@ impl TuiEventContext {
     /// Sets the view that subsequently dispatched actions are attributed to,
     /// returning the previous origin so callers can restore it when leaving the
     /// view's subtree.
-    pub(crate) fn set_origin_view(&mut self, view_id: Option<EntityId>) -> Option<EntityId> {
+    pub fn set_origin_view(&mut self, view_id: Option<EntityId>) -> Option<EntityId> {
         std::mem::replace(&mut self.origin_view_id, view_id)
     }
 }

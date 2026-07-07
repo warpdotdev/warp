@@ -126,7 +126,7 @@ fn tui_selection_reconciles_split_and_removed_selection() {
 #[test]
 fn tui_new_conversation_preserves_pending_autoexecute_override() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, true, ctx));
+        app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
         let terminal_surface_id = EntityId::new();
         let selection = app.add_model(|ctx| {

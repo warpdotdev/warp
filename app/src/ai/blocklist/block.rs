@@ -218,6 +218,14 @@ const AUTO_EXPAND_REQUESTED_COMMAND_DELAY: std::time::Duration =
 pub const RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID: &str =
     "ai_block:rich_content_secret_first_char_position";
 
+/// Builds a per-view-unique save-position id for a rich-content link tooltip, so that tooltips in
+/// different AI blocks don't collide on a single shared anchor id. Sharing one global id caused the
+/// tooltip to fail to position (and therefore not appear) in multi-block conversations.
+fn rich_content_link_tooltip_position_id(view_id: &EntityId) -> String {
+    let base = RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID;
+    format!("{base}_{view_id}")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UserAvatarInfo {
     display_name: String,
@@ -2079,7 +2087,12 @@ impl AIBlock {
                     } else {
                         format!("MCP Tool: {name} ({display_input})")
                     };
-                    self.handle_mcp_tool_stream_update(action_id, &command_text, ctx);
+                    self.handle_mcp_tool_stream_update(
+                        action_id,
+                        &command_text,
+                        display_input,
+                        ctx,
+                    );
                 }
                 AIAgentAction {
                     id: action_id,
@@ -2148,6 +2161,30 @@ impl AIBlock {
                 .footer_citation_chip_handles
                 .entry(citation.clone())
                 .or_default();
+        }
+        // Also register handles for memory citations derived from fetched_memories,
+        // which are synthesized at render time and never go through output.citations.
+        // Only register for the first exchange since that's the only one that shows them.
+        if let Some(conversation) = self.model.conversation(ctx) {
+            let is_first_exchange = conversation
+                .first_exchange()
+                .map(|e| Some(e.id) == self.model.exchange_id(ctx))
+                .unwrap_or(false);
+            if is_first_exchange {
+                for memory in conversation.fetched_memories() {
+                    if memory.memory_store_id.is_empty() || memory.memory_id.is_empty() {
+                        continue;
+                    }
+                    self.state_handles
+                        .footer_citation_chip_handles
+                        .entry(AIAgentCitation::AgentMemory {
+                            memory_store_id: memory.memory_store_id.clone(),
+                            memory_id: memory.memory_id.clone(),
+                            content: memory.content.clone(),
+                        })
+                        .or_default();
+                }
+            }
         }
 
         // Register element state for reasoning messages and track summarization timing.
@@ -3526,12 +3563,14 @@ impl AIBlock {
         &mut self,
         action_id: &AIAgentActionId,
         command_text: &str,
+        mcp_args: serde_json::Value,
         ctx: &mut ViewContext<Self>,
     ) {
         match self.requested_mcp_tools.get_mut(action_id) {
             Some(requested_mcp_tool) => {
                 requested_mcp_tool.view.update(ctx, |view, ctx| {
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_request(mcp_args);
                     ctx.notify();
                 });
             }
@@ -3552,6 +3591,7 @@ impl AIBlock {
                         ctx,
                     );
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_request(mcp_args);
                     view
                 });
                 let action_id_clone = action_id.clone();
@@ -4739,6 +4779,10 @@ impl AIBlock {
 
         if !cards.is_empty() {
             self.has_imported_comments = true;
+            let conversation_id = self.client_ids.conversation_id;
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, _| {
+                model.mark_conversation_has_imported_comments(conversation_id);
+            });
         }
 
         self.imported_comments.insert(
@@ -5122,13 +5166,15 @@ impl AIBlock {
                 target_override: self.detected_file_path_target_override(absolute_path),
             },
         };
+        let position_id = rich_content_link_tooltip_position_id(&ctx.view_id());
+        self.detected_links_state.tooltip_position_id = position_id.clone();
         self.detected_links_state.link_location_open_tooltip = Some(LinkLocation {
             link_range: link_range.clone(),
             location: *location,
         });
         ctx.emit(AIBlockEvent::ShowLinkTooltip(RichContentLinkTooltipInfo {
             link: rich_content_link,
-            position_id: RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+            position_id,
         }));
     }
 
@@ -5738,15 +5784,18 @@ impl AIBlock {
     /// bulk "Open all in code review" button based on whether the current working
     /// directory is still within the imported comments' repository.
     fn update_imported_comments_disabled_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let cwd_location = self.current_working_directory_location(ctx);
-
         if self.has_imported_comments {
+            let cwd_location = self.current_working_directory_location(ctx);
             self.update_own_imported_comments_disabled_state(cwd_location.as_ref(), ctx);
-        } else if self.model.is_latest_visible_exchange_in_root_task(ctx) {
+        } else if BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation_has_imported_comments(&self.client_ids.conversation_id)
+            && self.model.is_latest_visible_exchange_in_root_task(ctx)
+        {
             // The "Open all" button is rendered by the latest visible exchange when the
             // current thread has imported comments but this block does not own them directly.
             // Update that block's button state from its CWD so the button disables when the
             // user navigates outside the imported comments' repository.
+            let cwd_location = self.current_working_directory_location(ctx);
             self.update_open_all_button_disabled_state(cwd_location.as_ref(), ctx);
         } else {
             return;
@@ -6251,12 +6300,21 @@ impl TypedActionView for AIBlock {
                 ctx.notify();
             }
             AIBlockAction::SelectText => {
-                // If there's an ongoing text selection, clear all other selections within the
-                // `AIBlock`'s view sub-hierarchy to ensure only one component has a selection at a time.
+                // A plain click (no drag) produces an empty selection, but the enclosing
+                // `SelectableArea` still dispatches `SelectText` for it. Only treat it as a real
+                // selection — and, crucially, only dismiss any open link/secret tooltip — when there
+                // is actually a non-empty selection. Otherwise a plain click on a link would
+                // immediately dismiss the very tooltip that same click just opened, so the tooltip
+                // never becomes visible.
+                let has_selection = self.selected_text.read().is_some();
+                // Clear all other selections within the `AIBlock`'s view sub-hierarchy to ensure
+                // only one component has a selection at a time.
                 self.clear_other_selections(None, ctx.window_id(), ctx);
                 // If we have a selection, we should use the default cursor, even if it's over a link.
                 ctx.reset_cursor();
-                self.dismiss_ai_tooltips(ctx);
+                if has_selection {
+                    self.dismiss_ai_tooltips(ctx);
+                }
                 // Notify the terminal view so it can keep the model's record of which rich
                 // content block has an active selection in sync (rich content selections are
                 // not tied to the point-based model selection used for regular blocks).

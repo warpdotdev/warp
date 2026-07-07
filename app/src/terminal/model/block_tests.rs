@@ -46,7 +46,7 @@ impl float_cmp::ApproxEq for BlockSection {
 pub fn test_find() {
     let mut block = TestBlockBuilder::new().build();
 
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
     block.start();
     assert_lines_approx_eq!(block.height(&AgentViewState::Inactive), 3.);
 
@@ -236,7 +236,7 @@ pub fn test_find() {
 
     let mut block = TestBlockBuilder::new().build();
 
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
     block.start();
 
     block.header_grid.command_grid_linefeed();
@@ -266,7 +266,7 @@ pub fn test_long_running_block_bottom_padding() {
     warpui::r#async::block_on(async {
         let mut block = TestBlockBuilder::new().build();
 
-        block.precmd(Default::default());
+        block.prompt_only_precmd(PromptMetadata::default());
         block.start();
         for c in "command".chars() {
             block.input(c);
@@ -326,7 +326,7 @@ pub fn non_empty_pre_bootstrap_block_can_be_long_running() {
 pub fn test_precmd_no_preexec() {
     let mut block = TestBlockBuilder::new().build();
     block.start();
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
 
     for c in "command".chars() {
         block.input(c);
@@ -401,7 +401,7 @@ pub fn test_image_completion_drops_in_warp_input_stage() {
 pub fn test_command_grid_bold() {
     let mut block = TestBlockBuilder::new().build();
     block.start();
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
 
     // We should have the BOLD flag enabled for commands, once we've started the command grid.
     assert!(block
@@ -423,7 +423,7 @@ pub fn test_command_grid_bold() {
 pub fn test_command_grid_bold_after_reset() {
     let mut block = TestBlockBuilder::new().build();
     block.start();
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
 
     // We should have the BOLD flag enabled for commands, once we've started the command grid.
     assert!(block
@@ -452,7 +452,7 @@ pub fn test_command_grid_bold_after_reset() {
 pub fn test_empty_command() {
     let mut block = TestBlockBuilder::new().build();
     block.start();
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
 
     block.finish(0);
 
@@ -463,14 +463,14 @@ pub fn test_empty_command() {
 pub fn test_failed_block() {
     let mut block = TestBlockBuilder::new().build();
 
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
     block.preexec(Default::default());
 
     block.finish(1 /* exit_code */);
     assert!(block.has_failed());
 
     let mut block = TestBlockBuilder::new().build();
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
     block.finish(1 /* exit_code */);
 
     // The block should not be marked as failed since execution never started.
@@ -481,7 +481,7 @@ pub fn test_failed_block() {
 fn test_non_error_exit_codes() {
     let mut block = TestBlockBuilder::new().build();
 
-    block.precmd(Default::default());
+    block.prompt_only_precmd(PromptMetadata::default());
     block.preexec(Default::default());
 
     block.finish(130 /* exit_code */);
@@ -490,7 +490,7 @@ fn test_non_error_exit_codes() {
 
     let mut block = TestBlockBuilder::new().build();
 
-    block.precmd(Default::default());
+    block.prompt_only_precmd(PromptMetadata::default());
     block.preexec(Default::default());
 
     block.finish(141 /* exit_code */);
@@ -634,7 +634,7 @@ pub fn test_set_current_working_directory_updates_pwd_and_emits_cwd_event() {
 pub fn test_elapsed_duration_rounds_down_to_whole_seconds() {
     let mut block = TestBlockBuilder::new().build();
     // Move the block into the Executing state so `elapsed_duration` returns a value.
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
     block.preexec(Default::default());
 
     let start = chrono::Local.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
@@ -678,7 +678,7 @@ pub fn test_elapsed_duration_requires_executing_state() {
     assert!(!block.is_duration_live());
 
     // `precmd` alone leaves the block in `BeforeExecution`; the duration is not yet live.
-    block.precmd(PrecmdValue::default());
+    block.prompt_only_precmd(PromptMetadata::default());
     block.override_start_ts(start);
     assert_eq!(block.elapsed_duration_whole_secs_at(now), None);
     assert!(!block.is_duration_live());
@@ -724,7 +724,7 @@ pub fn test_block_emits_block_completed_event_for_in_band_command() {
         .build();
 
     block.start_for_in_band_command();
-    block.precmd(Default::default());
+    block.prompt_only_precmd(PromptMetadata::default());
     block.preexec(PreexecValue {
         command: "warp_run_generator_command 1234 foo".to_owned(),
         session_id: None,
@@ -895,6 +895,59 @@ fn test_selection_bounds_all_grids_single_line_lprompt_command() {
         BlockGridPoint::Output(Point::new(2, 0)),
     );
     assert_eq!(all_grids, "lprompt%cmd1\nrprompt\noutput1\noutput2");
+}
+
+#[test]
+fn test_command_and_output_to_string_includes_ps1_prompt_command_rprompt_and_output() {
+    let block_index = BlockIndex::zero();
+    let mut prompt_and_command_grid = mock_blockgrid("lprompt%cmd1");
+    prompt_and_command_grid.finish();
+    let mut rprompt_grid = mock_blockgrid("rprompt");
+    rprompt_grid.finish();
+    let mut output_grid = mock_blockgrid("output1\r\noutput2\r\n");
+    output_grid.finish();
+
+    let mut block = create_test_block_with_grids(
+        block_index,
+        prompt_and_command_grid,
+        rprompt_grid,
+        output_grid,
+        true, /* honor_ps1 */
+    );
+    block.set_raw_prompt_end_point(Some(PromptEndPoint::PromptEnd {
+        point: Point::new(0, 7),
+        has_extra_trailing_newline: false,
+    }));
+
+    assert_eq!(
+        block.command_and_output_to_string(),
+        "lprompt%cmd1\nrprompt\noutput1\noutput2"
+    );
+}
+
+#[test]
+fn test_command_and_output_to_string_excludes_warp_prompt() {
+    let block_index = BlockIndex::zero();
+    let mut prompt_and_command_grid = mock_blockgrid("cmd1");
+    prompt_and_command_grid.finish();
+    let mut rprompt_grid = mock_blockgrid("rprompt");
+    rprompt_grid.finish();
+    let mut output_grid = mock_blockgrid("output1\r\noutput2\r\n");
+    output_grid.finish();
+
+    let mut block = create_test_block_with_grids(
+        block_index,
+        prompt_and_command_grid,
+        rprompt_grid,
+        output_grid,
+        false, /* honor_ps1 */
+    );
+    block.set_honor_ps1(false);
+
+    assert_eq!(
+        block.command_and_output_to_string(),
+        "cmd1\noutput1\noutput2"
+    );
 }
 
 /// Tests the single line lprompt, with trailing newline, and command case for text selection across grids.
@@ -1296,6 +1349,109 @@ fn test_clone_command_from_blockgrid_to_empty() {
     assert_eq!(new_content, "clone1\nclone2\nclone3");
 }
 
+#[test]
+fn test_multiline_preexec_reconciles_command_grid_redraw_prefix() {
+    let cases = [
+        (
+            "ececho \"line one\" && \\\r\necho \"line two\"",
+            "echo \"line one\" && \\\necho \"line two\"",
+        ),
+        ("aasdf\r\nasdf", "asdf\nasdf"),
+    ];
+
+    for (command_grid_text, reported_command) in cases {
+        let prompt_and_command_grid = mock_blockgrid(command_grid_text);
+        let mut rprompt_grid = mock_blockgrid("");
+        rprompt_grid.finish();
+        let mut output_grid = mock_blockgrid("");
+        output_grid.finish();
+
+        let mut block = create_test_block_with_grids(
+            BlockIndex::zero(),
+            prompt_and_command_grid,
+            rprompt_grid,
+            output_grid,
+            false, /* honor_ps1 */
+        );
+        block.set_honor_ps1(false);
+
+        block.preexec(PreexecValue {
+            command: reported_command.to_owned(),
+            session_id: None,
+        });
+
+        assert_eq!(block.command_to_string(), reported_command);
+        assert_eq!(
+            block.prompt_and_command_with_secrets_unobfuscated(false),
+            reported_command
+        );
+    }
+}
+
+#[test]
+fn test_multiline_preexec_reconciliation_preserves_prompt_demarcation() {
+    let prompt = "warp> ";
+    let reported_command = "echo \"line one\" && \\\necho \"line two\"";
+    let mut block = TestBlockBuilder::new().with_honor_ps1(true).build();
+    block.prompt_marker(ansi::PromptMarker::StartPrompt {
+        kind: ansi::PromptKind::Initial,
+    });
+    for c in prompt.chars() {
+        block.input(c);
+    }
+    block.prompt_marker(ansi::PromptMarker::EndPrompt);
+    block.start();
+    for c in "ececho \"line one\" && \\".chars() {
+        block.input(c);
+    }
+    block.carriage_return();
+    block.linefeed();
+    for c in "echo \"line two\"".chars() {
+        block.input(c);
+    }
+
+    block.preexec(PreexecValue {
+        command: reported_command.to_owned(),
+        session_id: None,
+    });
+
+    assert_eq!(block.command_to_string(), reported_command);
+    assert_eq!(
+        block.prompt_and_command_with_secrets_unobfuscated(false),
+        format!("{prompt}{reported_command}")
+    );
+}
+
+#[test]
+fn test_multiline_preexec_preserves_legitimate_repeated_command_prefix() {
+    let reported_command = "aasdf\nasdf";
+    let prompt_and_command_grid = mock_blockgrid("aasdf\r\nasdf");
+    let mut rprompt_grid = mock_blockgrid("");
+    rprompt_grid.finish();
+    let mut output_grid = mock_blockgrid("");
+    output_grid.finish();
+
+    let mut block = create_test_block_with_grids(
+        BlockIndex::zero(),
+        prompt_and_command_grid,
+        rprompt_grid,
+        output_grid,
+        false, /* honor_ps1 */
+    );
+    block.set_honor_ps1(false);
+
+    block.preexec(PreexecValue {
+        command: reported_command.to_owned(),
+        session_id: None,
+    });
+
+    assert_eq!(block.command_to_string(), reported_command);
+    assert_eq!(
+        block.prompt_and_command_with_secrets_unobfuscated(false),
+        reported_command
+    );
+}
+
 /// Tests is_command_empty for an empty command with the combined grid.
 #[test]
 fn test_command_is_empty_combined_grid() {
@@ -1453,7 +1609,7 @@ fn test_top_level_command() {
         .with_size_info(SizeInfo::new_without_font_metrics(1, 20))
         .build();
     block.start();
-    block.precmd(PrecmdValue {
+    block.prompt_only_precmd(PromptMetadata {
         session_id: Some(0),
         ..Default::default()
     });
@@ -1467,7 +1623,7 @@ fn test_top_level_command() {
         .with_size_info(SizeInfo::new_without_font_metrics(1, 20))
         .build();
     block.start();
-    block.precmd(PrecmdValue {
+    block.prompt_only_precmd(PromptMetadata {
         session_id: Some(0),
         ..Default::default()
     });
@@ -1493,7 +1649,7 @@ fn test_top_level_command_with_aliases() {
         .with_size_info(SizeInfo::new_without_font_metrics(1, 20))
         .build();
     block.start();
-    block.precmd(PrecmdValue {
+    block.prompt_only_precmd(PromptMetadata {
         session_id: Some(0),
         ..Default::default()
     });
@@ -1506,7 +1662,7 @@ fn test_top_level_command_with_aliases() {
         .with_size_info(SizeInfo::new_without_font_metrics(1, 20))
         .build();
     block.start();
-    block.precmd(PrecmdValue {
+    block.prompt_only_precmd(PromptMetadata {
         session_id: Some(0),
         ..Default::default()
     });
@@ -1519,7 +1675,7 @@ fn test_top_level_command_with_aliases() {
         .with_size_info(SizeInfo::new_without_font_metrics(1, 20))
         .build();
     block.start();
-    block.precmd(PrecmdValue {
+    block.prompt_only_precmd(PromptMetadata {
         session_id: Some(0),
         ..Default::default()
     });
@@ -1540,7 +1696,7 @@ fn test_mark_end_of_prompt_with_some_rows_in_flat_storage() {
         .with_honor_ps1(true)
         .build();
 
-    block.precmd(PrecmdValue {
+    block.prompt_only_precmd(PromptMetadata {
         ps1: Some(hex::encode("prompt1\r\n")),
         honor_ps1: Some(true),
         ..Default::default()

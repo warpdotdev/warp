@@ -62,6 +62,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                 tasks: vec![warp_multi_agent_api::Task {
                     id: format!("task-{child_id}"),
                     messages: vec![warp_multi_agent_api::Message {
+                        fetched_memories: vec![],
                         id: "child-msg".to_string(),
                         task_id: format!("task-{child_id}"),
                         server_message_data: String::new(),
@@ -111,6 +112,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                 tasks: vec![warp_multi_agent_api::Task {
                     id: format!("task-{parent_id}"),
                     messages: vec![warp_multi_agent_api::Message {
+                        fetched_memories: vec![],
                         id: "parent-msg".to_string(),
                         task_id: format!("task-{parent_id}"),
                         server_message_data: String::new(),
