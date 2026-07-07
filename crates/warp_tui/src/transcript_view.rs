@@ -8,8 +8,8 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
-    BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, RichContentItem,
-    RichContentType, TerminalModel,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, RichContentItem, RichContentType, TerminalModel,
 };
 use warpui_core::elements::tui::{
     TuiElement, TuiScrollable, TuiScrollableElement, TuiViewportVerticalAlignment,
@@ -43,6 +43,34 @@ impl TuiTranscriptView {
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |view, _, event, ctx| view.handle_history_event(event, ctx),
+        );
+
+        // Tool-call rows derive their text from per-action status, so any
+        // status transition must re-measure and re-render the owning block.
+        // Finding the owning block is an O(1) set lookup per block (mirroring
+        // the GUI `AIBlock`'s `requested_action_ids` membership check).
+        ctx.subscribe_to_model(
+            &action_model,
+            |view, _, event: &BlocklistAIActionEvent, ctx| {
+                let action_id = event.action_id();
+                let view_id = view
+                    .agent_blocks
+                    .borrow()
+                    .iter()
+                    .find_map(|(view_id, block)| {
+                        block
+                            .as_ref(ctx)
+                            .renders_action(action_id)
+                            .then_some(*view_id)
+                    });
+                if let Some(view_id) = view_id {
+                    view.model
+                        .lock()
+                        .block_list_mut()
+                        .mark_rich_content_dirty(view_id);
+                    ctx.notify();
+                }
+            },
         );
 
         Self {

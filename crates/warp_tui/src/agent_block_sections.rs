@@ -7,12 +7,13 @@
 
 use std::time::Duration;
 
-use warp::tui_export::{format_elapsed_seconds, MessageId};
+use warp::tui_export::{format_elapsed_seconds, AIActionStatus, AIAgentAction, MessageId};
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiText};
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::AppContext;
 
 use crate::agent_block::ThinkingBlockStates;
+use crate::tool_call_labels::{tool_call_display_state, tool_call_label, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
 
 const INPUT_PREFIX: &str = "≫ ";
@@ -48,11 +49,28 @@ pub(crate) fn render_plain_text_section(text: &str, app: &AppContext) -> Box<dyn
         .finish()
 }
 
-/// Renders a dim status row standing in for an agent tool call.
-// TODO: add richer rendering for each tool call type. This is just a rendering stub to build off of.
-pub(crate) fn render_tool_call_section(app: &AppContext) -> Box<dyn TuiElement> {
-    TuiText::new("executed a tool call")
-        .with_style(TuiUiBuilder::from_app(app).dim_text_style())
+/// Renders a one-line status row for an agent tool call: per-tool, per-state
+/// text with de-emphasized styling for non-final states and cancellations,
+/// and error styling for failures. `output_streaming` marks tool calls whose
+/// arguments are still streaming in (see `ToolCallDisplayState::Constructing`).
+pub(crate) fn render_tool_call_section(
+    action: &AIAgentAction,
+    status: Option<&AIActionStatus>,
+    output_streaming: bool,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
+    let builder = TuiUiBuilder::from_app(app);
+    let style = match tool_call_display_state(status, output_streaming) {
+        ToolCallDisplayState::Constructing
+        | ToolCallDisplayState::Pending
+        | ToolCallDisplayState::AwaitingApproval
+        | ToolCallDisplayState::Running
+        | ToolCallDisplayState::Cancelled => builder.dim_text_style(),
+        ToolCallDisplayState::Succeeded => builder.muted_text_style(),
+        ToolCallDisplayState::Failed => builder.error_text_style(),
+    };
+    TuiText::new(tool_call_label(action, status, output_streaming))
+        .with_style(style)
         .finish()
 }
 

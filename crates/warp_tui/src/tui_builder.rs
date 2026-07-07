@@ -50,6 +50,13 @@ impl TuiUiBuilder {
         self.muted_text_style().add_modifier(Modifier::DIM)
     }
 
+    /// Style for error text (e.g. failed tool-call rows).
+    pub(crate) fn error_text_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.red,
+        )))
+    }
+
     /// Bold foreground over the accent-tinted input background; pair with
     /// [`Self::input_background`] on the enclosing container.
     pub(crate) fn input_text_style(&self) -> TuiStyle {

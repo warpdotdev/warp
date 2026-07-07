@@ -46,7 +46,8 @@ pub(crate) use action_model::{
     StartAgentRequestId,
 };
 pub use action_model::{
-    BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
+    AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor,
+    ShellCommandExecutorEvent,
 };
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;

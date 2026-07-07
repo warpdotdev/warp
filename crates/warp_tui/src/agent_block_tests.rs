@@ -184,7 +184,7 @@ fn agent_block_renders_tool_calls_in_message_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["before", "", "executed a tool call", "", "after", ""],
+                vec!["before", "", "Init project", "", "after", ""],
             );
             assert_eq!(
                 frame.buffer[(0, 2)].fg,
@@ -234,7 +234,7 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["executed a tool call", "", "executed a tool call", ""],
+                vec!["Init project", "", "Init project", ""],
             );
         });
     });

@@ -6,7 +6,7 @@
 //! functions live in [`crate::agent_block_sections`].
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -128,9 +128,17 @@ impl TuiToolCallView {
 pub(super) struct TuiAIBlock {
     conversation_id: AIConversationId,
     exchange_id: AIAgentExchangeId,
-    model: Rc<dyn AIBlockModel<View = Self>>,
+    block_model: Rc<dyn AIBlockModel<View = Self>>,
+    /// Source of truth for per-action execution status, consulted at render
+    /// time to pick each tool-call row's text and styling.
+    action_model: ModelHandle<BlocklistAIActionModel>,
     /// Per-message UI state for this exchange's thinking blocks.
     thinking_states: ThinkingBlockStates,
+    /// Every tool-call action id seen in this exchange's output, maintained by
+    /// [`Self::sync_action_views`]. Mirrors the GUI `AIBlock`'s
+    /// `requested_action_ids` so per-action-event lookups are a cheap set
+    /// membership check instead of an output-message scan.
+    action_ids: HashSet<AIAgentActionId>,
     /// Stateful per-action child views, keyed by tool-call action id.
     /// Populated by [`Self::sync_action_views`]; stateless tool calls never
     /// get entries here.
@@ -146,19 +154,21 @@ impl TuiAIBlock {
     pub(super) fn new(
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
-        model: Rc<dyn AIBlockModel<View = Self>>,
+        block_model: Rc<dyn AIBlockModel<View = Self>>,
         action_model: ModelHandle<BlocklistAIActionModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let mut block = Self {
             conversation_id,
             exchange_id,
-            model,
+            block_model,
+            action_model: action_model.clone(),
             thinking_states: Default::default(),
+            action_ids: HashSet::new(),
             action_views: HashMap::new(),
         };
         block.sync_action_views(&action_model, ctx);
-        block.model.on_updated_output(
+        block.block_model.on_updated_output(
             Box::new(move |me, ctx| {
                 me.sync_action_views(&action_model, ctx);
             }),
@@ -167,31 +177,27 @@ impl TuiAIBlock {
         block
     }
 
-    /// Creates child views for stateful tool calls that don't have one yet.
-    /// Rendering can't create views since it only sees `&AppContext`.
+    /// Records the exchange's tool-call action ids and creates child views
+    /// for stateful tool calls that don't have one yet. Rendering can't
+    /// create views since it only sees `&AppContext`.
     fn sync_action_views(
         &mut self,
         action_model: &ModelHandle<BlocklistAIActionModel>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let status = self.model.status(ctx);
-        let file_edit_action_ids: Vec<AIAgentActionId> = status
-            .output_to_render()
-            .map(|output| {
-                output
-                    .get()
-                    .messages
-                    .iter()
-                    .filter_map(|message| {
-                        let AIAgentOutputMessageType::Action(action) = &message.message else {
-                            return None;
-                        };
-                        matches!(action.action, AIAgentActionType::RequestFileEdits { .. })
-                            .then(|| action.id.clone())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let status = self.block_model.status(ctx);
+        let mut file_edit_action_ids = Vec::new();
+        if let Some(output) = status.output_to_render() {
+            for message in &output.get().messages {
+                let AIAgentOutputMessageType::Action(action) = &message.message else {
+                    continue;
+                };
+                self.action_ids.insert(action.id.clone());
+                if matches!(action.action, AIAgentActionType::RequestFileEdits { .. }) {
+                    file_edit_action_ids.push(action.id.clone());
+                }
+            }
+        }
 
         for action_id in file_edit_action_ids {
             if self.action_views.contains_key(&action_id) {
@@ -205,14 +211,14 @@ impl TuiAIBlock {
         }
     }
 
-    /// Replaces the backing model when the same exchange is reassigned.
+    /// Replaces the backing block model when the same exchange is reassigned.
     pub(super) fn replace_model(
         &mut self,
         conversation_id: AIConversationId,
-        model: Rc<dyn AIBlockModel<View = Self>>,
+        block_model: Rc<dyn AIBlockModel<View = Self>>,
     ) {
         self.conversation_id = conversation_id;
-        self.model = model;
+        self.block_model = block_model;
     }
 
     /// Returns the conversation that currently owns this agent block.
@@ -223,6 +229,13 @@ impl TuiAIBlock {
     /// Returns the exchange rendered by this agent block.
     pub(super) fn exchange_id(&self) -> AIAgentExchangeId {
         self.exchange_id
+    }
+
+    /// Returns whether this block's output contains the tool call with the
+    /// given action id. A set lookup over ids recorded by
+    /// [`Self::sync_action_views`], so per-action-event checks stay cheap.
+    pub(super) fn renders_action(&self, action_id: &AIAgentActionId) -> bool {
+        self.action_ids.contains(action_id)
     }
 
     /// Returns this block's wrapped height at the given width.
@@ -248,7 +261,7 @@ impl TuiAIBlock {
     fn sections(&self, app: &AppContext) -> Vec<TuiAIBlockSection> {
         let mut sections = Vec::new();
         let input = self
-            .model
+            .block_model
             .inputs_to_render(app)
             .iter()
             .filter_map(|input| input.display_query())
@@ -258,7 +271,7 @@ impl TuiAIBlock {
         }
 
         // Walk output messages in order so tool-call rows interleave with text.
-        if let Some(output) = self.model.status(app).output_to_render() {
+        if let Some(output) = self.block_model.status(app).output_to_render() {
             let output = output.get();
             for message in &output.messages {
                 match &message.message {
@@ -323,6 +336,7 @@ impl TuiAIBlock {
 
     /// Builds this block's generic TUI element tree.
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
+        let output_streaming = self.block_model.status(app).is_streaming();
         let mut column = TuiFlex::column();
         for section in &self.sections(app) {
             let element = match section {
@@ -332,7 +346,10 @@ impl TuiAIBlock {
                 // other tool call stays a pure render fn.
                 TuiAIBlockSection::ToolCall(action) => match self.action_views.get(&action.id) {
                     Some(view) => TuiContainer::new(Box::new(view.render_child())).finish(),
-                    None => render_tool_call_section(app),
+                    None => {
+                        let status = self.action_model.as_ref(app).get_action_status(&action.id);
+                        render_tool_call_section(action, status.as_ref(), output_streaming, app)
+                    }
                 },
                 TuiAIBlockSection::Thinking {
                     message_id,
