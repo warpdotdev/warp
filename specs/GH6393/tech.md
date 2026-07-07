@@ -244,6 +244,13 @@ Warp Drive blocks store the same `SerializedBlock` shape (`app/src/terminal/mode
 
 #### 6a-iii. Session-sharing protocol (`session-sharing-protocol` workspace crate)
 
+> **Follow-up — out of scope for this PR.** This PR does not modify the
+> `session-sharing-protocol` crate or snapshot/replay handling, so OSC 8
+> hyperlinks are **not** preserved over live shared sessions yet. The plan
+> below is the design for that follow-up. (Local history and Warp Drive
+> persistence in §6a-i / §6a-ii need no protocol change — the OSC 8 bytes
+> round-trip through the stored output and re-parse on load.)
+
 The session-sharing protocol streams **events**, not byte streams (set cursor, write char, set SGR, etc.). Adding OSC 8 means a new event:
 
 ```rust
@@ -267,9 +274,11 @@ The protocol's serialization (whichever framing — protobuf, MessagePack, JSON-
 - **Old-client read-of-new-payload (session-sharing):** a CI matrix test that pins the old client to a tag-before-this-PR, runs the new client as the producer, and asserts the old client renders cells correctly (just not clickable). Lives in `crates/integration` and runs as part of the protocol-compat CI job.
 - **New-client read-of-old-payload (session-sharing):** the inverse — new client consumes a recorded session from before the PR; asserts the deserializer doesn't error and cells render plain.
 
-This subsumes the earlier "session persistence" follow-up; it is no longer deferred.
+The sqlite and Warp Drive round-trips (§6a-i / §6a-ii) work in this PR because they ride the existing byte stream. The session-sharing event/snapshot work above is deferred to a follow-up.
 
 ### 7. AI context
+
+> **Follow-up — out of scope for this PR.** The block→agent context formatter is not changed here, so OSC 8 URIs are not yet surfaced to the AI/agent as untrusted metadata. The requirement below (product invariant 14) defines the intended behavior for that follow-up.
 
 - **AI context** (invariant 14). The block→agent context formatter inlines `visible text (URI)` for hyperlinked spans so an agent reading wizcli output sees the URI without losing the visible label.
 
