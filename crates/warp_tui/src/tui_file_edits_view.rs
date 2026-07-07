@@ -15,7 +15,7 @@ use warpui_core::elements::tui::{Modifier, TuiContainer, TuiElement, TuiStyle, T
 use warpui_core::elements::Fill;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
-use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageHandle};
+use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageEvent, TuiDiffStorageHandle};
 
 /// A per-action view backing one `RequestFileEdits` tool call in the transcript.
 pub(super) struct TuiFileEditsView {
@@ -33,10 +33,8 @@ impl TuiFileEditsView {
     ) -> Self {
         let storage = ctx.add_model(|_| TuiDiffStorage::new(Vec::new(), DiffSessionType::Local));
 
-        // The storage emits when the executor seeds it with resolved diffs;
-        // re-render the summary.
-        ctx.subscribe_to_model(&storage, |_me, _, (), ctx| {
-            ctx.notify();
+        ctx.subscribe_to_model(&storage, |_me, _, event, ctx| match event {
+            TuiDiffStorageEvent::CandidateDiffsSet => ctx.notify(),
         });
 
         let executor = action_model.as_ref(ctx).request_file_edits_executor(ctx);

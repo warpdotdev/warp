@@ -196,6 +196,12 @@ fn ready_save_failure(error: FileSaveError) -> SaveFuture {
     futures::future::ready(Err(Arc::new(error))).boxed()
 }
 
+/// Events emitted by [`TuiDiffStorage`].
+pub(crate) enum TuiDiffStorageEvent {
+    /// The executor seeded the storage with resolved diffs.
+    CandidateDiffsSet,
+}
+
 /// The TUI surface's diff storage: holds the resolved diffs and persists them
 /// by writing straight through [`FileModel`], with no review UI or editor
 /// buffers of its own.
@@ -272,7 +278,7 @@ impl DiffStorage for TuiDiffStorage {
 }
 
 impl Entity for TuiDiffStorage {
-    type Event = ();
+    type Event = TuiDiffStorageEvent;
 }
 
 /// The handle the TUI registers as the executor's storage.
@@ -300,8 +306,7 @@ impl RegisteredDiffStorage for TuiDiffStorageHandle {
     ) {
         self.storage.update(app, |model, ctx| {
             model.set_candidate_diffs(diffs, session_type);
-            // Wake subscribers (e.g. the TUI summary view) now that diffs exist.
-            ctx.emit(());
+            ctx.emit(TuiDiffStorageEvent::CandidateDiffsSet);
         });
     }
 
