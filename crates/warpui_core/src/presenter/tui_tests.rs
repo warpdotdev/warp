@@ -10,8 +10,8 @@ use instant::Instant;
 
 use super::TuiPresenter;
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiLayoutContext,
-    TuiLiveElement, TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiAnimated, TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement,
+    TuiLayoutContext, TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
     TuiStyle,
 };
 use crate::platform::WindowStyle;
@@ -429,15 +429,16 @@ fn frame_surfaces_the_earliest_requested_repaint_deadline() {
 }
 
 #[test]
-fn live_element_requests_a_repaint_every_paint() {
+fn animated_element_requests_a_repaint_every_paint() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            let live =
-                TuiLiveElement::new(Box::new(TextDouble::new("LIVE")), Duration::from_millis(50));
+            let animated = TuiAnimated::new(Duration::from_millis(50), || {
+                TextDouble::new("LIVE").finish()
+            });
 
             let mut presenter = TuiPresenter::new();
             let frame =
-                presenter.present_element(Box::new(live), TuiRect::new(0, 0, 10, 1), app_ctx);
+                presenter.present_element(Box::new(animated), TuiRect::new(0, 0, 10, 1), app_ctx);
 
             assert!(frame.repaint_at.is_some());
             assert_eq!(frame.buffer.to_lines(), vec!["LIVE      "]);

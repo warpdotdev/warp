@@ -631,6 +631,7 @@ impl TuiView for TuiTerminalSessionView {
         // fixed binding registered in [`Self::init`], so no element-level key
         // handling is needed here.
         let mut column = TuiFlex::column().flex_child(TuiChildView::new(&self.transcript).finish());
+
         // While the selected conversation is in progress (the GUI warping
         // indicator's core condition), the animated warping indicator sits
         // between the transcript and the input box. Its elapsed counter is
@@ -654,6 +655,7 @@ impl TuiView for TuiTerminalSessionView {
                     .finish(),
             );
         }
+
         TuiContainer::new(
             column
                 .child(input_box.finish())

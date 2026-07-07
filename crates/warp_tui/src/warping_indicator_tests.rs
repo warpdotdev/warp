@@ -5,11 +5,11 @@ use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::App;
 
-use super::{render_warping_indicator, spinner_frame_at, SPINNER_TIMELINE};
+use super::{render_warping_indicator, SPINNER_TIMELINE};
 
 #[test]
 fn spinner_follows_the_prototype_choreography() {
-    let frame_at = |millis| spinner_frame_at(Duration::from_millis(millis));
+    let frame_at = |millis| *SPINNER_TIMELINE.value_at(Duration::from_millis(millis));
     // 180° right at 200ms per 45° step...
     assert_eq!(frame_at(0), "⋮");
     assert_eq!(frame_at(200), "⋰");
@@ -58,8 +58,8 @@ fn renders_the_indicator_row_and_requests_a_repaint() {
             let spinner = line.chars().next().expect("row should not be empty");
             assert!(
                 SPINNER_TIMELINE
-                    .iter()
-                    .any(|frame| frame.glyph == spinner.to_string().as_str()),
+                    .values()
+                    .any(|glyph| *glyph == spinner.to_string().as_str()),
                 "unexpected spinner glyph in row: {line:?}"
             );
             assert!(

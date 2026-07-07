@@ -27,6 +27,7 @@ use instant::Instant;
 
 use crate::{AppContext, EntityId, EntityIdMap};
 
+mod animated;
 mod buffer;
 mod child_view;
 mod clipped;
@@ -39,13 +40,13 @@ mod event_handler;
 mod flex;
 mod geometry;
 mod hoverable;
-mod live;
 mod parent;
 mod scrollable;
 mod shimmering_text;
 mod text;
 mod viewported_list;
 
+pub use animated::TuiAnimated;
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
 pub use child_view::TuiChildView;
 pub use clipped::TuiClipped;
@@ -59,7 +60,6 @@ pub use event_handler::TuiEventHandler;
 pub use flex::TuiFlex;
 pub use geometry::{TuiConstraint, TuiPoint, TuiPointExt, TuiRect, TuiRectExt, TuiSize};
 pub use hoverable::TuiHoverable;
-pub use live::TuiLiveElement;
 pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use shimmering_text::TuiShimmeringText;
