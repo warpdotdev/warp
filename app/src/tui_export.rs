@@ -31,9 +31,10 @@ pub use crate::ai::blocklist::history_model::{
     ConversationStatusUpdate,
 };
 pub use crate::ai::blocklist::{
-    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
-    InputConfig, InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
-    PolicyConfigUpdate, RequestFileEditsExecutor, ShellCommandExecutor, ShellCommandExecutorEvent,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIInputModel, InputConfig, InputModePolicy, InputModePolicyHandle, InputType,
+    InputTypeAutoDetectionSource, PolicyConfigUpdate, RequestFileEditsExecutor,
+    ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
