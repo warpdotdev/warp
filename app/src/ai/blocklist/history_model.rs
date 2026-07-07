@@ -14,6 +14,7 @@ use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::client_action::{Action, StartNewConversation};
+use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::response_event::stream_finished::{
     ConversationUsageMetadata, TokenUsage,
 };
@@ -1581,6 +1582,10 @@ impl BlocklistAIHistoryModel {
         let root_task_id = conversation.get_root_task_id().clone();
 
         let mut message_ids_to_retain_by_task: HashMap<TaskId, HashSet<MessageId>> = HashMap::new();
+        // Each task's last retained exchange. Retention keeps a prefix of each
+        // task's exchanges, so only tool calls in this exchange can have been
+        // severed from their results (which land in the next, dropped exchange).
+        let mut fork_point_exchange_by_task: HashMap<TaskId, &AIAgentExchange> = HashMap::new();
         let mut found_from_exchange_id = false;
         'outer: for (task_id, task_exchanges) in exchanges_by_task.into_iter() {
             for exchange in task_exchanges {
@@ -1594,6 +1599,7 @@ impl BlocklistAIHistoryModel {
                     .entry(task_id.clone())
                     .or_default();
                 message_ids_to_retain.extend(exchange.added_message_ids.iter().cloned());
+                fork_point_exchange_by_task.insert(task_id.clone(), exchange);
                 if exchange.id == from_exchange_id {
                     if fork_from_exact_exchange {
                         break 'outer;
@@ -1612,16 +1618,30 @@ impl BlocklistAIHistoryModel {
 
         // Build truncated tasks by retaining only messages whose IDs are in
         // `allowed_message_ids`. Tasks whose message list becomes empty and
-        // which are non-root tasks are dropped.
-        let mut truncated_tasks: Vec<warp_multi_agent_api::Task> = conversation
+        // which are non-root tasks are dropped. Client `tool_call`s in the
+        // fork-point exchange whose `tool_call_result` was truncated away are
+        // reconciled so every `tool_use` stays paired (see
+        // `reconcile_dangling_tool_calls_in_forked_task`).
+        let truncated_tasks: Vec<warp_multi_agent_api::Task> = conversation
             .all_tasks()
             .filter_map(|t| {
                 if let Some(message_ids_to_retain) = message_ids_to_retain_by_task.get(t.id()) {
-                    let mut truncated_task = t.source().cloned()?;
+                    let source_task = t.source()?;
+                    let mut truncated_task = source_task.clone();
                     truncated_task
                         .messages
                         .retain(|m| message_ids_to_retain.contains(&MessageId::new(m.id.clone())));
-                    (!truncated_task.messages.is_empty()).then_some(truncated_task)
+                    if truncated_task.messages.is_empty() {
+                        return None;
+                    }
+                    if let Some(fork_point_exchange) = fork_point_exchange_by_task.get(t.id()) {
+                        reconcile_dangling_tool_calls_in_forked_task(
+                            &mut truncated_task,
+                            &source_task.messages,
+                            &fork_point_exchange.added_message_ids,
+                        );
+                    }
+                    Some(truncated_task)
                 } else {
                     None
                 }
@@ -1633,23 +1653,6 @@ impl BlocklistAIHistoryModel {
                 "Truncated tasks for forked conversation at block are empty for conversation {}.",
                 conversation.id()
             ));
-        }
-
-        // Forking at an exchange boundary can retain a dangling `tool_call`
-        // whose matching `tool_call_result` lived in a later (dropped) exchange
-        // (a call and its result carry different `request_id`s, so
-        // `into_exchanges` places them in separate exchanges). Sending a prompt
-        // in the fork would then hit an Anthropic `400 invalid_request_error:
-        // tool_use ids were found without tool_result blocks`. Reconcile each
-        // retained-but-unresolved tool_call so every tool_use stays paired.
-        for task in truncated_tasks.iter_mut() {
-            let source_task_messages = conversation
-                .all_tasks()
-                .filter_map(|t| t.source())
-                .find(|source| source.id == task.id)
-                .map(|source| source.messages.as_slice())
-                .unwrap_or(&[]);
-            reconcile_dangling_tool_calls_in_forked_task(task, source_task_messages);
         }
 
         let updated_tasks_with_new_ids =
@@ -3198,40 +3201,45 @@ impl From<&AIAgentOutputStatus> for AIQueryHistoryOutputStatus {
     }
 }
 
-/// Reconciles every retained `tool_call` in a forked `task` whose matching
-/// `tool_call_result` was dropped by the truncation. On a fork this is the tool
-/// call(s) in the fork-point exchange: a call and its result live in different
-/// exchanges (they carry different `request_id`s), so truncating at the call's
-/// exchange drops the result. An unpaired `tool_use` makes the fork's next
-/// request fail with the Anthropic `400 invalid_request_error: tool_use ids
-/// were found without tool_result blocks`.
+/// Mirrors the server's `isClientToolCall`: true for tool calls the client
+/// executes. Server and subagent tool calls are managed by the server's
+/// runtime and must not be reconciled — notably the `RunPrimaryAgent`
+/// bootstrap call at the start of every root task is unresolved by design (it
+/// anchors the primary agent on the server's run stack), and pairing it with a
+/// synthesized `Cancel` would pop the primary agent on the fork's next
+/// request, breaking the conversation.
+fn is_client_tool_call(tool_call: &warp_multi_agent_api::message::ToolCall) -> bool {
+    !matches!(
+        tool_call.tool,
+        None | Some(Tool::Server(_)) | Some(Tool::Subagent(_))
+    )
+}
+
+/// Reconciles client `tool_call`s in the fork-point exchange
+/// (`fork_point_message_ids`, the task's last retained exchange) whose
+/// `tool_call_result` was dropped by the truncation: a call and its result
+/// carry different `request_id`s, so they land in different exchanges and the
+/// fork point separates them. An unpaired `tool_use` fails the fork's next
+/// request with an Anthropic `400 invalid_request_error`.
 ///
-/// Reconciliation prefers to preserve real context: it pulls the real
-/// `tool_call_result` forward from the source conversation
-/// (`source_task_messages` is this task's full pre-truncation history), keeping
-/// its original `request_id` so it groups into the right exchange on restore,
-/// and falls back to a synthesized `Cancel` result when there is no real result
-/// (a genuinely in-flight tool call). A `Cancel` keeps the turn valid and
-/// signals the model the call can be retried (mirroring the server's
-/// `NewToolCallCancellationMessage`). The reconciled result is inserted
-/// immediately after its `tool_call` to keep call/result ordering.
+/// Each severed call gets its real result pulled forward from
+/// `source_task_messages` (the task's pre-truncation history), or a
+/// synthesized `Cancel` when none exists (a genuinely in-flight call). The
+/// result is inserted immediately after its `tool_call`. Tool calls outside
+/// the fork-point exchange were dangling in the source too, and are left
+/// untouched so the fork reproduces the source history faithfully.
 fn reconcile_dangling_tool_calls_in_forked_task(
     task: &mut warp_multi_agent_api::Task,
     source_task_messages: &[warp_multi_agent_api::Message],
+    fork_point_message_ids: &HashSet<MessageId>,
 ) {
-    let resolved_tool_call_ids: HashSet<String> = task
+    let fork_point_message_ids: HashSet<&str> =
+        fork_point_message_ids.iter().map(|id| &**id).collect();
+    let resolved_tool_call_ids: HashSet<&str> = task
         .messages
         .iter()
-        .filter_map(|m| m.tool_call_result().map(|r| r.tool_call_id.clone()))
+        .filter_map(|m| m.tool_call_result().map(|r| r.tool_call_id.as_str()))
         .collect();
-
-    // Real results from the source history, keyed by tool_call_id, so a dropped
-    // result can be pulled forward.
-    let source_results_by_tool_call_id: HashMap<String, &warp_multi_agent_api::Message> =
-        source_task_messages
-            .iter()
-            .filter_map(|m| m.tool_call_result().map(|r| (r.tool_call_id.clone(), m)))
-            .collect();
 
     // Collect each dangling tool_call's position, id, and request_id up front so
     // we don't mutate the message list while iterating it.
@@ -3240,8 +3248,13 @@ fn reconcile_dangling_tool_calls_in_forked_task(
         .iter()
         .enumerate()
         .filter_map(|(idx, message)| {
+            if !fork_point_message_ids.contains(message.id.as_str()) {
+                return None;
+            }
             let tool_call = message.tool_call()?;
-            (!resolved_tool_call_ids.contains(&tool_call.tool_call_id)).then(|| {
+            (is_client_tool_call(tool_call)
+                && !resolved_tool_call_ids.contains(tool_call.tool_call_id.as_str()))
+            .then(|| {
                 (
                     idx,
                     tool_call.tool_call_id.clone(),
@@ -3251,15 +3264,27 @@ fn reconcile_dangling_tool_calls_in_forked_task(
         })
         .collect();
 
+    // Common case: nothing dangling, so skip scanning the source history.
+    if dangling.is_empty() {
+        return;
+    }
+
+    // Real results from the source history, keyed by tool_call_id, so a dropped
+    // result can be pulled forward.
+    let source_results_by_tool_call_id: HashMap<&str, &warp_multi_agent_api::Message> =
+        source_task_messages
+            .iter()
+            .filter_map(|m| m.tool_call_result().map(|r| (r.tool_call_id.as_str(), m)))
+            .collect();
+
     // Insert from the back so earlier indices remain valid as we splice.
     for (idx, tool_call_id, request_id) in dangling.into_iter().rev() {
         let reconciled = source_results_by_tool_call_id
-            .get(&tool_call_id)
+            .get(tool_call_id.as_str())
             .map(|real| (*real).clone())
             .unwrap_or_else(|| {
-                // No real result to pull forward (in-flight call): synthesize a
-                // `Cancel` result carrying the call's `request_id` so it groups
-                // into the same exchange as its `tool_call` on restore.
+                // Synthesized `Cancel` carries the call's `request_id` so it
+                // groups into the same exchange as its `tool_call` on restore.
                 warp_multi_agent_api::Message {
                     id: Uuid::new_v4().to_string(),
                     task_id: task.id.clone(),

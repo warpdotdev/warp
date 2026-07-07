@@ -4687,19 +4687,34 @@ fn regular_tool_call_result_message(
     }
 }
 
-/// True if `task` retains any `tool_call` whose matching `tool_call_result`
-/// (paired by `tool_call_id`) is absent. Mirrors the Anthropic invariant that
-/// each `tool_use` block must be immediately followed by its `tool_result`.
-fn has_dangling_tool_use(task: &warp_multi_agent_api::Task) -> bool {
-    let result_ids: HashSet<&str> = task
-        .messages
-        .iter()
-        .filter_map(|m| m.tool_call_result().map(|r| r.tool_call_id.as_str()))
-        .collect();
-    task.messages
-        .iter()
-        .filter_map(|m| m.tool_call())
-        .any(|tc| !result_ids.contains(tc.tool_call_id.as_str()))
+/// Builds a server-handled tool_call message (like the `RunPrimaryAgent`
+/// bootstrap call at the start of every root task), which never receives a
+/// result by design.
+fn server_tool_call_message(
+    id: &str,
+    task_id: &str,
+    tool_call_id: &str,
+    request_id: &str,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: id.to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        fetched_memories: vec![],
+        message: Some(warp_multi_agent_api::message::Message::ToolCall(
+            warp_multi_agent_api::message::ToolCall {
+                tool_call_id: tool_call_id.to_string(),
+                tool: Some(warp_multi_agent_api::message::tool_call::Tool::Server(
+                    warp_multi_agent_api::message::tool_call::Server {
+                        payload: String::new(),
+                    },
+                )),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
 }
 
 /// Returns the non-empty forked root task from a fork result.
@@ -4751,38 +4766,46 @@ fn install_mock_model_event_sender(app: &mut warpui::App) -> std::sync::mpsc::Re
     receiver
 }
 
-/// Forking mid-tool-call at an exact exchange must never leave a dangling
-/// `tool_use`: a completed tool_call has its REAL result pulled forward from the
-/// source, while a genuinely in-flight tool_call falls back to a synthesized
-/// `Cancel` positioned right after the call, carrying its request_id.
+/// Forking at an exact exchange reconciles exactly the client tool_calls in
+/// the fork-point exchange: a completed call gets its REAL result pulled
+/// forward from the source, an in-flight call gets a synthesized `Cancel`
+/// right after the call, and unresolved server tool calls plus danglers from
+/// earlier exchanges are left untouched.
 #[test]
-fn fork_exact_midtoolcall_pairs_retained_tool_uses() {
+fn fork_exact_reconciles_fork_point_client_tool_calls() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         let _receiver = install_mock_model_event_sender(&mut app);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let root_task_id = "root-task";
+        let orphan_id = "toolu_orphan";
+        let server_id = "toolu_server";
         let completed_id = "toolu_completed";
         let inflight_id = "toolu_inflight";
-        // The fork point (req-1) holds the user query plus two tool_calls: one
-        // whose real result arrives later (req-2, truncated by the fork) and one
-        // that never receives a result (in-flight).
+        // req-1 holds a client tool_call that never received a result (a
+        // pre-existing dangler). The fork point (req-2) holds an unresolved
+        // server tool_call plus two client tool_calls: one whose real result
+        // lives in req-3 (truncated by the fork) and one that never receives a
+        // result (in-flight).
         let root_task = create_api_task(
             root_task_id,
             vec![
-                create_user_query_message("m1", root_task_id, "req-1", "run commands"),
-                regular_tool_call_message("m2", root_task_id, completed_id, "req-1"),
-                regular_tool_call_message("m3", root_task_id, inflight_id, "req-1"),
-                regular_tool_call_result_message("m4", root_task_id, completed_id, "req-2"),
-                agent_output_message("m5", root_task_id, "req-2", "done"),
+                create_user_query_message("m1", root_task_id, "req-1", "first"),
+                regular_tool_call_message("m2", root_task_id, orphan_id, "req-1"),
+                create_user_query_message("m3", root_task_id, "req-2", "second"),
+                server_tool_call_message("m4", root_task_id, server_id, "req-2"),
+                regular_tool_call_message("m5", root_task_id, completed_id, "req-2"),
+                regular_tool_call_message("m6", root_task_id, inflight_id, "req-2"),
+                regular_tool_call_result_message("m7", root_task_id, completed_id, "req-3"),
+                agent_output_message("m8", root_task_id, "req-3", "done"),
             ],
         );
         let source = AIConversation::new_restored(AIConversationId::new(), vec![root_task], None)
             .expect("source conversation should build");
 
         let (source_id, exchange_id) =
-            restore_and_find_exchange(&mut app, &history_model, source, "run commands");
+            restore_and_find_exchange(&mut app, &history_model, source, "second");
 
         let forked = history_model.update(&mut app, |model, ctx| {
             let source = model.conversation(&source_id).unwrap().clone();
@@ -4792,21 +4815,17 @@ fn fork_exact_midtoolcall_pairs_retained_tool_uses() {
         });
 
         let root = forked_root_task(&forked);
-        assert!(
-            !has_dangling_tool_use(root),
-            "fork must leave no dangling tool_use"
-        );
-        // Completed call: the REAL result (m4) is pulled forward, not a Cancel.
-        let completed = root
-            .messages
-            .iter()
-            .find(|m| {
+        let result_for = |tool_call_id: &str| {
+            root.messages.iter().find(|m| {
                 m.tool_call_result()
-                    .is_some_and(|r| r.tool_call_id == completed_id)
+                    .is_some_and(|r| r.tool_call_id == tool_call_id)
             })
-            .expect("completed tool_call must be paired");
+        };
+
+        // Completed call: the REAL result (m7) is pulled forward, not a Cancel.
+        let completed = result_for(completed_id).expect("completed tool_call must be paired");
         assert_eq!(
-            completed.id, "m4",
+            completed.id, "m7",
             "the REAL result message should be pulled forward"
         );
         assert!(
@@ -4819,14 +4838,8 @@ fn fork_exact_midtoolcall_pairs_retained_tool_uses() {
 
         // In-flight call: a Cancel is synthesized immediately after the call,
         // carrying the call's request_id.
-        let inflight = root
-            .messages
-            .iter()
-            .find(|m| {
-                m.tool_call_result()
-                    .is_some_and(|r| r.tool_call_id == inflight_id)
-            })
-            .expect("in-flight tool_call must be paired with a synthesized Cancel");
+        let inflight =
+            result_for(inflight_id).expect("in-flight tool_call must be paired with a Cancel");
         assert!(
             matches!(
                 inflight.tool_call_result().and_then(|r| r.result.as_ref()),
@@ -4834,15 +4847,30 @@ fn fork_exact_midtoolcall_pairs_retained_tool_uses() {
             ),
             "in-flight tool_call must fall back to a Cancel result"
         );
-        let call_idx = root.messages.iter().position(|m| m.id == "m3").unwrap();
+        let call_idx = root.messages.iter().position(|m| m.id == "m6").unwrap();
         let next = &root.messages[call_idx + 1];
         assert_eq!(
             next.id, inflight.id,
             "Cancel must immediately follow its tool_call"
         );
         assert_eq!(
-            next.request_id, "req-1",
+            next.request_id, "req-2",
             "Cancel carries the call's request_id"
+        );
+
+        // The unresolved server tool_call must stay unresolved: a synthesized
+        // Cancel would pop an agent off the server's run stack on restore.
+        assert!(root.messages.iter().any(|m| m.id == "m4"));
+        assert!(
+            result_for(server_id).is_none(),
+            "no result may be synthesized for a server tool_call"
+        );
+
+        // The pre-existing dangler outside the fork point is reproduced as-is.
+        assert!(root.messages.iter().any(|m| m.id == "m2"));
+        assert!(
+            result_for(orphan_id).is_none(),
+            "no result may be synthesized outside the fork-point exchange"
         );
     });
 }
