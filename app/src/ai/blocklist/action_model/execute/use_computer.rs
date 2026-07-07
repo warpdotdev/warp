@@ -1,11 +1,53 @@
 use ai::agent::action_result::AIAgentActionResultType;
+use computer_use::{Action, OverlayKind, TargetedAction};
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use warpui::{Entity, ModelContext};
+use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::{AIAgentActionType, UseComputerResult};
+use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::features::FeatureFlag;
+
+/// Maps a `UseComputer` call to a keyboard overlay entry, or `None` for input
+/// that is visible on screen (pointer/scroll) or is a no-op. Only keyboard input
+/// is annotated; kind comes from the structured actions and the `Key` label from
+/// the server-authored summary (the typed payload is never surfaced).
+fn overlay_entry_for(
+    actions: &[TargetedAction],
+    action_summary: &str,
+) -> Option<(OverlayKind, String)> {
+    let mut has_key = false;
+    for targeted in actions {
+        match &targeted.action {
+            Action::TypeText { .. } => {
+                return Some((OverlayKind::Type, "typing\u{2026}".to_string()))
+            }
+            Action::KeyDown { .. } | Action::KeyUp { .. } => has_key = true,
+            _ => {}
+        }
+    }
+    has_key.then(|| (OverlayKind::Key, key_label_from_summary(action_summary)))
+}
+
+/// Extracts the key combo from a `Key "<combo>"` summary, falling back to the
+/// trimmed summary (or a generic label) when it isn't quoted.
+fn key_label_from_summary(summary: &str) -> String {
+    let quoted = summary
+        .find('"')
+        .zip(summary.rfind('"'))
+        .filter(|(first, last)| last > first)
+        .map(|(first, last)| summary[first + 1..last].to_string());
+    if let Some(label) = quoted {
+        return label;
+    }
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        "key".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
 
 pub struct UseComputerExecutor;
 
@@ -34,12 +76,20 @@ impl UseComputerExecutor {
     pub(super) fn execute(
         &mut self,
         input: ExecuteActionInput,
-        _ctx: &mut ModelContext<Self>,
+        ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> {
         let ExecuteActionInput { action, .. } = input;
         let AIAgentActionType::UseComputer(request) = &action.action else {
             return ActionExecution::InvalidAction;
         };
+
+        // Record a keyboard overlay entry for this call if a recording is active.
+        // Pointer/scroll and no-op actions are visible on screen and produce none.
+        if let Some((kind, label)) = overlay_entry_for(&request.actions, &request.action_summary) {
+            RecordingController::handle(ctx).update(ctx, |controller, _| {
+                controller.record_action(kind, label);
+            });
+        }
 
         let actions = request.actions.clone();
         let screenshot_params = request.screenshot_params;
@@ -84,3 +134,7 @@ impl UseComputerExecutor {
 impl Entity for UseComputerExecutor {
     type Event = ();
 }
+
+#[cfg(test)]
+#[path = "use_computer_tests.rs"]
+mod tests;

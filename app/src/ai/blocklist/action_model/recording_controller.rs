@@ -4,6 +4,7 @@ use std::mem;
 
 use ai::agent::action_result::StopRecordingResult;
 use futures::channel::oneshot;
+use instant::Instant;
 use thiserror::Error;
 use warpui::{Entity, SingletonEntity};
 
@@ -37,6 +38,10 @@ pub(crate) struct ActiveRecording {
     pub(crate) id: String,
     pub(crate) conversation_id: AIConversationId,
     pub(crate) handle: computer_use::RecordingHandle,
+    /// When capture went live; action offsets are measured from here.
+    pub(crate) started_at: Instant,
+    /// Keyboard actions to burn into the video, in dispatch order.
+    pub(crate) actions: Vec<computer_use::ActionLogEntry>,
 }
 
 enum RecordingState {
@@ -122,6 +127,23 @@ impl RecordingController {
                 id: recording_id,
                 conversation_id,
                 handle,
+                started_at: Instant::now(),
+                actions: Vec::new(),
+            });
+        }
+    }
+
+    /// Appends a keyboard overlay entry to the active recording, timestamped
+    /// relative to capture start. No-op when nothing is recording, so callers
+    /// can record unconditionally.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn record_action(&mut self, kind: computer_use::OverlayKind, label: String) {
+        if let RecordingState::Active(recording) = &mut self.state {
+            recording.actions.push(computer_use::ActionLogEntry {
+                offset: recording.started_at.elapsed(),
+                kind,
+                label,
+                show_duration: computer_use::DEFAULT_PILL_DURATION,
             });
         }
     }
