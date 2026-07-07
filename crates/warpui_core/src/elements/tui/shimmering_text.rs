@@ -4,21 +4,20 @@
 //! [`ShimmeringTextElement`](crate::elements::shimmering_text), sharing its
 //! band math ([`crate::elements::shimmer_math`]).
 //!
-//! Colors are derived at paint time from the wall clock against a caller
-//! provided animation anchor, so the animation advances on cached-element
-//! repaints and survives element-tree rebuilds. Each paint requests the next
-//! repaint; the animation stops as soon as the element leaves the painted
-//! tree. Intended for short single-width-glyph strings (one cell per char).
+//! Colors are derived at paint time from the caller's [`AnimationClock`], so
+//! the animation advances on cached-element repaints and survives
+//! element-tree rebuilds. Each paint requests the next repaint; the animation
+//! stops as soon as the element leaves the painted tree. Intended for short
+//! single-width-glyph strings (one cell per char).
 
 use std::time::Duration;
-
-use instant::Instant;
 
 use super::{
     Color, Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiRect, TuiSize, TuiStyle,
 };
 use crate::color::ColorU;
+use crate::elements::animation::AnimationClock;
 use crate::elements::shimmer_math::{self, ShimmerConfig};
 use crate::AppContext;
 
@@ -32,28 +31,28 @@ pub struct TuiShimmeringText {
     base_color: ColorU,
     shimmer_color: ColorU,
     config: ShimmerConfig,
-    /// The instant the animation is phased against (the shimmer's t=0).
-    animation_anchor: Instant,
+    /// The clock the band's phase is derived from.
+    clock: AnimationClock,
     modifier: Modifier,
 }
 
 impl TuiShimmeringText {
     /// A shimmering text element displaying `text` in `base_color`, lerping
     /// toward `shimmer_color` under the band. The band's phase is derived from
-    /// time elapsed since `animation_anchor`.
+    /// `clock`'s elapsed time.
     pub fn new(
         text: impl Into<String>,
         base_color: ColorU,
         shimmer_color: ColorU,
         config: ShimmerConfig,
-        animation_anchor: Instant,
+        clock: AnimationClock,
     ) -> Self {
         Self {
             text: text.into(),
             base_color,
             shimmer_color,
             config,
-            animation_anchor,
+            clock,
             modifier: Modifier::empty(),
         }
     }
@@ -88,11 +87,7 @@ impl TuiElement for TuiShimmeringText {
         }
 
         let glyph_count = self.text.chars().count();
-        let center = shimmer_math::shimmer_center(
-            glyph_count,
-            self.animation_anchor.elapsed(),
-            &self.config,
-        );
+        let center = shimmer_math::shimmer_center(glyph_count, self.clock.elapsed(), &self.config);
 
         for (index, char) in self.text.chars().enumerate() {
             let x = area

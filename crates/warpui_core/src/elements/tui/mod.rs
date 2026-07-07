@@ -69,6 +69,30 @@ pub use viewported_list::{
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
 };
 
+/// Shared access to the presenter's pre-rendered view map for the context
+/// types threaded through the element tree, providing the one
+/// [`use_view`](Self::use_view) implementation they all share.
+pub(crate) trait TuiViewMapContext: Sized {
+    /// The presenter's pre-rendered elements keyed by view id.
+    fn rendered_views_mut(&mut self) -> &mut EntityIdMap<Box<dyn TuiElement>>;
+
+    /// Temporarily removes the element for `view_id` from the view map,
+    /// passes it (along with `self`) to `f`, then returns it. Mirrors the
+    /// GUI's `LayoutContext::layout` / `PaintContext::paint` /
+    /// `EventContext::dispatch_event_on_view` pattern. Returns the value
+    /// produced by `f`, or `None` if no element was registered for `view_id`.
+    fn use_view<R>(
+        &mut self,
+        view_id: EntityId,
+        f: impl FnOnce(&mut Box<dyn TuiElement>, &mut Self) -> R,
+    ) -> Option<R> {
+        let mut element = self.rendered_views_mut().remove(&view_id)?;
+        let result = f(&mut element, self);
+        self.rendered_views_mut().insert(view_id, element);
+        Some(result)
+    }
+}
+
 /// Carries the pre-rendered per-view element map through the layout pass,
 /// mirroring the GUI's `LayoutContext`. [`TuiChildView`] uses it to look up
 /// its child element (freshly rendered by [`TuiPresenter::invalidate`] if
@@ -81,21 +105,9 @@ pub struct TuiLayoutContext<'a> {
     pub rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
 }
 
-impl<'a> TuiLayoutContext<'a> {
-    /// Temporarily removes the element for `view_id` from `rendered_views`,
-    /// passes it (along with `self`) to `f`, then returns it. Mirrors the
-    /// GUI's `LayoutContext::layout` / `PaintContext::paint` /
-    /// `EventContext::dispatch_event_on_view` pattern. Returns the value
-    /// produced by `f`, or `None` if no element was registered for `view_id`.
-    pub(crate) fn use_view<R>(
-        &mut self,
-        view_id: EntityId,
-        f: impl FnOnce(&mut Box<dyn TuiElement>, &mut Self) -> R,
-    ) -> Option<R> {
-        let mut element = self.rendered_views.remove(&view_id)?;
-        let result = f(&mut element, self);
-        self.rendered_views.insert(view_id, element);
-        Some(result)
+impl TuiViewMapContext for TuiLayoutContext<'_> {
+    fn rendered_views_mut(&mut self) -> &mut EntityIdMap<Box<dyn TuiElement>> {
+        self.rendered_views
     }
 }
 
@@ -114,6 +126,11 @@ pub struct TuiPaintContext<'a> {
     repaint_at: Option<Instant>,
 }
 
+/// The soonest an element may request a repaint after the current paint.
+/// Floors zero/tiny [`TuiPaintContext::repaint_after`] delays so a
+/// misbehaving element can't busy-loop the repaint scheduler.
+const MIN_REPAINT_DELAY: Duration = Duration::from_millis(10);
+
 impl<'a> TuiPaintContext<'a> {
     /// Creates a paint context over the presenter's pre-rendered view map with
     /// no repaint requested.
@@ -124,14 +141,15 @@ impl<'a> TuiPaintContext<'a> {
         }
     }
 
-    /// Requests a repaint after `delay`, keeping the earliest pending deadline.
+    /// Requests a repaint after `delay` (floored to [`MIN_REPAINT_DELAY`]),
+    /// keeping the earliest pending deadline.
     pub fn repaint_after(&mut self, delay: Duration) {
-        self.repaint_at(Instant::now() + delay);
+        self.repaint_at(Instant::now() + delay.max(MIN_REPAINT_DELAY));
     }
 
     /// Requests a repaint at `new_repaint_at`, keeping the earlier deadline if
     /// one is already pending.
-    pub fn repaint_at(&mut self, new_repaint_at: Instant) {
+    fn repaint_at(&mut self, new_repaint_at: Instant) {
         if self
             .repaint_at
             .is_some_and(|repaint_at| repaint_at <= new_repaint_at)
@@ -145,19 +163,11 @@ impl<'a> TuiPaintContext<'a> {
     pub(crate) fn requested_repaint_at(&self) -> Option<Instant> {
         self.repaint_at
     }
+}
 
-    /// Temporarily removes the element for `view_id` from `rendered_views`,
-    /// passes it (along with `self`) to `f`, then returns it — the same
-    /// move-in/move-out pattern as [`TuiLayoutContext::use_view`].
-    pub(crate) fn use_view<R>(
-        &mut self,
-        view_id: EntityId,
-        f: impl FnOnce(&mut Box<dyn TuiElement>, &mut Self) -> R,
-    ) -> Option<R> {
-        let mut element = self.rendered_views.remove(&view_id)?;
-        let result = f(&mut element, self);
-        self.rendered_views.insert(view_id, element);
-        Some(result)
+impl TuiViewMapContext for TuiPaintContext<'_> {
+    fn rendered_views_mut(&mut self) -> &mut EntityIdMap<Box<dyn TuiElement>> {
+        self.rendered_views
     }
 }
 
@@ -304,19 +314,32 @@ impl<'a> TuiPresentationContext<'a> {
             .pop()
             .expect("a child view is entered before it is exited");
     }
+}
 
-    /// Temporarily removes the element for `view_id` from `rendered_views`,
-    /// passes it (along with `self`) to `f`, then returns it — the same
-    /// move-in/move-out pattern the GUI's `EventContext::dispatch_event_on_view`
-    /// uses. Returns `None` if no element is registered for `view_id`.
-    pub(crate) fn use_view<R>(
-        &mut self,
-        view_id: EntityId,
-        f: impl FnOnce(&mut Box<dyn TuiElement>, &mut Self) -> R,
-    ) -> Option<R> {
-        let mut element = self.rendered_views.remove(&view_id)?;
-        let result = f(&mut element, self);
-        self.rendered_views.insert(view_id, element);
-        Some(result)
+impl TuiViewMapContext for TuiPresentationContext<'_> {
+    fn rendered_views_mut(&mut self) -> &mut EntityIdMap<Box<dyn TuiElement>> {
+        self.rendered_views
+    }
+}
+
+/// Shared harnesses for TUI element tests.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{TuiBuffer, TuiBufferExt, TuiElement, TuiPaintContext, TuiRect, TuiSize};
+    use crate::EntityIdMap;
+
+    /// Runs `f` with a paint context over a fresh, empty view map — the
+    /// common harness for leaf-element paint tests.
+    pub(crate) fn with_paint_context<R>(f: impl FnOnce(&mut TuiPaintContext) -> R) -> R {
+        let mut rendered_views = EntityIdMap::default();
+        f(&mut TuiPaintContext::new(&mut rendered_views))
+    }
+
+    /// Renders `element` into a `size` buffer and returns the rows as strings.
+    pub(crate) fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
+        let area = TuiRect::new(0, 0, size.width, size.height);
+        let mut buffer = TuiBuffer::empty(area);
+        with_paint_context(|ctx| element.render(area, &mut buffer, ctx));
+        buffer.to_lines()
     }
 }

@@ -386,9 +386,9 @@ impl TuiTerminalGuard {
 /// - `_guard`: restores raw mode + the alternate screen on drop.
 pub struct TuiDriverHandle {
     _task: ForegroundTask,
-    /// The repaint loop that redraws at element-requested deadlines. An
-    /// [`async_task::Task`] like `_task`, so dropping it cancels the loop.
-    _repaint_task: ForegroundTask,
+    /// The pending element-requested repaint timer, if any (see
+    /// [`draw_and_schedule_repaint`]). Dropping it cancels the timer.
+    _repaint_timer: Rc<RefCell<Option<ForegroundTask>>>,
     _reader: thread::JoinHandle<()>,
     _guard: TuiTerminalGuard,
 }
@@ -426,12 +426,11 @@ pub fn spawn_tui_driver<T: TuiView>(
         CrosstermTerminal::new(),
     )));
 
-    // Repaint scheduling: every draw reports the earliest element-requested
-    // repaint deadline, which is forwarded here; a single loop task sleeps
-    // until the earliest pending deadline and redraws. The cycle is
-    // self-sustaining (a repaint's own draw reports the next deadline) and
-    // fully idle when no element is animating.
-    let (repaint_tx, repaint_rx) = async_channel::unbounded::<Instant>();
+    // Repaint scheduling: at most one pending timer, held in this slot. Every
+    // draw reports the earliest element-requested repaint deadline for the
+    // whole frame, so each draw replaces (cancelling) the previous timer with
+    // one for its own deadline — or clears it when nothing is animating.
+    let repaint_timer: Rc<RefCell<Option<ForegroundTask>>> = Rc::default();
 
     // Redraw whenever the window is invalidated. `update_windows` invokes this at
     // the end of every `flush_effects`, so any `notify()` repaints. (The callback
@@ -439,9 +438,9 @@ pub fn spawn_tui_driver<T: TuiView>(
     // invalidates can't re-enter it.)
     {
         let screen = screen.clone();
-        let repaint_tx = repaint_tx.clone();
+        let repaint_timer = repaint_timer.clone();
         ctx.on_window_invalidated(window_id, move |_, ctx| {
-            if let Err(error) = draw_and_forward_repaint(&screen, &repaint_tx, ctx) {
+            if let Err(error) = draw_and_schedule_repaint(&screen, &repaint_timer, ctx) {
                 log::error!("failed to draw a TUI frame: {error}");
             }
         });
@@ -454,40 +453,7 @@ pub fn spawn_tui_driver<T: TuiView>(
     // returning `Err` here drops `guard` (restoring the terminal) and lets the
     // caller surface the error, rather than leaving a live raw-mode session with
     // no usable frame.
-    draw_and_forward_repaint(&screen, &repaint_tx, ctx)?;
-
-    let repaint_task = {
-        let screen = screen.clone();
-        let weak_app = ctx.weak_app();
-        ctx.foreground_executor().spawn(async move {
-            while let Ok(mut deadline) = repaint_rx.recv().await {
-                // Coalesce all pending requests down to the earliest deadline.
-                // A request that arrives *while sleeping* with an earlier
-                // deadline is served late (at this deadline) — at worst one
-                // repaint interval, which is fine for animation cadences.
-                while let Ok(next) = repaint_rx.try_recv() {
-                    deadline = deadline.min(next);
-                }
-                let now = Instant::now();
-                if deadline > now {
-                    Timer::after(deadline - now).await;
-                }
-                // Requests that arrived while sleeping are superseded by the
-                // fresh draw below, which reports its own next deadline.
-                while repaint_rx.try_recv().is_ok() {}
-                let Some(mut app) = weak_app.upgrade() else {
-                    break;
-                };
-                let screen = screen.clone();
-                let repaint_tx = repaint_tx.clone();
-                app.update(move |ctx| {
-                    if let Err(error) = draw_and_forward_repaint(&screen, &repaint_tx, ctx) {
-                        log::error!("failed to draw a TUI frame: {error}");
-                    }
-                });
-            }
-        })
-    };
+    draw_and_schedule_repaint(&screen, &repaint_timer, ctx)?;
 
     let weak_app = ctx.weak_app();
     let (sender, receiver) = async_channel::unbounded::<CrosstermEvent>();
@@ -538,23 +504,52 @@ pub fn spawn_tui_driver<T: TuiView>(
 
     Ok(TuiDriverHandle {
         _task: task,
-        _repaint_task: repaint_task,
+        _repaint_timer: repaint_timer,
         _reader: reader,
         _guard: guard,
     })
 }
 
-/// Draws a frame and forwards any element-requested repaint deadline to the
-/// driver's repaint loop. A send can only fail during teardown (the receiver
-/// lives in the loop task), when the repaint is moot anyway.
-fn draw_and_forward_repaint<T: TuiView, R: TuiTerminal>(
+/// Draws a frame and schedules a timer for its element-requested repaint
+/// deadline, if any.
+///
+/// Paint traverses the full tree, so each frame's reported deadline is the
+/// authoritative next repaint: the new timer replaces — and thereby cancels —
+/// any previously pending one, and a frame with no deadline clears the slot.
+/// The timer redraws through this same function, so the cycle is
+/// self-sustaining while elements animate and fully idle otherwise.
+fn draw_and_schedule_repaint<T: TuiView, R: TuiTerminal + 'static>(
     screen: &Rc<RefCell<TuiScreen<T, R>>>,
-    repaint_tx: &async_channel::Sender<Instant>,
+    timer_slot: &Rc<RefCell<Option<ForegroundTask>>>,
     ctx: &mut AppContext,
 ) -> io::Result<()> {
-    if let Some(deadline) = screen.borrow_mut().draw(ctx)? {
-        let _ = repaint_tx.try_send(deadline);
-    }
+    let deadline = screen.borrow_mut().draw(ctx)?;
+    let timer = deadline.map(|deadline| {
+        let screen = screen.clone();
+        // Weak, or the slot (held by the task) and the task (held by the slot)
+        // would keep each other alive.
+        let weak_slot = Rc::downgrade(timer_slot);
+        let weak_app = ctx.weak_app();
+        ctx.foreground_executor().spawn(async move {
+            let now = Instant::now();
+            if deadline > now {
+                Timer::after(deadline - now).await;
+            }
+            let (Some(mut app), Some(timer_slot)) = (weak_app.upgrade(), weak_slot.upgrade())
+            else {
+                return;
+            };
+            app.update(move |ctx| {
+                // The draw below replaces the slot, dropping this task's own
+                // handle; `async_task` defers destruction, so this in-flight
+                // poll completes normally.
+                if let Err(error) = draw_and_schedule_repaint(&screen, &timer_slot, ctx) {
+                    log::error!("failed to draw a TUI frame: {error}");
+                }
+            });
+        })
+    });
+    *timer_slot.borrow_mut() = timer;
     Ok(())
 }
 

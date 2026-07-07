@@ -102,10 +102,16 @@ impl TuiUiBuilder {
         TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
     }
 
-    /// The warping indicator's base color (spinner glyph and "Warping" text):
+    /// The warping indicator's base fill (spinner glyph and "Warping" text):
     /// the terminal palette's normal yellow, per the TUI design.
+    fn warping_base_fill(&self) -> ThemeFill {
+        ThemeFill::from(self.warp_theme.terminal_colors().normal.yellow)
+    }
+
+    /// The warping indicator's base color as a solid color, for per-glyph
+    /// shimmer lerping.
     pub(crate) fn warping_base_color(&self) -> ColorU {
-        ThemeFill::from(self.warp_theme.terminal_colors().normal.yellow).into_solid()
+        self.warping_base_fill().into_solid()
     }
 
     /// The peak color the "Warping" shimmer band lerps toward: the terminal
@@ -116,9 +122,7 @@ impl TuiUiBuilder {
 
     /// Style for the warping indicator's spinner glyph.
     pub(crate) fn warping_spinner_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().normal.yellow,
-        )))
+        TuiStyle::default().fg(cell_color(self.warping_base_fill()))
     }
 
     /// Collapsible-header style while the pointer hovers it.

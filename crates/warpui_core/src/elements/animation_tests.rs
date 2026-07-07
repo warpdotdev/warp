@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::{Keyframe, KeyframeTimeline};
+use super::{AnimationClock, Keyframe, KeyframeTimeline};
 
 /// Millisecond [`Duration`] shorthand.
 fn ms(millis: u64) -> Duration {
@@ -44,4 +44,14 @@ fn values_are_in_timeline_order() {
 #[should_panic(expected = "non-zero hold")]
 fn rejects_a_timeline_with_no_duration() {
     KeyframeTimeline::<&str>::new([]);
+}
+
+#[test]
+fn clock_starts_at_its_initial_elapsed_and_advances() {
+    // An initial offset far beyond any plausible process uptime must not
+    // panic (the underflow `Instant::now() - elapsed` would) and must be
+    // preserved in the reported elapsed time.
+    let initial = Duration::from_secs(60 * 60 * 24 * 365 * 100);
+    let clock = AnimationClock::starting_at(initial);
+    assert!(clock.elapsed() >= initial);
 }

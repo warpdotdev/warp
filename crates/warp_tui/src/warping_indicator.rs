@@ -3,8 +3,9 @@
 //! progress — the TUI counterpart of the GUI's warping indicator.
 //!
 //! All animation state (spinner frame, shimmer phase, elapsed counter) is
-//! derived from the wall clock against the exchange's start time, so it
-//! advances on cached-element repaints and survives element-tree rebuilds.
+//! derived from one [`AnimationClock`] carrying the exchange's elapsed time,
+//! so it advances on cached-element repaints and survives element-tree
+//! rebuilds.
 //! The spinner and counter are [`TuiAnimated`] leaves and the shimmer label
 //! self-schedules, so the row keeps requesting repaints while it is part of
 //! the painted tree and stops as soon as the session view re-renders without
@@ -13,8 +14,7 @@
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use instant::Instant;
-use warpui_core::elements::animation::{Keyframe, KeyframeTimeline};
+use warpui_core::elements::animation::{AnimationClock, Keyframe, KeyframeTimeline};
 use warpui_core::elements::shimmer_math::ShimmerConfig;
 use warpui_core::elements::tui::{
     Modifier, TuiAnimated, TuiElement, TuiFlex, TuiShimmeringText, TuiText,
@@ -65,15 +65,15 @@ static SPINNER_TIMELINE: LazyLock<KeyframeTimeline<&'static str>> = LazyLock::ne
 /// `elapsed`.
 pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    // When the exchange started; every animation reads the wall clock against
-    // this so its state is current at each repaint.
-    let start_time = Instant::now() - elapsed;
+    // One clock, already `elapsed` into the exchange, drives all three parts
+    // so they stay phase-locked; each repaint reads its current elapsed time.
+    let clock = AnimationClock::starting_at(elapsed);
 
     // The spinner repaints at its timeline's shortest hold so the fast spins
     // don't skip frames; repaint requests coalesce to the earliest deadline.
     let spinner_style = builder.warping_spinner_style();
     let spinner = TuiAnimated::new(Duration::from_millis(50), move || {
-        TuiText::new(*SPINNER_TIMELINE.value_at(start_time.elapsed()))
+        TuiText::new(*SPINNER_TIMELINE.value_at(clock.elapsed()))
             .with_style(spinner_style)
             .truncate()
             .finish()
@@ -84,13 +84,13 @@ pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> B
         builder.warping_base_color(),
         builder.warping_shimmer_color(),
         ShimmerConfig::default(),
-        start_time,
+        clock,
     )
     .with_modifier(Modifier::BOLD);
 
     let counter_style = builder.muted_text_style();
     let counter = TuiAnimated::new(Duration::from_secs(1), move || {
-        TuiText::new(format!("({}s)", start_time.elapsed().as_secs()))
+        TuiText::new(format!("({}s)", clock.elapsed().as_secs()))
             .with_style(counter_style)
             .truncate()
             .finish()

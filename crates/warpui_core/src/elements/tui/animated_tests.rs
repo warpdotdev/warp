@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use super::TuiAnimated;
+use crate::elements::tui::test_support::with_paint_context;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect,
     TuiSize, TuiText,
@@ -50,8 +51,6 @@ fn paints_nothing_before_its_first_layout() {
         TuiText::new("content").finish()
     });
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 7, 1));
-    let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiPaintContext::new(&mut rendered_views);
-    animated.render(TuiRect::new(0, 0, 7, 1), &mut buffer, &mut ctx);
+    with_paint_context(|ctx| animated.render(TuiRect::new(0, 0, 7, 1), &mut buffer, ctx));
     assert_eq!(buffer.to_lines(), vec!["       "]);
 }

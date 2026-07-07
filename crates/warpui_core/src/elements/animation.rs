@@ -1,5 +1,6 @@
-//! Backend-agnostic keyframe animation timing: a looping sequence of values,
-//! each held for a fixed duration.
+//! Backend-agnostic animation timing: a monotonic-safe elapsed clock
+//! ([`AnimationClock`]) and a looping sequence of values each held for a
+//! fixed duration ([`KeyframeTimeline`]).
 //!
 //! Elements that animate through discrete frames (e.g. spinner glyphs)
 //! describe their choreography as a [`KeyframeTimeline`] and ask it which
@@ -7,6 +8,43 @@
 //! walking per element.
 
 use std::time::Duration;
+
+use instant::Instant;
+
+/// A monotonic-safe animation clock: the animation's elapsed time captured
+/// when the clock was built, advanced by the monotonic time since.
+///
+/// Exists because an animation's starting offset often comes from the wall
+/// clock (e.g. an exchange's start timestamp), and reconstructing a monotonic
+/// anchor from it (`Instant::now() - elapsed`) panics when the duration
+/// exceeds the monotonic clock's range — e.g. after suspend (the monotonic
+/// clock doesn't tick while asleep) or wall-clock skew. Tracking the offset
+/// as a plain `Duration` and *adding* monotonic time since build avoids the
+/// underflow entirely while keeping the animation continuous across element
+/// rebuilds.
+#[derive(Clone, Copy)]
+pub struct AnimationClock {
+    /// How far into the animation the caller already was at build time.
+    initial_elapsed: Duration,
+    /// When this clock was built.
+    anchor: Instant,
+}
+
+impl AnimationClock {
+    /// A clock that is already `initial_elapsed` into the animation and
+    /// advances with the monotonic clock from now.
+    pub fn starting_at(initial_elapsed: Duration) -> Self {
+        Self {
+            initial_elapsed,
+            anchor: Instant::now(),
+        }
+    }
+
+    /// The animation's total elapsed time.
+    pub fn elapsed(&self) -> Duration {
+        self.initial_elapsed + self.anchor.elapsed()
+    }
+}
 
 /// One keyframe: a value shown for a fixed hold duration.
 pub struct Keyframe<T> {

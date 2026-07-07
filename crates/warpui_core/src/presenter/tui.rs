@@ -93,6 +93,11 @@ pub struct TuiPresenter {
     /// point for the next frame's layout (for unchanged child subtrees) and for
     /// event dispatch between frames.
     pub(crate) last_element: Option<Box<dyn TuiElement>>,
+    /// Whether [`invalidate`](Self::invalidate) ran since the last
+    /// [`present`](Self::present). When it did, every changed view was
+    /// re-rendered into `rendered_views`, so `last_element` is current and a
+    /// paint-only repaint can reuse it without re-rendering the root view.
+    invalidated_this_frame: bool,
 }
 
 impl TuiPresenter {
@@ -114,6 +119,7 @@ impl TuiPresenter {
         ctx: &AppContext,
         window_id: WindowId,
     ) {
+        self.invalidated_this_frame = true;
         for &view_id in invalidation.updated.difference(&invalidation.removed) {
             match ctx.render_tui_view(window_id, view_id) {
                 Ok(element) => {
@@ -149,18 +155,20 @@ impl TuiPresenter {
 
         // Element resolution order:
         //   1. Fresh from rendered_views (populated by invalidate() this frame).
-        //   2. Cached last_element — ONLY when rendered_views is non-empty,
-        //      meaning invalidate() was called and this view was not changed.
-        //      If rendered_views is empty (no invalidate() was called), skip
-        //      last_element: the root may be stale (e.g. view called notify()
-        //      but the caller drives the presenter standalone without the
-        //      runtime's invalidate() step).
-        //   3. Direct render fallback for callers that skip invalidate().
+        //   2. Cached last_element — ONLY when invalidate() ran this frame, so
+        //      every changed view (including the root) was already re-rendered
+        //      and an absent root means it is unchanged. This is what lets
+        //      paint-only repaints (e.g. animations) reuse the cached tree
+        //      without re-rendering any view.
+        //   3. Direct render fallback for callers that skip invalidate(): the
+        //      root may be stale (e.g. the view called notify() but nothing
+        //      re-rendered it), so render it fresh.
+        let invalidated_this_frame = std::mem::take(&mut self.invalidated_this_frame);
         let Some(mut element) = self
             .rendered_views
             .remove(&root_view_id)
             .or_else(|| {
-                if !self.rendered_views.is_empty() {
+                if invalidated_this_frame {
                     self.last_element.take()
                 } else {
                     None

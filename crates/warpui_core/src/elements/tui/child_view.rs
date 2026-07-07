@@ -18,7 +18,7 @@
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize, TuiViewMapContext,
 };
 #[cfg(test)]
 use crate::EntityIdMap;

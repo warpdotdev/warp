@@ -4,6 +4,8 @@
 //! [`TuiView`]s in a test [`App`] and resolve them through the app, exactly as
 //! the live elements do.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use instant::Instant;
@@ -298,6 +300,28 @@ impl TuiView for LeafView {
     }
 }
 
+/// A childless root view that counts its renders, to pin the paint-only
+/// repaint contract: repaints must reuse the cached element tree instead of
+/// re-rendering the view.
+struct CountingLeafView {
+    renders: Rc<Cell<usize>>,
+}
+
+impl Entity for CountingLeafView {
+    type Event = ();
+}
+
+impl TuiView for CountingLeafView {
+    fn ui_name() -> &'static str {
+        "CountingLeafView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        self.renders.set(self.renders.get() + 1);
+        Box::new(TextDouble::new("LEAF"))
+    }
+}
+
 /// A parent view: a header above an embedded child view, which it resolves
 /// through the app at render time. Records `DescendentFocused` hook firings.
 struct ParentView {
@@ -443,6 +467,42 @@ fn animated_element_requests_a_repaint_every_paint() {
             assert!(frame.repaint_at.is_some());
             assert_eq!(frame.buffer.to_lines(), vec!["LIVE      "]);
         });
+    });
+}
+
+#[test]
+fn paint_only_repaint_reuses_the_cached_leaf_root_without_re_rendering() {
+    App::test((), |mut app| async move {
+        let (window_id, _root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RootStub));
+        let renders = Rc::new(Cell::new(0));
+        let renders_in_view = renders.clone();
+        let view = app.update(|ctx| {
+            ctx.add_tui_view(window_id, move |_| CountingLeafView {
+                renders: renders_in_view,
+            })
+        });
+
+        let mut presenter = TuiPresenter::new();
+        // The first draw renders the view once (via its initial invalidation).
+        let frame = app.update(|ctx| {
+            let invalidation = ctx.take_all_invalidations_for_window(window_id);
+            presenter.invalidate(&invalidation, ctx, window_id);
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 8, 1))
+        });
+        assert_eq!(frame.buffer.to_lines(), vec!["LEAF    "]);
+        assert_eq!(renders.get(), 1);
+
+        // A paint-only repaint (no invalidations — e.g. an animation frame)
+        // must reuse the cached element tree without re-rendering the view,
+        // even though this root has no child views in `rendered_views`.
+        let frame = app.update(|ctx| {
+            let invalidation = ctx.take_all_invalidations_for_window(window_id);
+            presenter.invalidate(&invalidation, ctx, window_id);
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 8, 1))
+        });
+        assert_eq!(frame.buffer.to_lines(), vec!["LEAF    "]);
+        assert_eq!(renders.get(), 1);
     });
 }
 
