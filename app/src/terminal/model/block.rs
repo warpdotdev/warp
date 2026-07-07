@@ -413,6 +413,8 @@ pub struct Block {
     ///
     /// This is used for debugging UI shown in the block header on dogfood builds.
     nld_overridden: bool,
+    /// Whether the delayed work that runs after this block's next prompt has been resolved.
+    deferred_completion_work_resolved: bool,
 
     visible_bootstrap_block_event_sent: bool,
 }
@@ -1012,6 +1014,7 @@ impl Block {
             },
             nld_overridden: false,
             is_oz_environment_startup_command: false,
+            deferred_completion_work_resolved: false,
             visible_bootstrap_block_event_sent: false,
         }
     }
@@ -1682,6 +1685,16 @@ impl Block {
 
     pub fn finished(&self) -> bool {
         self.output_grid.finished()
+    }
+
+    /// Returns whether this block's deferred after-completion work has been resolved.
+    pub(super) fn deferred_completion_work_resolved(&self) -> bool {
+        self.deferred_completion_work_resolved
+    }
+
+    /// Marks this block's deferred after-completion work as resolved.
+    pub(super) fn resolve_deferred_completion_work(&mut self) {
+        self.deferred_completion_work_resolved = true;
     }
 
     pub fn is_receiving_prompt(&self) -> bool {
