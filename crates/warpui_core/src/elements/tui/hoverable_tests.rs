@@ -214,6 +214,46 @@ impl TuiElement for AlwaysHandles {
 }
 
 #[test]
+fn consecutive_synthetic_hover_flips_are_suppressed() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let handle = MouseStateHandle::default();
+            let hoverable = TuiHoverable::new(handle.clone(), TuiText::new("hello").finish());
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(
+                hoverable.finish(),
+                crate::elements::tui::TuiRect::new(0, 0, 10, 1),
+                app_ctx,
+            );
+            let mut move_to = |x, y, is_synthetic| {
+                dispatch_presented_event(
+                    &mut presenter,
+                    &TuiEvent::MouseMoved {
+                        position: TuiPoint::new(x, y),
+                        modifiers: ModifiersState::default(),
+                        is_synthetic,
+                    },
+                    app_ctx,
+                )
+            };
+
+            // A synthetic flip in is allowed: the previous flip was not synthetic.
+            move_to(2, 0, true);
+            assert!(handle.lock().unwrap().is_hovered());
+
+            // A second consecutive synthetic flip (out) is suppressed to break
+            // potential layout<->hover feedback loops.
+            move_to(9, 0, true);
+            assert!(handle.lock().unwrap().is_hovered());
+
+            // A real move out flips immediately.
+            move_to(9, 0, false);
+            assert!(!handle.lock().unwrap().is_hovered());
+        });
+    });
+}
+
+#[test]
 fn child_consumes_the_event_before_the_click_handler() {
     App::test((), |app| async move {
         app.read(|app_ctx| {

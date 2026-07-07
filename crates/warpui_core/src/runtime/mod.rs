@@ -36,7 +36,8 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
-use crate::elements::tui::{TuiEvent, TuiEventContext, TuiRect, TuiSize};
+use crate::elements::tui::{TuiEvent, TuiEventContext, TuiPoint, TuiRect, TuiSize};
+use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
 use crate::r#async::executor::ForegroundTask;
 use crate::r#async::{block_on, Timer};
@@ -81,6 +82,10 @@ struct TuiScreen<T, R: TuiTerminal> {
     /// Synthesizes multi-click counts for left mouse presses, which crossterm
     /// does not report.
     click_tracker: ClickTracker,
+    /// The pointer position from the most recent positional event, replayed as
+    /// a synthetic `MouseMoved` after each draw so hover state tracks elements
+    /// that move under a stationary pointer.
+    last_mouse_position: Option<TuiPoint>,
 }
 
 impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
@@ -92,6 +97,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             renderer: TuiFrameRenderer::new(),
             terminal,
             click_tracker: ClickTracker::default(),
+            last_mouse_position: None,
         }
     }
 
@@ -102,20 +108,51 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     /// Lays out and paints the root view through the presenter, then flushes the
     /// frame to the terminal. Draining this window's invalidations keeps the
     /// manual + autotracking sets from accumulating (the frame is repainted in
-    /// full regardless). Returns the earliest repaint deadline requested by an
-    /// animated element during paint, if any, so the caller can schedule a
-    /// timed redraw.
+    /// full regardless). After each paint, the last pointer position is replayed
+    /// as a synthetic `MouseMoved`; resulting invalidations rebuild the frame
+    /// within this call, capped at three iterations like the GUI.
+    ///
+    /// Returns the final frame's earliest requested repaint deadline so the
+    /// caller can schedule a timed redraw.
     fn draw(&mut self, ctx: &mut AppContext) -> io::Result<Option<Instant>> {
         let size = self.terminal.size()?;
         let area = TuiRect::new(0, 0, size.width, size.height);
-        let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
-        self.presenter
-            .invalidate(&invalidation, ctx, self.window_id);
-        let frame = self.presenter.present(ctx, &self.root_view, area);
-        let mut writer = self.terminal.writer();
-        self.renderer
-            .draw(&mut writer, &frame.buffer, frame.cursor)?;
-        Ok(frame.repaint_at)
+        let mut repaint_at = None;
+        for iteration in 1..=3 {
+            let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
+            // Always paint at least once, even with nothing invalidated.
+            if iteration > 1 && invalidation.updated.is_empty() && !invalidation.redraw_requested {
+                break;
+            }
+            self.presenter
+                .invalidate(&invalidation, ctx, self.window_id);
+            let frame = self.presenter.present(ctx, &self.root_view, area);
+            let mut writer = self.terminal.writer();
+            self.renderer
+                .draw(&mut writer, &frame.buffer, frame.cursor)?;
+            repaint_at = frame.repaint_at;
+
+            self.replay_mouse_position(ctx);
+        }
+        Ok(repaint_at)
+    }
+
+    /// Redispatches the last known pointer position as a synthetic
+    /// `MouseMoved` through the freshly rendered tree, so hover state tracks
+    /// elements that moved under a stationary pointer (e.g. a collapsible
+    /// expanding and pushing its header out from under the mouse). A state
+    /// change invalidates the notified views, which `draw`'s loop picks up to
+    /// rebuild the frame within the same call.
+    fn replay_mouse_position(&mut self, ctx: &mut AppContext) {
+        let Some(position) = self.last_mouse_position else {
+            return;
+        };
+        let event = TuiEvent::MouseMoved {
+            position,
+            modifiers: ModifiersState::default(),
+            is_synthetic: true,
+        };
+        self.dispatch_event(ctx, &event);
     }
 
     /// Converts a raw crossterm event into the TUI vocabulary, annotating left
@@ -132,6 +169,10 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     /// presenter (the same tree that was painted), with a `TuiLayoutContext` so
     /// `TuiChildView` can resolve its child from `rendered_views`.
     fn dispatch_event(&mut self, ctx: &mut AppContext, event: &TuiEvent) -> bool {
+        if let Some(position) = event.position() {
+            self.last_mouse_position = Some(position);
+        }
+
         // Keymap pass (GUI parity): offer a keystroke to the focused view's
         // responder chain first, exactly like the GUI window event path.
         if let Some((keystroke, is_composing)) = event.key_down() {
