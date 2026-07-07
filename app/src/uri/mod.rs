@@ -39,7 +39,8 @@ use crate::settings_view::{
 use crate::tab_configs::TabConfig;
 use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
 use crate::util::openable_file_type::{
-    is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script, starts_with_shebang,
+    is_file_openable_in_warp, is_runnable_shell_script, renders_in_warp_notebook_viewer,
+    starts_with_shebang,
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::auto_handoff::trigger_auto_handoff_to_cloud;
@@ -1274,7 +1275,7 @@ fn get_primary_window(
 /// What `open_file` should do with an incoming `file://` URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenFileAction {
-    /// Open in the markdown notebook pane.
+    /// Open in the notebook viewer pane (Markdown, or Jupyter when enabled).
     Notebook,
     /// Open in Warp's code/text editor pane.
     Editor,
@@ -1286,7 +1287,7 @@ enum OpenFileAction {
 /// Pure routing decision for `open_file`. Extracted so it can be unit-tested without
 /// standing up a full `AppContext`.
 fn classify_open_file_action(path: &Path) -> OpenFileAction {
-    if is_markdown_file(path) {
+    if renders_in_warp_notebook_viewer(path) {
         OpenFileAction::Notebook
     } else if is_runnable_shell_script(path) {
         OpenFileAction::ExecuteInSession
@@ -1305,7 +1306,7 @@ fn can_open_file_editor_path(path: &Path) -> bool {
 }
 
 /// Handle an incoming `file://` URL.
-/// * Markdown files are opened as notebook panes.
+/// * Markdown and Jupyter notebook files are opened as notebook panes.
 /// * For directories, open a new session at the directory path.
 /// * For other files, open a new session at the parent directory path, then possibly execute the
 ///   file.

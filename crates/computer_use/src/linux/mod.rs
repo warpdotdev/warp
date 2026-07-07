@@ -1,8 +1,10 @@
 mod keysym;
+mod recording;
 mod wayland;
 mod x11;
 
 use async_trait::async_trait;
+pub use recording::Recorder;
 
 use crate::{ActionResult, Options, TargetedAction};
 

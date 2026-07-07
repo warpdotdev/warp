@@ -279,6 +279,26 @@ fn kill_then_yank_round_trips() {
     });
 }
 
+/// Ctrl-c clear: emptying the buffer resets the text and the viewport scroll.
+#[test]
+fn clear_empties_buffer_and_resets_scroll() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_lines(&view, ctx, 10); // 10 rows > 6-row viewport
+            assert_eq!(view.as_ref(ctx).scroll_offset, 4);
+            assert!(!view.as_ref(ctx).is_empty(ctx));
+
+            view.update(ctx, |v, ctx| v.clear(ctx));
+
+            assert!(view.as_ref(ctx).is_empty(ctx));
+            assert_eq!(text(&view, ctx), "");
+            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+        });
+    });
+}
+
 /// Bug 3: word-wise selection (Ctrl+Shift+←) extends the selection one word back.
 #[test]
 fn select_word_left_selects_previous_word() {

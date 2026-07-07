@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use instant::Instant;
+use warp_core::features::FeatureFlag;
 use warp_core::telemetry::TelemetryEvent;
 
 use super::telemetry::{
@@ -13,25 +14,11 @@ use super::transition::{
 use crate::terminal::model::block::BlockState;
 
 #[test]
-fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
+fn transition_matrix_preserves_normal_flow_and_plans_safe_completion_recovery() {
     use LifecycleAction::*;
     use LifecycleInput::*;
     use LifecyclePhase::*;
     use NextBlockIdDisposition::*;
-    let snapshot = LifecycleSnapshot {
-        active_block_id: "active".to_owned(),
-        active_session_id: Some(1),
-        supplied_next_block_id: None,
-        hook_session_id: None,
-        block_state: BlockState::BeforeExecution,
-        started: false,
-        finished: false,
-        received_precmd: true,
-        is_in_band: false,
-        is_bootstrapped: true,
-        is_bootstrap_done: true,
-        is_alt_screen_active: false,
-    };
 
     let cases = [
         (
@@ -110,13 +97,13 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
             AwaitingPrecmd,
             CommandFinished(Novel),
             AwaitingPrecmd,
-            Ignore(IgnoreReason::RecoveryDisabled),
+            AcceptCommandFinished,
         ),
         (
             AtPrompt,
             CommandFinished(Novel),
-            AtPrompt,
-            Ignore(IgnoreReason::RecoveryDisabled),
+            AwaitingPrecmd,
+            AcceptCommandFinished,
         ),
         (
             Submitted,
@@ -133,8 +120,8 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
         (
             Unknown,
             CommandFinished(Novel),
-            Unknown,
-            Ignore(IgnoreReason::RecoveryDisabled),
+            AwaitingPrecmd,
+            AcceptCommandFinished,
         ),
         (
             Terminated,
@@ -234,25 +221,17 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
     ];
 
     for (phase, input, expected_phase, expected_action) in cases {
-        assert_eq!(
-            plan(phase, input, &snapshot),
-            (expected_phase, expected_action)
-        );
+        assert_eq!(plan(phase, input), (expected_phase, expected_action));
     }
 
-    let bootstrap_snapshot = LifecycleSnapshot {
-        is_bootstrap_done: false,
-        ..snapshot
-    };
     assert_eq!(
-        plan(AtPrompt, CommandFinished(Novel), &bootstrap_snapshot),
+        plan(AtPrompt, CommandFinished(Novel)),
         (AwaitingPrecmd, AcceptCommandFinished)
     );
     assert_eq!(
         plan(
             Executing,
             Preexec(super::PreexecObservation::RepeatedDifferentCommand),
-            &bootstrap_snapshot,
         ),
         (
             Executing,
@@ -268,29 +247,21 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
         Terminated,
     ] {
         assert_eq!(
-            plan(phase, CommandFinished(ActiveDuplicate), &bootstrap_snapshot),
+            plan(phase, CommandFinished(ActiveDuplicate)),
             (phase, Ignore(IgnoreReason::DuplicateCompletion))
         );
         assert_eq!(
-            plan(
-                phase,
-                CommandFinished(ExistingCollision),
-                &bootstrap_snapshot
-            ),
+            plan(phase, CommandFinished(ExistingCollision)),
             (phase, Ignore(IgnoreReason::CollidingCompletion))
         );
         let expected_novel_precmd = match phase {
             Terminated => (Terminated, Ignore(IgnoreReason::IgnoredTerminated)),
             AwaitingPrecmd | AtPrompt | Submitted | Executing | Unknown => {
-                (phase, Ignore(IgnoreReason::RecoveryDisabled))
+                (AtPrompt, ReconcileCompletionThenApplyPrecmd)
             }
         };
         assert_eq!(
-            plan(
-                phase,
-                PrecmdWithCompletionMetadata(Novel),
-                &bootstrap_snapshot
-            ),
+            plan(phase, PrecmdWithCompletionMetadata(Novel)),
             expected_novel_precmd
         );
     }
@@ -302,42 +273,24 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
         Unknown,
         Terminated,
     ] {
-        let expected = plan(
-            phase,
-            StartCommand(super::CommandStartKind::UserOrQueued),
-            &bootstrap_snapshot,
-        );
+        let expected = plan(phase, StartCommand(super::CommandStartKind::UserOrQueued));
         for kind in [
             super::CommandStartKind::SharedSession,
             super::CommandStartKind::InBand,
         ] {
-            assert_eq!(
-                plan(phase, StartCommand(kind), &bootstrap_snapshot),
-                expected
-            );
+            assert_eq!(plan(phase, StartCommand(kind)), expected);
         }
         if phase != Executing {
-            let expected = plan(
-                phase,
-                Preexec(super::PreexecObservation::First),
-                &bootstrap_snapshot,
-            );
+            let expected = plan(phase, Preexec(super::PreexecObservation::First));
             for observation in [
                 super::PreexecObservation::RepeatedSameCommand,
                 super::PreexecObservation::RepeatedDifferentCommand,
             ] {
-                assert_eq!(
-                    plan(phase, Preexec(observation), &bootstrap_snapshot),
-                    expected
-                );
+                assert_eq!(plan(phase, Preexec(observation)), expected);
             }
         }
         assert_eq!(
-            plan(
-                phase,
-                PrecmdWithCompletionMetadata(ExistingCollision),
-                &bootstrap_snapshot
-            ),
+            plan(phase, PrecmdWithCompletionMetadata(ExistingCollision)),
             (phase, Ignore(IgnoreReason::CollidingCompletion))
         );
     }
@@ -345,7 +298,6 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
         plan(
             Executing,
             Preexec(super::PreexecObservation::RepeatedSameCommand),
-            &bootstrap_snapshot,
         ),
         (Executing, Ignore(IgnoreReason::RepeatedPreexec))
     );
@@ -368,6 +320,7 @@ fn lifecycle_phase_reconciliation_requires_compatible_live_evidence() {
         is_bootstrapped: true,
         is_bootstrap_done: true,
         is_alt_screen_active: false,
+        completion_mismatch: false,
     };
     assert_eq!(
         reconcile_phase(AwaitingPrecmd, &before_execution),
@@ -427,6 +380,7 @@ fn lifecycle_coordinator_records_only_conservative_or_recovery_transitions() {
         is_bootstrapped: true,
         is_bootstrap_done: true,
         is_alt_screen_active: false,
+        completion_mismatch: false,
     };
     let mut coordinator = super::BlockLifecycleCoordinator::default();
 
@@ -475,6 +429,92 @@ fn lifecycle_coordinator_records_only_conservative_or_recovery_transitions() {
 }
 
 #[test]
+fn lifecycle_coordinator_gates_novel_completion_recovery() {
+    let _recovery_disabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(false);
+    let snapshot = LifecycleSnapshot {
+        active_block_id: "active".to_owned(),
+        active_session_id: Some(1),
+        supplied_next_block_id: Some("next".to_owned()),
+        hook_session_id: Some(1),
+        block_state: BlockState::BeforeExecution,
+        started: false,
+        finished: false,
+        received_precmd: true,
+        is_in_band: false,
+        is_bootstrapped: true,
+        is_bootstrap_done: true,
+        is_alt_screen_active: false,
+        completion_mismatch: false,
+    };
+    let mut coordinator = super::BlockLifecycleCoordinator {
+        phase: LifecyclePhase::AtPrompt,
+        ..Default::default()
+    };
+
+    for input in [
+        LifecycleInput::CommandFinished(NextBlockIdDisposition::Novel),
+        LifecycleInput::PrecmdWithCompletionMetadata(NextBlockIdDisposition::Novel),
+    ] {
+        let transition = coordinator.plan(&snapshot, input);
+        assert_eq!(
+            transition.action,
+            LifecycleAction::Ignore(IgnoreReason::RecoveryDisabled)
+        );
+        assert_eq!(transition.next_phase, LifecyclePhase::AtPrompt);
+        assert!(transition.recovery_record.is_some());
+    }
+}
+
+#[test]
+fn lifecycle_coordinator_accepts_novel_completion_recovery_when_enabled() {
+    let _recovery_enabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(true);
+    let snapshot = LifecycleSnapshot {
+        active_block_id: "active".to_owned(),
+        active_session_id: Some(1),
+        supplied_next_block_id: Some("next".to_owned()),
+        hook_session_id: Some(1),
+        block_state: BlockState::BeforeExecution,
+        started: false,
+        finished: false,
+        received_precmd: true,
+        is_in_band: false,
+        is_bootstrapped: true,
+        is_bootstrap_done: true,
+        is_alt_screen_active: false,
+        completion_mismatch: false,
+    };
+    let mut coordinator = super::BlockLifecycleCoordinator {
+        phase: LifecyclePhase::AtPrompt,
+        ..Default::default()
+    };
+
+    let command_finished = coordinator.plan(
+        &snapshot,
+        LifecycleInput::CommandFinished(NextBlockIdDisposition::Novel),
+    );
+    assert_eq!(
+        command_finished.action,
+        LifecycleAction::AcceptCommandFinished
+    );
+    assert_eq!(command_finished.next_phase, LifecyclePhase::AwaitingPrecmd);
+    assert!(command_finished.recovery_record.is_some());
+
+    let precmd_with_completion_metadata = coordinator.plan(
+        &snapshot,
+        LifecycleInput::PrecmdWithCompletionMetadata(NextBlockIdDisposition::Novel),
+    );
+    assert_eq!(
+        precmd_with_completion_metadata.action,
+        LifecycleAction::ReconcileCompletionThenApplyPrecmd
+    );
+    assert_eq!(
+        precmd_with_completion_metadata.next_phase,
+        LifecyclePhase::AtPrompt
+    );
+    assert!(precmd_with_completion_metadata.recovery_record.is_some());
+}
+
+#[test]
 fn lifecycle_telemetry_is_rate_limited_per_transition_key() {
     let mut limiter = LifecycleTelemetryLimiter::default();
     let now = Instant::now();
@@ -496,6 +536,7 @@ fn lifecycle_telemetry_is_rate_limited_per_transition_key() {
             is_bootstrapped: true,
             is_bootstrap_done: true,
             is_alt_screen_active: false,
+            completion_mismatch: false,
         },
     );
 
@@ -529,6 +570,7 @@ fn lifecycle_telemetry_payload_is_allowlisted_and_non_ugc() {
             is_bootstrapped: true,
             is_bootstrap_done: true,
             is_alt_screen_active: false,
+            completion_mismatch: false,
         },
     );
     let event = LifecycleTelemetryEvent::Recovery(record);
@@ -549,6 +591,7 @@ fn lifecycle_telemetry_payload_is_allowlisted_and_non_ugc() {
             "active_block_id",
             "active_session_id",
             "block_state",
+            "completion_mismatch",
             "finished",
             "hook_session_id",
             "input_kind",

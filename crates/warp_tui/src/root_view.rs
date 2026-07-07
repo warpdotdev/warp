@@ -3,11 +3,15 @@
 use warp::tui_export::TerminalSurfaceInit;
 use warp::{TuiLoginModel, TuiLoginPhase};
 use warpui_core::elements::tui::{TuiChildView, TuiElement};
+use warpui_core::keymap::macros::*;
+use warpui_core::keymap::FixedBinding;
+use warpui_core::platform::TerminationMode;
 use warpui_core::{
     keymap, AppContext, Entity, EntityId, SingletonEntity, TuiView, TypedActionView, ViewContext,
     ViewHandle,
 };
 
+use crate::keybindings::TUI_BINDING_GROUP;
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::ui::{login_failed, login_placeholder, terminal_starting};
 
@@ -22,9 +26,30 @@ enum RootTuiState {
     Terminal(ViewHandle<TuiTerminalSessionView>),
 }
 
+/// Typed actions handled by [`RootTuiView`].
+#[derive(Debug, Clone)]
+pub enum RootTuiAction {
+    /// Exit the app. Bound to ctrl-c in the root's keymap context; the
+    /// terminal session's deeper `Interrupt` binding wins while a session
+    /// exists, so this fires only on the pre-session placeholders (which say
+    /// "Press Ctrl-C to exit") — keeping the app exitable in every state.
+    ExitApp,
+}
+
 /// The app-level TUI shell. It gates the authenticated terminal session on login state.
 pub struct RootTuiView {
     state: RootTuiState,
+}
+
+/// Registers the root view's keybindings. Called once at TUI startup from
+/// `keybindings::init`.
+pub fn init(app: &mut AppContext) {
+    app.register_fixed_bindings([FixedBinding::new(
+        "ctrl-c",
+        RootTuiAction::ExitApp,
+        id!(RootTuiView::ui_name()),
+    )
+    .with_group(TUI_BINDING_GROUP)]);
 }
 
 impl RootTuiView {
@@ -94,5 +119,11 @@ impl TuiView for RootTuiView {
 }
 
 impl TypedActionView for RootTuiView {
-    type Action = ();
+    type Action = RootTuiAction;
+
+    fn handle_action(&mut self, action: &RootTuiAction, ctx: &mut ViewContext<Self>) {
+        match action {
+            RootTuiAction::ExitApp => ctx.terminate_app(TerminationMode::ForceTerminate, None),
+        }
+    }
 }

@@ -19,15 +19,7 @@ pub struct TuiClipped {
 
 impl TuiClipped {
     /// Wraps `child` without clipping rows from the top.
-    pub fn new(child: impl TuiElement + 'static) -> Self {
-        Self {
-            child: Box::new(child),
-            viewport_origin_y: 0,
-        }
-    }
-
-    /// Wraps an already-boxed child without skipping rows from the top.
-    pub(crate) fn from_boxed(child: Box<dyn TuiElement>) -> Self {
+    pub fn new(child: Box<dyn TuiElement>) -> Self {
         Self {
             child,
             viewport_origin_y: 0,

@@ -503,6 +503,32 @@ impl From<api::message::tool_call::RequestComputerUse> for AIAgentActionType {
     }
 }
 
+impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
+    fn from(value: api::message::tool_call::StartRecording) -> Self {
+        let limits = value.limits;
+        AIAgentActionType::StartRecording {
+            frame_rate: value.frame_rate.max(0) as u32,
+            max_duration: limits
+                .as_ref()
+                .and_then(|l| l.max_duration.as_ref())
+                .map(|d| Duration::new(d.seconds.max(0) as u64, d.nanos.max(0) as u32)),
+            max_size_bytes: limits
+                .as_ref()
+                .map(|l| l.max_size_bytes)
+                .filter(|&bytes| bytes > 0)
+                .map(|bytes| bytes as u64),
+        }
+    }
+}
+
+impl From<api::message::tool_call::StopRecording> for AIAgentActionType {
+    fn from(value: api::message::tool_call::StopRecording) -> Self {
+        AIAgentActionType::StopRecording {
+            recording_id: value.recording_id,
+        }
+    }
+}
+
 impl From<api::message::tool_call::FetchConversation> for AIAgentActionType {
     fn from(value: api::message::tool_call::FetchConversation) -> Self {
         AIAgentActionType::FetchConversation {

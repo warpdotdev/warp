@@ -2997,6 +2997,21 @@ impl Block {
         self.wakeup_after_delay();
     }
 
+    /// Moves an unfinished block through the minimum execution transition needed before completion.
+    pub(super) fn ensure_executing_for_completion(&mut self) {
+        if self.finished() || self.state != BlockState::BeforeExecution {
+            return;
+        }
+
+        self.ensure_started_for_preexec();
+        self.header_grid.finish_command_grid();
+        self.leading_linefeeds_ignored = 0;
+        self.output_grid.start();
+        self.state = BlockState::Executing;
+        self.is_for_in_band_command |=
+            command_executor::is_in_band_command(self.command_to_string().as_str());
+    }
+
     /// Starts the block when `Preexec` is the first observed start evidence.
     pub(super) fn ensure_started_for_preexec(&mut self) {
         // This condition is a hack to fix a bug with shells that don't support bracketed paste,

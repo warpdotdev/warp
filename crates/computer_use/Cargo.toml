@@ -17,16 +17,18 @@ test-util = []
 async-trait.workspace = true
 cfg-if.workspace = true
 clap.workspace = true
+instant.workspace = true
 log.workspace = true
 pathfinder_geometry.workspace = true
 serde.workspace = true
 serde_with.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 command.workspace = true
 image.workspace = true
-instant.workspace = true
+# `instant` is already provided by the common [dependencies] table above.
 libc.workspace = true
 objc2.workspace = true
 # `NSEvent`/`NSGraphicsContext`/`objc2-core-graphics` are needed to build window-targeted mouse
@@ -47,7 +49,10 @@ warpui_core.workspace = true
 ashpd.workspace = true
 futures.workspace = true
 image.workspace = true
+nix = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["process", "time"] }
 url.workspace = true
+uuid.workspace = true
 warpui_core.workspace = true
 x11rb = { workspace = true, features = ["xtest"] }
 zbus.workspace = true

@@ -65,7 +65,7 @@ use crate::ai::blocklist::block::view_impl::comments::address_comment_chips;
 use crate::ai::blocklist::block::view_impl::header::{
     render_overflow_menu_button, OVERFLOW_BUTTON_SIZE,
 };
-use crate::ai::blocklist::block::{DetectedLinksState, RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID};
+use crate::ai::blocklist::block::DetectedLinksState;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ai::blocklist::model::AIBlockModelHelper;
@@ -258,7 +258,7 @@ fn add_highlights_to_text(
                 }
                 text_element = text_element.with_saved_char_position(
                     open_link_tooltip.link_range.start,
-                    RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+                    detected_links_state.resolved_tooltip_position_id(),
                 );
             }
         }
@@ -511,7 +511,7 @@ pub(crate) fn add_highlights_to_rich_text(
                     formatted_text_element = formatted_text_element.with_saved_glyph_position(
                         open_link_tooltip.link_range.start,
                         i,
-                        RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+                        detected_links_state.resolved_tooltip_position_id(),
                     );
                 }
             }

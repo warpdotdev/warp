@@ -26,9 +26,9 @@ pub struct TuiConstrainedBox {
 }
 
 impl TuiConstrainedBox {
-    pub fn new(child: impl TuiElement + 'static) -> Self {
+    pub fn new(child: Box<dyn TuiElement>) -> Self {
         Self {
-            child: Box::new(child),
+            child,
             max_rows: None,
             max_cols: None,
         }

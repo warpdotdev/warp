@@ -8,12 +8,19 @@
 //! - Binary entry points under `src/bin/`.
 
 mod agent_block;
+mod agent_block_sections;
+mod autoupdate;
 pub mod input;
 pub mod root_view;
 pub mod session;
+mod telemetry;
+mod tui_builder;
 mod ui;
 
 mod conversation_selection;
+mod exit_confirmation;
+mod input_mode_policy;
+mod keybindings;
 mod terminal_block;
 mod terminal_session_view;
 mod transcript_view;

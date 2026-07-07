@@ -29,16 +29,414 @@ use warp_editor::render::model::{
 };
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{
-    Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
     TuiLayoutContext, TuiParentElement, TuiPoint, TuiRect, TuiRectExt, TuiSize, TuiStyle, TuiText,
 };
+use warpui_core::keymap::macros::*;
+use warpui_core::keymap::EditableBinding;
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
 use super::kill_buffer::KillBuffer;
+use crate::keybindings::TUI_BINDING_GROUP;
 
 /// Logical rows scrolled per mouse-wheel notch (matches `TuiScrollable`).
 const WHEEL_STEP: isize = 2;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keybindings
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Registers the input view's editing keybindings (the readline/chord
+/// table). Called once at TUI startup from `keybindings::init` — these
+/// bindings exist only in the TUI process; the GUI never registers them.
+///
+/// Each command is an [`EditableBinding`] named `tui:input:*`, so it is
+/// user-remappable by name (via `keybindings.yaml`, once the TUI loads
+/// overrides — a follow-up). Commands with multiple default keys register one
+/// binding per key under the same name, which the keymap supports directly:
+/// it tracks every binding registered under a name, and a custom-trigger
+/// override replaces the trigger on all of them. Printable-character
+/// insertion is not a binding — it stays element-level in
+/// `TuiInputElement::dispatch_event`, matching the GUI.
+pub fn init(app: &mut AppContext) {
+    app.register_editable_bindings([
+        // ── Submit / newline ─────────────────────────────────────────
+        EditableBinding::new(
+            "tui:input:submit",
+            "Submit the input",
+            TuiInputAction::Submit,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("enter"),
+        EditableBinding::new(
+            "tui:input:insert_newline",
+            "Insert a newline",
+            TuiInputAction::InsertNewline,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-enter"),
+        EditableBinding::new(
+            "tui:input:insert_newline",
+            "Insert a newline",
+            TuiInputAction::InsertNewline,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-j"),
+        EditableBinding::new(
+            "tui:input:insert_newline",
+            "Insert a newline",
+            TuiInputAction::InsertNewline,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-enter"),
+        // ── Deletion ───────────────────────────────────────────────────
+        EditableBinding::new(
+            "tui:input:backspace",
+            "Delete the previous character",
+            TuiInputAction::Backspace,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("backspace"),
+        EditableBinding::new(
+            "tui:input:backspace",
+            "Delete the previous character",
+            TuiInputAction::Backspace,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-backspace"),
+        EditableBinding::new(
+            "tui:input:backspace",
+            "Delete the previous character",
+            TuiInputAction::Backspace,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-h"),
+        EditableBinding::new(
+            "tui:input:delete_forward",
+            "Delete the next character",
+            TuiInputAction::DeleteForward,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("delete"),
+        EditableBinding::new(
+            "tui:input:delete_forward",
+            "Delete the next character",
+            TuiInputAction::DeleteForward,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-d"),
+        EditableBinding::new(
+            "tui:input:delete_word_backward",
+            "Delete the previous word",
+            TuiInputAction::DeleteWordBackward,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-w"),
+        EditableBinding::new(
+            "tui:input:delete_word_backward",
+            "Delete the previous word",
+            TuiInputAction::DeleteWordBackward,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-backspace"),
+        EditableBinding::new(
+            "tui:input:delete_word_backward",
+            "Delete the previous word",
+            TuiInputAction::DeleteWordBackward,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-backspace"),
+        EditableBinding::new(
+            "tui:input:delete_word_forward",
+            "Delete the next word",
+            TuiInputAction::DeleteWordForward,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-d"),
+        EditableBinding::new(
+            "tui:input:delete_word_forward",
+            "Delete the next word",
+            TuiInputAction::DeleteWordForward,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-delete"),
+        EditableBinding::new(
+            "tui:input:delete_word_forward",
+            "Delete the next word",
+            TuiInputAction::DeleteWordForward,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-delete"),
+        // ── Cursor movement ─────────────────────────────────────────────
+        EditableBinding::new(
+            "tui:input:move_left",
+            "Move cursor left",
+            TuiInputAction::MoveLeft,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("left"),
+        EditableBinding::new(
+            "tui:input:move_left",
+            "Move cursor left",
+            TuiInputAction::MoveLeft,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-b"),
+        EditableBinding::new(
+            "tui:input:move_right",
+            "Move cursor right",
+            TuiInputAction::MoveRight,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("right"),
+        EditableBinding::new(
+            "tui:input:move_right",
+            "Move cursor right",
+            TuiInputAction::MoveRight,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-f"),
+        EditableBinding::new(
+            "tui:input:move_up",
+            "Move cursor up",
+            TuiInputAction::MoveUp,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("up"),
+        EditableBinding::new(
+            "tui:input:move_up",
+            "Move cursor up",
+            TuiInputAction::MoveUp,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-p"),
+        EditableBinding::new(
+            "tui:input:move_down",
+            "Move cursor down",
+            TuiInputAction::MoveDown,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("down"),
+        EditableBinding::new(
+            "tui:input:move_down",
+            "Move cursor down",
+            TuiInputAction::MoveDown,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-n"),
+        EditableBinding::new(
+            "tui:input:move_word_left",
+            "Move cursor one word left",
+            TuiInputAction::MoveWordLeft,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-left"),
+        EditableBinding::new(
+            "tui:input:move_word_left",
+            "Move cursor one word left",
+            TuiInputAction::MoveWordLeft,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-b"),
+        EditableBinding::new(
+            "tui:input:move_word_left",
+            "Move cursor one word left",
+            TuiInputAction::MoveWordLeft,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-left"),
+        EditableBinding::new(
+            "tui:input:move_word_right",
+            "Move cursor one word right",
+            TuiInputAction::MoveWordRight,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-right"),
+        EditableBinding::new(
+            "tui:input:move_word_right",
+            "Move cursor one word right",
+            TuiInputAction::MoveWordRight,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-f"),
+        EditableBinding::new(
+            "tui:input:move_word_right",
+            "Move cursor one word right",
+            TuiInputAction::MoveWordRight,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-right"),
+        EditableBinding::new(
+            "tui:input:move_to_line_start",
+            "Move cursor to start of line",
+            TuiInputAction::MoveToLineStart,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("home"),
+        EditableBinding::new(
+            "tui:input:move_to_line_start",
+            "Move cursor to start of line",
+            TuiInputAction::MoveToLineStart,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-a"),
+        EditableBinding::new(
+            "tui:input:move_to_line_end",
+            "Move cursor to end of line",
+            TuiInputAction::MoveToLineEnd,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("end"),
+        EditableBinding::new(
+            "tui:input:move_to_line_end",
+            "Move cursor to end of line",
+            TuiInputAction::MoveToLineEnd,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-e"),
+        // ── Selection ────────────────────────────────────────────────────────────────
+        EditableBinding::new(
+            "tui:input:select_left",
+            "Extend selection left",
+            TuiInputAction::SelectLeft,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-left"),
+        EditableBinding::new(
+            "tui:input:select_right",
+            "Extend selection right",
+            TuiInputAction::SelectRight,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-right"),
+        EditableBinding::new(
+            "tui:input:select_up",
+            "Extend selection up",
+            TuiInputAction::SelectUp,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-up"),
+        EditableBinding::new(
+            "tui:input:select_down",
+            "Extend selection down",
+            TuiInputAction::SelectDown,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-down"),
+        EditableBinding::new(
+            "tui:input:select_word_left",
+            "Extend selection one word left",
+            TuiInputAction::SelectWordLeft,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-shift-left"),
+        EditableBinding::new(
+            "tui:input:select_word_left",
+            "Extend selection one word left",
+            TuiInputAction::SelectWordLeft,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-shift-left"),
+        EditableBinding::new(
+            "tui:input:select_word_right",
+            "Extend selection one word right",
+            TuiInputAction::SelectWordRight,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-shift-right"),
+        EditableBinding::new(
+            "tui:input:select_word_right",
+            "Extend selection one word right",
+            TuiInputAction::SelectWordRight,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("alt-shift-right"),
+        EditableBinding::new(
+            "tui:input:select_all",
+            "Select all text",
+            TuiInputAction::SelectAll,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-shift-A"),
+        // ── Kill / yank ─────────────────────────────────────────────────
+        EditableBinding::new(
+            "tui:input:kill_to_line_end",
+            "Delete to end of line",
+            TuiInputAction::KillToLineEnd,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-k"),
+        EditableBinding::new(
+            "tui:input:kill_to_line_start",
+            "Delete to start of line",
+            TuiInputAction::KillToLineStart,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-u"),
+        EditableBinding::new(
+            "tui:input:yank",
+            "Paste the last deleted text",
+            TuiInputAction::Yank,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-y"),
+        // ── Undo / redo ─────────────────────────────────────────────────
+        EditableBinding::new("tui:input:undo", "Undo", TuiInputAction::Undo)
+            .with_context_predicate(id!("TuiInputView"))
+            .with_group(TUI_BINDING_GROUP)
+            .with_key_binding("ctrl-z"),
+        EditableBinding::new("tui:input:redo", "Redo", TuiInputAction::Redo)
+            .with_context_predicate(id!("TuiInputView"))
+            .with_group(TUI_BINDING_GROUP)
+            .with_key_binding("ctrl-shift-Z"),
+    ]);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // View events
@@ -181,6 +579,18 @@ impl TuiInputView {
         &self.model
     }
 
+    /// Whether the input buffer is empty.
+    pub fn is_empty(&self, ctx: &AppContext) -> bool {
+        self.model.as_ref(ctx).content().as_ref(ctx).is_empty()
+    }
+
+    /// Clears the input buffer and resets the viewport scroll.
+    pub fn clear(&mut self, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |m, ctx| m.clear_buffer(ctx));
+        self.scroll_offset = 0;
+        ctx.notify();
+    }
+
     /// Builds the concrete `TuiInputElement` for this frame. `render` wraps it in
     /// a `Box`; tests construct it directly to exercise mouse dispatch.
     ///
@@ -204,7 +614,7 @@ impl TuiInputView {
             scroll_offset: self.scroll_offset,
             max_visible_rows: self.max_visible_rows,
             is_selecting: self.is_selecting,
-            column: TuiColumn::new(),
+            column: TuiFlex::column(),
             cursor_col: 0,
             cursor_row_in_view: 0,
             cursor_visible: false,
@@ -492,8 +902,7 @@ impl TuiInputView {
     fn submit(&mut self, ctx: &mut ViewContext<Self>) {
         let text = self.plain_text(ctx);
         ctx.emit(TuiInputViewEvent::Submitted(text));
-        self.model.update(ctx, |m, ctx| m.clear_buffer(ctx));
-        self.scroll_offset = 0;
+        self.clear(ctx);
     }
 
     // ── Kill / yank ───────────────────────────────────────────────────────────
@@ -696,7 +1105,7 @@ struct TuiInputElement {
     /// render time); gates drag/up handling in `dispatch_event`.
     is_selecting: bool,
     /// Visible rows, built during `layout`.
-    column: TuiColumn,
+    column: TuiFlex,
     /// The cursor's 0-based column within the visible area (set during `layout`).
     cursor_col: u16,
     /// The cursor's 0-based row within the visible area (set during `layout`).
@@ -755,7 +1164,7 @@ impl TuiInputElement {
             }
         }
 
-        let mut column = TuiColumn::new();
+        let mut column = TuiFlex::column();
         for (row_text, _) in &visible_rows_slice {
             // An empty `TuiText` lays out to zero rows, which would collapse the
             // row and clip the cursor (or following rows) off the column. Render
@@ -941,83 +1350,17 @@ impl TuiElement for TuiInputElement {
             keystroke, chars, ..
         } = event
         {
-            let ctrl = keystroke.ctrl;
-            let alt = keystroke.alt;
-            let shift = keystroke.shift;
-            let key = keystroke.key.as_str();
-
-            let action: Option<TuiInputAction> = match (ctrl, alt, shift, key) {
-                // ── Submit / newline ─────────────────────────────────────────────
-                (false, false, false, "enter") => Some(TuiInputAction::Submit),
-                (false, false, true, "enter") => Some(TuiInputAction::InsertNewline),
-                (true, false, false, "j") => Some(TuiInputAction::InsertNewline),
-                (false, true, false, "enter") => Some(TuiInputAction::InsertNewline),
-                // ── Deletion ─────────────────────────────────────────────────────
-                (false, false, _, "backspace") => Some(TuiInputAction::Backspace),
-                (true, false, false, "h") => Some(TuiInputAction::Backspace),
-                (false, false, false, "delete") => Some(TuiInputAction::DeleteForward),
-                (true, false, false, "d") => Some(TuiInputAction::DeleteForward),
-                (true, false, false, "w") => Some(TuiInputAction::DeleteWordBackward),
-                (true, false, false, "backspace") => Some(TuiInputAction::DeleteWordBackward),
-                (false, true, false, "backspace") => Some(TuiInputAction::DeleteWordBackward),
-                (false, true, false, "d") => Some(TuiInputAction::DeleteWordForward),
-                (false, true, false, "delete") => Some(TuiInputAction::DeleteWordForward),
-                (true, false, false, "delete") => Some(TuiInputAction::DeleteWordForward),
-                // ── Cursor movement ───────────────────────────────────────────────
-                (false, false, false, "left") | (true, false, false, "b") => {
-                    Some(TuiInputAction::MoveLeft)
+            // The chorded editing commands (movement, deletion, kill/yank,
+            // undo/redo, …) are dispatched by the keymap pass via the
+            // `tui:input:*` bindings registered in [`TuiInputView::init`],
+            // which runs before the element pass ever sees the key. Only
+            // printable-character insertion stays element-level — text
+            // insertion is not a keybinding, matching the GUI.
+            if !keystroke.ctrl && !keystroke.alt && !chars.is_empty() {
+                if let Some(char) = chars.chars().next() {
+                    event_ctx.dispatch_typed_action(TuiInputAction::InsertChar(char));
+                    return true;
                 }
-                (false, false, false, "right") | (true, false, false, "f") => {
-                    Some(TuiInputAction::MoveRight)
-                }
-                (false, false, false, "up") | (true, false, false, "p") => {
-                    Some(TuiInputAction::MoveUp)
-                }
-                (false, false, false, "down") | (true, false, false, "n") => {
-                    Some(TuiInputAction::MoveDown)
-                }
-                (false, true, false, "left")
-                | (false, true, false, "b")
-                | (true, false, false, "left") => Some(TuiInputAction::MoveWordLeft),
-                (false, true, false, "right")
-                | (false, true, false, "f")
-                | (true, false, false, "right") => Some(TuiInputAction::MoveWordRight),
-                (false, false, false, "home") | (true, false, false, "a") => {
-                    Some(TuiInputAction::MoveToLineStart)
-                }
-                (false, false, false, "end") | (true, false, false, "e") => {
-                    Some(TuiInputAction::MoveToLineEnd)
-                }
-                // ── Selection ────────────────────────────────────────────────────
-                (false, false, true, "left") => Some(TuiInputAction::SelectLeft),
-                (false, false, true, "right") => Some(TuiInputAction::SelectRight),
-                (false, false, true, "up") => Some(TuiInputAction::SelectUp),
-                (false, false, true, "down") => Some(TuiInputAction::SelectDown),
-                (true, false, true, "a") => Some(TuiInputAction::SelectAll),
-                // Word-wise selection: Ctrl+Shift+Arrow (and Alt+Shift+Arrow).
-                (true, false, true, "left") | (false, true, true, "left") => {
-                    Some(TuiInputAction::SelectWordLeft)
-                }
-                (true, false, true, "right") | (false, true, true, "right") => {
-                    Some(TuiInputAction::SelectWordRight)
-                }
-                // ── Kill / yank ───────────────────────────────────────────────────
-                (true, false, false, "k") => Some(TuiInputAction::KillToLineEnd),
-                (true, false, false, "u") => Some(TuiInputAction::KillToLineStart),
-                (true, false, false, "y") => Some(TuiInputAction::Yank),
-                // ── Undo / redo ───────────────────────────────────────────────────
-                (true, false, false, "z") => Some(TuiInputAction::Undo),
-                (true, false, true, "z") => Some(TuiInputAction::Redo),
-                // ── Printable character ───────────────────────────────────────────
-                (false, false, _, _) if !chars.is_empty() && !ctrl && !alt => {
-                    chars.chars().next().map(TuiInputAction::InsertChar)
-                }
-                _ => None,
-            };
-
-            if let Some(action) = action {
-                event_ctx.dispatch_typed_action(action);
-                return true;
             }
         }
 

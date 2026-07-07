@@ -310,6 +310,10 @@ impl NotebooksEditorModel {
         <Self as RichTextEditorModel>::reset_with_markdown(self, markdown, ctx);
     }
 
+    pub fn reset_with_ipynb(&mut self, ipynb: &str, ctx: &mut ModelContext<Self>) {
+        <Self as RichTextEditorModel>::reset_with_ipynb(self, ipynb, ctx);
+    }
+
     pub fn update_to_new_markdown(&mut self, markdown: &str, ctx: &mut ModelContext<Self>) {
         <Self as RichTextEditorModel>::update_to_new_markdown(self, markdown, ctx);
     }

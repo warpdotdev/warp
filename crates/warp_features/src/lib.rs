@@ -501,6 +501,10 @@ pub enum FeatureFlag {
     /// Enables rendering markdown tables in notebooks.
     MarkdownTables,
 
+    /// Renders `.ipynb` (Jupyter) files as a formatted, read-only notebook in
+    /// Warp's notebook viewer instead of showing the raw JSON in the code editor.
+    JupyterNotebookRendering,
+
     /// Enables rendering markdown tables inline in AI block list responses.
     BlocklistMarkdownTableRendering,
     /// Enables rendering markdown images inline in AI block list responses.
@@ -578,6 +582,9 @@ pub enum FeatureFlag {
     /// Enables background, per-window computer use: driving a specific window directly without
     /// raising it or moving the cursor.  Currently only supported on macOS.
     BackgroundComputerUse,
+
+    /// Enables video recording of computer-use sessions for cloud agents.
+    VideoRecording,
 
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
@@ -954,6 +961,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::FileGlobV2Warnings,
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
+    FeatureFlag::VideoRecording,
     FeatureFlag::OzLaunchModal,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
@@ -973,9 +981,11 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
+    FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::BackgroundComputerUse,
     FeatureFlag::ContextWindowUsageBreakdown,
+    FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
@@ -983,12 +993,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    FeatureFlag::AsyncFind,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    FeatureFlag::DragTabsToWindows,
-    FeatureFlag::PinnedTabs,
-];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::AsyncFind, FeatureFlag::PinnedTabs];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely
@@ -1003,6 +1008,8 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)

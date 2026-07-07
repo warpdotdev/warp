@@ -27,6 +27,17 @@ pub trait TuiScrollableElement: TuiElement {
     /// Scrolls by `rows` (negative scrolls toward the top) within a viewport of
     /// `viewport_height` rows. Returns whether the scroll position changed.
     fn scroll_by_rows(&mut self, rows: isize, viewport_height: usize) -> bool;
+
+    /// Boxes this element as a scrollable trait object, mirroring the GUI's
+    /// `NewScrollableElement::finish_scrollable`. [`TuiElement::finish`] can't
+    /// be used to build a [`TuiScrollable`] child because it erases to
+    /// `dyn TuiElement`, losing the scroll interface.
+    fn finish_scrollable(self) -> Box<dyn TuiScrollableElement>
+    where
+        Self: 'static + Sized,
+    {
+        Box::new(self)
+    }
 }
 
 /// Wraps a [`TuiScrollableElement`], capturing wheel events over the child's
@@ -40,9 +51,9 @@ pub struct TuiScrollable {
 
 impl TuiScrollable {
     /// Wraps `child` so wheel events over its area scroll it.
-    pub fn new(child: impl TuiScrollableElement + 'static) -> Self {
+    pub fn new(child: Box<dyn TuiScrollableElement>) -> Self {
         Self {
-            child: Box::new(child),
+            child,
             propagate_mousewheel_if_not_handled: false,
         }
     }

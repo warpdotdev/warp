@@ -789,6 +789,7 @@ local_fs = [
     "warp_core/local_fs",
 ]
 log_expensive_frames_in_sentry = []
+jupyter_notebook_rendering = []
 markdown_tables = []
 markdown_mermaid = []
 mcp_server = []

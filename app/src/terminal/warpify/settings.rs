@@ -63,11 +63,20 @@ maybe_define_setting!(EnableSshWarpification, group: WarpifySettings, {
 // release once the migration has shipped to all users.
 // The storage key and TOML path are intentionally kept identical to the old
 // `SshSettings::enable_ssh_wrapper` field for backward compatibility.
+//
+// It is deliberately NOT cloud-synced (`SyncToCloud::Never`) — this is the fix for
+// https://github.com/warpdotdev/Warp/issues/13228. The migration below reads this
+// value and forwards an opt-out to `enable_ssh_warpification`. When it was synced,
+// a stale cloud value (from a user's pre-extension flow) was restored on every
+// launch, re-arming the "one-time" migration and repeatedly disabling
+// `enable_ssh_warpification` even after the user turned it back on. Keeping it
+// local means the migration's reset to the default (`true`) persists and serves as
+// the one-time, per-device marker so the migration cannot re-fire.
 maybe_define_setting!(EnableSshWrapper, group: WarpifySettings, {
     type: bool,
     default: true,
     supported_platforms: SupportedPlatforms::ALL,
-    sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    sync_to_cloud: SyncToCloud::Never,
     surface: settings::SettingSurfaces::GUI,
     private: false,
     storage_key: "EnableSSHWrapper",
@@ -80,11 +89,17 @@ maybe_define_setting!(EnableSshWrapper, group: WarpifySettings, {
 // it is retained only so the one-time deprecation migration (see `register`) can read a
 // user's previous opt-in and reset it. It can be deleted in a future release once the
 // migration has shipped to all users.
+//
+// Like `enable_ssh_wrapper`, it is deliberately NOT cloud-synced (`SyncToCloud::Never`):
+// it is a one-time migration trigger, so syncing it would let a stale cloud value be
+// restored on every launch and re-arm the migration (the same class of bug as #13228,
+// here re-showing the tmux deprecation notice). Keeping it local means the migration's
+// reset persists as the one-time, per-device marker.
 maybe_define_setting!(UseSshTmuxWrapper, group: WarpifySettings, {
     type: bool,
     default: false,
     supported_platforms: SupportedPlatforms::OR(SupportedPlatforms::MAC.into(), SupportedPlatforms::LINUX.into()),
-    sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    sync_to_cloud: SyncToCloud::Never,
     surface: settings::SettingSurfaces::GUI,
     private: false,
     toml_path: "warpify.ssh.use_ssh_tmux_wrapper",
@@ -343,6 +358,11 @@ impl WarpifySettings {
         // disabling `enable_ssh_warpification` — the canonical setting that now controls the
         // same behaviour. Resetting `enable_ssh_wrapper` back to its default (`true`) ensures
         // the migration does not run again on subsequent launches.
+        //
+        // `enable_ssh_wrapper` is not cloud-synced (see its definition), so this reset
+        // persists locally and cannot be re-armed by a stale synced value — the fix for
+        // https://github.com/warpdotdev/Warp/issues/13228, where syncing the trigger caused
+        // the migration to re-fire every launch and repeatedly disable warpification.
         handle.update(ctx, |me, ctx| {
             if me.enable_ssh_wrapper.is_value_explicitly_set() && !*me.enable_ssh_wrapper.value() {
                 if let Err(e) = me.enable_ssh_warpification.set_value(false, ctx) {

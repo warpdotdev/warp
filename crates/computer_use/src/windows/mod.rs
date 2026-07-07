@@ -12,6 +12,8 @@ use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, HDESK, OpenInputDesktop,
 };
 
+// Video recording is not yet implemented on Windows; reuse the no-op recorder.
+pub use crate::noop::Recorder;
 use crate::{Action, ActionResult, Options, TargetedAction};
 
 /// Returns whether computer_use can drive input on this machine right now.

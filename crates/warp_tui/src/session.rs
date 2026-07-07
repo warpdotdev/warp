@@ -48,6 +48,15 @@ pub fn run() -> Result<()> {
 
 /// Creates the login-gated TUI root and starts the headless draw + input driver.
 fn init(ctx: &mut AppContext) {
+    // Register the TUI views' keybindings (and, in debug builds, the
+    // cross-surface binding validators) before any input can be dispatched.
+    crate::keybindings::init(ctx);
+
+    // Kick off the background auto-updater (its polling loop only runs for
+    // release builds installed via the managed versioned layout; see the
+    // `autoupdate` module docs).
+    crate::autoupdate::TuiAutoupdater::register(ctx);
+
     // The current TUI transcript design is dark-mode-only. Keep this scoped to
     // the TUI process by overriding the already-initialized Appearance theme at
     // mount time, without changing normal GUI theme selection or font settings.

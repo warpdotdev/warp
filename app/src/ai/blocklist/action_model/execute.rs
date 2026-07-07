@@ -16,6 +16,8 @@ pub(super) mod search_codebase;
 pub(super) mod send_message;
 pub(super) mod shell_command;
 pub(super) mod start_agent;
+pub(super) mod start_recording;
+pub(super) mod stop_recording;
 pub(super) mod suggest_new_conversation;
 pub(super) mod suggest_prompt;
 pub(super) mod upload_artifact;
@@ -62,6 +64,8 @@ pub use shell_command::{ShellCommandExecutor, ShellCommandExecutorEvent};
 pub use start_agent::{
     StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
 };
+use start_recording::StartRecordingExecutor;
+use stop_recording::StopRecordingExecutor;
 pub use suggest_new_conversation::NewConversationDecision;
 use suggest_new_conversation::SuggestNewConversationExecutor;
 pub use suggest_prompt::PromptSuggestionExecutor;
@@ -87,6 +91,7 @@ use crate::ai::agent::{
     FileLocations, ServerOutputId,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 #[cfg(feature = "local_fs")]
 use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
@@ -260,6 +265,8 @@ pub struct BlocklistAIActionExecutor {
     create_documents_executor: ModelHandle<CreateDocumentsExecutor>,
     use_computer_executor: ModelHandle<UseComputerExecutor>,
     request_computer_use_executor: ModelHandle<RequestComputerUseExecutor>,
+    start_recording_executor: ModelHandle<StartRecordingExecutor>,
+    stop_recording_executor: ModelHandle<StopRecordingExecutor>,
     read_skill_executor: ModelHandle<ReadSkillExecutor>,
     fetch_conversation_executor: ModelHandle<FetchConversationExecutor>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
@@ -327,6 +334,8 @@ impl BlocklistAIActionExecutor {
         let use_computer_executor = ctx.add_model(|_| UseComputerExecutor::new());
         let request_computer_use_executor =
             ctx.add_model(|_| RequestComputerUseExecutor::new(terminal_view_id));
+        let start_recording_executor = ctx.add_model(|_| StartRecordingExecutor::new());
+        let stop_recording_executor = ctx.add_model(|_| StopRecordingExecutor::new());
         let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new(active_session.clone()));
         let fetch_conversation_executor = ctx.add_model(|_| FetchConversationExecutor::new());
         let start_agent_executor = ctx.add_model(StartAgentExecutor::new);
@@ -354,6 +363,8 @@ impl BlocklistAIActionExecutor {
             create_documents_executor,
             use_computer_executor,
             request_computer_use_executor,
+            start_recording_executor,
+            stop_recording_executor,
             async_executing_actions: Default::default(),
             terminal_model,
             read_skill_executor,
@@ -542,6 +553,12 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::RequestComputerUse(_) => self
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::StartRecording { .. } => self
+                .start_recording_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::StopRecording { .. } => self
+                .stop_recording_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::ReadSkill(_) => self
                 .read_skill_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
@@ -729,6 +746,13 @@ impl BlocklistAIActionExecutor {
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
+            AIAgentActionType::StartRecording { .. } => self
+                .start_recording_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::StopRecording { .. } => self
+                .stop_recording_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx)),
             AIAgentActionType::ReadSkill(_) => self
                 .read_skill_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
@@ -863,6 +887,13 @@ impl BlocklistAIActionExecutor {
                 self.run_agents_executor.update(ctx, |executor, ctx| {
                     executor.cancel_execution(&running.action.id, ctx);
                 });
+            } else if matches!(
+                running.action.action,
+                AIAgentActionType::StartRecording { .. }
+            ) {
+                RecordingController::handle(ctx).update(ctx, |controller, _| {
+                    controller.abort_start();
+                });
             } else if let AIAgentActionType::WaitForEvents { tool_call_id, .. } =
                 &running.action.action
             {
@@ -958,6 +989,12 @@ impl BlocklistAIActionExecutor {
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::RequestComputerUse(_) => self
                 .request_computer_use_executor
+                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            AIAgentActionType::StartRecording { .. } => self
+                .start_recording_executor
+                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            AIAgentActionType::StopRecording { .. } => self
+                .stop_recording_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::ReadSkill(_) => self
                 .read_skill_executor

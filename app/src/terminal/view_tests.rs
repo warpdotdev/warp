@@ -5390,7 +5390,12 @@ fn ctrl_c_after_stop_takeover_cancels_conversation() {
                 .expect("command should become agent monitored");
 
             view.cli_subagent_controller.update(ctx, |controller, ctx| {
-                controller.switch_control_to_user(UserTakeOverReason::Stop, ctx);
+                controller.switch_control_to_user(
+                    UserTakeOverReason::Stop {
+                        should_auto_resume: true,
+                    },
+                    ctx,
+                );
             });
 
             conversation_id
@@ -5469,6 +5474,108 @@ fn ctrl_c_after_transfer_takeover_does_not_cancel_conversation() {
             // completion to the agent, so Ctrl-C should interrupt the command without
             // cancelling the conversation.
             assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+        });
+    })
+}
+
+#[test]
+fn completed_user_controlled_lrc_resumes_when_not_suppressed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.view_id, false, false, false, ctx)
+                });
+
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 20", "running");
+            let task_id = TaskId::new("test-cli-subagent".to_owned());
+            let block_id = {
+                let mut model = view.model.lock();
+                let active_block = model.block_list_mut().active_block_mut();
+                active_block.set_agent_interaction_mode_for_requested_command(
+                    AIAgentActionId::from("requested-command".to_owned()),
+                    Some(task_id.clone()),
+                    conversation_id,
+                );
+                active_block
+                    .set_agent_interaction_mode_for_agent_monitored_command(
+                        &task_id,
+                        conversation_id,
+                    )
+                    .expect("command should become agent monitored");
+                active_block
+                    .take_over_control_for_user(UserTakeOverReason::Stop {
+                        should_auto_resume: true,
+                    })
+                    .expect("user takeover should succeed");
+                active_block.id().clone()
+            };
+
+            assert!(!view
+                .ai_controller
+                .as_ref(ctx)
+                .has_active_stream_for_conversation(conversation_id, ctx));
+
+            view.on_user_block_completed(&block_id, ctx);
+
+            // A Ctrl-C takeover (Stop) without an explicit teardown should resume the
+            // conversation once the command completes, just like a manual takeover.
+            assert!(view
+                .ai_controller
+                .as_ref(ctx)
+                .has_active_stream_for_conversation(conversation_id, ctx));
+        });
+    })
+}
+
+#[test]
+fn completed_user_controlled_lrc_skips_resume_when_suppressed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.view_id, false, false, false, ctx)
+                });
+
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 20", "running");
+            let task_id = TaskId::new("test-cli-subagent".to_owned());
+            let block_id = {
+                let mut model = view.model.lock();
+                let active_block = model.block_list_mut().active_block_mut();
+                active_block.set_agent_interaction_mode_for_requested_command(
+                    AIAgentActionId::from("requested-command".to_owned()),
+                    Some(task_id.clone()),
+                    conversation_id,
+                );
+                active_block
+                    .set_agent_interaction_mode_for_agent_monitored_command(
+                        &task_id,
+                        conversation_id,
+                    )
+                    .expect("command should become agent monitored");
+                // Mirrors rewind / stop_local_agent_conversation tearing down the conversation.
+                active_block.set_user_control_for_teardown();
+                active_block.id().clone()
+            };
+
+            view.on_user_block_completed(&block_id, ctx);
+
+            assert!(!view
+                .ai_controller
+                .as_ref(ctx)
+                .has_active_stream_for_conversation(conversation_id, ctx));
         });
     })
 }

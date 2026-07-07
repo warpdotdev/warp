@@ -8,7 +8,8 @@ pub use crate::ai::agent::task::TaskId;
 pub use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
     AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode,
-    AIAgentText, AIAgentTextSection, MessageId, ServerOutputId, Shared, UserQueryMode,
+    AIAgentText, AIAgentTextSection, CancellationReason, MessageId, ServerOutputId, Shared,
+    UserQueryMode,
 };
 pub use crate::ai::blocklist::agent_view::{
     AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
@@ -26,12 +27,14 @@ pub use crate::ai::blocklist::history_model::{
 };
 pub use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
-    ShellCommandExecutor, ShellCommandExecutorEvent,
+    InputConfig, InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
+    PolicyConfigUpdate, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
-pub use crate::ai::llms::LLMId;
+pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
+pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::event::AfterBlockCompletedEvent;
 pub use crate::terminal::input::CommandExecutionSource;
@@ -45,7 +48,7 @@ pub use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
 pub use crate::terminal::model::rich_content::RichContentType;
-pub use crate::terminal::model::session::active_session::ActiveSession;
+pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 pub use crate::terminal::model::terminal_model::BlockIndex;
 pub use crate::terminal::model_events::ModelEvent;
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
@@ -56,3 +59,4 @@ pub use crate::terminal::{
     TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::dark_theme;
+pub use crate::util::time_format::format_elapsed_seconds;

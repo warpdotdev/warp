@@ -29,7 +29,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiScrollable, TuiStyle,
+    Modifier, TuiElement, TuiEventHandler, TuiFlex, TuiParentElement, TuiScrollable, TuiStyle,
     TuiText, TuiViewportContent, TuiViewportWindow, TuiViewportedElement, TuiViewportedList,
     TuiViewportedListState, TuiVisibleViewportItem,
 };
@@ -193,13 +193,16 @@ impl TuiView for ViewportDemoView {
             items: self.items.clone(),
             last_width: self.last_width.clone(),
         };
-        let list = TuiScrollable::new(TuiViewportedList::new(self.viewport.clone(), content));
+        let list = TuiScrollable::new(Box::new(TuiViewportedList::new(
+            self.viewport.clone(),
+            content,
+        )));
 
         let quit_for_q = self.quit.clone();
         let quit_for_esc = self.quit.clone();
         Box::new(
             TuiEventHandler::new(
-                TuiColumn::new()
+                TuiFlex::column()
                     .with_child(Box::new(
                         TuiText::new("WarpUI · TUI viewport harness")
                             .with_style(bold)
@@ -223,7 +226,8 @@ impl TuiView for ViewportDemoView {
                         .truncate(),
                     ))
                     .with_child(Box::new(TuiText::new("──── transcript ────").truncate()))
-                    .with_child(Box::new(list)),
+                    .with_child(Box::new(list))
+                    .finish(),
             )
             .on_key("x", |_, ctx, _| {
                 ctx.dispatch_typed_action(DemoAction::RemoveFront)

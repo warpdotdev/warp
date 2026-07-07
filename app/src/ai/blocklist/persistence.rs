@@ -364,6 +364,11 @@ impl From<&AIAgentActionType> for PersistedAIAgentActionType {
             // stays in the transcript as an orphan until the next
             // outbound request triggers the server's supersede.
             AIAgentActionType::WaitForEvents { .. } => Self::NotPersisted,
+            // Recordings are tied to a live capture process that cannot survive
+            // a restart, so there is nothing useful to persist.
+            AIAgentActionType::StartRecording { .. } | AIAgentActionType::StopRecording { .. } => {
+                Self::NotPersisted
+            }
         }
     }
 }

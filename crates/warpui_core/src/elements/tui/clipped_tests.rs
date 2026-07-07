@@ -23,7 +23,8 @@ fn render_to_lines(element: &mut dyn TuiElement, size: TuiSize) -> Vec<String> {
 
 #[test]
 fn renders_from_the_requested_logical_row() {
-    let mut clipped = TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_viewport_origin_y(1);
+    let mut clipped =
+        TuiClipped::new(TuiText::new("a\nb\nc").truncate().finish()).with_viewport_origin_y(1);
 
     assert_eq!(
         render_to_lines(&mut clipped, TuiSize::new(3, 2)),
@@ -35,8 +36,8 @@ fn renders_from_the_requested_logical_row() {
 fn layout_preserves_child_width_and_reports_visible_height() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            let mut clipped =
-                TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_viewport_origin_y(1);
+            let mut clipped = TuiClipped::new(TuiText::new("a\nb\nc").truncate().finish())
+                .with_viewport_origin_y(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
@@ -72,7 +73,8 @@ impl TuiElement for CursorElement {
 
 #[test]
 fn cursor_position_is_shifted_into_the_visible_window() {
-    let clipped = TuiClipped::new(CursorElement { cursor: (0, 2) }).with_viewport_origin_y(1);
+    let clipped =
+        TuiClipped::new(CursorElement { cursor: (0, 2) }.finish()).with_viewport_origin_y(1);
     let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -86,7 +88,8 @@ fn cursor_position_is_shifted_into_the_visible_window() {
 
 #[test]
 fn cursor_position_above_the_visible_window_is_hidden() {
-    let clipped = TuiClipped::new(CursorElement { cursor: (0, 0) }).with_viewport_origin_y(1);
+    let clipped =
+        TuiClipped::new(CursorElement { cursor: (0, 0) }.finish()).with_viewport_origin_y(1);
     let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -145,10 +148,13 @@ fn dispatch_translates_mouse_event_to_full_logical_area() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let seen_area = Rc::new(RefCell::new(None));
-            let mut clipped = TuiClipped::new(DispatchRecorder {
-                seen_area: seen_area.clone(),
-                handle: true,
-            })
+            let mut clipped = TuiClipped::new(
+                DispatchRecorder {
+                    seen_area: seen_area.clone(),
+                    handle: true,
+                }
+                .finish(),
+            )
             .with_viewport_origin_y(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
@@ -171,10 +177,13 @@ fn dispatch_filters_mouse_events_outside_visible_window() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let seen_area = Rc::new(RefCell::new(None));
-            let mut clipped = TuiClipped::new(DispatchRecorder {
-                seen_area: seen_area.clone(),
-                handle: true,
-            })
+            let mut clipped = TuiClipped::new(
+                DispatchRecorder {
+                    seen_area: seen_area.clone(),
+                    handle: true,
+                }
+                .finish(),
+            )
             .with_viewport_origin_y(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
@@ -199,10 +208,13 @@ fn dispatch_forwards_non_positional_events_without_filtering() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let seen_area = Rc::new(RefCell::new(None));
-            let mut clipped = TuiClipped::new(DispatchRecorder {
-                seen_area: seen_area.clone(),
-                handle: true,
-            })
+            let mut clipped = TuiClipped::new(
+                DispatchRecorder {
+                    seen_area: seen_area.clone(),
+                    handle: true,
+                }
+                .finish(),
+            )
             .with_viewport_origin_y(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
