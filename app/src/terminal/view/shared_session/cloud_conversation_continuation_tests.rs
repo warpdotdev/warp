@@ -776,21 +776,6 @@ fn ambient_pane_model(task_id: AmbientAgentTaskId, status: SharedSessionStatus) 
 }
 
 #[test]
-fn blocks_local_continuation_only_when_disconnected_or_read_only() {
-    assert!(AIQueryRouting::NewCloudVm {
-        task_id: ambient_task_id(1)
-    }
-    .blocks_local_continuation());
-    assert!(AIQueryRouting::UnconnectedReadOnly.blocks_local_continuation());
-    let live_remote_vm = AIQueryRouting::LiveRemoteVm {
-        is_executor: true,
-        ambient_agent_task_id: None,
-    };
-    assert!(!live_remote_vm.blocks_local_continuation());
-    assert!(!AIQueryRouting::Local.blocks_local_continuation());
-}
-
-#[test]
 fn routing_is_local_for_non_cloud_pane() {
     App::test((), |mut app| async move {
         let model = TerminalModel::mock(None, None);

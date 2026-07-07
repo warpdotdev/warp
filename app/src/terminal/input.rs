@@ -5767,16 +5767,16 @@ impl Input {
         conversation_id_override: Option<AIConversationId>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        // Never continue a remote cloud conversation on the local agent. A skill invocation
-        // resolves and runs locally, so it must not run when this pane is a disconnected cloud
-        // follow-up composer or a read-only cloud transcript. Skills are also hidden from the
-        // slash menu in that state; this no-op covers typed/keybinding execution.
-        if self.ai_query_routing(ctx).blocks_local_continuation() {
+        // The skills menu should be hiding skills that are not available in the remote context.
+        // This is a safety net to prevent invoking skills locally when follow ups are not supposed to run locally, in case some skills are showing up in the menu.
+        // Currently skills are populated by the local machine's state and are always run locally below.
+        // TODO: consider populating the skills menu with skills in the remote machine, and forward to the remote machine.
+        if !self.ai_query_routing(ctx).is_local() {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::default(
-                        "Skills run locally and aren't available for a cloud conversation. Send a prompt to continue in the cloud."
+                        "Local skills cannot run on a remote machine. Try forking the conversation locally and running the skill."
                             .to_owned(),
                     ),
                     window_id,

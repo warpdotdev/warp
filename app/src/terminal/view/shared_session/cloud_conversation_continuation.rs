@@ -58,9 +58,8 @@ pub(crate) enum AIQueryRouting {
 }
 
 impl AIQueryRouting {
-    /// True when a conversation-continuing submission on this pane must not reach the local agent.
-    pub(crate) fn blocks_local_continuation(&self) -> bool {
-        matches!(self, Self::NewCloudVm { .. } | Self::UnconnectedReadOnly)
+    pub(crate) fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
     }
 }
 

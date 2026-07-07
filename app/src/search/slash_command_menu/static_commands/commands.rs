@@ -41,7 +41,7 @@ pub const PR_COMMENTS: StaticCommand = StaticCommand {
     name: "/pr-comments",
     description: "Pull GitHub PR review comments",
     icon_path: "bundled/svg/github.svg",
-    availability: Availability::REPOSITORY.union(Availability::AI_ENABLED),
+    availability: Availability::REPOSITORY.union(Availability::AI_ENABLED).union(Availability::LOCAL),
     auto_enter_ai_mode: true,
     argument: None,
 };
