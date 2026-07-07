@@ -1,50 +1,48 @@
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use ai::agent::action_result::AnyFileContent;
 use ai::agent::FileLocations;
+use futures::FutureExt as _;
 use warpui::{App, Entity, ModelHandle};
 
 use super::*;
 
-/// Minimal [`DiffStorage`] impl: canned report state and a no-op write
-/// kickoff, so tests drive completion through the [`DiffStorageHelper`] flow.
+/// Minimal [`DiffStorage`] impl: canned snapshots and save outcomes, so tests
+/// drive completion through the [`DiffStorageHelper`] flow.
 struct TestSurface {
-    save_state: DiffSaveState,
-    files: Vec<PendingFileState>,
+    files: Vec<FileSnapshot>,
+    save_results: Vec<Result<(), Arc<FileSaveError>>>,
 }
 
 impl TestSurface {
-    fn new(files: Vec<PendingFileState>) -> Self {
+    fn new(files: Vec<FileSnapshot>, save_results: Vec<Result<(), Arc<FileSaveError>>>) -> Self {
         Self {
-            save_state: DiffSaveState::default(),
             files,
+            save_results,
         }
     }
 }
 
 impl DiffStorage for TestSurface {
-    fn save_state_mut(&mut self) -> &mut DiffSaveState {
-        &mut self.save_state
-    }
-
-    fn pending_diff_count(&self) -> usize {
-        self.files.len()
-    }
-
-    fn pending_file_state(&self, _app: &AppContext) -> Vec<PendingFileState> {
+    fn snapshot_pending_files(&self, _app: &AppContext) -> Vec<FileSnapshot> {
         self.files.clone()
     }
 
-    fn start_saving(&mut self, _app: &mut AppContext) {}
+    fn start_saving(&mut self, _app: &mut AppContext) -> Vec<SaveFuture> {
+        std::mem::take(&mut self.save_results)
+            .into_iter()
+            .map(|result| futures::future::ready(result).boxed() as SaveFuture)
+            .collect()
+    }
 }
 
 impl Entity for TestSurface {
     type Event = ();
 }
 
-fn updated_file(path: &str, content: &str) -> PendingFileState {
-    PendingFileState {
+fn updated_file(path: &str, content: &str) -> FileSnapshot {
+    FileSnapshot {
         updated: Some(UpdatedFileState {
             path: path.to_owned(),
             changed_lines: std::iter::once(1..2).collect(),
@@ -52,31 +50,29 @@ fn updated_file(path: &str, content: &str) -> PendingFileState {
             was_edited: false,
         }),
         deleted_paths: Vec::new(),
+        diff_base: String::new(),
+        diff_new: content.to_owned(),
+        diff_name: path.to_owned(),
     }
 }
 
-fn add_surface(app: &mut App, files: Vec<PendingFileState>) -> ModelHandle<TestSurface> {
-    app.add_model(|_| TestSurface::new(files))
+fn add_surface(
+    app: &mut App,
+    files: Vec<FileSnapshot>,
+    save_results: Vec<Result<(), Arc<FileSaveError>>>,
+) -> ModelHandle<TestSurface> {
+    app.add_model(|_| TestSurface::new(files, save_results))
 }
 
 #[test]
-fn accept_resolves_once_every_file_is_saved_and_computed() {
+fn accept_resolves_with_computed_diffs_once_saves_complete() {
     App::test((), |mut app| async move {
-        let surface = add_surface(&mut app, vec![updated_file("/tmp/x.rs", "fn main() {}\n")]);
+        let surface = add_surface(
+            &mut app,
+            vec![updated_file("/tmp/x.rs", "fn main() {}\n")],
+            vec![Ok(())],
+        );
         let future = surface.update(&mut app, |surface, ctx| surface.accept_and_save(ctx));
-
-        surface.update(&mut app, |surface, ctx| {
-            surface.handle_diff_computed(
-                0,
-                Rc::new(DiffResult {
-                    unified_diff: "+fn main() {}".to_owned(),
-                    lines_added: 1,
-                    lines_removed: 0,
-                }),
-                ctx,
-            );
-            surface.handle_file_saved(0, None, ctx);
-        });
 
         let RequestFileEditsResult::Success {
             diff,
@@ -88,7 +84,7 @@ fn accept_resolves_once_every_file_is_saved_and_computed() {
         else {
             panic!("expected accept to succeed");
         };
-        assert_eq!(diff, "+fn main() {}");
+        assert!(diff.contains("+fn main() {}"));
         assert_eq!(lines_added, 1);
         assert_eq!(lines_removed, 0);
         assert_eq!(deleted_files, Vec::<String>::new());
@@ -100,17 +96,14 @@ fn accept_resolves_once_every_file_is_saved_and_computed() {
 #[test]
 fn accept_reports_save_failure_for_the_whole_edit() {
     App::test((), |mut app| async move {
-        let surface = add_surface(&mut app, vec![updated_file("/tmp/x.rs", "content\n")]);
+        let surface = add_surface(
+            &mut app,
+            vec![updated_file("/tmp/x.rs", "content\n")],
+            vec![Err(Arc::new(FileSaveError::RemoteError(
+                "disk full".to_owned(),
+            )))],
+        );
         let future = surface.update(&mut app, |surface, ctx| surface.accept_and_save(ctx));
-
-        surface.update(&mut app, |surface, ctx| {
-            surface.handle_diff_computed(0, Rc::new(DiffResult::default()), ctx);
-            surface.handle_file_saved(
-                0,
-                Some(Rc::new(FileSaveError::RemoteError("disk full".to_owned()))),
-                ctx,
-            );
-        });
 
         let RequestFileEditsResult::DiffApplicationFailed { error } = future.await else {
             panic!("expected a failed save to fail the edit");
@@ -124,21 +117,21 @@ fn deleted_paths_are_reported_as_deleted_files() {
     App::test((), |mut app| async move {
         let surface = add_surface(
             &mut app,
-            vec![PendingFileState {
+            vec![FileSnapshot {
                 updated: None,
                 deleted_paths: vec!["/tmp/gone.rs".to_owned()],
+                diff_base: "old content\n".to_owned(),
+                diff_new: String::new(),
+                diff_name: "/tmp/gone.rs".to_owned(),
             }],
+            vec![Ok(())],
         );
         let future = surface.update(&mut app, |surface, ctx| surface.accept_and_save(ctx));
-
-        surface.update(&mut app, |surface, ctx| {
-            surface.handle_diff_computed(0, Rc::new(DiffResult::default()), ctx);
-            surface.handle_file_saved(0, None, ctx);
-        });
 
         let RequestFileEditsResult::Success {
             updated_files,
             deleted_files,
+            lines_removed,
             ..
         } = future.await
         else {
@@ -146,6 +139,7 @@ fn deleted_paths_are_reported_as_deleted_files() {
         };
         assert!(updated_files.is_empty());
         assert_eq!(deleted_files, vec!["/tmp/gone.rs".to_owned()]);
+        assert_eq!(lines_removed, 1);
     });
 }
 

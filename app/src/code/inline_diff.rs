@@ -1,6 +1,9 @@
-use std::rc::Rc;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::Arc;
 
 use ai::diff_validation::DiffType;
+#[cfg(not(target_family = "wasm"))]
+use futures::FutureExt;
 #[cfg(not(target_family = "wasm"))]
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::file::FileId;
@@ -16,7 +19,7 @@ use super::diff_viewer::{DiffViewer, DisplayMode};
 use super::editor::scroll::{ScrollPosition, ScrollTrigger};
 use super::editor::view::{CodeEditorEvent, CodeEditorView};
 use super::editor::NavBarBehavior;
-use super::DiffResult;
+use crate::ai::blocklist::diff_storage::SaveFuture;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::diff_types::DiffSessionType;
 use crate::editor::InteractionState;
@@ -29,11 +32,7 @@ pub enum InlineDiffViewEvent {
     FileSaved,
     #[cfg(not(target_family = "wasm"))]
     FailedToSave {
-        error: Rc<FileSaveError>,
-    },
-    /// The result diff for an accepted edit has been computed by the editor.
-    DiffAccepted {
-        diff: Rc<DiffResult>,
+        error: Arc<FileSaveError>,
     },
     UserEdited,
 }
@@ -78,9 +77,6 @@ impl InlineDiffView {
         ctx.subscribe_to_view(&editor, |me, _view, event, ctx| match event {
             CodeEditorEvent::DiffUpdated => {
                 ctx.emit(InlineDiffViewEvent::DiffStatusUpdated);
-            }
-            CodeEditorEvent::UnifiedDiffComputed(diff) => {
-                ctx.emit(InlineDiffViewEvent::DiffAccepted { diff: diff.clone() });
             }
             CodeEditorEvent::ContentChanged { origin } => {
                 if origin.from_user() && !me.was_edited {
@@ -217,50 +213,61 @@ impl InlineDiffView {
         });
     }
 
-    /// Saves the current editor content through `FileModel`; completion arrives
-    /// as `FileSaved` / `FailedToSave`.
+    /// Saves the current editor content through `FileModel`, returning the
+    /// save's completion future. `FileSaved` / `FailedToSave` events still
+    /// fire alongside. `None` when no file is registered.
     #[cfg(not(target_family = "wasm"))]
-    fn save_content(&self, ctx: &mut ViewContext<Self>) {
-        let Some(file_id) = self.backing_file_id else {
-            return;
-        };
+    fn save_content(&self, ctx: &mut ViewContext<Self>) -> Option<SaveFuture> {
+        let file_id = self.backing_file_id?;
         let content = self.editor.as_ref(ctx).text(ctx).into_string();
         let version = self.editor.as_ref(ctx).version(ctx);
 
-        if let Err(err) = FileModel::handle(ctx).update(ctx, |file_model, ctx| {
+        match FileModel::handle(ctx).update(ctx, |file_model, ctx| {
             file_model.save(file_id, content, version, ctx)
         }) {
-            ctx.emit(InlineDiffViewEvent::FailedToSave {
-                error: Rc::new(err),
-            });
+            Ok(save_future) => Some(save_future),
+            Err(err) => {
+                let error = Arc::new(err);
+                ctx.emit(InlineDiffViewEvent::FailedToSave {
+                    error: error.clone(),
+                });
+                Some(futures::future::ready(Err(error)).boxed())
+            }
         }
     }
 
-    /// Accepts the diff: computes the result diff (delivered via
-    /// [`InlineDiffViewEvent::DiffAccepted`]) and saves the editor content to
-    /// the backing file. No-op when no file is registered (WASM / restored
-    /// conversations).
-    pub fn accept_and_save_diff(&self, ctx: &mut ViewContext<Self>) {
-        if self.backing_file_id.is_none() {
-            return;
-        }
-
-        // Compute the result diff (arrives via CodeEditorEvent::UnifiedDiffComputed).
-        if let Some(file_path) = &self.file_path {
-            let file_name = file_path.to_string();
-            self.editor.update(ctx, |editor, ctx| {
-                editor.retrieve_unified_diff(file_name, ctx)
-            });
-        }
-        // Save the current editor content to disk.
+    /// Accepts the diff by saving the editor content to the backing file,
+    /// returning the save's completion future. `None` when no file is
+    /// registered (WASM / restored conversations), in which case nothing is
+    /// dispatched.
+    pub fn accept_and_save_diff(&self, ctx: &mut ViewContext<Self>) -> Option<SaveFuture> {
         #[cfg(not(target_family = "wasm"))]
-        self.save_content(ctx);
+        {
+            self.save_content(ctx)
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = ctx;
+            None
+        }
     }
 }
 
 impl InlineDiffView {
     pub fn file_path(&self) -> Option<&StandardizedPath> {
         self.file_path.as_ref()
+    }
+
+    /// Base content of the diff (from the editor's diff model), if set.
+    pub fn base_content(&self, app: &AppContext) -> Option<String> {
+        self.editor
+            .as_ref(app)
+            .model
+            .as_ref(app)
+            .diff()
+            .as_ref(app)
+            .base()
+            .map(|base| base.to_string())
     }
 
     pub fn file_name(&self) -> Option<String> {
@@ -337,10 +344,12 @@ impl DiffViewer for InlineDiffView {
                 .to_string();
 
             let version = self.editor.as_ref(_ctx).version(_ctx);
+            // The revert save's completion is observed via `FileSaved` events.
             FileModel::handle(_ctx)
                 .update(_ctx, |file_model, ctx| {
                     file_model.save(file_id, base_content, version, ctx)
                 })
+                .map(drop)
                 .map_err(|e| format!("Failed to save file: {e:?}"))?;
         }
 

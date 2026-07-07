@@ -6,6 +6,7 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
     time::Duration,
 };
 
@@ -108,7 +109,7 @@ pub enum LocalCodeEditorEvent {
     },
     FileSaved,
     FailedToSave {
-        error: Rc<FileSaveError>,
+        error: Arc<FileSaveError>,
     },
     DiffAccepted,
     DiffRejected,
@@ -1137,7 +1138,7 @@ impl LocalCodeEditorView {
         if let Err(err) = result {
             log::error!("Failed to save file: {err:?}");
             ctx.emit(LocalCodeEditorEvent::FailedToSave {
-                error: Rc::new(err),
+                error: Arc::new(err),
             });
         }
     }
@@ -1682,7 +1683,7 @@ impl LocalCodeEditorView {
             }) {
             log::error!("Failed to save file to new path: {err:?}");
             ctx.emit(LocalCodeEditorEvent::FailedToSave {
-                error: Rc::new(err),
+                error: Arc::new(err),
             });
             SaveOutcome::Failed
         } else {
@@ -2286,7 +2287,7 @@ impl TypedActionView for LocalCodeEditorView {
                 if let Err(ImmediateSaveError::FailedToSave(err)) = self.save_local(ctx) {
                     log::error!("Failed to save file {err:?}");
                     ctx.emit(LocalCodeEditorEvent::FailedToSave {
-                        error: Rc::new(err),
+                        error: Arc::new(err),
                     });
                 };
             }

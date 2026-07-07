@@ -57,7 +57,7 @@ use crate::ai::blocklist::action_model::{
     MalformedFinalLineProxyEvent, RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent,
 };
 use crate::ai::blocklist::diff_storage::{
-    DiffSaveState, DiffStorage, DiffStorageHelper, PendingFileState, RegisteredDiffStorage,
+    DiffStorage, DiffStorageHelper, FileSnapshot, RegisteredDiffStorage, SaveFuture,
     UpdatedFileState,
 };
 use crate::ai::blocklist::diff_types::{changed_lines_from_op, DiffSessionType, FileDiff};
@@ -409,8 +409,8 @@ pub struct CodeDiffView {
     session_platform: Option<SessionPlatform>,
     /// Whether diffs target local disk or a remote host.
     diff_session_type: DiffSessionType,
-    /// In-flight accept progress (shared [`DiffStorageHelper`] flow).
-    save_state: DiffSaveState,
+    /// Number of dispatched saves still in flight; guards revert while saving.
+    pending_saves: usize,
 }
 
 impl CodeDiffView {
@@ -518,11 +518,10 @@ impl CodeDiffView {
         editor
     }
 
-    /// Sets up event subscriptions for an `InlineDiffView` at the given index.
+    /// Sets up event subscriptions for an `InlineDiffView`.
     fn setup_diff_view_subscriptions(
         &self,
         diff_view: &ViewHandle<InlineDiffView>,
-        idx: usize,
         file_path_for_error: String,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -543,7 +542,7 @@ impl CodeDiffView {
             }
             #[cfg(not(target_family = "wasm"))]
             InlineDiffViewEvent::FileSaved => {
-                me.handle_file_saved(idx, None, ctx);
+                me.pending_saves = me.pending_saves.saturating_sub(1);
             }
             #[cfg(not(target_family = "wasm"))]
             InlineDiffViewEvent::FailedToSave { error } => {
@@ -557,10 +556,7 @@ impl CodeDiffView {
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
-                me.handle_file_saved(idx, Some(error.clone()), ctx);
-            }
-            InlineDiffViewEvent::DiffAccepted { diff } => {
-                me.handle_diff_computed(idx, diff.clone(), ctx);
+                me.pending_saves = me.pending_saves.saturating_sub(1);
             }
             InlineDiffViewEvent::UserEdited => {
                 if me.user_edited_file_contents {
@@ -853,7 +849,7 @@ impl CodeDiffView {
             should_show_speedbump,
             session_platform,
             diff_session_type: DiffSessionType::Local,
-            save_state: DiffSaveState::default(),
+            pending_saves: 0,
         }
     }
 
@@ -895,8 +891,7 @@ impl CodeDiffView {
         let display_mode = self.display_mode;
         let pending_diffs = diffs
             .into_iter()
-            .enumerate()
-            .map(|(idx, diff)| {
+            .map(|diff| {
                 #[cfg(debug_assertions)]
                 log::debug!("Create CodeEditorView with diff: {diff:#?}");
                 let editor = self.create_editor_with_subscriptions(ctx);
@@ -928,7 +923,7 @@ impl CodeDiffView {
                     diff_viewer.update(ctx, |view, ctx| view.register_file(session_type, ctx));
                 }
 
-                self.setup_diff_view_subscriptions(&diff_viewer, idx, file_path, ctx);
+                self.setup_diff_view_subscriptions(&diff_viewer, file_path, ctx);
 
                 PendingDiff {
                     diff_view: diff_viewer,
@@ -1042,7 +1037,7 @@ impl CodeDiffView {
     /// Revert all changes by replacing file contents with the base version.
     /// For newly created files, this deletes them instead.
     fn revert_changes(&mut self, ctx: &mut ViewContext<Self>) {
-        if !matches!(self.state, CodeDiffState::Accepted) || self.save_state.is_saving() {
+        if !matches!(self.state, CodeDiffState::Accepted) || self.pending_saves > 0 {
             log::warn!(
                 "Attempted to revert changes when not in a settled Accepted state - actual state: {:?}",
                 self.state
@@ -2935,34 +2930,32 @@ pub fn convert_file_edits_to_file_diffs(
 }
 
 impl DiffStorage for CodeDiffView {
-    fn save_state_mut(&mut self) -> &mut DiffSaveState {
-        &mut self.save_state
-    }
-
-    fn pending_diff_count(&self) -> usize {
-        self.pending_diffs.len()
-    }
-
-    /// Extracts each file's report state from the diff views and editor
-    /// buffers: final (possibly user-edited) content, changed lines, and
-    /// rename/delete bookkeeping.
-    fn pending_file_state(&self, app: &AppContext) -> Vec<PendingFileState> {
+    /// Extracts each file's report state and diff inputs from the diff views
+    /// and editor buffers: final (possibly user-edited) content, changed
+    /// lines, base content, and rename/delete bookkeeping.
+    fn snapshot_pending_files(&self, app: &AppContext) -> Vec<FileSnapshot> {
         self.pending_diffs
             .iter()
             .filter_map(|diff| {
                 let diff_view = diff.diff_view.as_ref(app);
                 let path = diff_view.file_path()?.to_string();
+                let diff_base = diff_view.base_content(app).unwrap_or_default();
+                let final_content = diff_view.editor().as_ref(app).text(app).into_string();
+
                 if matches!(diff_view.diff(), Some(DiffType::Delete { .. })) {
-                    return Some(PendingFileState {
+                    return Some(FileSnapshot {
                         updated: None,
-                        deleted_paths: vec![path],
+                        deleted_paths: vec![path.clone()],
+                        diff_base,
+                        diff_new: final_content,
+                        diff_name: path,
                     });
                 }
 
                 // A rename reports the source path as deleted and the update
                 // at the rename target.
                 let mut deleted_paths = Vec::new();
-                let mut report_path = path;
+                let mut report_path = path.clone();
                 if let Some(DiffType::Update {
                     rename: Some(rename),
                     ..
@@ -2974,27 +2967,35 @@ impl DiffStorage for CodeDiffView {
 
                 let changed_lines =
                     changed_lines_for_result(diff_view.changed_lines(app), diff_view.diff());
-                let final_content = diff_view.editor().as_ref(app).text(app).into_string();
-                Some(PendingFileState {
+                Some(FileSnapshot {
                     updated: Some(UpdatedFileState {
                         path: report_path,
                         changed_lines,
-                        final_content,
+                        final_content: final_content.clone(),
                         was_edited: diff_view.was_edited(),
                     }),
                     deleted_paths,
+                    diff_base,
+                    diff_new: final_content,
+                    diff_name: path,
                 })
             })
             .collect()
     }
 
-    /// Saves every file through its editor buffer; completions arrive via the
-    /// per-file `InlineDiffView` subscriptions.
-    fn start_saving(&mut self, app: &mut AppContext) {
-        for diff in &self.pending_diffs {
-            diff.diff_view
-                .update(app, |view, ctx| view.accept_and_save_diff(ctx));
-        }
+    /// Saves every file through its editor buffer, tracking the number of
+    /// dispatched saves for the revert guard.
+    fn start_saving(&mut self, app: &mut AppContext) -> Vec<SaveFuture> {
+        let saves: Vec<SaveFuture> = self
+            .pending_diffs
+            .iter()
+            .filter_map(|diff| {
+                diff.diff_view
+                    .update(app, |view, ctx| view.accept_and_save_diff(ctx))
+            })
+            .collect();
+        self.pending_saves = saves.len();
+        saves
     }
 }
 
