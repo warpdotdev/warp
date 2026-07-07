@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::{
     Color, Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
-    TuiRect, TuiSize, TuiStyle,
+    TuiPoint, TuiRect, TuiScreenPoint, TuiSize, TuiStyle,
 };
 use crate::color::ColorU;
 use crate::elements::animation::AnimationClock;
@@ -34,6 +34,8 @@ pub struct TuiShimmeringText {
     /// The clock the band's phase is derived from.
     clock: AnimationClock,
     modifier: Modifier,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiShimmeringText {
@@ -54,6 +56,8 @@ impl TuiShimmeringText {
             config,
             clock,
             modifier: Modifier::empty(),
+            size: None,
+            origin: None,
         }
     }
 
@@ -71,17 +75,30 @@ impl TuiElement for TuiShimmeringText {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        if self.text.is_empty() {
-            return constraint.clamp(TuiSize::ZERO);
-        }
-        let width = u16::try_from(self.text.chars().count()).unwrap_or(u16::MAX);
-        TuiSize::new(
-            constraint.constrain_width(width),
-            constraint.constrain_height(1),
-        )
+        let size = if self.text.is_empty() {
+            constraint.clamp(TuiSize::ZERO)
+        } else {
+            let width = u16::try_from(self.text.chars().count()).unwrap_or(u16::MAX);
+            TuiSize::new(
+                constraint.constrain_width(width),
+                constraint.constrain_height(1),
+            )
+        };
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
+    fn render(
+        &mut self,
+        buffer_origin: TuiPoint,
+        buffer: &mut TuiBuffer,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.screen_point(buffer_origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        let area = TuiRect::new(buffer_origin.x, buffer_origin.y, size.width, size.height);
         if area.is_empty() {
             return;
         }
@@ -108,6 +125,14 @@ impl TuiElement for TuiShimmeringText {
         }
 
         ctx.repaint_after(REPAINT_INTERVAL);
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 

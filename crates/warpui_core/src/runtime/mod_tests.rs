@@ -9,7 +9,7 @@ use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyM
 use super::*;
 use crate::elements::tui::{
     TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext,
-    TuiPaintContext, TuiStyle, TuiText,
+    TuiPaintContext, TuiPoint, TuiScreenPoint, TuiStyle, TuiText,
 };
 use crate::keymap::macros::*;
 use crate::keymap::FixedBinding;
@@ -19,6 +19,8 @@ use crate::{AddWindowOptions, AppContext, Entity, TypedActionView, ViewContext};
 /// A trivial leaf element that paints a single line of text.
 struct TextElement {
     text: String,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiElement for TextElement {
@@ -29,17 +31,34 @@ impl TuiElement for TextElement {
         _app: &AppContext,
     ) -> TuiSize {
         let width = u16::try_from(self.text.chars().count()).unwrap_or(u16::MAX);
-        constraint.clamp(TuiSize::new(width, 1))
+        let size = constraint.clamp(TuiSize::new(width, 1));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
+    fn render(
+        &mut self,
+        buffer_origin: TuiPoint,
+        buffer: &mut TuiBuffer,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.screen_point(buffer_origin));
+        let size = self.size.unwrap();
         buffer.set_stringn(
-            area.x,
-            area.y,
+            buffer_origin.x,
+            buffer_origin.y,
             &self.text,
-            usize::from(area.width),
+            usize::from(size.width),
             TuiStyle::default(),
         );
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 
@@ -58,6 +77,8 @@ impl TuiView for TextView {
     fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
         Box::new(TextElement {
             text: "hello".to_owned(),
+            size: None,
+            origin: None,
         })
     }
 }

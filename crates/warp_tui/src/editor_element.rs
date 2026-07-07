@@ -30,8 +30,8 @@ use warp_editor::render::model::{
 };
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
-    TuiGridPoint, TuiLayoutContext, TuiPaintContext, TuiParentElement, TuiPoint, TuiRect,
-    TuiRectExt, TuiSize, TuiStyle, TuiText,
+    TuiGridPoint, TuiLayoutContext, TuiLocalPoint, TuiPaintContext, TuiParentElement, TuiPoint,
+    TuiRect, TuiScreenPoint, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::{AppContext, ModelHandle};
 
@@ -67,7 +67,7 @@ pub(crate) enum TuiEditorAction {
 }
 
 /// Handler receiving the element's [`TuiEditorAction`]s during event dispatch.
-type TuiEditorActionHandler = Rc<dyn Fn(TuiEditorAction, &mut TuiEventContext)>;
+type TuiEditorActionHandler = Rc<dyn for<'a> Fn(TuiEditorAction, &mut TuiEventContext<'a>)>;
 
 /// Whole-row styles by row kind, plus per-line overrides — all consumer
 /// policy. Gutter cells take their row's style.
@@ -125,6 +125,8 @@ pub(crate) struct TuiEditorElement {
     cursor_col: u16,
     cursor_row_in_view: u16,
     cursor_visible: bool,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiEditorElement {
@@ -178,6 +180,8 @@ impl TuiEditorElement {
             cursor_col: 0,
             cursor_row_in_view: 0,
             cursor_visible: false,
+            size: None,
+            origin: None,
         }
     }
 
@@ -229,7 +233,7 @@ impl TuiEditorElement {
     /// all (a read-only, click-through body).
     pub(crate) fn on_action(
         mut self,
-        handler: impl Fn(TuiEditorAction, &mut TuiEventContext) + 'static,
+        handler: impl for<'a> Fn(TuiEditorAction, &mut TuiEventContext<'a>) + 'static,
     ) -> Self {
         self.on_action = Some(Rc::new(handler));
         self
@@ -466,7 +470,7 @@ impl TuiEditorElement {
     /// below maps to the last display row (or the buffer's end on the
     /// deferred-wrap phantom row), so a drag that leaves the element drives
     /// auto-scroll.
-    fn offset_at(&self, position: TuiPoint, area: TuiRect, app: &AppContext) -> Option<CharOffset> {
+    fn offset_at(&self, position: TuiLocalPoint, app: &AppContext) -> Option<CharOffset> {
         let inner = self.model.as_ref(app);
         let render_state = inner.render_state().as_ref(app);
         let char_cell = render_state.char_cell()?;
@@ -483,11 +487,10 @@ impl TuiEditorElement {
             0
         };
 
-        let row_in_view = i64::from(position.y) - i64::from(area.y);
+        let row_in_view = i64::from(position.y);
         let display_row = (i64::from(first_visible_row) + row_in_view).max(0) as usize;
-        let col = position
-            .x
-            .saturating_sub(area.x)
+        let col = u16::try_from(position.x.max(0))
+            .unwrap_or(u16::MAX)
             .saturating_sub(self.gutter_cols);
 
         let lattice = char_cell.display_lattice(&hidden);
@@ -525,9 +528,10 @@ impl TuiEditorElement {
     pub(crate) fn mouse_action(
         &self,
         event: &TuiEvent,
-        area: TuiRect,
+        event_ctx: &TuiEventContext<'_>,
         app: &AppContext,
     ) -> Option<TuiEditorAction> {
+        let (origin, size) = self.origin.zip(self.size)?;
         match event {
             TuiEvent::LeftMouseDown {
                 position,
@@ -537,10 +541,10 @@ impl TuiEditorElement {
             } => {
                 // The focus-bringing first click has no matching mouse-up, and
                 // a press outside the element must not start a selection.
-                if *is_first_mouse || !area.contains_point(*position) {
+                if *is_first_mouse || !event_ctx.hit_test(origin, size, *position) {
                     return None;
                 }
-                let offset = self.offset_at(*position, area, app)?;
+                let offset = self.offset_at(event_ctx.local_point(origin, *position), app)?;
                 Some(match *click_count {
                     0 | 1 if modifiers.shift => TuiEditorAction::SelectionExtendTo { offset },
                     0 | 1 => TuiEditorAction::SelectionStartAt { offset },
@@ -552,7 +556,7 @@ impl TuiEditorElement {
             // but only while a selection that began inside it is active.
             TuiEvent::LeftMouseDragged { position, .. } if self.drag_in_progress(app) => {
                 Some(TuiEditorAction::SelectionUpdateTo {
-                    offset: self.offset_at(*position, area, app)?,
+                    offset: self.offset_at(event_ctx.local_point(origin, *position), app)?,
                 })
             }
             TuiEvent::LeftMouseUp { .. } if self.drag_in_progress(app) => {
@@ -562,7 +566,7 @@ impl TuiEditorElement {
             // meaningful for scroll-windowed consumers.
             TuiEvent::ScrollWheel {
                 position, delta, ..
-            } if self.viewport_rows.is_some() && area.contains_point(*position) => {
+            } if self.viewport_rows.is_some() && event_ctx.hit_test(origin, size, *position) => {
                 // crossterm reports ScrollUp as +1 row / ScrollDown as -1;
                 // negate so wheel-up scrolls toward the top.
                 Some(TuiEditorAction::Scroll {
@@ -599,11 +603,23 @@ impl TuiElement for TuiEditorElement {
         let content_size = self.column.layout(constraint, ctx, app);
         // The editor claims the full width it was offered (its wrap width),
         // not just the longest row's width the content-sized column reports.
-        TuiSize::new(full_width, content_size.height)
+        let size = TuiSize::new(full_width, content_size.height);
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        self.column.render(area, buffer, ctx);
+    fn render(
+        &mut self,
+        buffer_origin: TuiPoint,
+        buffer: &mut TuiBuffer,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.screen_point(buffer_origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        let area = TuiRect::new(buffer_origin.x, buffer_origin.y, size.width, size.height);
+        self.column.render(buffer_origin, buffer, ctx);
         if !self.selected_spans.is_empty() {
             let reversed = TuiStyle::default().add_modifier(Modifier::REVERSED);
             for &(row_in_view, start_col, end_col) in &self.selected_spans {
@@ -617,34 +633,42 @@ impl TuiElement for TuiEditorElement {
                 }
             }
         }
-    }
-
-    fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        if !self.cursor_visible
-            || self.cursor_col >= area.width
-            || self.cursor_row_in_view >= area.height
+        if self.cursor_visible
+            && self.cursor_col < size.width
+            && self.cursor_row_in_view < size.height
         {
-            return None;
+            let origin = self
+                .origin
+                .expect("editor origin is retained before cursor paint");
+            ctx.set_terminal_cursor(TuiScreenPoint::new(
+                origin.x.saturating_add(i32::from(self.cursor_col)),
+                origin.y.saturating_add(i32::from(self.cursor_row_in_view)),
+                origin.z_index,
+            ));
         }
-        Some((self.cursor_col, self.cursor_row_in_view))
     }
 
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
+    }
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        if self.column.dispatch_event(event, area, event_ctx, ctx, app) {
+        if self.column.dispatch_event(event, event_ctx, app) {
             return true;
         }
         let Some(handler) = self.on_action.clone() else {
             return false;
         };
 
-        if let Some(action) = self.mouse_action(event, area, app) {
+        if let Some(action) = self.mouse_action(event, event_ctx, app) {
             handler(action, event_ctx);
             return true;
         }

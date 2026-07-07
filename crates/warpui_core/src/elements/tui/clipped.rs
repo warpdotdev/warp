@@ -6,8 +6,9 @@
 //! the child rows before the first visible row.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiBuffer, TuiClipBounds, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect, TuiScreenPoint,
+    TuiScreenRect, TuiSize,
 };
 use crate::AppContext;
 
@@ -15,6 +16,8 @@ use crate::AppContext;
 pub struct TuiClipped {
     child: Box<dyn TuiElement>,
     viewport_origin_y: u16,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiClipped {
@@ -23,6 +26,8 @@ impl TuiClipped {
         Self {
             child,
             viewport_origin_y: 0,
+            size: None,
+            origin: None,
         }
     }
 
@@ -70,21 +75,55 @@ impl TuiElement for TuiClipped {
             self.child_height(constraint.max.height),
         );
         let child_size = self.child.layout(TuiConstraint::loose(child_max), ctx, app);
-        constraint.clamp(TuiSize::new(
+        let size = constraint.clamp(TuiSize::new(
             child_size.width,
             child_size.height.saturating_sub(self.viewport_origin_y),
-        ))
+        ));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
+    fn render(
+        &mut self,
+        buffer_origin: TuiPoint,
+        buffer: &mut TuiBuffer,
+        ctx: &mut TuiPaintContext,
+    ) {
+        let screen_origin = ctx.screen_point(buffer_origin);
+        self.origin = Some(screen_origin);
+        let Some(size) = self.size else {
+            return;
+        };
+        let area = TuiRect::new(buffer_origin.x, buffer_origin.y, size.width, size.height);
         if area.is_empty() {
             return;
         }
-
-        let child_height = self.child_height(area.height);
-        let child_area = TuiRect::new(0, 0, area.width, child_height);
+        let child_size = self
+            .child
+            .size()
+            .unwrap_or_else(|| TuiSize::new(area.width, self.child_height(area.height)));
+        let child_area = TuiRect::new(
+            0,
+            0,
+            area.width.max(child_size.width),
+            self.child_height(area.height).max(child_size.height),
+        );
         let mut child_buffer = TuiBuffer::empty(child_area);
-        self.child.render(child_area, &mut child_buffer, ctx);
+        let clip = TuiScreenRect::new(screen_origin, size);
+        ctx.scene
+            .start_layer(TuiClipBounds::BoundedByActiveLayerAnd(clip));
+        let child_screen_origin = TuiScreenPoint::new(
+            screen_origin.x,
+            screen_origin
+                .y
+                .saturating_sub(i32::from(self.viewport_origin_y)),
+            ctx.scene.z_index(),
+        );
+        ctx.with_buffer_mapping(TuiPoint::new(0, 0), child_screen_origin, |ctx| {
+            self.child
+                .render(TuiPoint::new(0, 0), &mut child_buffer, ctx);
+        });
+        ctx.scene.stop_layer();
 
         for y in 0..area.height {
             let source_y = y.saturating_add(self.viewport_origin_y);
@@ -98,11 +137,12 @@ impl TuiElement for TuiClipped {
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        let child_area = TuiRect::new(area.x, area.y, area.width, self.child_height(area.height));
-        let (x, y) = self.child.cursor_position(child_area, ctx)?;
-        let y = y.checked_sub(self.viewport_origin_y)?;
-        (y < area.height).then_some((x, y))
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -112,30 +152,10 @@ impl TuiElement for TuiClipped {
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        // The child was laid out at its full logical height (visible +
-        // clipped rows). Filter mouse events to the visible window, then give the
-        // child its full logical area translated so `viewport_origin_y`
-        // aligns with the visible top: a container child then splits the
-        // correct height, and a click at the visible top hits logical row
-        // `viewport_origin_y`.
-        if let Some(position) = event.position() {
-            if !area.contains_point(position) {
-                return false;
-            }
-        }
-        let child_area = TuiRect::new(
-            area.x,
-            area.y.saturating_sub(self.viewport_origin_y),
-            area.width,
-            self.child_height(area.height),
-        );
-        self.child
-            .dispatch_event(event, child_area, event_ctx, ctx, app)
+        self.child.dispatch_event(event, event_ctx, app)
     }
 }
 

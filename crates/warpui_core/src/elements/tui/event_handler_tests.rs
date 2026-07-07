@@ -3,8 +3,7 @@ use std::rc::Rc;
 
 use super::TuiEventHandler;
 use crate::elements::tui::{
-    TuiChildView, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPresentationContext,
-    TuiRect,
+    TuiChildView, TuiElement, TuiEvent, TuiEventContext, TuiPresentationContext,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
@@ -33,26 +32,14 @@ fn invokes_callback_on_matching_key_and_reports_handled() {
                     counter.set(counter.get() + 1);
                 });
 
-            let area = TuiRect::new(0, 0, 4, 1);
             let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
 
-            let handled = handler.dispatch_event(
-                &key_event("enter"),
-                area,
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
-            );
+            let handled = handler.dispatch_event(&key_event("enter"), &mut event_ctx, app_ctx);
             assert!(handled);
             assert_eq!(hits.get(), 1);
 
             // A non-matching key is left unhandled for ancestors, runs no callback.
-            let handled =
-                handler.dispatch_event(&key_event("esc"), area, &mut event_ctx, &mut ctx, app_ctx);
+            let handled = handler.dispatch_event(&key_event("esc"), &mut event_ctx, app_ctx);
             assert!(!handled);
             assert_eq!(hits.get(), 1);
         });
@@ -76,17 +63,7 @@ fn child_consumes_the_event_before_the_wrapper() {
             });
 
             let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let handled = outer.dispatch_event(
-                &key_event("enter"),
-                TuiRect::new(0, 0, 1, 1),
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
-            );
+            let handled = outer.dispatch_event(&key_event("enter"), &mut event_ctx, app_ctx);
 
             assert!(handled);
             assert_eq!(inner_hits.get(), 1);

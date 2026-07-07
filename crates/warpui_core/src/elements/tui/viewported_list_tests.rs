@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use string_offset::ByteOffset;
@@ -9,10 +9,11 @@ use super::{
 };
 use crate::elements::tui::{
     Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiScrollable, TuiScrollableElement,
-    TuiSelectable, TuiSelectionHandle, TuiSize, TuiText,
+    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiScreenPoint, TuiScrollable,
+    TuiScrollableElement, TuiSelectable, TuiSelectionHandle, TuiSize, TuiText,
 };
 use crate::event::ModifiersState;
+use crate::presenter::tui::TuiPresenter;
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::{App, AppContext, EntityId, EntityIdMap};
 
@@ -110,7 +111,7 @@ fn render_viewport(app: &App, viewport: &mut impl TuiElement, size: TuiSize) -> 
         let area = TuiRect::new(0, 0, size.width, size.height);
         let mut buffer = TuiBuffer::empty(area);
         let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-        viewport.render(area, &mut buffer, &mut paint_ctx);
+        viewport.render(TuiPoint::new(0, 0), &mut buffer, &mut paint_ctx);
         buffer.to_lines()
     })
 }
@@ -122,15 +123,15 @@ fn mouse(app: &App, element: &mut impl TuiElement, size: TuiSize, event: TuiEven
         let mut ctx = TuiLayoutContext {
             rendered_views: &mut rendered_views,
         };
-        let mut event_ctx = TuiEventContext::default();
+        element.layout(TuiConstraint::tight(size), &mut ctx, app_ctx);
+        let area = TuiRect::new(0, 0, size.width, size.height);
+        let mut buffer = TuiBuffer::empty(area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        element.render(TuiPoint::new(0, 0), &mut buffer, &mut paint_ctx);
+        let (scene, _, _) = paint_ctx.finish();
+        let mut event_ctx = TuiEventContext::new(Rc::new(scene), &mut rendered_views);
         event_ctx.set_origin_view(Some(EntityId::new()));
-        element.dispatch_event(
-            &event,
-            TuiRect::new(0, 0, size.width, size.height),
-            &mut event_ctx,
-            &mut ctx,
-            app_ctx,
-        )
+        element.dispatch_event(&event, &mut event_ctx, app_ctx)
     })
 }
 
@@ -176,11 +177,12 @@ fn wheel_with_notify_count(
 ) -> (bool, usize) {
     app.read(|app_ctx| {
         let mut rendered_views = EntityIdMap::default();
-        let mut ctx = TuiLayoutContext {
-            rendered_views: &mut rendered_views,
-        };
         let area = TuiRect::new(0, 0, size.width, size.height);
-        let mut event_ctx = TuiEventContext::default();
+        let mut buffer = TuiBuffer::empty(area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        viewport.render(TuiPoint::new(0, 0), &mut buffer, &mut paint_ctx);
+        let (scene, _, _) = paint_ctx.finish();
+        let mut event_ctx = TuiEventContext::new(Rc::new(scene), &mut rendered_views);
         event_ctx.set_origin_view(Some(EntityId::new()));
         let event = TuiEvent::ScrollWheel {
             position: TuiPoint::new(0, 0),
@@ -188,7 +190,7 @@ fn wheel_with_notify_count(
             precise: false,
             modifiers: ModifiersState::default(),
         };
-        let handled = viewport.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
+        let handled = viewport.dispatch_event(&event, &mut event_ctx, app_ctx);
         (handled, event_ctx.take_notified().len())
     })
 }
@@ -345,7 +347,7 @@ fn selectable_viewport_highlights_and_copies_linear_rows() {
             let area = TuiRect::new(0, 0, size.width, size.height);
             let mut buffer = TuiBuffer::empty(area);
             let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-            element.render(area, &mut buffer, &mut paint_ctx);
+            element.render(TuiPoint::new(0, 0), &mut buffer, &mut paint_ctx);
             buffer
         });
         assert!(buffer[(0, 0)].modifier.contains(Modifier::REVERSED));
@@ -643,6 +645,8 @@ fn propagating_scrollable_returns_unhandled_when_scroll_state_does_not_change() 
 
 struct CursorElement {
     cursor: (u16, u16),
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiElement for CursorElement {
@@ -652,13 +656,32 @@ impl TuiElement for CursorElement {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        constraint.clamp(TuiSize::new(1, 3))
+        let size = constraint.clamp(TuiSize::new(1, 3));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
+    fn render(
+        &mut self,
+        buffer_origin: TuiPoint,
+        _buffer: &mut TuiBuffer,
+        ctx: &mut TuiPaintContext,
+    ) {
+        let origin = ctx.screen_point(buffer_origin);
+        self.origin = Some(origin);
+        ctx.set_terminal_cursor(TuiScreenPoint::new(
+            origin.x.saturating_add(i32::from(self.cursor.0)),
+            origin.y.saturating_add(i32::from(self.cursor.1)),
+            origin.z_index,
+        ));
+    }
 
-    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        Some(self.cursor)
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 
@@ -705,90 +728,23 @@ fn single_element_viewport(
 #[test]
 fn cursor_position_is_shifted_into_the_visible_window() {
     App::test((), |app| async move {
-        let mut viewport = single_element_viewport(
+        let viewport = single_element_viewport(
             TuiViewportPosition::RowsFromTop(1),
-            CursorElement { cursor: (0, 2) }.finish(),
-        );
-
-        app.read(|app_ctx| {
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            viewport.layout(TuiConstraint::tight(TuiSize::new(3, 2)), &mut ctx, app_ctx);
-
-            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-            assert_eq!(
-                viewport.cursor_position(TuiRect::new(0, 0, 3, 2), &mut paint_ctx),
-                Some((0, 1)),
-            );
-        });
-    });
-}
-
-struct DispatchRecorder {
-    called: Rc<Cell<bool>>,
-}
-
-impl TuiElement for DispatchRecorder {
-    fn layout(
-        &mut self,
-        constraint: TuiConstraint,
-        _ctx: &mut TuiLayoutContext,
-        _app: &AppContext,
-    ) -> TuiSize {
-        constraint.clamp(TuiSize::new(1, 3))
-    }
-
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
-
-    fn dispatch_event(
-        &mut self,
-        _event: &TuiEvent,
-        _area: TuiRect,
-        _event_ctx: &mut TuiEventContext,
-        _ctx: &mut TuiLayoutContext,
-        _app: &AppContext,
-    ) -> bool {
-        self.called.set(true);
-        true
-    }
-}
-
-#[test]
-fn dispatch_filters_mouse_events_outside_visible_window() {
-    App::test((), |app| async move {
-        let called = Rc::new(Cell::new(false));
-        let mut viewport = single_element_viewport(
-            TuiViewportPosition::RowsFromTop(1),
-            DispatchRecorder {
-                called: called.clone(),
+            CursorElement {
+                cursor: (0, 2),
+                size: None,
+                origin: None,
             }
             .finish(),
         );
 
         app.read(|app_ctx| {
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let mut event_ctx = TuiEventContext::default();
-            viewport.layout(TuiConstraint::tight(TuiSize::new(3, 2)), &mut ctx, app_ctx);
-
-            let event = TuiEvent::LeftMouseDown {
-                position: TuiPoint::new(0, 2),
-                modifiers: ModifiersState::default(),
-                click_count: 1,
-                is_first_mouse: false,
-            };
-            assert!(!viewport.dispatch_event(
-                &event,
+            let frame = TuiPresenter::new().present_element(
+                viewport.finish(),
                 TuiRect::new(0, 0, 3, 2),
-                &mut event_ctx,
-                &mut ctx,
                 app_ctx,
-            ));
-            assert!(!called.get());
+            );
+            assert_eq!(frame.cursor, Some((0, 1)));
         });
     });
 }

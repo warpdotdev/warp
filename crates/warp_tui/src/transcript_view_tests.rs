@@ -358,7 +358,7 @@ fn render_element(app: &App, element: &mut dyn TuiElement, area: TuiRect) -> Vec
         );
         let mut buffer = TuiBuffer::empty(area);
         let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-        element.render(area, &mut buffer, &mut paint_ctx);
+        element.render((area.x, area.y).into(), &mut buffer, &mut paint_ctx);
         buffer.to_lines()
     })
 }
@@ -387,12 +387,12 @@ fn dispatch_event(
 ) -> bool {
     app.read(|app| {
         let mut rendered_views = EntityIdMap::default();
-        let mut layout_ctx = TuiLayoutContext {
-            rendered_views: &mut rendered_views,
-        };
-        let mut event_ctx = TuiEventContext::default();
+        let mut buffer = TuiBuffer::empty(area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        element.render((area.x, area.y).into(), &mut buffer, &mut paint_ctx);
+        let mut event_ctx = TuiEventContext::with_scene(Rc::new(paint_ctx.scene.clone()));
         event_ctx.set_origin_view(Some(EntityId::new()));
-        element.dispatch_event(event, area, &mut event_ctx, &mut layout_ctx, app)
+        element.dispatch_event(event, &mut event_ctx, app)
     })
 }
 fn rich_content_count(model: &Arc<FairMutex<TerminalModel>>) -> usize {

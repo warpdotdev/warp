@@ -10,7 +10,7 @@ use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
 use warpui_core::elements::tui::{
     Color as TuiColor, Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext,
-    TuiPaintContext, TuiRect, TuiSize, TuiStyle,
+    TuiPaintContext, TuiPoint, TuiRect, TuiScreenPoint, TuiSize, TuiStyle,
 };
 use warpui_core::AppContext;
 
@@ -36,6 +36,8 @@ pub(super) struct TerminalBlockElement {
     model: Arc<FairMutex<TerminalModel>>,
     block_id: BlockId,
     rows: TerminalBlockRows,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TerminalBlockElement {
@@ -53,6 +55,8 @@ impl TerminalBlockElement {
                 rows: visible_rows,
                 width,
             },
+            size: None,
+            origin: None,
         }
     }
     /// Creates an element for all currently displayed command/output rows.
@@ -61,6 +65,8 @@ impl TerminalBlockElement {
             model,
             block_id,
             rows: TerminalBlockRows::Content,
+            size: None,
+            origin: None,
         }
     }
 }
@@ -83,15 +89,27 @@ impl TuiElement for TerminalBlockElement {
                     .unwrap_or_default()
             }
         };
-        constraint.clamp(TuiSize::new(
+        let size = constraint.clamp(TuiSize::new(
             constraint.max.width,
             rows.end
                 .saturating_sub(rows.start)
                 .min(usize::from(u16::MAX)) as u16,
-        ))
+        ));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
+    fn render(
+        &mut self,
+        buffer_origin: TuiPoint,
+        buffer: &mut TuiBuffer,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.screen_point(buffer_origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        let area = TuiRect::new(buffer_origin.x, buffer_origin.y, size.width, size.height);
         let model = self.model.lock();
         let colors = model.colors();
         let Some(block) = model.block_list().block_with_id(&self.block_id) else {
@@ -102,6 +120,14 @@ impl TuiElement for TerminalBlockElement {
             TerminalBlockRows::Content => (block_content_rows(block), area.width),
         };
         render_block_rows(block, rows, width, area, buffer, &colors);
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 

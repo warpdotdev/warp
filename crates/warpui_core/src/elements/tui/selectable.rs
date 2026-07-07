@@ -15,8 +15,8 @@ use string_offset::{ByteOffset, CharOffset};
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
-    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect,
-    TuiScrollableElement, TuiSize,
+    TuiLayoutContext, TuiLocalPoint, TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect,
+    TuiScreenPoint, TuiScrollableElement, TuiSize, TuiViewMapContext,
 };
 use crate::elements::SmartSelectFn;
 use crate::text::word_boundaries::WordBoundariesPolicy;
@@ -43,11 +43,11 @@ pub struct TuiRowResize {
 
 /// Geometry, content, and rendering behavior implemented by a selectable child.
 pub trait TuiSelectableElement: TuiElement {
-    /// Resolves one screen position into a content-space point.
+    /// Resolves one element-local position into a content-space point.
     fn selection_point_at(
         &mut self,
-        position: TuiPoint,
-        area: TuiRect,
+        position: TuiLocalPoint,
+        size: TuiSize,
         clamp_outside: bool,
     ) -> Option<TuiGridPoint>;
 
@@ -64,7 +64,7 @@ pub trait TuiSelectableElement: TuiElement {
     fn selected_text(
         &self,
         selection: TuiSelectionSpan,
-        area: TuiRect,
+        size: TuiSize,
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> Option<String>;
@@ -124,17 +124,17 @@ where
     /// Resolves one screen position into the configured selection unit.
     fn selection_span_at(
         &mut self,
-        position: TuiPoint,
+        position: TuiLocalPoint,
         selection_type: SelectionType,
-        area: TuiRect,
+        size: TuiSize,
         clamp_outside: bool,
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> Option<TuiSelectionSpan> {
         let point = self
             .child
-            .selection_point_at(position, area, clamp_outside)?;
-        Some(self.selection_unit_span(selection_type, point, area.width, ctx, app))
+            .selection_point_at(position, size, clamp_outside)?;
+        Some(self.selection_unit_span(selection_type, point, size.width, ctx, app))
     }
 
     /// Expands one content point to a character, word, or line span.
@@ -222,13 +222,27 @@ where
         size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        self.child.render(area, buffer, ctx);
+    fn render(
+        &mut self,
+        buffer_origin: TuiPoint,
+        buffer: &mut TuiBuffer,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.child.render(buffer_origin, buffer, ctx);
+        let Some(size) = self.child.size() else {
+            return;
+        };
+        let area = TuiRect::new(buffer_origin.x, buffer_origin.y, size.width, size.height);
         self.child
             .render_selection(&self.selection, area, buffer, ctx);
     }
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        self.child.cursor_position(area, ctx)
+
+    fn size(&self) -> Option<TuiSize> {
+        self.child.size()
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.child.origin()
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -238,9 +252,7 @@ where
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
         let captures_drag = self.selection.is_selecting()
@@ -248,9 +260,12 @@ where
                 event,
                 TuiEvent::LeftMouseDragged { .. } | TuiEvent::LeftMouseUp { .. }
             );
-        if !captures_drag && self.child.dispatch_event(event, area, event_ctx, ctx, app) {
+        if !captures_drag && self.child.dispatch_event(event, event_ctx, app) {
             return true;
         }
+        let Some((origin, size)) = self.child.origin().zip(self.child.size()) else {
+            return false;
+        };
 
         match event {
             TuiEvent::LeftMouseDown {
@@ -258,11 +273,23 @@ where
                 click_count,
                 is_first_mouse,
                 ..
-            } if !*is_first_mouse => {
+            } if !*is_first_mouse && event_ctx.hit_test(origin, size, *position) => {
                 let selection_type = SelectionType::from_click_count(*click_count);
-                let Some(anchor_span) =
-                    self.selection_span_at(*position, selection_type, area, false, ctx, app)
-                else {
+                let local_position = event_ctx.local_point(origin, *position);
+                let anchor_span = {
+                    let mut ctx = TuiLayoutContext {
+                        rendered_views: event_ctx.rendered_views_mut(),
+                    };
+                    self.selection_span_at(
+                        local_position,
+                        selection_type,
+                        size,
+                        false,
+                        &mut ctx,
+                        app,
+                    )
+                };
+                let Some(anchor_span) = anchor_span else {
                     return false;
                 };
                 let focus_span = match selection_type {
@@ -270,7 +297,7 @@ where
                     SelectionType::Semantic | SelectionType::Lines => Some(anchor_span),
                 };
                 self.selection
-                    .start(anchor_span, focus_span, selection_type, area.width);
+                    .start(anchor_span, focus_span, selection_type, size.width);
                 if let Some(callback) = self.on_selection_start.as_mut() {
                     callback(event_ctx, app);
                 }
@@ -281,14 +308,21 @@ where
                 let Some(interaction) = self.selection.interaction() else {
                     return false;
                 };
-                let Some(focus_span) = self.selection_span_at(
-                    *position,
-                    interaction.selection_type,
-                    area,
-                    true,
-                    ctx,
-                    app,
-                ) else {
+                let local_position = event_ctx.local_point(origin, *position);
+                let focus_span = {
+                    let mut ctx = TuiLayoutContext {
+                        rendered_views: event_ctx.rendered_views_mut(),
+                    };
+                    self.selection_span_at(
+                        local_position,
+                        interaction.selection_type,
+                        size,
+                        true,
+                        &mut ctx,
+                        app,
+                    )
+                };
+                let Some(focus_span) = focus_span else {
                     return true;
                 };
                 if matches!(
@@ -306,10 +340,15 @@ where
             }
             TuiEvent::LeftMouseUp { .. } if self.selection.is_selecting() => {
                 self.selection.finish();
-                let text = self
-                    .selection
-                    .range()
-                    .and_then(|selection| self.child.selected_text(selection, area, ctx, app));
+                let selection = self.selection.range();
+                let text = {
+                    let mut ctx = TuiLayoutContext {
+                        rendered_views: event_ctx.rendered_views_mut(),
+                    };
+                    selection.and_then(|selection| {
+                        self.child.selected_text(selection, size, &mut ctx, app)
+                    })
+                };
                 if text.is_none() {
                     self.selection.clear();
                 }

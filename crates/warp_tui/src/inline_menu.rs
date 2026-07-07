@@ -3,7 +3,7 @@
 use warp::tui_export::AcceptSlashCommandOrSavedPrompt;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext,
-    TuiRect, TuiSize, TuiText,
+    TuiPoint, TuiScreenPoint, TuiSize, TuiText,
 };
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::{AppContext, ModelAsRef, ModelHandle, UpdateModel};
@@ -151,10 +151,25 @@ impl TuiElement for TuiInlineMenuElement {
         size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        if let Some(content) = &self.content {
-            content.render(area, buffer, ctx);
+    fn render(
+        &mut self,
+        buffer_origin: TuiPoint,
+        buffer: &mut TuiBuffer,
+        ctx: &mut TuiPaintContext,
+    ) {
+        if let Some(content) = self.content.as_mut() {
+            content.render(buffer_origin, buffer, ctx);
         }
+    }
+
+    /// Returns the laid-out content size.
+    fn size(&self) -> Option<TuiSize> {
+        self.content.as_ref()?.size()
+    }
+
+    /// Returns the painted content origin.
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.content.as_ref()?.origin()
     }
 }
 

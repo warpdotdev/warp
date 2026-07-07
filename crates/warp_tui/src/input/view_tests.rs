@@ -15,8 +15,8 @@ use warp::tui_export::{
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
-    TuiPoint, TuiRect, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
+    TuiPaintContext, TuiPoint, TuiRect, TuiSize,
 };
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
@@ -242,9 +242,13 @@ fn cursor_and_height(
         rendered_views: &mut rendered_views,
     };
     let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut buffer = TuiBuffer::empty(area);
     let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-    let cursor =
-        element.cursor_position(TuiRect::new(0, 0, size.width, size.height), &mut paint_ctx);
+    element.render(TuiPoint::new(0, 0), &mut buffer, &mut paint_ctx);
+    let cursor = paint_ctx
+        .terminal_cursor()
+        .and_then(|point| Some((u16::try_from(point.x).ok()?, u16::try_from(point.y).ok()?)));
     (cursor, size.height)
 }
 
@@ -727,13 +731,23 @@ fn laid_out_element(
     (element, TuiRect::new(0, 0, size.width, size.height))
 }
 
+/// Paints `element` and returns dispatch state for its retained scene.
+fn paint_event_context(element: &mut dyn TuiElement, area: TuiRect) -> TuiEventContext<'static> {
+    let mut rendered_views = EntityIdMap::default();
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    element.render(TuiPoint::new(area.x, area.y), &mut buffer, &mut paint_ctx);
+    TuiEventContext::with_scene(Rc::new(paint_ctx.scene.clone()))
+}
+
 /// Drives the full mouse path for `event`: lay out the element, map the event to
 /// its editor action, and apply the corresponding [`TuiInputAction`] to the view.
 /// Returns whether an action fired (i.e. the event was not ignored).
 fn mouse(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, event: &TuiEvent) -> bool {
     let action = {
-        let (element, area) = laid_out_element(view, ctx);
-        element.mouse_action(event, area, ctx)
+        let (mut element, area) = laid_out_element(view, ctx);
+        let event_ctx = paint_event_context(&mut element, area);
+        element.mouse_action(event, &event_ctx, ctx)
     };
     match action {
         Some(action) => {
@@ -1032,11 +1046,7 @@ fn escape_is_not_consumed_by_the_element() {
             let view = build_view(ctx);
             type_str(&view, ctx, "ab");
             let (mut element, area) = laid_out_element(&view, ctx);
-            let mut rendered_views = EntityIdMap::default();
-            let mut lctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let mut event_ctx = TuiEventContext::default();
+            let mut event_ctx = paint_event_context(&mut element, area);
             event_ctx.set_origin_view(Some(view.id()));
             let escape = TuiEvent::KeyDown {
                 keystroke: Keystroke {
@@ -1048,7 +1058,7 @@ fn escape_is_not_consumed_by_the_element() {
                 is_composing: false,
             };
             assert!(
-                !element.dispatch_event(&escape, area, &mut event_ctx, &mut lctx, ctx),
+                !element.dispatch_event(&escape, &mut event_ctx, ctx),
                 "escape must not be consumed by the element"
             );
 
@@ -1120,10 +1130,15 @@ fn shell_mode_offsets_cursor_by_gutter() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, "ab");
-            let (element, area) = laid_out_shell_row(&view, ctx);
+            let (mut element, area) = laid_out_shell_row(&view, ctx);
             let mut rendered_views = EntityIdMap::default();
+            let mut buffer = TuiBuffer::empty(area);
             let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-            assert_eq!(element.cursor_position(area, &mut paint_ctx), Some((4, 0)));
+            element.render(TuiPoint::new(area.x, area.y), &mut buffer, &mut paint_ctx);
+            let cursor = paint_ctx.terminal_cursor().and_then(|point| {
+                Some((u16::try_from(point.x).ok()?, u16::try_from(point.y).ok()?))
+            });
+            assert_eq!(cursor, Some((4, 0)));
         });
     });
 }
@@ -1138,9 +1153,10 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             let view = build_view(ctx);
             type_str(&view, ctx, "hello world");
             let action = {
-                let (element, area) = laid_out_shell_content_slot(&view, ctx);
+                let (mut element, area) = laid_out_shell_content_slot(&view, ctx);
+                let event_ctx = paint_event_context(&mut element, area);
                 element
-                    .mouse_action(&left_down(2 + 3, 0, 1, false), area, ctx)
+                    .mouse_action(&left_down(2 + 3, 0, 1, false), &event_ctx, ctx)
                     .map(TuiInputAction::from)
             };
             let Some(TuiInputAction::SelectionStartAt { offset }) = action else {
@@ -1153,24 +1169,14 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             // release inside it fires the handler (which moves the cursor to
             // the buffer start); both halves are consumed.
             let (mut row, area) = laid_out_shell_row(&view, ctx);
-            let mut rendered_views = EntityIdMap::default();
-            let mut lctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let mut event_ctx = TuiEventContext::default();
+            let mut event_ctx = paint_event_context(row.as_mut(), area);
             event_ctx.set_origin_view(Some(view.id()));
             assert!(
-                row.dispatch_event(
-                    &left_down(0, 0, 1, false),
-                    area,
-                    &mut event_ctx,
-                    &mut lctx,
-                    ctx
-                ),
+                row.dispatch_event(&left_down(0, 0, 1, false), &mut event_ctx, ctx),
                 "gutter presses must be consumed"
             );
             assert!(
-                row.dispatch_event(&left_up(0, 0), area, &mut event_ctx, &mut lctx, ctx),
+                row.dispatch_event(&left_up(0, 0), &mut event_ctx, ctx),
                 "the release completing a gutter click must be consumed"
             );
         });

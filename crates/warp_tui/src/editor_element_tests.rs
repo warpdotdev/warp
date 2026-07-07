@@ -6,7 +6,7 @@ use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext,
-    TuiPaintContext, TuiRect, TuiSize,
+    TuiPaintContext, TuiPoint, TuiRect, TuiSize,
 };
 use warpui_core::{App, AppContext, ModelHandle};
 
@@ -57,7 +57,7 @@ fn render_buffer(
     let area = TuiRect::new(0, 0, size.width, size.height);
     let mut buffer = TuiBuffer::empty(area);
     let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-    element.render(area, &mut buffer, &mut paint_ctx);
+    element.render(TuiPoint::new(area.x, area.y), &mut buffer, &mut paint_ctx);
     buffer
 }
 
