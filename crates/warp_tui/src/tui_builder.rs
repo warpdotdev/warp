@@ -91,6 +91,20 @@ impl TuiUiBuilder {
         )))
     }
 
+    /// Style for added diff lines and `+n` counts (theme green).
+    pub(crate) fn diff_added_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.green,
+        )))
+    }
+
+    /// Style for removed diff lines and `−n` counts (theme red).
+    pub(crate) fn diff_removed_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.red,
+        )))
+    }
+
     /// Bold foreground over the accent-tinted input background; pair with
     /// [`Self::input_background`] on the enclosing container.
     pub(crate) fn input_text_style(&self) -> TuiStyle {

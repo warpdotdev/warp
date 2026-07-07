@@ -42,7 +42,7 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            assert_eq!(block.desired_height(20, app_ctx), 6);
+            assert_eq!(desired_height(block, 20, app_ctx), 6);
 
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
@@ -88,8 +88,8 @@ fn simple_agent_block_reflows_height_at_narrow_width() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            let wide = block.desired_height(40, app_ctx);
-            let narrow = block.desired_height(6, app_ctx);
+            let wide = desired_height(block, 40, app_ctx);
+            let narrow = desired_height(block, 6, app_ctx);
             assert!(narrow > wide, "narrow text should occupy more logical rows");
         });
     });
@@ -359,7 +359,7 @@ fn agent_block_desired_height_accounts_for_tool_call_stub() {
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
             // One tool-call stub line plus the block's top padding row.
-            assert_eq!(block.desired_height(40, app_ctx), 2);
+            assert_eq!(desired_height(block, 40, app_ctx), 2);
         });
     });
 }
@@ -806,10 +806,29 @@ fn plain_text_message(id: &str, text: &str) -> AIAgentOutputMessage {
     )
 }
 
+/// Measures the block by laying out its rendered element with an empty layout
+/// context; these tests exercise blocks with no registered child views.
+fn desired_height(block: &TuiAIBlock, width: u16, app: &AppContext) -> usize {
+    let mut rendered_views = EntityIdMap::default();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let mut element = block.render_element(app);
+    usize::from(
+        element
+            .layout(
+                TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                &mut ctx,
+                app,
+            )
+            .height,
+    )
+}
+
 /// Renders the block at `width` and returns its non-empty rows, trimmed of
 /// trailing padding, so header/body assertions ignore blank rows.
 fn render_block_lines(block: &TuiAIBlock, width: u16, app: &AppContext) -> Vec<String> {
-    let height = block.desired_height(width, app).max(1) as u16;
+    let height = desired_height(block, width, app).max(1) as u16;
     let mut presenter = TuiPresenter::new();
     let frame = presenter.present_element(
         block.render_element(app),

@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
-    BlockPadding, BlockSpacing, BlocklistAIActionEvent, BlocklistAIActionModel,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, RichContentItem, RichContentType,
-    TerminalModel,
+    should_show_task_in_blocklist, AIAgentActionId, AIAgentExchangeId, AIBlockModelImpl,
+    AIConversationId, BlockId, BlockPadding, BlockSpacing, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ModelEvent,
+    ModelEventDispatcher, RichContentItem, RichContentType, TerminalModel,
 };
 use warpui_core::elements::tui::{
     TuiElement, TuiScrollable, TuiScrollableElement, TuiViewportVerticalAlignment,
@@ -63,6 +63,7 @@ impl TuiTranscriptView {
         terminal_surface_id: EntityId,
         model: Arc<FairMutex<TerminalModel>>,
         action_model: ModelHandle<BlocklistAIActionModel>,
+        model_events: &ModelHandle<ModelEventDispatcher>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(
@@ -72,31 +73,27 @@ impl TuiTranscriptView {
 
         // Tool-call rows derive their text from per-action status, so any
         // status transition must re-measure and re-render the owning block.
-        // Finding the owning block is an O(1) set lookup per block (mirroring
-        // the GUI `AIBlock`'s `requested_action_ids` membership check).
         ctx.subscribe_to_model(
             &action_model,
             |view, _, event: &BlocklistAIActionEvent, ctx| {
-                let action_id = event.action_id();
-                let view_id = view
-                    .agent_blocks
-                    .borrow()
-                    .iter()
-                    .find_map(|(view_id, block)| {
-                        block
-                            .as_ref(ctx)
-                            .renders_action(action_id)
-                            .then_some(*view_id)
-                    });
-                if let Some(view_id) = view_id {
-                    view.model
-                        .lock()
-                        .block_list_mut()
-                        .mark_rich_content_dirty(view_id);
-                    ctx.notify();
-                }
+                view.notify_action_owner(event.action_id(), ctx);
             },
         );
+
+        // Command tool-call rows read their backing terminal block's
+        // ground-truth state (running/finished, exit code, executed command)
+        // at render time. The presenter caches agent-block elements, so a
+        // block starting or finishing must re-render the owning agent block.
+        ctx.subscribe_to_model(model_events, |view, _, event, ctx| {
+            let block_id = match event {
+                ModelEvent::AfterBlockStarted { block_id, .. } => block_id,
+                ModelEvent::BlockCompleted(completed) => &completed.block_id,
+                _ => return,
+            };
+            if let Some(action_id) = view.requested_command_action_id(block_id) {
+                view.notify_action_owner(&action_id, ctx);
+            }
+        });
 
         Self {
             terminal_surface_id,
@@ -197,6 +194,44 @@ impl TuiTranscriptView {
             .any(|block| should_render_terminal_block(block, block_list))
     }
 
+    /// The agent-requested-command action id for the terminal block with
+    /// `block_id`, if that block backs a command tool call.
+    fn requested_command_action_id(&self, block_id: &BlockId) -> Option<AIAgentActionId> {
+        // Short-lived lock, dropped before any notify/render work.
+        let model = self.model.lock();
+        model
+            .block_list()
+            .block_with_id(block_id)
+            .and_then(|block| block.requested_command_action_id().cloned())
+    }
+
+    /// Routes an action-related change to the agent block that renders it:
+    /// marks the block's canonical rich-content height dirty (so off-band
+    /// blocks re-measure) and notifies the block view (so the presenter
+    /// refreshes its cached element). Finding the owner is an O(1) set lookup
+    /// per block (mirroring the GUI `AIBlock`'s `requested_action_ids`
+    /// membership check).
+    fn notify_action_owner(&self, action_id: &AIAgentActionId, ctx: &mut ViewContext<Self>) {
+        let owner = self
+            .agent_blocks
+            .borrow()
+            .iter()
+            .find_map(|(view_id, block)| {
+                block
+                    .as_ref(ctx)
+                    .renders_action(action_id)
+                    .then(|| (*view_id, block.clone()))
+            });
+        let Some((view_id, block)) = owner else {
+            return;
+        };
+        self.model
+            .lock()
+            .block_list_mut()
+            .mark_rich_content_dirty(view_id);
+        block.update(ctx, |_, ctx| ctx.notify());
+    }
+
     /// Returns the view id of the agent block rendering `exchange_id`, if any.
     fn view_id_for_exchange(
         &self,
@@ -282,8 +317,10 @@ impl TuiTranscriptView {
             );
             return;
         };
-        agent_block.update(ctx, |view, _| {
-            view.replace_model(conversation_id, Rc::new(block_model))
+        agent_block.update(ctx, |view, ctx| {
+            view.replace_model(conversation_id, Rc::new(block_model));
+            // Refresh the presenter's cached element for the block.
+            ctx.notify();
         });
         self.model
             .lock()

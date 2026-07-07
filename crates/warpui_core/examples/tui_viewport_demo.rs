@@ -29,9 +29,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, TuiElement, TuiEventHandler, TuiFlex, TuiParentElement, TuiScrollable, TuiStyle,
-    TuiText, TuiViewportContent, TuiViewportWindow, TuiViewportedElement, TuiViewportedList,
-    TuiViewportedListState, TuiVisibleViewportItem,
+    Modifier, TuiElement, TuiEventHandler, TuiFlex, TuiLayoutContext, TuiParentElement,
+    TuiScrollable, TuiStyle, TuiText, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
+    TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
 };
 use warpui_core::platform::WindowStyle;
 use warpui_core::runtime::TuiRuntime;
@@ -97,6 +97,7 @@ impl TuiViewportedElement for DemoViewportContent {
         &self,
         window: TuiViewportWindow,
         available_width: u16,
+        _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiViewportContent {
         let width_changed = self.last_width.replace(Some(available_width)) != Some(available_width);

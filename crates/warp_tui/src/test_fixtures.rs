@@ -32,6 +32,14 @@ impl TypedActionView for TestHostView {
     type Action = ();
 }
 
+/// Builds a `ModelEventDispatcher` over minimal test session state, for
+/// surfaces that subscribe to terminal model events.
+pub(crate) fn add_test_model_events(app: &mut App) -> ModelHandle<ModelEventDispatcher> {
+    let sessions = app.add_model(|_| Sessions::new_for_test());
+    let (_tx, model_events_rx) = async_channel::unbounded();
+    app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions, ctx))
+}
+
 /// Builds a real `BlocklistAIActionModel` over minimal test session state,
 /// mirroring what production surfaces inject into transcript views and agent
 /// blocks.

@@ -19,13 +19,10 @@ use warp::tui_export::{
     AIConversationId, BlocklistAIActionModel, MessageId, RequestCommandOutputResult, TerminalModel,
 };
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
-    TuiParentElement, TuiSize,
+    TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement,
 };
 use warpui_core::elements::MouseStateHandle;
-use warpui_core::{
-    AppContext, Entity, EntityId, EntityIdMap, ModelHandle, TuiView, ViewContext, ViewHandle,
-};
+use warpui_core::{AppContext, Entity, EntityId, ModelHandle, TuiView, ViewContext, ViewHandle};
 
 use super::tui_file_edits_view::TuiFileEditsView;
 use crate::agent_block_sections::{
@@ -182,6 +179,10 @@ impl TuiAIBlock {
         block.block_model.on_updated_output(
             Box::new(move |me, ctx| {
                 me.sync_action_views(&action_model, ctx);
+                // The presenter caches this block's rendered element; new
+                // output must invalidate the view or the transcript keeps
+                // painting the stale element.
+                ctx.notify();
             }),
             ctx,
         );
@@ -300,24 +301,6 @@ impl TuiAIBlock {
             command: (!command.is_empty()).then_some(command),
             state,
         })
-    }
-
-    /// Returns this block's wrapped height at the given width.
-    pub(super) fn desired_height(&self, width: u16, app: &AppContext) -> usize {
-        let mut rendered_views = EntityIdMap::default();
-        let mut ctx = TuiLayoutContext {
-            rendered_views: &mut rendered_views,
-        };
-        let mut element = self.render_element(app);
-        usize::from(
-            element
-                .layout(
-                    TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
-                    &mut ctx,
-                    app,
-                )
-                .height,
-        )
     }
 
     /// Extracts this exchange's visible input/output into logical render sections,

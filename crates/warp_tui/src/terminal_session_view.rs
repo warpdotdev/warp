@@ -195,6 +195,7 @@ impl TuiTerminalSessionView {
                 terminal_surface_id,
                 model.clone(),
                 action_model.clone(),
+                &model_events,
                 ctx,
             )
         });

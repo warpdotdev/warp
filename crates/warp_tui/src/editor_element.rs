@@ -202,16 +202,11 @@ impl TuiEditorElement {
     /// right-aligned numbers on a buffer line's first row, blanks on
     /// continuation/ghost/gap rows, plus a [`GUTTER_GAP`]-cell gap before the
     /// content.
-    // Consumed by the TUI diff view (stacked on this branch); exercised by
-    // this crate's element tests until then.
-    #[allow(dead_code)]
     pub(crate) fn with_line_number_gutter(mut self) -> Self {
         self.line_number_gutter = true;
         self
     }
 
-    // Consumed by the TUI diff view (stacked on this branch).
-    #[allow(dead_code)]
     pub(crate) fn with_styles(mut self, styles: TuiEditorStyles) -> Self {
         self.styles = styles;
         self
@@ -225,9 +220,6 @@ impl TuiEditorElement {
     /// Structural extras like this one are folded into the hidden set that
     /// both painting and hit-testing use ([`Self::effective_hidden_ranges`]),
     /// so the two stay consistent.
-    // Consumed by the TUI diff view (stacked on this branch); exercised by
-    // this crate's element tests until then.
-    #[allow(dead_code)]
     pub(crate) fn hide_trailing_empty_line(mut self) -> Self {
         self.hide_trailing_empty_line = true;
         self
