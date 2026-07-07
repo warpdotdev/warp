@@ -270,10 +270,11 @@ impl RequestFileEditsExecutor {
     ) {
         tx.send(()).ok();
 
+        // Expected when the action reached a terminal result (e.g. was
+        // cancelled) mid-apply and its storage was discarded; a storage that
+        // was never registered still warns at execute time.
         let Some(storage) = self.diff_storages.get(&id) else {
-            log::warn!(
-                "Tried to apply diffs for a RequestFileEdits action without a registered storage"
-            );
+            log::info!("No registered storage for RequestFileEdits action at apply completion");
             return;
         };
 
