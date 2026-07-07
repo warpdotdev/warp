@@ -321,7 +321,7 @@ impl LocalCodeEditorView {
         });
 
         ctx.subscribe_to_view(&editor, |me, _, event, ctx| match event {
-            CodeEditorEvent::UnifiedDiffComputed(_) => {
+            CodeEditorEvent::UnifiedDiffComputed => {
                 ctx.emit(LocalCodeEditorEvent::DiffAccepted);
             }
             CodeEditorEvent::ContentChanged { origin, .. } => {

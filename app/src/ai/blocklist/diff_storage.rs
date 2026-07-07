@@ -24,7 +24,7 @@ use std::sync::Arc;
 use futures::future::{join_all, BoxFuture};
 use futures::FutureExt;
 use itertools::Itertools;
-use warp_editor::multiline::{AnyMultilineString, MultilineString, LF};
+use warp_editor::multiline::AnyMultilineString;
 use warp_util::file::FileSaveError;
 use warpui::AppContext;
 
@@ -99,12 +99,14 @@ impl<T: DiffStorage> DiffStorageHelper for T {
 
             let mut combined = DiffResult::default();
             for file in &files {
-                let base: MultilineString<LF> =
-                    AnyMultilineString::infer(file.diff_base.clone()).to_format();
-                let new: MultilineString<LF> =
-                    AnyMultilineString::infer(file.diff_new.clone()).to_format();
-                combined +=
-                    &compute_unified_diff(base.as_ref(), new.as_ref(), &file.diff_name).await;
+                let base = AnyMultilineString::infer(file.diff_base.clone());
+                let new = AnyMultilineString::infer(file.diff_new.clone());
+                combined += &compute_unified_diff(
+                    base.to_format().as_ref(),
+                    new.to_format().as_ref(),
+                    &file.diff_name,
+                )
+                .await;
             }
             assemble_result(combined, files)
         }
