@@ -1,38 +1,34 @@
 pub mod header;
 pub mod header_content;
 
-use crate::pane_group::pane::ActionOrigin;
-use crate::{
-    appearance::Appearance,
-    pane_group::{Direction, SplitPaneState, TabBarHoverIndex},
-    server::telemetry::SharingDialogSource,
-    settings::{PaneSettings, PaneSettingsChangedEvent},
-    util::bindings::CustomAction,
-};
-
-use super::{
-    BackingView, PaneConfiguration, PaneConfigurationEvent, PaneId, PaneStack, PaneStackEvent,
-};
 use header::PaneHeader;
-
-use warpui::{
-    elements::{
-        Border, Container, DropTarget, DropTargetData, Flex, MainAxisSize, ParentElement,
-        SavePosition, Shrinkable,
-    },
-    keymap::EditableBinding,
-    presenter::ChildView,
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
-};
-
-use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
-
 pub use header::PaneHeaderAction;
 pub use header::PaneHeaderAction::CustomAction as PaneHeaderCustomAction;
 pub use header_content::{
     HeaderContent, HeaderRenderContext, StandardHeader, StandardHeaderOptions,
 };
+use pathfinder_geometry::rect::RectF;
+use warpui::elements::{
+    Border, Container, DropTarget, DropTargetData, Flex, MainAxisSize, ParentElement, SavePosition,
+    Shrinkable,
+};
+use warpui::keymap::EditableBinding;
+use warpui::presenter::ChildView;
+use warpui::{
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
+
+use super::{
+    BackingView, PaneConfiguration, PaneConfigurationEvent, PaneId, PaneStack, PaneStackEvent,
+};
+use crate::appearance::Appearance;
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
+use crate::pane_group::pane::ActionOrigin;
+use crate::pane_group::{Direction, SplitPaneState, TabBarHoverIndex};
+use crate::server::telemetry::SharingDialogSource;
+use crate::settings::{PaneSettings, PaneSettingsChangedEvent};
+use crate::util::bindings::CustomAction;
 
 const HAS_SHARED_OBJECT_CONTEXT_KEY: &str = "PaneView_HasSharedObject";
 
@@ -60,6 +56,7 @@ pub enum PaneViewEvent {
         origin: ActionOrigin,
         tab_hover_index: TabBarHoverIndex,
         hidden_pane_preview_direction: Direction,
+        drag_position: RectF,
     },
     PaneDraggedOutsideTabBarOrPaneGroup,
     PaneDragEnded,
@@ -252,6 +249,11 @@ impl<P: BackingView> PaneView<P> {
                     header.share_pane_contents(*source, ctx);
                 });
             }
+            PaneConfigurationEvent::OpenSharingQrCode(source) => {
+                self.header.update(ctx, |header, ctx| {
+                    header.open_shared_session_qr_code(*source, ctx);
+                });
+            }
             _ => {}
         }
     }
@@ -314,6 +316,7 @@ impl<P: BackingView> PaneView<P> {
                 origin,
                 tab_hover_index,
                 hidden_pane_preview_direction,
+                drag_position,
             } => {
                 // Adds a neutral background to the pane if it's being dragged over the workspace tab group.
                 if matches!(origin, ActionOrigin::Pane) {
@@ -324,6 +327,7 @@ impl<P: BackingView> PaneView<P> {
                     origin: *origin,
                     tab_hover_index: *tab_hover_index,
                     hidden_pane_preview_direction: *hidden_pane_preview_direction,
+                    drag_position: *drag_position,
                 });
                 ctx.notify();
             }
@@ -431,6 +435,20 @@ impl<P: BackingView> View for PaneView<P> {
             keymap_context.set.insert(HAS_SHARED_OBJECT_CONTEXT_KEY);
         }
         keymap_context
+    }
+
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        // The backing views are owned by the `pane_stack` model, and only the
+        // active (topmost) one is ever rendered (see `render`), so the
+        // non-active views — and even the active one in a window that never
+        // laid out — are invisible to the render-time parent graph. Report
+        // all of them plus the header so the entire pane moves together when
+        // it is transferred between windows; otherwise a backing view would
+        // be orphaned in the source window and later trip a "circular view
+        // reference" panic when accessed from its new window.
+        let mut ids = vec![self.header.id()];
+        ids.extend(self.pane_stack.as_ref(app).views().map(|view| view.id()));
+        ids
     }
 }
 

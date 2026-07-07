@@ -1,38 +1,28 @@
 //! Rendering logic for todo list components in AI blocks.
 
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Highlight,
+    ParentElement, Radius, Shrinkable, Text,
+};
 use warpui::fonts::Properties;
 use warpui::text_layout::TextStyle;
-use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
-        Highlight, ParentElement, Radius, Shrinkable, Text,
-    },
-    AppContext, Element, SingletonEntity,
-};
-
-use crate::ai::agent::conversation::{AIConversation, TodoStatus};
-use crate::ai::agent::icons::{gray_stop_icon, in_progress_icon, pending_icon, succeeded_icon};
-use crate::ai::agent::todos::AIAgentTodoList;
-use crate::ai::agent::{AIAgentTodo, MessageId};
-use crate::ai::blocklist::inline_action::inline_action_icons::cancelled_icon;
-use crate::{
-    ai::{
-        agent::icons::todo_list_icon,
-        blocklist::{
-            block::{AIBlockAction, TodoListElementState},
-            inline_action::{
-                inline_action_header::{
-                    ExpandedConfig, HeaderConfig, InteractionMode, INLINE_ACTION_HORIZONTAL_PADDING,
-                },
-                inline_action_icons::icon_size,
-            },
-        },
-    },
-    appearance::Appearance,
-    ui_components::{blended_colors, icons::Icon},
-};
+use warpui::{AppContext, Element, SingletonEntity};
 
 use super::WithContentItemSpacing;
+use crate::ai::agent::conversation::{AIConversation, TodoStatus};
+use crate::ai::agent::icons::{
+    gray_stop_icon, in_progress_icon, pending_icon, succeeded_icon, todo_list_icon,
+};
+use crate::ai::agent::todos::AIAgentTodoList;
+use crate::ai::agent::{AIAgentTodo, MessageId};
+use crate::ai::blocklist::block::{AIBlockAction, TodoListElementState};
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    ExpandedConfig, HeaderConfig, InteractionMode, INLINE_ACTION_HORIZONTAL_PADDING,
+};
+use crate::ai::blocklist::inline_action::inline_action_icons::{cancelled_icon, icon_size};
+use crate::appearance::Appearance;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 pub(super) fn render_todos(
     id: &MessageId,

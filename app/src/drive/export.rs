@@ -1,12 +1,8 @@
+use std::collections::hash_map::{Entry, OccupiedEntry};
+use std::collections::HashMap;
 #[cfg(feature = "local_fs")]
 use std::io::ErrorKind;
-use std::{
-    collections::{
-        hash_map::{Entry, OccupiedEntry},
-        HashMap,
-    },
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 #[cfg(feature = "local_fs")]
 use aho_corasick::{AhoCorasick, MatchKind};
@@ -15,26 +11,23 @@ use anyhow::{anyhow, Context};
 #[cfg(feature = "local_fs")]
 use futures::AsyncWriteExt;
 use warp_util::path::ShellFamily;
-use warpui::{
-    platform::{file_picker::FilePickerError, FilePickerConfiguration, OperatingSystem},
-    r#async::SpawnedFutureHandle,
-    AppContext, Entity, ModelContext, SingletonEntity, WindowId,
-};
+use warpui::platform::file_picker::FilePickerError;
+use warpui::platform::{FilePickerConfiguration, OperatingSystem};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 
-use crate::{
-    cloud_object::{model::persistence::CloudModel, Space},
-    safe_warn,
-    view_components::DismissibleToast,
-    workspace::{active_terminal_in_window, ToastStack},
-};
+use super::CloudObjectTypeAndId;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::Space;
+use crate::safe_warn;
+use crate::view_components::DismissibleToast;
+use crate::workspace::{active_terminal_in_window, ToastStack};
 #[cfg(feature = "local_fs")]
 use crate::{
     notebooks::export_notebook, server::cloud_objects::update_manager::get_duplicate_object_name,
     view_components::ToastLink, workflows::export_workflow::export_serialize,
     workspace::WorkspaceAction,
 };
-
-use super::CloudObjectTypeAndId;
 
 /// Singleton model for exporting from Warp Drive.
 pub struct ExportManager {

@@ -1,34 +1,29 @@
-use std::{cmp::max, fmt::Debug, mem, ops::RangeInclusive};
+use std::cmp::max;
+use std::fmt::Debug;
+use std::mem;
+use std::ops::RangeInclusive;
 
 use sum_tree::SeekBias;
 use vec1::{vec1, Vec1};
 use warp_core::semantic_selection::SemanticSelection;
 use warp_terminal::model::grid::CellType;
-use warpui::{
-    text::{IsRect, SelectionType},
-    units::{IntoLines as _, Lines},
-    AppContext, EntityId, ViewAsRef as _,
-};
-
-use crate::{
-    ai::blocklist::AIBlock,
-    env_vars::env_var_collection_block::EnvVarCollectionBlock,
-    terminal::{
-        event::Event as TerminalEvent,
-        model::{
-            block::BlockSection,
-            index::{Direction, Point, Side},
-            selection::{ExpandedSelectionRange, Selection, SelectionDirection},
-            terminal_model::{BlockIndex, WithinBlock},
-        },
-        warpify::success_block::WarpifySuccessBlock,
-        GridType,
-    },
-};
+use warpui::text::{IsRect, SelectionType};
+use warpui::units::{IntoLines as _, Lines};
+use warpui::{AppContext, EntityId, ViewAsRef as _};
 
 use super::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, RichContentItem,
 };
+use crate::ai::blocklist::block::PendingUserQueryBlock;
+use crate::ai::blocklist::AIBlock;
+use crate::env_vars::env_var_collection_block::EnvVarCollectionBlock;
+use crate::terminal::event::Event as TerminalEvent;
+use crate::terminal::model::block::BlockSection;
+use crate::terminal::model::index::{Direction, Point, Side};
+use crate::terminal::model::selection::{ExpandedSelectionRange, Selection, SelectionDirection};
+use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
+use crate::terminal::warpify::success_block::WarpifySuccessBlock;
+use crate::terminal::GridType;
 
 /// A selection that can span multiple blocks (and thus grids). Here row is the number of lines from
 /// the top of all blocks.
@@ -402,6 +397,9 @@ impl BlockList {
         selection_type: SelectionType,
         side: Side,
     ) {
+        // A new point-based selection supersedes any rich content (AI) block
+        // selection (single-selection semantics).
+        self.rich_content_selections.clear();
         let mut selection = BlockListSelection::new(point, selection_type, side);
         if let Some(smart_select_override) = &self.smart_select_override {
             let (override_start, override_end) = smart_select_override.unfold_range();
@@ -867,8 +865,49 @@ impl BlockList {
 
     pub fn clear_selection(&mut self) {
         self.selection = None;
+        self.rich_content_selections.clear();
         self.event_proxy
             .send_terminal_event(TerminalEvent::TextSelectionChanged);
+    }
+
+    /// Records that the given rich content (AI) block view currently has an
+    /// active text selection. Rich content blocks manage their own selection
+    /// state, so the block list can't derive this from its point-based
+    /// [`selection`](Self::selection); tracking it explicitly lets copy/insert
+    /// paths find the selected text via
+    /// [`rich_content_blocks_in_selection`](Self::rich_content_blocks_in_selection).
+    pub fn set_rich_content_selection(&mut self, view_id: EntityId) {
+        if self.selection.is_some() {
+            // A point-based selection is active. If it already spans this rich
+            // content block (e.g. a selection dragged from a command block
+            // *through* this AI block), that point selection remains the source
+            // of truth and already accounts for the AI block's text via its row
+            // range — don't override it, or we'd drop the command-block portion.
+            if self.rich_content_blocks_in_selection().contains(&view_id) {
+                return;
+            }
+            // Otherwise the point selection doesn't involve this block (e.g. a
+            // stale command-block selection elsewhere); a fresh rich content
+            // selection supersedes it (single-selection semantics).
+            self.selection = None;
+        }
+        self.rich_content_selections = vec![view_id];
+        self.event_proxy
+            .send_terminal_event(TerminalEvent::TextSelectionChanged);
+    }
+
+    /// Clears the tracked text selection for the given rich content (AI) block
+    /// view, if present.
+    pub fn clear_rich_content_selection(&mut self, view_id: EntityId) {
+        if let Some(position) = self
+            .rich_content_selections
+            .iter()
+            .position(|id| *id == view_id)
+        {
+            self.rich_content_selections.remove(position);
+            self.event_proxy
+                .send_terminal_event(TerminalEvent::TextSelectionChanged);
+        }
     }
 
     pub fn set_smart_select_override(
@@ -952,6 +991,11 @@ impl BlockList {
                             {
                                 selected_texts.push(selected_text);
                             }
+                            if let Some(selected_text) =
+                                read_selected_text_from_pending_user_query_block(*view_id, app)
+                            {
+                                selected_texts.push(selected_text);
+                            }
 
                             if let Some(active_window_id) = app.windows().active_window() {
                                 if let Some(ssh_block) = app
@@ -1015,6 +1059,11 @@ impl BlockList {
                             {
                                 selected_texts.push(selected_text);
                             }
+                            if let Some(selected_text) =
+                                read_selected_text_from_pending_user_query_block(item.view_id, app)
+                            {
+                                selected_texts.push(selected_text);
+                            }
                         }
                         selection_start_cursor.next();
                     }
@@ -1036,6 +1085,11 @@ impl BlockList {
                         {
                             selected_texts.push(selected_text);
                         }
+                        if let Some(selected_text) =
+                            read_selected_text_from_pending_user_query_block(item.view_id, app)
+                        {
+                            selected_texts.push(selected_text);
+                        }
                     }
                     selection_start_cursor.next();
                 }
@@ -1054,16 +1108,11 @@ impl BlockList {
 
                 let mut selected_texts = vec![];
                 for view_id in ids {
-                    if let Some(active_window_id) = app.windows().active_window() {
-                        if let Some(ai_block) =
-                            app.view_with_id::<AIBlock>(active_window_id, view_id)
-                        {
-                            let ai_block_view = app.view(&ai_block);
-                            if let Some(selected_text) = ai_block_view.selected_text(app) {
-                                selected_texts.push(selected_text);
-                            }
-                        }
+                    if let Some(selected_text) = read_selected_text_from_ai_block(view_id, app) {
+                        selected_texts.push(selected_text);
+                    }
 
+                    if let Some(active_window_id) = app.windows().active_window() {
                         if let Some(env_var_block) =
                             app.view_with_id::<EnvVarCollectionBlock>(active_window_id, view_id)
                         {
@@ -1081,6 +1130,12 @@ impl BlockList {
                                 selected_texts.push(selected_text);
                             }
                         }
+                    }
+
+                    if let Some(selected_text) =
+                        read_selected_text_from_pending_user_query_block(view_id, app)
+                    {
+                        selected_texts.push(selected_text);
                     }
                 }
 
@@ -1202,7 +1257,11 @@ impl BlockList {
     /// text selection.
     fn rich_content_blocks_in_selection(&self) -> Vec<EntityId> {
         let Some(original_selection) = self.selection.as_ref() else {
-            return vec![];
+            // Without a point-based selection, a selection may still be active
+            // inside a rich content (AI) block, which manages its own selection
+            // state. Fall back to the explicitly tracked rich content blocks so
+            // their selected text can still be copied.
+            return self.rich_content_selections.clone();
         };
         let mut top_row = original_selection.head.point.row;
         let mut bottom_row = original_selection.tail.point.row;
@@ -1523,6 +1582,19 @@ fn read_selected_text_from_ai_block(view_id: EntityId, app: &AppContext) -> Opti
     let ai_block = app.view_with_id::<AIBlock>(active_window_id, view_id)?;
     let ai_block_view = app.view(&ai_block);
     ai_block_view.selected_text(app)
+}
+
+/// Given the view id of a pending user query block, return the active selected text in that block.
+fn read_selected_text_from_pending_user_query_block(
+    view_id: EntityId,
+    app: &AppContext,
+) -> Option<String> {
+    let active_window_id = app.windows().active_window()?;
+
+    let pending_user_query_block =
+        app.view_with_id::<PendingUserQueryBlock>(active_window_id, view_id)?;
+    let pending_user_query_block_view = app.view(&pending_user_query_block);
+    pending_user_query_block_view.selected_text(app)
 }
 
 #[cfg(test)]

@@ -1,12 +1,13 @@
-use warpui::{
-    elements::{Border, ConstrainedBox, Container, CornerRadius, Flex, ParentElement, Radius},
-    fonts::Weight,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    Element,
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, Flex, ParentElement, Radius,
 };
+use warpui::fonts::Weight;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::Element;
 
 use crate::appearance::Appearance;
-use crate::terminal::{model::block::Block, view::WARP_PROMPT_HEIGHT_LINES};
+use crate::terminal::model::block::Block;
+use crate::terminal::view::WARP_PROMPT_HEIGHT_LINES;
 
 pub(super) fn render_floating_block_snapshot(
     block: &Block,

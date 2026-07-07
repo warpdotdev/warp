@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# script/warp_sudo - source this file to define the `warp_sudo` function.
+#
+# `warp_sudo` is a thin wrapper around `sudo` that echoes the command it
+# is about to run and asks for confirmation before invoking it. This gives
+# the user a chance to see (and decline) every privileged action taken
+# during bootstrap, which is otherwise opaque.
+#
+# Skip the prompt by setting WARP_SKIP_SUDO_PROMPT=1 (also set automatically
+# by `./script/bootstrap -y` / `--yes`) or by running with stdin not
+# attached to a tty (e.g. CI). The prompt itself is read from /dev/tty,
+# so pipes like `curl ... | warp_sudo apt-key add -` continue to work.
+
+warp_sudo() {
+  printf '\n>>> requires root: sudo %s\n' "$*" >&2
+
+  if [ "${WARP_SKIP_SUDO_PROMPT:-}" = "1" ]; then
+    sudo "$@"
+    return
+  fi
+
+  # Probe for a usable controlling terminal. `[ -r /dev/tty ]` is unreliable
+  # on macOS (the device file is always world-readable, even for processes
+  # with no controlling tty), so actually try to open it in a subshell.
+  if (: </dev/tty) 2>/dev/null; then
+    # Write the prompt to /dev/tty (not stderr) so it stays visible even
+    # when stderr is redirected, matching where the response is read from.
+    printf '    continue? [y/N] ' >/dev/tty
+    reply=""
+    read -r reply </dev/tty || reply=""
+    case "$reply" in
+      y|Y|yes|YES) sudo "$@" ;;
+      *) printf '    aborted.\n' >&2; return 1 ;;
+    esac
+  else
+    sudo "$@"
+  fi
+}

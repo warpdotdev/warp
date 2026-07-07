@@ -609,6 +609,89 @@ fn test_are_rects_overlapping_on_axis() {
 }
 
 #[test]
+fn test_reset_pane_sizes_resets_containing_branch() {
+    let panes = [
+        PaneId::dummy_pane_id(),
+        PaneId::dummy_pane_id(),
+        PaneId::dummy_pane_id(),
+    ];
+    let mut tree = PaneData::new(panes[0]);
+
+    tree.split(panes[0], panes[1], Direction::Right);
+    tree.split(panes[1], panes[2], Direction::Right);
+
+    let root = tree.root.as_branch().expect("Should be a branch");
+    let border_id = root.dividers[0].id;
+
+    let root = match &mut tree.root {
+        PaneNode::Branch(root) => root,
+        PaneNode::Leaf(_) => panic!("Should be a branch"),
+    };
+    root.nodes[0].0 = PaneFlex(0.2);
+    root.nodes[1].0 = PaneFlex(0.5);
+    root.nodes[2].0 = PaneFlex(0.3);
+
+    assert!(tree.reset_pane_sizes(border_id));
+
+    let root = tree.root.as_branch().expect("Should be a branch");
+    assert_eq!(
+        root.nodes
+            .iter()
+            .map(|(flex, _)| flex.0)
+            .collect::<Vec<_>>(),
+        vec![DEFAULT_FLEX_VALUE, DEFAULT_FLEX_VALUE, DEFAULT_FLEX_VALUE]
+    );
+}
+
+#[test]
+fn test_reset_pane_sizes_only_resets_containing_branch() {
+    let panes = [
+        PaneId::dummy_pane_id(),
+        PaneId::dummy_pane_id(),
+        PaneId::dummy_pane_id(),
+    ];
+    let mut tree = PaneData::new(panes[0]);
+
+    tree.split(panes[0], panes[1], Direction::Down);
+    tree.split(panes[1], panes[2], Direction::Right);
+
+    let root = match &mut tree.root {
+        PaneNode::Branch(root) => root,
+        PaneNode::Leaf(_) => panic!("Should be a branch"),
+    };
+    root.nodes[0].0 = PaneFlex(0.25);
+    root.nodes[1].0 = PaneFlex(0.75);
+
+    let nested = match &mut root.nodes[1].1 {
+        PaneNode::Branch(nested) => nested,
+        PaneNode::Leaf(_) => panic!("Should be a branch"),
+    };
+    nested.nodes[0].0 = PaneFlex(0.8);
+    nested.nodes[1].0 = PaneFlex(0.2);
+    let nested_border_id = nested.dividers[0].id;
+
+    assert!(tree.reset_pane_sizes(nested_border_id));
+
+    let root = tree.root.as_branch().expect("Should be a branch");
+    assert_eq!(
+        root.nodes
+            .iter()
+            .map(|(flex, _)| flex.0)
+            .collect::<Vec<_>>(),
+        vec![0.25, 0.75]
+    );
+    let nested = root.node(1).as_branch().expect("Should be a branch");
+    assert_eq!(
+        nested
+            .nodes
+            .iter()
+            .map(|(flex, _)| flex.0)
+            .collect::<Vec<_>>(),
+        vec![DEFAULT_FLEX_VALUE, DEFAULT_FLEX_VALUE]
+    );
+}
+
+#[test]
 fn test_hide_and_show_child_agent_pane() {
     let panes = [PaneId::dummy_pane_id(), PaneId::dummy_pane_id()];
     let mut tree = PaneData::new(panes[0]);

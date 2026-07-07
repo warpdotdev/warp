@@ -1,23 +1,25 @@
-use crate::ai::agent::AIAgentActionId;
-use crate::ai::blocklist::block::cli_controller::LongRunningCommandControlState;
-use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
-use crate::features::FeatureFlag;
-use crate::terminal::model::block::AgentInteractionMetadata;
+use std::collections::HashMap;
+use std::io::{sink, Sink};
+use std::sync::Arc;
+
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
     OrderedTerminalEvent, OrderedTerminalEventType, Scrollback, WindowSize,
 };
-use std::io::{sink, Sink};
-use std::sync::Arc;
 use warpui::{Entity, ModelContext, SingletonEntity, WeakViewHandle};
 
+use crate::ai::agent::AIAgentActionId;
+use crate::ai::blocklist::block::cli_controller::LongRunningCommandControlState;
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::features::FeatureFlag;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self};
+use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::shared_session::ai_agent::decode_agent_response_event;
+use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
 use crate::terminal::shared_session::{decode_scrollback, SharedSessionStatus};
+use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::{TerminalModel, TerminalView};
-
-use std::collections::HashMap;
 
 /// If we end up buffering more than this many events,
 /// this is an indication that we're too far ahead and
@@ -57,6 +59,7 @@ pub struct EventLoop {
     sink: Sink,
 
     channel_event_listener: ChannelEventListener,
+    remote_update_guard: RemoteUpdateGuard,
 
     /// The next event number we need from the server.
     next_event_no: usize,
@@ -66,6 +69,8 @@ pub struct EventLoop {
 
     /// A buffer to maintain events we receive from the server that are unordered.
     buffer: HashMap<usize, OrderedTerminalEventType>,
+
+    should_suppress_existing_agent_conversation_replay: bool,
 }
 
 impl EventLoop {
@@ -78,6 +83,7 @@ impl EventLoop {
         scrollback: Scrollback,
         catching_up_to_event_no: Option<usize>,
         load_mode: SharedSessionInitialLoadMode,
+        remote_update_guard: RemoteUpdateGuard,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let scrollback_blocks = decode_scrollback(&scrollback);
@@ -123,10 +129,15 @@ impl EventLoop {
             parser: ansi::Processor::new(),
             sink: sink(),
             channel_event_listener,
+            remote_update_guard,
             // Eventually once we have pagination, the server might need to tell us this.
             next_event_no: 0,
             buffer: HashMap::new(),
             catching_up_to_event_no,
+            should_suppress_existing_agent_conversation_replay: matches!(
+                load_mode,
+                SharedSessionInitialLoadMode::AppendFollowupScrollback
+            ),
         };
 
         // Respect the sharer's window size.
@@ -168,6 +179,7 @@ impl EventLoop {
 
         // Flush out as many contiguous events as we can.
         while let Some(next_event) = self.buffer.remove(&self.next_event_no) {
+            let _active_remote_update = self.remote_update_guard.start_remote_update();
             match next_event {
                 OrderedTerminalEventType::PtyBytesRead { bytes } => {
                     let mut model = self.terminal_model.lock();
@@ -180,17 +192,7 @@ impl EventLoop {
                     participant_id,
                     ai_metadata,
                 } => {
-                    // When a non-agent command starts, clear the loading state and input buffer.
-                    // We don't clear for agent commands because the viewer may be typing a follow-up.
-                    if ai_metadata.is_none() {
-                        if let Some(view) = self.terminal_view.upgrade(ctx) {
-                            view.update(ctx, |view, ctx| {
-                                view.input().update(ctx, |input, ctx| {
-                                    input.unfreeze_and_clear_agent_input(ctx);
-                                });
-                            });
-                        }
-                    }
+                    let should_clear_input = ai_metadata.is_none();
 
                     // If we have AI metadata, map the tool_call_id back to the owning conversation
                     let reconstructed_ai_metadata = ai_metadata.and_then(|ai_metadata| {
@@ -235,7 +237,8 @@ impl EventLoop {
                         ))
                     });
 
-                    self.terminal_model
+                    let start_outcome = self
+                        .terminal_model
                         .lock()
                         .start_command_execution_for_shared_session(
                             participant_id,
@@ -245,19 +248,61 @@ impl EventLoop {
                     // Notify the action model that the action is now executing on the sharer's side
                     // This allows the viewer's UI to show the command as running rather than queued
                     // (which is essential for long running commands to be expandable in the UI).
-                    if let Some(ai_metadata) = reconstructed_ai_metadata {
-                        if let Some(view) = self.terminal_view.upgrade(ctx) {
-                            if let Some(action_id) = ai_metadata.requested_command_action_id() {
+                    if start_outcome.is_accepted() {
+                        // When a non-agent command starts, clear the loading state and input buffer.
+                        // We don't clear for agent commands because the viewer may be typing a
+                        // follow-up.
+                        if should_clear_input {
+                            if let Some(view) = self.terminal_view.upgrade(ctx) {
                                 view.update(ctx, |view, ctx| {
-                                    view.ai_controller().update(ctx, |controller, ctx| {
-                                        controller
-                                            .mark_action_as_remotely_executing_in_shared_session(
-                                                action_id,
-                                                *ai_metadata.conversation_id(),
+                                    // Skip during cloud setup: clearing on every setup command would
+                                    // wipe a follow-up the viewer is composing. Mirrors the
+                                    // `InputUpdated` guard.
+                                    let skip_clear_during_setup =
+                                        FeatureFlag::CloudModeSetupV2.is_enabled() && {
+                                            let model = view.model.lock();
+                                            is_cloud_agent_pre_first_exchange(
+                                                view.ambient_agent_view_model(),
+                                                view.agent_view_controller(),
+                                                &model,
                                                 ctx,
-                                            );
+                                            )
+                                        };
+                                    if skip_clear_during_setup
+                                        || view.has_queued_command_in_flight(ctx)
+                                    {
+                                        return;
+                                    }
+                                    view.input().update(ctx, |input, ctx| {
+                                        // Restore frozen visual state. Then also reinitialize the
+                                        // buffer here: for shell commands the block transition will
+                                        // reset the CRDT with a new block ID shortly after, so the
+                                        // brief CRDT inconsistency is harmless. This pre-emptive
+                                        // clear gives the viewer an empty buffer while the command
+                                        // runs rather than showing the command text.
+                                        input.unfreeze_agent_input(false, ctx);
+                                        let editor = input.editor().clone();
+                                        editor.update(ctx, |editor, ctx| {
+                                            editor.reinitialize_buffer(None, ctx);
+                                        });
                                     });
                                 });
+                            }
+                        }
+                        if let Some(ai_metadata) = reconstructed_ai_metadata {
+                            if let Some(view) = self.terminal_view.upgrade(ctx) {
+                                if let Some(action_id) = ai_metadata.requested_command_action_id() {
+                                    view.update(ctx, |view, ctx| {
+                                        view.ai_controller().update(ctx, |controller, ctx| {
+                                            controller
+                                                .mark_action_as_remotely_executing_in_shared_session(
+                                                    action_id,
+                                                    *ai_metadata.conversation_id(),
+                                                    ctx,
+                                                );
+                                        });
+                                    });
+                                }
                             }
                         }
                     }
@@ -265,7 +310,10 @@ impl EventLoop {
                 OrderedTerminalEventType::Resize { window_size } => {
                     self.process_resize_event(window_size, ctx)
                 }
-                OrderedTerminalEventType::CommandExecutionFinished { .. } => (),
+                OrderedTerminalEventType::CommandExecutionFinished { .. } => {
+                    // Queue advancement waits for block completion so input cleanup can observe
+                    // the in-flight queued command and preserve any local draft.
+                }
                 OrderedTerminalEventType::AgentResponseEvent {
                     response_initiator,
                     response_event,
@@ -314,11 +362,44 @@ impl EventLoop {
                     self.terminal_model
                         .lock()
                         .set_is_receiving_agent_conversation_replay(true);
+                    if let Some(view) = self.terminal_view.upgrade(ctx) {
+                        let should_suppress_existing_replay =
+                            self.should_suppress_existing_agent_conversation_replay;
+                        view.update(ctx, |view, ctx| {
+                            view.ai_controller().update(ctx, |controller, _| {
+                                controller.set_should_suppress_existing_agent_conversation_replay(
+                                    should_suppress_existing_replay,
+                                );
+                            });
+                        });
+                    }
                 }
                 OrderedTerminalEventType::AgentConversationReplayEnded => {
                     self.terminal_model
                         .lock()
                         .set_is_receiving_agent_conversation_replay(false);
+                    if let Some(view) = self.terminal_view.upgrade(ctx) {
+                        view.update(ctx, |view, ctx| {
+                            view.ai_controller().update(ctx, |controller, _| {
+                                controller
+                                    .set_should_suppress_existing_agent_conversation_replay(false);
+                            });
+                        });
+                    }
+                }
+                OrderedTerminalEventType::CloudModeSetupPhaseEnded => {
+                    // Canonical setup-complete signal from the sharer. Legacy
+                    // AppendedExchange-driven teardowns remain idempotently as
+                    // a fallback for pre-feature sharers.
+                    if let Some(view) = self.terminal_view.upgrade(ctx) {
+                        view.update(ctx, |view, ctx| {
+                            view.tear_down_cloud_mode_setup_phase(ctx);
+                            // A promptless handoff run never fires a first turn,
+                            // so this is the only point a prompt queued during
+                            // setup can be auto-sent.
+                            view.maybe_drain_queue_after_promptless_setup(ctx);
+                        });
+                    }
                 }
             }
 
@@ -352,5 +433,5 @@ impl Entity for EventLoop {
 }
 
 #[cfg(test)]
-#[path = "event_loop_test.rs"]
+#[path = "event_loop_tests.rs"]
 mod tests;

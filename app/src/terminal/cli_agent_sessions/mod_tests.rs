@@ -1,4 +1,6 @@
-use super::event::{parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType};
+use super::event::{
+    parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
+};
 use super::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
@@ -237,6 +239,20 @@ fn parse_pi_stop_notification() {
 }
 
 #[test]
+fn parse_droid_stop_notification() {
+    // Droid is already a known CLI agent, so structured OSC 777 events using
+    // `"agent":"droid"` should resolve through the existing command prefix
+    // parser without any Droid-specific parser logic.
+    let body = r#"{"v":1,"agent":"droid","event":"stop","session_id":"abc","cwd":"/tmp/proj","project":"proj","query":"write a haiku","response":"Memory is safe"}"#;
+    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+
+    assert_eq!(notif.agent, CLIAgent::Droid);
+    assert_eq!(notif.event, CLIAgentEventType::Stop);
+    assert_eq!(notif.payload.query.as_deref(), Some("write a haiku"));
+    assert_eq!(notif.payload.response.as_deref(), Some("Memory is safe"));
+}
+
+#[test]
 fn apply_event_preserves_input_session() {
     let input_state = CLIAgentInputState::Open {
         entrypoint: CLIAgentInputEntrypoint::CtrlG,
@@ -257,9 +273,11 @@ fn apply_event_preserves_input_session() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::PermissionRequest,
@@ -290,6 +308,7 @@ fn is_remote_returns_true_when_remote_host_is_set() {
         draft_text: None,
         remote_host: Some("user@devbox".to_owned()),
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
     assert!(session.is_remote());
 }
@@ -307,6 +326,7 @@ fn is_remote_returns_false_when_remote_host_is_none() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
     assert!(!session.is_remote());
 }
@@ -375,9 +395,11 @@ fn session_start_sets_plugin_version() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::SessionStart,
@@ -407,9 +429,11 @@ fn session_start_without_plugin_version_leaves_none() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::SessionStart,
@@ -421,4 +445,255 @@ fn session_start_without_plugin_version_leaves_none() {
 
     session.apply_event(&event);
     assert_eq!(session.plugin_version, None);
+}
+
+#[test]
+fn codex_session_not_rich_until_rich_notification() {
+    // Codex's OSC 9 fallback never sets `received_rich_notification`, so the
+    // session must not claim rich status even when a fallback listener exists.
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    };
+    assert!(!session.supports_rich_status());
+
+    // A structured OSC 777 notification latches the flag -> rich status.
+    session.received_rich_notification = true;
+    assert!(session.supports_rich_status());
+}
+
+#[test]
+fn non_codex_session_rich_after_rich_notification() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    };
+    // No listener and no rich notification yet.
+    assert!(!session.supports_rich_status());
+
+    session.received_rich_notification = true;
+    assert!(session.supports_rich_status());
+}
+
+/// Constructs a session with permission-scoped state already populated, as if
+/// a `PermissionRequest` had just been received and the agent is now Blocked.
+/// Used by the GH-9525 regression tests below.
+fn blocked_claude_session_with_permission_state() -> CLIAgentSession {
+    CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Blocked {
+            message: Some("Wants to run bash: rm -rf /tmp".to_owned()),
+        },
+        session_context: CLIAgentSessionContext {
+            summary: Some("Wants to run bash: rm -rf /tmp".to_owned()),
+            tool_name: Some("Bash".to_owned()),
+            tool_input_preview: Some("rm -rf /tmp".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    }
+}
+
+#[test]
+fn stop_clears_permission_scoped_state() {
+    // GH-9525: after a PermissionRequest sets `summary`, the Stop event must
+    // clear it. Otherwise the tab title falls back to the stale permission
+    // text instead of reflecting the now-completed session.
+    let mut session = blocked_claude_session_with_permission_state();
+
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::Stop,
+        session_id: Some("abc".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            query: Some("write a haiku".to_owned()),
+            response: Some("Memory is safe".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    session.apply_event(&event);
+
+    assert_eq!(session.session_context.summary, None);
+    assert_eq!(session.session_context.tool_name, None);
+    assert_eq!(session.session_context.tool_input_preview, None);
+    assert_eq!(
+        session.session_context.query.as_deref(),
+        Some("write a haiku"),
+    );
+    assert_eq!(
+        session.session_context.response.as_deref(),
+        Some("Memory is safe"),
+    );
+    assert!(matches!(session.status, CLIAgentSessionStatus::Success));
+}
+
+#[test]
+fn permission_replied_clears_permission_scoped_state() {
+    // When the user replies to a permission prompt the agent transitions back
+    // to InProgress; the now-stale summary/tool fields must be cleared so they
+    // don't leak into UI surfaces during the next turn.
+    let mut session = blocked_claude_session_with_permission_state();
+
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::PermissionReplied,
+        session_id: Some("abc".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    session.apply_event(&event);
+
+    assert_eq!(session.session_context.summary, None);
+    assert_eq!(session.session_context.tool_name, None);
+    assert_eq!(session.session_context.tool_input_preview, None);
+    assert!(matches!(session.status, CLIAgentSessionStatus::InProgress));
+}
+
+#[test]
+fn prompt_submit_clears_permission_scoped_state() {
+    // PromptSubmit already clears `response`; clearing the permission-scoped
+    // fields keeps the same hygiene if the user manages to start a new turn
+    // while permission state is still populated (e.g. an abandoned permission
+    // flow that was not closed by an explicit PermissionReplied).
+    let mut session = blocked_claude_session_with_permission_state();
+    session.session_context.response = Some("stale response".to_owned());
+
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::PromptSubmit,
+        session_id: Some("abc".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            query: Some("next prompt".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    session.apply_event(&event);
+
+    assert_eq!(session.session_context.summary, None);
+    assert_eq!(session.session_context.tool_name, None);
+    assert_eq!(session.session_context.tool_input_preview, None);
+    assert_eq!(session.session_context.response, None);
+    assert_eq!(
+        session.session_context.query.as_deref(),
+        Some("next prompt")
+    );
+    assert!(matches!(session.status, CLIAgentSessionStatus::InProgress));
+}
+
+#[test]
+fn tool_complete_clears_permission_scoped_state() {
+    // GH-11082: answering an AskUserQuestion emits only ToolComplete (the
+    // plugin sends no PermissionReplied for it), so the Blocked -> InProgress
+    // transition here must also clear the stale summary. Otherwise the tab
+    // title keeps showing "Wants to run AskUserQuestion: ..." until the next
+    // prompt or Stop.
+    let mut session = blocked_claude_session_with_permission_state();
+
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::ToolComplete,
+        session_id: Some("abc".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    session.apply_event(&event);
+
+    assert_eq!(session.session_context.summary, None);
+    assert_eq!(session.session_context.tool_name, None);
+    assert_eq!(session.session_context.tool_input_preview, None);
+    assert!(matches!(session.status, CLIAgentSessionStatus::InProgress));
+}
+
+#[test]
+fn permission_request_still_populates_summary_and_tool_fields() {
+    // Sanity: clearing permission-scoped state on Stop/Reply/Submit must not
+    // also break the PermissionRequest path that initially populates them.
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    };
+
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::PermissionRequest,
+        session_id: Some("abc".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            summary: Some("Wants to run bash: rm -rf /tmp".to_owned()),
+            tool_name: Some("Bash".to_owned()),
+            tool_input_preview: Some("rm -rf /tmp".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    session.apply_event(&event);
+
+    assert_eq!(
+        session.session_context.summary.as_deref(),
+        Some("Wants to run bash: rm -rf /tmp"),
+    );
+    assert_eq!(session.session_context.tool_name.as_deref(), Some("Bash"));
+    assert_eq!(
+        session.session_context.tool_input_preview.as_deref(),
+        Some("rm -rf /tmp"),
+    );
+    assert!(matches!(
+        session.status,
+        CLIAgentSessionStatus::Blocked { .. },
+    ));
 }

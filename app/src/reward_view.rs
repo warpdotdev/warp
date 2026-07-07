@@ -1,12 +1,10 @@
 use warp_core::ui::builder::UiBuilder;
-use warpui::{
-    accessibility::{AccessibilityContent, WarpA11yRole},
-    elements::{Align, Container, Element, Flex, MouseStateHandle, ParentElement},
-    keymap::FixedBinding,
-    ui_components::button::ButtonVariant,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
+use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+use warpui::elements::{Align, Container, Element, Flex, MouseStateHandle, ParentElement};
+use warpui::keymap::FixedBinding;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
 

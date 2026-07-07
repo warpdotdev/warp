@@ -1,17 +1,17 @@
+use std::borrow::Cow;
+use std::collections::HashSet;
+
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
-use std::{borrow::Cow, collections::HashSet};
 use url::{Origin, ParseError, Url};
 
-use crate::AppId;
-use crate::{
-    channel::config::{
-        ChannelConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination, WarpServerConfig,
-    },
-    features::FeatureFlag,
-};
-
 use super::Channel;
+use crate::channel::config::{
+    ChannelConfig, IapConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination,
+    WarpServerConfig,
+};
+use crate::features::FeatureFlag;
+use crate::AppId;
 
 lazy_static! {
     static ref CHANNEL_STATE: Mutex<ChannelState> = Mutex::new(ChannelState::init());
@@ -19,8 +19,8 @@ lazy_static! {
 
 #[cfg(feature = "test-util")]
 lazy_static! {
-    static ref MOCK_SERVER: mockito::ServerGuard = mockito::Server::new();
-    static ref MOCK_SERVER_URL: String = MOCK_SERVER.url();
+    static ref MOCK_SERVER: Mutex<mockito::ServerGuard> = Mutex::new(mockito::Server::new());
+    static ref MOCK_SERVER_URL: String = MOCK_SERVER.lock().url();
     static ref APP_VERSION: Mutex<Option<&'static str>> = Mutex::new(None);
 }
 
@@ -52,6 +52,13 @@ impl ChannelState {
                 mcp_static_config: None,
             },
         }
+    }
+
+    /// Returns the server used by test-only URL routing so downstream tests can install mocks.
+    #[cfg(feature = "test-util")]
+    pub fn mock_server() -> parking_lot::MutexGuard<'static, mockito::ServerGuard> {
+        lazy_static::initialize(&MOCK_SERVER_URL);
+        MOCK_SERVER.lock()
     }
 
     pub fn new(channel: Channel, mut config: ChannelConfig) -> Self {
@@ -214,6 +221,10 @@ impl ChannelState {
             .server_config
             .firebase_auth_api_key
             .clone()
+    }
+
+    pub fn iap_config() -> Option<IapConfig> {
+        CHANNEL_STATE.lock().config.server_config.iap_config.clone()
     }
 
     pub fn ws_server_url() -> Cow<'static, str> {
@@ -422,28 +433,17 @@ fn app_id_from_bundle() -> Option<AppId> {
     // We skip this for tests, as the call to `mainBundle` can take 30+ms,
     // which is a significant portion of the total test runtime.
     #[cfg(all(target_os = "macos", not(feature = "test-util")))]
-    #[allow(deprecated)]
-    unsafe {
-        use cocoa::{
-            base::{id, nil},
-            foundation::NSBundle,
-        };
-        use objc::{msg_send, sel, sel_impl};
-        use warpui::platform::mac::utils::nsstring_as_str;
+    {
+        use objc2_foundation::NSBundle;
 
-        let bundle = id::mainBundle();
-        if bundle != nil {
-            let nsstring: id = msg_send![bundle, bundleIdentifier];
-            if nsstring != nil {
-                let app_id = nsstring_as_str(nsstring)
-                    .expect("bundle IDs should always be valid UTF-8 strings");
-
-                if !app_id.is_empty() {
-                    return Some(
-                        AppId::parse(app_id)
-                            .expect("macOS bundle identifier has an unexpected format"),
-                    );
-                }
+        let bundle = NSBundle::mainBundle();
+        if let Some(bundle_identifier) = bundle.bundleIdentifier() {
+            let app_id = bundle_identifier.to_string();
+            if !app_id.is_empty() {
+                return Some(
+                    AppId::parse(&app_id)
+                        .expect("macOS bundle identifier has an unexpected format"),
+                );
             }
         }
     }

@@ -5,14 +5,13 @@ use std::iter;
 
 use itertools::Itertools;
 
-use crate::{
-    completer::{
-        describe::OptionCaseSensitivity, suggest::MatchRequirement, LocationType, Match,
-        MatchStrategy, MatchedSuggestion, Suggestion, SuggestionType,
-    },
-    meta::Spanned,
-    signatures::Command,
+use crate::completer::describe::OptionCaseSensitivity;
+use crate::completer::suggest::MatchRequirement;
+use crate::completer::{
+    LocationType, Match, MatchStrategy, MatchedSuggestion, Suggestion, SuggestionType,
 };
+use crate::meta::Spanned;
+use crate::signatures::Command;
 
 pub fn complete(
     matcher: MatchStrategy,

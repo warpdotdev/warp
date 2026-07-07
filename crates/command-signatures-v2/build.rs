@@ -1,7 +1,7 @@
-use command::blocking::Command;
 use std::path::Path;
 
 use anyhow::anyhow;
+use command::blocking::Command;
 
 fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed=js/src");

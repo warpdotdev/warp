@@ -1,13 +1,12 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use crate::{
-    config::LanguageId, model::LanguageServerId, supported_servers::LSPServerType, LspEvent,
-    LspServerConfig, LspServerModel,
-};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+
+use crate::config::LanguageId;
+use crate::model::LanguageServerId;
+use crate::supported_servers::LSPServerType;
+use crate::{LspEvent, LspServerConfig, LspServerModel};
 
 #[derive(Debug)]
 pub enum LspManagerModelEvent {
@@ -188,7 +187,7 @@ impl LspManagerModel {
         let lsp = ctx.add_model(|_| LspServerModel::new(config));
 
         let path_clone = path.clone();
-        ctx.subscribe_to_model(&lsp, move |_, event, ctx| match event {
+        ctx.subscribe_to_model(&lsp, move |_, _, event, ctx| match event {
             LspEvent::Started => {
                 ctx.emit(LspManagerModelEvent::ServerStarted(path_clone.clone()));
             }

@@ -1,6 +1,6 @@
 name: Bug Report
 description: "Found a bug? Please search through our open issues and docs, to make sure it isn't already submitted. If you have an SSH related issue, please use the SSH Template below"
-labels: ["bug", "ready-to-implement"]
+labels: ["bug"]
 body:
   - type: checkboxes
     attributes:
@@ -134,4 +134,3 @@ body:
         - Ignore
     validations:
       required: false
-

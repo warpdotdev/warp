@@ -1,26 +1,24 @@
-use std::{
-    path::{Path, PathBuf},
-    rc::Rc,
-};
-
 use std::ops::Range;
-
-use warp_editor::{content::buffer::InitialBufferState, render::model::LineCount};
-use warp_util::file::{FileLoadError, FileSaveError};
-use warpui::{
-    elements::MouseStateHandle, AppContext, Element, Entity, TypedActionView, View, ViewContext,
-    ViewHandle, WindowId,
-};
+use std::path::PathBuf;
+use std::rc::Rc;
 
 use ai::diff_validation::DiffType;
-
-use super::editor::view::CodeEditorView;
-use super::ImmediateSaveError;
-use crate::terminal::TerminalView;
-use crate::{code::editor::EditorReviewComment, code_review::comments::CommentId};
 use warp_core::ui::appearance::Appearance;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::model::LineCount;
+use warp_util::file::{FileLoadError, FileSaveError};
+use warpui::elements::MouseStateHandle;
+use warpui::{
+    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
+};
 
 pub use super::diff_viewer::DisplayMode;
+use super::editor::view::CodeEditorView;
+use super::ImmediateSaveError;
+use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;
+use crate::code::editor::EditorReviewComment;
+use crate::code_review::comments::CommentId;
+use crate::terminal::TerminalView;
 
 #[derive(Debug)]
 pub enum LocalCodeEditorEvent {
@@ -97,7 +95,9 @@ impl LocalCodeEditorView {
         false
     }
 
-    pub fn file_path(&self) -> Option<&Path> {
+    /// Returns the unified file location (local or remote).
+    /// The WASM stub has no backing file, so this always returns `None`.
+    pub fn file_location(&self) -> Option<&BufferFileLocation> {
         None
     }
 }

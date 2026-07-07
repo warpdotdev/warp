@@ -1,43 +1,35 @@
-use std::{fmt::Write, time::Duration};
+use std::fmt::Write;
+use std::time::Duration;
 
 use async_channel::Sender;
 use pathfinder_geometry::vector::vec2f;
-use warp_editor::{
-    render::model::{AutoScrollMode, Decoration},
-    search::{SearchEvent, Searcher},
+use warp_core::r#async::debounce;
+use warp_editor::render::model::{AutoScrollMode, Decoration};
+use warp_editor::search::{SearchEvent, Searcher};
+use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use warpui::elements::{
+    Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Empty, Flex, MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Rect, Shrinkable, Stack,
 };
+use warpui::platform::Cursor;
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::toggle_button::ToggleButton;
 use warpui::{
-    accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
-    elements::{
-        Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Empty, Flex, MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, Rect, Shrinkable, Stack,
-    },
-    platform::Cursor,
-    presenter::ChildView,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-        toggle_button::ToggleButton,
-    },
     AppContext, BlurContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    debounce::debounce,
-    editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions},
-    ui_components::icons::Icon,
-    view_components::find::{
-        CASE_SENSITIVE_LABEL, CASE_SENSITIVE_TOOLTIP, FIND_BAR_WIDTH, REGEX_TOGGLE_LABEL,
-        REGEX_TOGGLE_TOOLTIP,
-    },
-};
-
-use super::{
-    model::NotebooksEditorModel,
-    view::{EditorViewEvent, RichTextEditorView},
+use super::model::NotebooksEditorModel;
+use super::view::{EditorViewEvent, RichTextEditorView};
+use crate::appearance::Appearance;
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
+use crate::ui_components::icons::Icon;
+use crate::view_components::find::{
+    CASE_SENSITIVE_LABEL, CASE_SENSITIVE_TOOLTIP, FIND_BAR_WIDTH, REGEX_TOGGLE_LABEL,
+    REGEX_TOGGLE_TOOLTIP,
 };
 
 /// View for the find bar within a notebook.

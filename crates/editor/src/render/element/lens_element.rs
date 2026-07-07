@@ -1,24 +1,20 @@
 use std::ops::Range;
 
-use warpui::{
+use warpui_core::elements::Point;
+use warpui_core::event::DispatchedEvent;
+use warpui_core::geometry::rect::RectF;
+use warpui_core::geometry::vector::Vector2F;
+use warpui_core::units::IntoPixels;
+use warpui_core::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, ModelHandle,
     PaintContext, SizeConstraint, WeakViewHandle,
-    elements::Point,
-    event::DispatchedEvent,
-    geometry::{rect::RectF, vector::Vector2F},
-    units::IntoPixels,
 };
 
-use crate::{
-    editor::EditorView,
-    render::{
-        element::{
-            DisplayOptions, RenderContext, RenderableBlock, paragraph::RenderableParagraph,
-            temporary_block::RenderableTemporaryBlock,
-        },
-        model::{BlockItem, RenderLineLocation, RenderState},
-    },
-};
+use crate::editor::EditorView;
+use crate::render::element::paragraph::RenderableParagraph;
+use crate::render::element::temporary_block::RenderableTemporaryBlock;
+use crate::render::element::{DisplayOptions, RenderContext, RenderableBlock};
+use crate::render::model::{BlockItem, RenderLineLocation, RenderState};
 
 pub struct RichTextElementLens<V: EditorView> {
     blocks: Option<Vec<Box<dyn RenderableBlock>>>,

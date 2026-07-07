@@ -1,9 +1,11 @@
-use warpui::{async_assert, integration::TestStep, ViewHandle};
+use warpui::integration::TestStep;
+use warpui::{async_assert, ViewHandle};
 
 use crate::integration_testing::command_palette::assert_command_palette_is_open;
 use crate::integration_testing::navigation_palette::assert_navigation_mode_enabled_in_command_palette;
+use crate::integration_testing::step::new_step_with_default_assertions;
 use crate::util::bindings::cmd_or_ctrl_shift;
-use crate::{integration_testing::step::new_step_with_default_assertions, workspace::Workspace};
+use crate::workspace::Workspace;
 
 pub fn open_navigation_palette_step() -> TestStep {
     new_step_with_default_assertions("Open Navigation Palette")

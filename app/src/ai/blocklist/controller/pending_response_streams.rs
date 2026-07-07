@@ -3,15 +3,11 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::{
-    ai::agent::{conversation::AIConversationId, CancellationReason},
-    BlocklistAIHistoryModel,
-};
-
-use super::{
-    response_stream::{ResponseStream, ResponseStreamId},
-    BlocklistAIController,
-};
+use super::response_stream::{ResponseStream, ResponseStreamId};
+use super::BlocklistAIController;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::CancellationReason;
+use crate::BlocklistAIHistoryModel;
 
 pub(super) struct PendingResponseStreams {
     streams: HashMap<ResponseStreamId, ModelHandle<ResponseStream>>,
@@ -36,6 +32,23 @@ impl PendingResponseStreams {
         self.streams
             .keys()
             .any(|stream_id| conversation.is_processing_response_stream(stream_id))
+    }
+
+    /// Returns the IDs of all in-flight streams owned by the given conversation.
+    pub fn stream_ids_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        app: &AppContext,
+    ) -> Vec<ResponseStreamId> {
+        let history_model = BlocklistAIHistoryModel::as_ref(app);
+        let Some(conversation) = history_model.conversation(&conversation_id) else {
+            return Vec::new();
+        };
+        self.streams
+            .keys()
+            .filter(|stream_id| conversation.is_processing_response_stream(stream_id))
+            .cloned()
+            .collect()
     }
 
     pub fn register_new_stream(
@@ -99,6 +112,11 @@ impl PendingResponseStreams {
             false
         } else {
             for response_stream in streams_to_cancel.into_iter() {
+                log::info!(
+                    "Canceling active stream for conversation_id={conversation_id:?}, \
+                     reason={reason}, backtrace=\n{}",
+                    std::backtrace::Backtrace::force_capture()
+                );
                 response_stream.update(ctx, |stream, ctx| {
                     stream.cancel(reason, conversation_id, ctx)
                 });

@@ -1,38 +1,54 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::{send_telemetry_from_ctx, ui::Icon};
+use warp_core::ui::Icon;
 use warp_util::path::LineAndColumnArg;
+use warpui::elements::{
+    resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide,
+    Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    Resizable, ResizableStateHandle, Shrinkable,
+};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment,
-        DragBarSide, Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        ParentElement, Resizable, ResizableStateHandle, Shrinkable,
-    },
-    platform::Cursor,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::appearance::Appearance;
+use crate::code::buffer_location::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use crate::code::file_tree::FileTreeEvent;
+use crate::code::file_tree::FileTreeView;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
-use crate::drive::panel::{DrivePanel, DrivePanelEvent};
+use crate::drive::panel::{
+    DrivePanel, DrivePanelEvent, MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH,
+};
+use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
+use crate::pane_group::pane::view::header::PANE_HEADER_HEIGHT;
 use crate::pane_group::working_directories::WorkingDirectory;
-use crate::pane_group::{PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel};
+use crate::pane_group::{
+    PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel, {self},
+};
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
 use crate::server::telemetry::{FileTreeSource, WarpDriveSource};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use crate::terminal::resizable_data::{ModalType, ResizableData};
+use crate::ui_components::buttons::{icon_button, icon_button_with_color};
+use crate::ui_components::icons;
+use crate::util::bindings::keybinding_name_to_display_string;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
-#[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
 use crate::util::openable_file_type::FileTarget;
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::{
+    is_markdown_file, resolve_file_target_with_editor_choice, EditorLayout,
+};
 use crate::workspace::view::conversation_list::view::{
     ConversationListView, Event as ConversationListViewEvent,
 };
@@ -45,28 +61,15 @@ use crate::workspace::view::{
     OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
     TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
-use crate::{
-    appearance::Appearance,
-    code::file_tree::FileTreeView,
-    drive::panel::{MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH},
-    pane_group::pane::view::header::{components::HEADER_EDGE_PADDING, PANE_HEADER_HEIGHT},
-    pane_group::{self},
-    terminal::resizable_data::{ModalType, ResizableData},
-    ui_components::{
-        buttons::{icon_button, icon_button_with_color},
-        icons,
-    },
-    util::bindings::keybinding_name_to_display_string,
-    workspace::WorkspaceAction,
-    TelemetryEvent,
-};
+use crate::workspace::WorkspaceAction;
+use crate::TelemetryEvent;
 
 #[derive(Default)]
 struct MouseStateHandles {
     project_explorer_button: MouseStateHandle,
+    conversation_list_view_button: MouseStateHandle,
     global_search_button: MouseStateHandle,
     warp_drive_button: MouseStateHandle,
-    conversation_list_view_button: MouseStateHandle,
 }
 
 #[derive(Clone, Debug)]
@@ -77,13 +80,14 @@ pub enum LeftPanelAction {
     ConversationListView,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum LeftPanelEvent {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     FileTree(pane_group::Event),
     WarpDrive(DrivePanelEvent),
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     OpenFileWithTarget {
-        path: PathBuf,
+        location: LocalOrRemotePath,
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },
@@ -106,8 +110,9 @@ pub enum ToolPanelView {
 /// Encapsulates the active view state to enforce that all mutations go through
 /// `active_view_state::set`, which handles necessary side effects.
 mod active_view_state {
-    use super::ToolPanelView;
     use warpui::ViewContext;
+
+    use super::ToolPanelView;
 
     pub struct ActiveViewState(ToolPanelView);
 
@@ -270,27 +275,45 @@ impl LeftPanelView {
                 }
                 let has_terminal_session = directories.iter().any(|dir| dir.terminal_id.is_some());
 
-                // Update GlobalSearchView root directories based on all working directories
-                let roots: Vec<PathBuf> = directories.iter().map(|d| d.path.clone()).collect();
+                // Split directories into local and remote.
+                let local_paths: Vec<PathBuf> = directories
+                    .iter()
+                    .filter_map(|d| d.path.to_local_path().map(|p| p.to_path_buf()))
+                    .collect();
+                #[allow(unused_variables)]
+                let remote_repos: Vec<repo_metadata::RemoteRepositoryIdentifier> = directories
+                    .iter()
+                    .filter_map(|d| match &d.path {
+                        LocalOrRemotePath::Remote(remote_path) => {
+                            Some(repo_metadata::RemoteRepositoryIdentifier::new(
+                                remote_path.host_id.clone(),
+                                remote_path.path.clone(),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect();
 
+                // Update GlobalSearchView root directories (local + remote).
+                let all_directories: Vec<LocalOrRemotePath> =
+                    directories.iter().map(|d| d.path.clone()).collect();
                 let global_search_view =
                     me.get_or_create_global_search_view_for_pane_group(active_pane_group.id(), ctx);
                 global_search_view.update(ctx, |view, view_ctx| {
-                    view.set_root_directories(roots, view_ctx);
+                    view.set_root_directories(all_directories, view_ctx);
                 });
 
-                let directories: Vec<PathBuf> =
-                    directories.iter().map(|dir| dir.path.clone()).collect();
-
                 // Directories are already in display order (most recent first) from the model
-                let directories = deduplicate_by_directory_name(directories);
+                let local_directories = deduplicate_by_directory_name(local_paths);
                 let file_tree_view =
                     me.get_or_create_file_tree_view_for_pane_group(active_pane_group.id(), ctx);
 
                 let is_visible =
                     active_pane_group.as_ref(ctx).left_panel_open && me.is_file_tree_active();
                 file_tree_view.update(ctx, |view, ctx| {
-                    view.set_root_directories(directories, ctx);
+                    view.set_root_directories(local_directories, ctx);
+                    #[cfg(feature = "local_fs")]
+                    view.set_remote_root_directories(&remote_repos, ctx);
                     view.set_has_terminal_session(has_terminal_session, ctx);
                     view.set_is_active(is_visible, ctx);
 
@@ -591,26 +614,44 @@ impl LeftPanelView {
             .iter()
             .any(|dir| dir.terminal_id.is_some());
 
-        // Update GlobalSearchView root directories based on all working directories
-        let roots: Vec<PathBuf> = active_directories.iter().map(|d| d.path.clone()).collect();
+        // Split directories into local and remote.
+        let local_paths: Vec<PathBuf> = active_directories
+            .iter()
+            .filter_map(|d| d.path.to_local_path().map(|p| p.to_path_buf()))
+            .collect();
+        #[allow(unused_variables)]
+        let remote_repos: Vec<repo_metadata::RemoteRepositoryIdentifier> = active_directories
+            .iter()
+            .filter_map(|d| match &d.path {
+                LocalOrRemotePath::Remote(remote_path) => {
+                    Some(repo_metadata::RemoteRepositoryIdentifier::new(
+                        remote_path.host_id.clone(),
+                        remote_path.path.clone(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Update GlobalSearchView root directories (local + remote).
+        let all_directories: Vec<LocalOrRemotePath> =
+            active_directories.iter().map(|d| d.path.clone()).collect();
         let global_search_view =
             self.get_or_create_global_search_view_for_pane_group(pane_group_id, ctx);
         global_search_view.update(ctx, |view, view_ctx| {
-            view.set_root_directories(roots, view_ctx);
+            view.set_root_directories(all_directories, view_ctx);
         });
 
-        let directories: Vec<PathBuf> = active_directories
-            .iter()
-            .map(|dir| dir.path.clone())
-            .collect();
-        let directories = deduplicate_by_directory_name(directories);
+        let local_directories = deduplicate_by_directory_name(local_paths);
         let active_file_model = pane_group.as_ref(ctx).active_file_model().clone();
 
         let file_tree_view = self.get_or_create_file_tree_view_for_pane_group(pane_group_id, ctx);
         let left_panel_open = pane_group.as_ref(ctx).left_panel_open;
         let is_visible = left_panel_open && self.is_file_tree_active();
         file_tree_view.update(ctx, |view, ctx| {
-            view.set_root_directories(directories, ctx);
+            view.set_root_directories(local_directories, ctx);
+            #[cfg(feature = "local_fs")]
+            view.set_remote_root_directories(&remote_repos, ctx);
             view.set_has_terminal_session(has_terminal_session, ctx);
             view.set_active_file_model(active_file_model, ctx);
             view.set_is_active(is_visible, ctx);
@@ -701,7 +742,7 @@ impl LeftPanelView {
     ) {
         match event {
             GlobalSearchViewEvent::OpenMatch {
-                path,
+                location,
                 line_number,
                 column_num,
             } => {
@@ -711,13 +752,27 @@ impl LeftPanelView {
                 };
 
                 let settings = EditorSettings::as_ref(ctx);
-                let target = resolve_file_target_with_editor_choice(
-                    path,
-                    *settings.open_code_panels_file_editor,
-                    *settings.prefer_markdown_viewer,
-                    *settings.open_file_layout,
-                    None,
-                );
+                let target = match location {
+                    LocalOrRemotePath::Local(path) => resolve_file_target_with_editor_choice(
+                        path,
+                        *settings.open_code_panels_file_editor,
+                        *settings.prefer_markdown_viewer,
+                        *settings.open_file_layout,
+                        None,
+                    ),
+                    // Local-fs-based target resolution can't inspect remote
+                    // files; mirror the file tree's remote handling (code
+                    // editor, or markdown viewer by extension + preference).
+                    LocalOrRemotePath::Remote(remote) => {
+                        let is_markdown =
+                            is_markdown_file(std::path::Path::new(remote.path.as_str()));
+                        if is_markdown && *settings.prefer_markdown_viewer {
+                            FileTarget::MarkdownViewer(EditorLayout::SplitPane)
+                        } else {
+                            FileTarget::CodeEditor(EditorLayout::SplitPane)
+                        }
+                    }
+                };
 
                 send_telemetry_from_ctx!(
                     TelemetryEvent::CodePanelsFileOpened {
@@ -728,7 +783,7 @@ impl LeftPanelView {
                 );
 
                 ctx.emit(LeftPanelEvent::OpenFileWithTarget {
-                    path: path.clone(),
+                    location: location.clone(),
                     target,
                     line_col: Some(line_col),
                 });
@@ -761,7 +816,7 @@ impl LeftPanelView {
                 line_col,
             } => {
                 ctx.emit(LeftPanelEvent::OpenFileWithTarget {
-                    path: path.clone(),
+                    location: path.clone(),
                     target: target.clone(),
                     line_col: *line_col,
                 });
@@ -1083,11 +1138,11 @@ impl View for LeftPanelView {
 
         let mouse_state_handles = vec![
             self.mouse_state_handles.project_explorer_button.clone(),
-            self.mouse_state_handles.global_search_button.clone(),
-            self.mouse_state_handles.warp_drive_button.clone(),
             self.mouse_state_handles
                 .conversation_list_view_button
                 .clone(),
+            self.mouse_state_handles.global_search_button.clone(),
+            self.mouse_state_handles.warp_drive_button.clone(),
         ];
 
         // If there is only one button in the toolbelt row,

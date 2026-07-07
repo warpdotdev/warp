@@ -1,5 +1,7 @@
-use warpui::AppContext;
-use warpui::ModelContext;
+use std::collections::{HashMap, HashSet};
+
+use uuid::Uuid;
+use warpui::{AppContext, ModelContext};
 
 use super::TemplatableMCPServerManager;
 use crate::ai::mcp::templatable::{CloudTemplatableMCPServer, TemplatableMCPServer};
@@ -8,8 +10,6 @@ use crate::ai::mcp::MCPServerUpdate;
 use crate::cloud_object::Space;
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::ids::ServerId;
-use std::collections::{HashMap, HashSet};
-use uuid::Uuid;
 
 impl TemplatableMCPServerManager {
     /// Creates a new [`TemplatableMCPServerManager`] instance.

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
@@ -28,11 +29,11 @@ use crate::terminal::input::models::data_source::{AcceptModel, ModelSelectorData
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 use crate::view_components::alert::{Alert, AlertConfig};
 use crate::workspace::WorkspaceAction;
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 
 struct ManageDefaultsTheme;
 
@@ -105,11 +106,18 @@ pub struct InlineModelSelectorView {
     /// Controls whether or not we should filter the contents of the menu
     /// based on the contents of the input.
     filter_results_by_input: bool,
+    /// True when the selector was opened from the model chip with a pre-existing
+    /// prompt that we cleared so the input could be used to search models. The
+    /// prompt is stashed in the suggestions-mode buffer snapshot and restored
+    /// when the selector closes.
+    prompt_parked_for_search: bool,
 }
 
 impl InlineModelSelectorView {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         terminal_view_id: EntityId,
+        ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
         suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
         agent_view_controller: ModelHandle<AgentViewController>,
         input_buffer_model: &ModelHandle<InputBufferModel>,
@@ -117,7 +125,9 @@ impl InlineModelSelectorView {
         positioner: &ModelHandle<InlineMenuPositioner>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let data_source = ctx.add_model(|_| ModelSelectorDataSource::new(terminal_view_id));
+        let data_source = ctx.add_model(|_| {
+            ModelSelectorDataSource::new(terminal_view_id, ambient_agent_view_model)
+        });
 
         let tab_configs = TAB_CONFIGS.clone();
         let initial_filters = tab_configs
@@ -251,7 +261,8 @@ impl InlineModelSelectorView {
             if model.as_ref(ctx).is_inline_model_selector() {
                 me.rerun_query(ctx);
             } else if model.as_ref(ctx).is_closed() {
-                me.filter_results_by_input = true;
+                me.set_filter_results_by_input(true);
+                me.set_prompt_parked_for_search(false);
                 me.mixer.update(ctx, |mixer, ctx| {
                     mixer.reset_results(ctx);
                 });
@@ -331,11 +342,11 @@ impl InlineModelSelectorView {
             &BlocklistAIHistoryModel::handle(ctx),
             move |me, _, event, ctx| {
                 if let BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                    terminal_view_id: event_terminal_view_id,
+                    terminal_surface_id: event_terminal_surface_id,
                     ..
                 } = event
                 {
-                    if *event_terminal_view_id == terminal_view_id {
+                    if *event_terminal_surface_id == terminal_view_id {
                         me.menu_view.update(ctx, |_, ctx| ctx.notify());
                     }
                 }
@@ -397,6 +408,7 @@ impl InlineModelSelectorView {
             terminal_view_id,
             selection_before_tab_switch: None,
             filter_results_by_input: true,
+            prompt_parked_for_search: false,
         }
     }
 
@@ -448,6 +460,14 @@ impl InlineModelSelectorView {
 
     pub fn set_filter_results_by_input(&mut self, filter: bool) {
         self.filter_results_by_input = filter;
+    }
+
+    pub fn prompt_parked_for_search(&self) -> bool {
+        self.prompt_parked_for_search
+    }
+
+    pub fn set_prompt_parked_for_search(&mut self, parked: bool) {
+        self.prompt_parked_for_search = parked;
     }
 
     pub fn set_active_tab(&self, tab: InlineModelSelectorTab, ctx: &mut ViewContext<Self>) {

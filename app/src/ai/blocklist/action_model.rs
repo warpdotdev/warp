@@ -14,63 +14,53 @@
 
 mod execute;
 mod preprocess;
+pub(crate) mod recording_controller;
 
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::{
-    AIAgentActionResultType, AIAgentActionType, AIAgentExchange, CancellationReason,
-    CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
-};
-use crate::ai::{
-    agent::AIAgentInput,
-    blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor,
-};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use chrono::Local;
-pub(crate) use execute::apply_edits;
-pub(crate) use execute::coerce_integer_args;
-pub(crate) use execute::FileReadResult;
-pub(crate) use execute::MalformedFinalLineProxyEvent;
+pub(crate) use execute::{
+    apply_edits, coerce_integer_args, FileReadResult, MalformedFinalLineProxyEvent,
+};
+#[cfg(test)]
+pub(crate) use execute::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
 pub use execute::{
     read_local_file_context, EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent,
     EditResolvedEvent, EditStats, NewConversationDecision, PromptSuggestionExecutor,
     ReadFileContextResult, RequestFileEditsExecutor, RequestFileEditsFormatKind,
-    RequestFileEditsTelemetryEvent, ShellCommandExecutor, ShellCommandExecutorEvent,
-    StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
+    RequestFileEditsTelemetryEvent, RunAgentsExecutor, RunAgentsExecutorEvent,
+    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
 };
-
 use futures::future::{join_all, BoxFuture};
-use preprocess::{PendingPreprocessedActions, PreprocessId};
-
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    path::PathBuf,
-    sync::Arc,
-};
-
-use crate::ai::agent::conversation::AIConversationId;
 use itertools::Itertools;
 use parking_lot::FairMutex;
+use preprocess::{PendingPreprocessedActions, PreprocessId};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::{
-    ai::{
-        agent::{AIAgentAction, AIAgentActionId, AIAgentActionResult},
-        get_relevant_files::controller::GetRelevantFilesController,
-    },
-    terminal::{
-        model::session::active_session::ActiveSession, model_events::ModelEventDispatcher,
-        TerminalModel,
-    },
-};
-
+use self::execute::ask_user_question::AskUserQuestionExecutor;
+use self::execute::search_codebase::SearchCodebaseExecutor;
 use self::execute::{
-    ask_user_question::AskUserQuestionExecutor, search_codebase::SearchCodebaseExecutor,
     BlocklistAIActionExecutor, BlocklistAIActionExecutorEvent, NotExecutedReason,
     RunningActionPhase, TryExecuteResult,
 };
-
 use super::BlocklistAIHistoryModel;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange, AIAgentInput,
+    CancellationOutcome, CancellationReason, CreateDocumentsResult, EditDocumentsResult,
+    RequestCommandOutputResult,
+};
 use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
+use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::TerminalModel;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// The status of an action from an AI output.
@@ -274,7 +264,7 @@ impl BlocklistAIActionModel {
                 ctx,
             )
         });
-        ctx.subscribe_to_model(&executor, move |me, event, ctx| match event {
+        ctx.subscribe_to_model(&executor, move |me, _, event, ctx| match event {
             BlocklistAIActionExecutorEvent::ExecutingAction { action_id } => {
                 ctx.emit(BlocklistAIActionEvent::ExecutingAction(action_id.clone()));
             }
@@ -398,6 +388,10 @@ impl BlocklistAIActionModel {
 
     pub fn start_agent_executor(&self, app: &AppContext) -> ModelHandle<StartAgentExecutor> {
         self.executor.as_ref(app).start_agent_executor().clone()
+    }
+
+    pub fn run_agents_executor(&self, app: &AppContext) -> ModelHandle<RunAgentsExecutor> {
+        self.executor.as_ref(app).run_agents_executor().clone()
     }
 
     pub fn ask_user_question_executor(
@@ -676,6 +670,71 @@ impl BlocklistAIActionModel {
         }
     }
 
+    /// Dispatches a `RunAgents` action with the user-edited request
+    /// from the confirmation card.
+    pub fn execute_run_agents(
+        &mut self,
+        action_id: &AIAgentActionId,
+        request: ai::agent::action::RunAgentsRequest,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let mut found = None;
+        for (conv_id, queue) in self.pending_actions.iter_mut() {
+            if let Some(action) = queue.iter_mut().find(|action| &action.id == action_id) {
+                found = Some((*conv_id, action));
+                break;
+            }
+        }
+        let Some((conversation_id, action)) = found else {
+            log::warn!(
+                "BlocklistAIActionModel::execute_run_agents: no pending action for {action_id:?}"
+            );
+            return;
+        };
+        if !matches!(action.action, AIAgentActionType::RunAgents(_)) {
+            log::warn!(
+                "BlocklistAIActionModel::execute_run_agents: pending action {action_id:?} is not RunAgents"
+            );
+            return;
+        }
+        action.action = AIAgentActionType::RunAgents(request);
+        self.execute_action(action_id, conversation_id, ctx);
+    }
+
+    /// Removes a pending `RunAgents` action and records a `Denied`
+    /// result. Used when the orchestration config is disapproved at
+    /// the time the action becomes blocked on user confirmation.
+    pub fn deny_run_agents(
+        &mut self,
+        action_id: &AIAgentActionId,
+        reason: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let mut found: Option<(AIConversationId, AIAgentAction)> = None;
+        for (conv_id, queue) in self.pending_actions.iter_mut() {
+            if let Some(idx) = queue.iter().position(|a| &a.id == action_id) {
+                if let Some(action) = queue.remove(idx) {
+                    found = Some((*conv_id, action));
+                }
+                break;
+            }
+        }
+        let Some((conversation_id, action)) = found else {
+            log::warn!(
+                "BlocklistAIActionModel::deny_run_agents: no pending action for {action_id:?}"
+            );
+            return;
+        };
+        let result = Arc::new(AIAgentActionResult {
+            id: action.id,
+            task_id: action.task_id,
+            result: AIAgentActionResultType::RunAgents(
+                ai::agent::action_result::RunAgentsResult::Denied { reason },
+            ),
+        });
+        self.handle_action_result(conversation_id, result, None, ctx);
+    }
+
     /// Attempts to execute the next pending action for the active conversation.
     pub fn execute_next_action_for_user(
         &mut self,
@@ -809,18 +868,25 @@ impl BlocklistAIActionModel {
 
         let action_id = action.id.clone();
         let phase = self.action_phase_for_action(&action, ctx);
+        // WaitForEvents owns its own status transition; skip the default
+        // in-progress update.
+        let is_wait_for_events = matches!(action.action, AIAgentActionType::WaitForEvents { .. });
         let execute_result = self.executor.update(ctx, |executor, ctx| {
             executor.try_to_execute_action(action, conversation_id, is_user_initiated, ctx)
         });
 
         match execute_result {
             TryExecuteResult::ExecutedAsync => {
-                self.update_conversation_in_progress_status(conversation_id, ctx);
+                if !is_wait_for_events {
+                    self.update_conversation_in_progress_status(conversation_id, ctx);
+                }
                 self.add_running_action(conversation_id, action_id, phase);
                 Some(StartedAction::Async { phase })
             }
             TryExecuteResult::ExecutedSync => {
-                self.update_conversation_in_progress_status(conversation_id, ctx);
+                if !is_wait_for_events {
+                    self.update_conversation_in_progress_status(conversation_id, ctx);
+                }
                 Some(StartedAction::Sync)
             }
             TryExecuteResult::NotExecuted { reason, action } => {
@@ -990,6 +1056,38 @@ impl BlocklistAIActionModel {
         }
     }
 
+    /// Returns true if the given shell command action is still running (snapshot not yet fired).
+    pub fn is_shell_command_action_pending(
+        &self,
+        action_id: &AIAgentActionId,
+        conversation_id: AIConversationId,
+    ) -> bool {
+        self.running_actions
+            .get(&conversation_id)
+            .is_some_and(|r| r.contains(action_id))
+    }
+
+    /// Cancels any in-flight WaitForEvents action for the given conversation.
+    pub fn cancel_wait_for_events_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let action_id = self.executor.update(ctx, |executor, _| {
+            executor.find_running_wait_for_events(conversation_id)
+        });
+        if let Some(action_id) = action_id {
+            self.cancel_action_with_id(
+                conversation_id,
+                &action_id,
+                CancellationReason::FollowUpSubmitted {
+                    is_for_same_conversation: true,
+                },
+                ctx,
+            );
+        }
+    }
+
     pub(super) fn cancel_all_pending_actions(
         &mut self,
         conversation_id: AIConversationId,
@@ -1004,6 +1102,13 @@ impl BlocklistAIActionModel {
             return;
         };
         for action in actions_to_cancel.drain(..).collect_vec() {
+            log::info!(
+                "Canceling pending action of type {:?} conversation_id={conversation_id:?} action_id={:?}, reason={:?}, backtrace=\n{}",
+                AIAgentActionTypeDiscriminants::from(&action.action),
+                action.id,
+                reason,
+                std::backtrace::Backtrace::force_capture()
+            );
             self.cancel_pending_action(conversation_id, action, reason, ctx);
         }
     }
@@ -1047,9 +1152,14 @@ impl BlocklistAIActionModel {
             pending_action.action,
             AIAgentActionType::RequestComputerUse(_)
         ) {
+            let server_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .and_then(|c| c.server_conversation_token())
+                .map(|t| t.as_str().to_string());
             send_telemetry_from_ctx!(
                 TelemetryEvent::ComputerUseCancelled {
-                    conversation_id,
+                    client_conversation_id: conversation_id,
+                    server_conversation_id,
                     ambient_agent_task_id: self.ambient_agent_task_id,
                 },
                 ctx
@@ -1121,7 +1231,7 @@ impl BlocklistAIActionModel {
         }
 
         let Some(conversation_id) = found_conversation_id else {
-            debug_assert!(false, "Expected action to be requested command.");
+            log::warn!("Ignoring acceptance for non-pending requested command: {action_id:?}");
             return;
         };
 
@@ -1193,8 +1303,17 @@ impl BlocklistAIActionModel {
             .get(&conversation_id)
             .is_none_or(|actions| actions.is_empty())
         {
-            if !cancellation_reason.is_some_and(|r| r.is_follow_up_for_same_conversation()) {
+            // Only a `Cancelled` outcome stamps a status here. The other outcomes are
+            // owned elsewhere: `KeepInProgress` / `Succeeded` and `FinalizedExternally`
+            // are finalized by the controller or a dedicated path, and a normal
+            // completion (no cancellation reason) is resolved by the controller's
+            // follow-up handling. Stamping here for any of those would clobber the real
+            // status and message.
+            if cancellation_reason
+                .is_some_and(|r| matches!(r.conversation_outcome(), CancellationOutcome::Cancelled))
+            {
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    // Treat action result as authoritative for determining status.
                     let status = if self
                         .finished_action_results
                         .get(&conversation_id)

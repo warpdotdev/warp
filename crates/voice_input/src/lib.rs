@@ -1,19 +1,19 @@
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::io::Cursor;
+use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine;
-use cpal::{
-    Sample, StreamConfig,
-    traits::{DeviceTrait, HostTrait},
-};
+use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::{Sample, StreamConfig};
 use futures::channel::oneshot;
 use parking_lot::Mutex;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use thiserror::Error;
-
-use warpui::event::KeyState;
-use warpui::{Entity, ModelContext, SingletonEntity, platform::MicrophoneAccessState};
+use warpui_core::event::KeyState;
+use warpui_core::platform::MicrophoneAccessState;
+use warpui_core::{Entity, ModelContext, SingletonEntity};
 
 const DEFAULT_CHUNK_SIZE: u32 = 512;
 // We only support mono for now.
@@ -203,6 +203,13 @@ impl VoiceInput {
             StartListeningError::Other(anyhow::anyhow!("Resampler construction failed: {e}"))
         })?;
 
+        // Some audio backends (notably ALSA on Linux) fire this error callback
+        // repeatedly in a tight loop when the input device wedges - e.g.
+        // `alsa::poll()` returning POLLERR after a device disconnect. Logging at
+        // error level on every invocation floods Sentry with millions of
+        // identical events, so only report the first error per session at error
+        // level and downgrade the rest to debug.
+        let mut has_logged_stream_error = false;
         let stream = input_device
             .build_input_stream(
                 &stream_config,
@@ -217,10 +224,15 @@ impl VoiceInput {
                         .collect();
 
                     // This is blocking, but we aren't on the main thread.
-                    let _ = warpui::r#async::block_on(audio_frame_tx.send(mono_samples));
+                    let _ = warpui_core::r#async::block_on(audio_frame_tx.send(mono_samples));
                 },
-                |err| {
-                    log::error!("Error in voice input stream: {err}");
+                move |err| {
+                    if has_logged_stream_error {
+                        log::debug!("Error in voice input stream (suppressed repeat): {err}");
+                    } else {
+                        has_logged_stream_error = true;
+                        log::error!("Error in voice input stream: {err}");
+                    }
                 },
                 Some(STREAM_TIMEOUT),
             )

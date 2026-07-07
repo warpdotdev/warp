@@ -1,39 +1,19 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 // Adding this file level gate as some of the code around editability is not used in WASM yet.
 
-use crate::code::editor::line_iterator::LineIterator;
-use crate::code_review::CodeReviewTelemetryEvent;
-use num_traits::SaturatingSub;
-use rangemap::{RangeMap, RangeSet};
 use std::future::Future;
 use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{cmp, mem};
-use warp_core::platform::SessionPlatform;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::Fill;
-use warp_editor::content::anchor::Anchor;
-use warp_editor::content::edit::EditDelta;
-use warp_editor::content::find::{SearchConfig, SearchResults};
-use warp_editor::content::selection_model::BufferSelectionModel;
-use warp_editor::content::version::BufferVersion;
-use warp_editor::multiline::{AnyMultilineString, MultilineString, LF};
-use warp_editor::render::model::{AutoScrollMode, LineCount, StyleUpdateAction};
-use warp_editor::selection::TextDirection;
-use warpui::units::{IntoPixels, Pixels};
-
-use crate::util::link_detection::get_word_range_at_offset;
-use crate::{
-    appearance::Appearance, editor::InteractionState, notebooks::editor::model::word_unit,
-    themes::theme::AnsiColorIdentifier,
-};
 
 use ai::diff_validation::DiffDelta;
 use itertools::Itertools;
-use languages::{language_by_filename, language_by_name, Language};
+use languages::{language_by_filename, language_by_local_filename, language_by_name, Language};
 use line_ending::LineEnding;
+use num_traits::SaturatingSub;
+use rangemap::{RangeMap, RangeSet};
 use string_offset::CharOffset;
 use syntax_tree::{ColorMap, DecorationStateEvent, SyntaxTreeState};
 use vec1::{vec1, Vec1};
@@ -47,31 +27,40 @@ use vim::{
     vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
     vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
+use warp_core::platform::SessionPlatform;
 use warp_core::semantic_selection::SemanticSelection;
-use warp_editor::content::buffer::{ShouldAutoscroll, VimInsertPoint};
-use warp_editor::{
-    content::{
-        buffer::{
-            AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction,
-            EditOrigin, InitialBufferState, SelectionOffsets, ToBufferCharOffset, ToBufferPoint,
-        },
-        hidden_lines_model::HiddenLinesModel,
-        text::{BufferBlockStyle, IndentBehavior, IndentUnit},
-    },
-    decoration::DecorationLayer,
-    editor::TextDecoration,
-    model::{CoreEditorModel, PlainTextEditorModel},
-    render::model::{
-        BlockItem, Decoration, LineDecoration, RenderEvent, RenderLineLocation, RenderState,
-        RichTextStyles, UpdateDecorationAfterLayout, WidthSetting,
-    },
-    selection::{SelectionMode, SelectionModel, TextUnit},
+use warp_core::ui::theme::Fill;
+use warp_editor::content::anchor::Anchor;
+use warp_editor::content::buffer::{
+    AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
+    InitialBufferState, SelectionOffsets, ShouldAutoscroll, ToBufferCharOffset, ToBufferPoint,
+    VimInsertPoint,
 };
+use warp_editor::content::edit::EditDelta;
+use warp_editor::content::find::{SearchConfig, SearchResults};
+use warp_editor::content::hidden_lines_model::HiddenLinesModel;
+use warp_editor::content::selection_model::BufferSelectionModel;
+use warp_editor::content::text::{BufferBlockStyle, IndentBehavior, IndentUnit};
+use warp_editor::content::version::BufferVersion;
+use warp_editor::decoration::DecorationLayer;
+use warp_editor::editor::TextDecoration;
+use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
+use warp_editor::multiline::{AnyMultilineString, MultilineString, LF};
+use warp_editor::render::model::{
+    AutoScrollMode, BlockItem, BlockSpacings, BrokenLinkStyle, CheckBoxStyle, ColumnUnit,
+    Decoration, HorizontalRuleStyle, InlineCodeStyle, LineCount, LineDecoration, ParagraphStyles,
+    RenderEvent, RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction, TableStyle,
+    UpdateDecorationAfterLayout, WidthSetting,
+};
+use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
+use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::{
     AnchorPair, OffsetPositioning, OffsetType, PositionedElementOffsetBounds, PositioningAxis,
     XAxisAnchor, YAxisAnchor,
 };
-use warpui::text::{point::Point, TextBuffer};
+use warpui::text::point::Point;
+use warpui::text::TextBuffer;
+use warpui::units::{IntoPixels, Pixels};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::super::DiffResult;
@@ -80,7 +69,13 @@ use super::diff::{
     add_inline_overlay_color, DiffModel, DiffModelEvent, DiffStatus, RenderableDiffHunk,
 };
 use super::line::EditorLineLocation;
+use crate::appearance::Appearance;
+use crate::code::editor::line_iterator::LineIterator;
 use crate::code_review::comments::{CommentId, CommentOrigin, LineDiffContent};
+use crate::editor::InteractionState;
+use crate::notebooks::editor::model::word_unit;
+use crate::themes::theme::AnsiColorIdentifier;
+use crate::util::link_detection::get_word_range_at_offset;
 
 /// An opaque handle to a stable line in the editor content, suitable for scroll
 /// position preservation. Contains an internal anchor that tracks through
@@ -261,7 +256,7 @@ impl DelayRendering {
         model.render_state.update(ctx, move |render_state, _| {
             let should_autoscroll = self.should_autoscroll;
             for (delta, content_version) in self.edits {
-                render_state.add_pending_edit(delta.clone(), content_version);
+                render_state.add_pending_edit(delta, content_version);
             }
             match should_autoscroll {
                 ShouldAutoscroll::Yes => render_state.request_autoscroll(),
@@ -338,7 +333,73 @@ impl CodeEditorModel {
         content.update(ctx, |buffer, _| {
             buffer.set_session_platform(session_platform);
         });
-        ctx.subscribe_to_model(&content, |me, event, ctx| {
+
+        Self::from_content(
+            content,
+            true,        // show_current_line_highlights
+            lazy_layout, // lazy_layout_enabled
+            false,       // lazy_layout_initialized
+            ctx,
+            |hidden_lines, ctx| {
+                ctx.add_model(|ctx| {
+                    RenderState::new(text_styles, lazy_layout, Some(hidden_lines.clone()), ctx)
+                        .with_width_setting(WidthSetting::InfiniteWidth)
+                })
+            },
+        )
+    }
+
+    /// Constructs a `CodeEditorModel` in TUI char-cell mode.
+    ///
+    /// Identical to `new` but creates the `RenderState` with
+    /// [`LayoutMode::CharCell`] so all soft-wrap positions use monospace
+    /// character-count arithmetic rather than font-aware pixel layout.
+    /// `TuiEditorModel` (in `warp_tui`) is a type alias for this type;
+    /// constructing via this method is what gives the TUI editor all of
+    /// `CodeEditorModel`'s features (vim, syntax, diff, hidden lines) for free
+    /// while sharing no GUI-rendering infrastructure.
+    ///
+    /// Like `new`, this reads syntax-highlight colors from the `Appearance`
+    /// singleton, so callers must register `Appearance` (a real one for the
+    /// runtime, `Appearance::mock()` for tests) before constructing the model.
+    pub fn new_tui(terminal_width: u16, ctx: &mut ModelContext<Self>) -> Self {
+        let content = ctx.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+
+        Self::from_content(
+            content,
+            false, // show_current_line_highlights: no GPU rendering in TUI
+            false, // lazy_layout_enabled: no lazy layout in TUI
+            true,  // lazy_layout_initialized: no lazy layout in TUI
+            ctx,
+            |_hidden_lines, ctx| {
+                // CharCell layout never consults `RichTextStyles`, so pass a stub.
+                ctx.add_model(|ctx| {
+                    RenderState::new_tui(terminal_width, Self::tui_stub_text_styles(), ctx)
+                })
+            },
+        )
+    }
+
+    /// Shared construction for [`Self::new`] and [`Self::new_tui`]. The two modes
+    /// differ only in how the backing `content` buffer and the `RenderState` are
+    /// built (GUI pixel layout vs. TUI char-cell layout) plus a few flags; all
+    /// other sub-models (selection, syntax tree, diff, hidden lines, comments)
+    /// and event subscriptions are identical and wired up here.
+    ///
+    /// `build_render_state` receives the freshly-created `hidden_lines` handle so
+    /// the GUI path can attach it; the TUI path ignores it.
+    fn from_content(
+        content: ModelHandle<Buffer>,
+        show_current_line_highlights: bool,
+        lazy_layout_enabled: bool,
+        lazy_layout_initialized: bool,
+        ctx: &mut ModelContext<Self>,
+        build_render_state: impl FnOnce(
+            &ModelHandle<HiddenLinesModel>,
+            &mut ModelContext<Self>,
+        ) -> ModelHandle<RenderState>,
+    ) -> Self {
+        ctx.subscribe_to_model(&content, |me, _, event, ctx| {
             me.handle_content_model_event(event, ctx);
         });
 
@@ -349,23 +410,20 @@ impl CodeEditorModel {
         let buffer_handle = content.downgrade();
         let syntax_tree =
             ctx.add_model(|_ctx| SyntaxTreeState::new(buffer_handle, buffer_version, color_map));
-        ctx.subscribe_to_model(&syntax_tree, |me, event, ctx| {
+        ctx.subscribe_to_model(&syntax_tree, |me, _, event, ctx| {
             me.handle_syntax_tree_model_event(event, ctx);
         });
 
         let diff = ctx.add_model(|_ctx| DiffModel::new());
-        ctx.subscribe_to_model(&diff, |me, event, ctx| {
+        ctx.subscribe_to_model(&diff, |me, _, event, ctx| {
             me.handle_diff_model_event(event, ctx);
         });
 
         let hidden_lines =
             ctx.add_model(|_| HiddenLinesModel::new(content.clone(), selection_model.clone()));
 
-        let render_state = ctx.add_model(|ctx| {
-            RenderState::new(text_styles, lazy_layout, Some(hidden_lines.clone()), ctx)
-                .with_width_setting(WidthSetting::InfiniteWidth)
-        });
-        ctx.subscribe_to_model(&render_state, |me, event, ctx| {
+        let render_state = build_render_state(&hidden_lines, ctx);
+        ctx.subscribe_to_model(&render_state, |me, _, event, ctx| {
             me.handle_render_state_model_event(event, ctx);
         });
         let selection = ctx.add_model(|ctx| {
@@ -394,14 +452,93 @@ impl CodeEditorModel {
             hidden_lines,
             diff_navigation_state: DiffNavigationState::Collapsed,
             interaction_state: InteractionState::Editable,
-            show_current_line_highlights: true,
+            show_current_line_highlights,
             delay_rendering: None,
             vim_visual_tails: vec![],
             hovered_symbol_range: None,
             hide_lines_outside_of_active_diff: None,
-            lazy_layout_enabled: lazy_layout,
-            lazy_layout_initialized: false,
+            lazy_layout_enabled,
+            lazy_layout_initialized,
             pending_syntax_tree_bootstrap: false,
+        }
+    }
+
+    /// A minimal [`RichTextStyles`] for the TUI char-cell editor.
+    ///
+    /// `RenderState::new_tui` stores styles only for API compatibility and never
+    /// uses them for char-cell layout, so these values are placeholders. This
+    /// lives here (the caller of `RenderState::new_tui`) rather than in the core
+    /// editor crate so the editor API doesn't carry a TUI-specific stub.
+    fn tui_stub_text_styles() -> RichTextStyles {
+        use warpui::elements::{Border, Fill};
+        use warpui::fonts::{FamilyId, Weight};
+
+        const TRANSPARENT: warpui::color::ColorU = warpui::color::ColorU {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        };
+        let paragraph = |fixed_width_tab_size| ParagraphStyles {
+            font_family: FamilyId(0),
+            font_size: 10.,
+            font_weight: Weight::Normal,
+            line_height_ratio: 1.,
+            text_color: TRANSPARENT,
+            baseline_ratio: 0.7,
+            fixed_width_tab_size,
+        };
+        RichTextStyles {
+            base_text: paragraph(None),
+            code_text: paragraph(Some(4)),
+            code_background: Fill::None,
+            embedding_background: Fill::None,
+            embedding_text: paragraph(None),
+            code_border: Border::new(0.),
+            placeholder_color: TRANSPARENT,
+            selection_fill: Fill::None,
+            cursor_fill: Fill::None,
+            inline_code_style: InlineCodeStyle {
+                font_family: FamilyId(0),
+                background: TRANSPARENT,
+                font_color: TRANSPARENT,
+            },
+            check_box_style: CheckBoxStyle {
+                border_width: 0.,
+                border_color: TRANSPARENT,
+                icon_path: "",
+                background: TRANSPARENT,
+                hover_background: TRANSPARENT,
+            },
+            horizontal_rule_style: HorizontalRuleStyle {
+                rule_height: 0.,
+                color: TRANSPARENT,
+            },
+            broken_link_style: BrokenLinkStyle {
+                icon_path: "",
+                icon_color: TRANSPARENT,
+            },
+            block_spacings: BlockSpacings::default(),
+            minimum_paragraph_height: None,
+            show_placeholder_text_on_empty_block: false,
+            cursor_width: 0.,
+            highlight_urls: false,
+            table_style: TableStyle {
+                border_color: TRANSPARENT,
+                header_background: TRANSPARENT,
+                cell_background: TRANSPARENT,
+                alternate_row_background: None,
+                text_color: TRANSPARENT,
+                header_text_color: TRANSPARENT,
+                scrollbar_nonactive_thumb_color: TRANSPARENT,
+                scrollbar_active_thumb_color: TRANSPARENT,
+                font_family: FamilyId(0),
+                font_size: 10.,
+                cell_padding: 0.,
+                outer_border: false,
+                column_dividers: false,
+                row_dividers: false,
+            },
         }
     }
 
@@ -1151,8 +1288,21 @@ impl CodeEditorModel {
     }
 
     /// Set the language of the syntax map based on the file path.
-    pub fn set_language_with_path(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
+    pub fn set_language_with_path(
+        &mut self,
+        path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let language = language_by_filename(path);
+
+        if let Some(language) = language {
+            self.set_language(language, ctx);
+        }
+    }
+
+    /// Set the language of the syntax map based on the local filesystem path.
+    pub fn set_language_with_local_path(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
+        let language = language_by_local_filename(path);
 
         if let Some(language) = language {
             self.set_language(language, ctx);
@@ -1581,8 +1731,6 @@ impl CodeEditorModel {
     fn update_cursor_line_highlights(&self, ctx: &mut ModelContext<CodeEditorModel>) {
         let selection_model = self.selection_model.as_ref(ctx);
 
-        let overlay = Appearance::as_ref(ctx).theme().surface_2();
-
         let highlight_line = if self.diff_nav_is_active() {
             // We don't show current line highlights during diff navigation so we don't need
             // to update the `RenderState`. This lets us keep the line decorations we set
@@ -1591,6 +1739,7 @@ impl CodeEditorModel {
         } else if selection_model.all_single_cursors() && self.show_current_line_highlights {
             // When diff is not expanded, the only source of line decoration is highlights
             // from the active cursor, e.g. the current line highlight.
+            let overlay = Appearance::as_ref(ctx).theme().surface_2();
             Some(
                 selection_model
                     .selected_lines(ctx)
@@ -2428,7 +2577,7 @@ impl CodeEditorModel {
             if let Some(existing) = self.selection().as_ref(ctx).goal_xs.as_ref() {
                 existing
                     .iter()
-                    .map(|px| px.as_f32().round() as u32)
+                    .map(|col| col.as_pixels().as_f32().round() as u32)
                     .collect()
             } else {
                 current_selections
@@ -2469,10 +2618,11 @@ impl CodeEditorModel {
         if let Ok(new_selections) = Vec1::try_from_vec(new_selections_vec) {
             self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
 
-            // Update goal_xs to the desired columns (stored as pixels for consistency with SelectionModel)
+            // Update goal_xs to the desired columns (stored as ColumnUnit::Pixels for
+            // consistency with the GUI SelectionModel pixel path)
             let goal_pixels: Vec<_> = goal_cols
                 .into_iter()
-                .map(|c| (c as usize).into_pixels())
+                .map(|c| ColumnUnit::Pixels((c as usize).into_pixels()))
                 .collect();
             self.selection().update(ctx, |selection, _| {
                 selection.goal_xs = Vec1::try_from_vec(goal_pixels).ok();
@@ -3642,11 +3792,19 @@ impl CoreEditorModel for CodeEditorModel {
         buffer_version: BufferVersion,
         ctx: &mut ModelContext<Self::T>,
     ) {
-        // Synchronously convert hidden range anchors into offsets for the given version. This allows the render model
-        // to accurately hide line ranges based on the corresponding incoming buffer state.
+        // Synchronously convert hidden range anchors into offsets for the given version. This allows
+        // the render model to accurately hide line ranges based on the corresponding incoming buffer state.
         self.hidden_lines.update(ctx, |hidden_lines_model, ctx| {
             hidden_lines_model.materialize_hidden_range_offsets(buffer_version, ctx);
         });
+        // In TUI char-cell mode the async font-shaping pipeline is bypassed entirely (the
+        // LayoutAction::BufferEdit arm is a no-op for CharCell). We must therefore refresh the
+        // char-cell line index synchronously here so that offset_to_softwrap_point, max_line,
+        // and all cursor-positioning queries see up-to-date data in the same frame.
+        if let Some(char_cell) = self.render_state.as_ref(ctx).char_cell() {
+            let text = self.content.as_ref(ctx).text().into_string();
+            char_cell.update_text(&text);
+        }
     }
 
     fn content(&self) -> &ModelHandle<Buffer> {
@@ -3817,9 +3975,6 @@ impl CoreEditorModel for CodeEditorModel {
 
 impl CodeEditorModel {
     pub fn open_comment_line(&mut self, line: &EditorLineLocation, ctx: &mut ModelContext<Self>) {
-        // Telemetry: comment editor opened for a new inline review comment.
-        send_telemetry_from_ctx!(CodeReviewTelemetryEvent::CommentEditorOpened, ctx);
-
         self.comments.update(ctx, |comments, ctx| {
             comments.pending_comment = PendingComment::Open { line: line.clone() };
             ctx.emit(PendingCommentEvent::NewPendingComment(line.clone()));
@@ -3834,9 +3989,6 @@ impl CodeEditorModel {
         origin: &CommentOrigin,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Telemetry: comment editor opened for editing an existing inline review comment.
-        send_telemetry_from_ctx!(CodeReviewTelemetryEvent::CommentEditorOpened, ctx);
-
         self.comments.update(ctx, |comments, ctx| {
             comments.pending_comment = PendingComment::Open { line: line.clone() };
             ctx.emit(PendingCommentEvent::ReopenPendingComment {

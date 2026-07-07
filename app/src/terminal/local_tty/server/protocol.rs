@@ -1,16 +1,15 @@
-use std::{
-    io::{IoSlice, IoSliceMut},
-    os::unix::prelude::*,
-};
+use std::io::{IoSlice, IoSliceMut};
+use std::os::unix::prelude::*;
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use itertools::Itertools;
-use nix::{cmsg_space, errno::Errno, sys::socket};
+use nix::cmsg_space;
+use nix::errno::Errno;
+use nix::sys::socket;
 use serde::{Deserialize, Serialize};
 
-use crate::terminal::local_tty::PtySpawnResult;
-
 use super::api;
+use crate::terminal::local_tty::PtySpawnResult;
 
 /// The size of a usize, in bytes.
 const USIZE_SIZE: usize = std::mem::size_of::<usize>();

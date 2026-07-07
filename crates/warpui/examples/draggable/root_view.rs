@@ -1,18 +1,13 @@
 use std::any::Any;
 
 use pathfinder_color::ColorU;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warpui::elements::{
+    AcceptedByDropTarget, Align, ConstrainedBox, Container, DragAxis, Draggable, DraggableState,
+    DropTarget, DropTargetData, ParentElement, Rect, Stack,
 };
-use warpui::elements::{AcceptedByDropTarget, DropTarget, DropTargetData};
-use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, DragAxis, Draggable, DraggableState, ParentElement, Rect,
-        Stack,
-    },
-    AppContext, Element, Entity, TypedActionView, View,
-};
+use warpui::{AppContext, Element, Entity, TypedActionView, View};
 
 #[derive(Default)]
 pub struct RootView {

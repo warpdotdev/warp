@@ -16,8 +16,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-use crate::terminal::CLIAgent;
-use crate::terminal::TerminalView;
+use crate::terminal::{CLIAgent, TerminalView};
 
 /// Handles updating the local LLM preferences when a selected agent model update is received.
 /// This function is shared between the viewer and sharer to ensure consistent behavior.
@@ -42,7 +41,7 @@ pub(crate) fn apply_selected_agent_model_update(
     // Check if the model is available to the viewer. If not, skip the update.
     // This handles cases where the viewer and sharer have different model permissions.
     let model_is_available = llm_prefs
-        .get_base_llm_choices_for_agent_mode()
+        .get_base_llm_choices_for_agent_mode(ctx)
         .any(|info| info.id == model_id);
     if !model_is_available {
         log::warn!("Skipping shared-session model update - {model_id} is unknown");
@@ -210,8 +209,11 @@ pub(crate) fn apply_selected_conversation_update(
                 view.ai_context_model().update(ctx, |context_model, ctx| {
                     if FeatureFlag::AgentView.is_enabled() {
                         // Check if we're already in an empty agent view to avoid feedback loop.
-                        let agent_view_state = agent_view_controller.as_ref(ctx).agent_view_state();
-                        if let Some(conversation_id) = agent_view_state.active_conversation_id() {
+                        if let Some(conversation_id) = agent_view_controller
+                            .as_ref(ctx)
+                            .agent_view_state()
+                            .active_conversation_id()
+                        {
                             let history_model = BlocklistAIHistoryModel::handle(ctx);
                             let is_empty = history_model
                                 .as_ref(ctx)
@@ -316,11 +318,13 @@ fn build_selected_conversation_update_agent_view_enabled(
     history_model: &ModelHandle<BlocklistAIHistoryModel>,
     ctx: &mut AppContext,
 ) -> Option<UniversalDeveloperInputContextUpdate> {
-    let agent_view_state = agent_view_controller.as_ref(ctx).agent_view_state();
-
-    let selected_conversation = if !agent_view_state.is_active() {
+    let agent_view_controller = agent_view_controller.as_ref(ctx);
+    let selected_conversation = if !agent_view_controller.is_active() {
         SelectedConversation::NoConversation
-    } else if let Some(conversation_id) = agent_view_state.active_conversation_id() {
+    } else if let Some(conversation_id) = agent_view_controller
+        .agent_view_state()
+        .active_conversation_id()
+    {
         let conversation = history_model.as_ref(ctx).conversation(&conversation_id);
         let server_token_opt = conversation
             .and_then(|c| c.server_conversation_token().cloned())
@@ -389,6 +393,7 @@ pub(crate) fn apply_cli_agent_state_update(
                             remote_host: None,
                             draft_text: None,
                             custom_command_prefix: None,
+                            received_rich_notification: false,
                             // Viewer input is managed by the sync protocol,
                             // not local status-change auto-toggle.
                             should_auto_toggle_input: false,
@@ -426,6 +431,10 @@ pub(crate) fn apply_cli_agent_state_update(
                     }
                 });
             }
+
+            view.update(ctx, |view, ctx| {
+                view.sync_agent_view_for_shared_third_party_viewer(ctx);
+            });
         }
         CLIAgentSessionState::Inactive => {
             // Session cleanup is handled by BlockCompleted events on the

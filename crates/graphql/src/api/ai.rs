@@ -2,6 +2,7 @@ use crate::object::ObjectMetadata;
 use crate::object_permissions::ObjectPermissions;
 use crate::scalars::Time;
 use crate::schema;
+use crate::user::PublicUserProfile;
 
 #[derive(cynic::Enum, Clone, Copy, Debug)]
 pub enum RequestLimitRefreshDuration {
@@ -149,6 +150,7 @@ pub struct AIConversation {
     pub working_directory: Option<String>,
     pub usage: ConversationUsage,
     pub metadata: ObjectMetadata,
+    pub creator: Option<PublicUserProfile>,
     pub permissions: ObjectPermissions,
     pub ambient_agent_task_id: Option<cynic::Id>,
     pub artifacts: Option<Vec<AIConversationArtifact>>,
@@ -165,6 +167,48 @@ pub struct ConversationUsage {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ConversationUsageMetadata {
     pub context_window_usage: f64,
+    pub context_window_segments: Vec<ContextWindowSegment>,
     pub credits_spent: f64,
+    pub platform_credits_spent: f64,
     pub summarized: bool,
+}
+
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextWindowSegmentType {
+    Unknown,
+    SystemPrompt,
+    ToolDefinitions,
+    ConversationHistory,
+    LatestInput,
+    Images,
+    Other,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ContextWindowSegment {
+    pub segment_type: ContextWindowSegmentType,
+    pub token_count: i32,
+}
+
+impl From<ContextWindowSegmentType> for persistence::model::ContextWindowSegmentType {
+    fn from(value: ContextWindowSegmentType) -> Self {
+        match value {
+            ContextWindowSegmentType::Unknown => Self::Unknown,
+            ContextWindowSegmentType::SystemPrompt => Self::SystemPrompt,
+            ContextWindowSegmentType::ToolDefinitions => Self::ToolDefinitions,
+            ContextWindowSegmentType::ConversationHistory => Self::ConversationHistory,
+            ContextWindowSegmentType::LatestInput => Self::LatestInput,
+            ContextWindowSegmentType::Images => Self::Images,
+            ContextWindowSegmentType::Other => Self::Other,
+        }
+    }
+}
+
+impl From<&ContextWindowSegment> for persistence::model::ContextWindowSegment {
+    fn from(gql: &ContextWindowSegment) -> Self {
+        Self {
+            segment_type: gql.segment_type.into(),
+            token_count: u32::try_from(gql.token_count).unwrap_or_default(),
+        }
+    }
 }

@@ -1,10 +1,8 @@
-use std::{
-    collections::HashMap,
-    ffi::OsString,
-    io::Write,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

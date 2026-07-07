@@ -1,28 +1,23 @@
 //! This module implements terminal find functionality for the blocklist.
-use std::{collections::HashMap, iter, ops::RangeInclusive};
+use std::collections::HashMap;
+use std::iter;
+use std::ops::RangeInclusive;
 
 use itertools::Itertools;
-use warpui::{units::Lines, AppContext, EntityId};
+use warpui::units::Lines;
+use warpui::{AppContext, EntityId};
 
-use crate::terminal::{
-    model::{
-        block::Block,
-        blocks::{
-            BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem,
-            TotalIndex,
-        },
-        find::{FindConfig, RegexDFAs},
-        index::Point,
-        terminal_model::{BlockIndex, BlockSortDirection},
-    },
-    GridType,
+use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
+use super::FindOptions;
+use crate::terminal::model::block::Block;
+use crate::terminal::model::blocks::{
+    BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
+use crate::terminal::model::find::{FindConfig, RegexDFAs};
+use crate::terminal::model::index::Point;
+use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
+use crate::terminal::GridType;
 use crate::view_components::find::FindDirection;
-
-use super::{
-    rich_content::{FindableRichContentHandle, RichContentMatchId},
-    FindOptions,
-};
 
 /// Runs a find operation on the blocklist using the given `options` and returns a
 /// `BlockListFindRun` with the results.
@@ -243,6 +238,18 @@ pub struct BlockGridMatch {
 }
 
 /// Represents a single find match in the blocklist.
+///
+/// Match values are snapshots of the find run that produced them. The grid
+/// `range` on `CommandBlock` and the `index` on `RichContent` are captured at
+/// scan time and can be invalidated by subsequent block list mutations (new
+/// blocks, removals, rich content rescans, etc.). Callers should consume
+/// cloned values inline; long-lived storage outside a `BlockListFindRun` is
+/// not supported.
+///
+/// TODO(vkodithala): The `RichContent` variant mirrors `AsyncFocusedAiMatch` in the async
+/// path. Both derive `Clone` even though their contents are short-lived;
+/// explore removing `Clone` from both in a future PR to enforce the snapshot
+/// contract in the type system.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockListMatch {
     CommandBlock(BlockGridMatch),
@@ -285,6 +292,40 @@ impl BlockListMatch {
                 grid_type: match_grid_type,
                 ..
             }) => block_index == *match_block_index && grid_type == *match_grid_type,
+            _ => false,
+        }
+    }
+
+    /// Returns `true` if `self` and `other` refer to the same matched span, ignoring transient
+    /// state like `is_filtered`.
+    fn same_span(&self, other: &BlockListMatch) -> bool {
+        match (self, other) {
+            (
+                BlockListMatch::CommandBlock(BlockGridMatch {
+                    grid_type: g1,
+                    range: r1,
+                    block_index: b1,
+                    ..
+                }),
+                BlockListMatch::CommandBlock(BlockGridMatch {
+                    grid_type: g2,
+                    range: r2,
+                    block_index: b2,
+                    ..
+                }),
+            ) => g1 == g2 && r1 == r2 && b1 == b2,
+            (
+                BlockListMatch::RichContent {
+                    match_id: id1,
+                    view_id: v1,
+                    index: i1,
+                },
+                BlockListMatch::RichContent {
+                    match_id: id2,
+                    view_id: v2,
+                    index: i2,
+                },
+            ) => id1 == id2 && v1 == v2 && i1 == i2,
             _ => false,
         }
     }
@@ -471,11 +512,17 @@ impl BlockListFindRun {
             return self;
         };
 
+        // Remember the currently focused match so we can relocate it after splicing.
+        let old_focused_match = self
+            .raw_focused_match_index
+            .and_then(|i| self.matches.get(i).cloned());
+
         let old_block_matches_start_index = self
             .matches
             .iter()
             .position(|find_match| find_match.matches_block(block_index));
-        let mut new_matches = run_find_on_block(dfas, block, block_index, block_sort_direction);
+        let new_matches = run_find_on_block(dfas, block, block_index, block_sort_direction);
+        let new_block_match_count = new_matches.len();
         if let Some(start_index) = old_block_matches_start_index {
             let end_index = old_block_matches_start_index
                 .and_then(|i| {
@@ -486,21 +533,60 @@ impl BlockListFindRun {
                 })
                 .unwrap_or(self.matches.len());
 
+            let old_block_match_count = end_index - start_index;
+
             // Splice in the new matches where the old block matches used to exist.
             self.matches.splice(start_index..end_index, new_matches);
+
+            // Adjust the focused match index so it still points to the same match.
+            if let Some(focused_index) = self.raw_focused_match_index {
+                if focused_index >= start_index && focused_index < end_index {
+                    // The focused match was inside the rerun block. Try to find the same
+                    // match (by span identity) in the new results.
+                    self.raw_focused_match_index = old_focused_match
+                        .as_ref()
+                        .and_then(|old_match| {
+                            self.matches[start_index..(start_index + new_block_match_count)]
+                                .iter()
+                                .position(|m| m.same_span(old_match))
+                                .map(|p| start_index + p)
+                        })
+                        .or_else(|| {
+                            // The old match no longer exists; clamp to a valid index.
+                            if self.matches.is_empty() {
+                                None
+                            } else {
+                                Some(focused_index.min(self.matches.len() - 1))
+                            }
+                        });
+                } else if focused_index >= end_index {
+                    // The focused match was after the rerun block. Shift by the change in
+                    // match count so it continues to point at the same match.
+                    let new_index = focused_index + new_block_match_count - old_block_match_count;
+                    self.raw_focused_match_index =
+                        Some(new_index.min(self.matches.len().saturating_sub(1)));
+                }
+                // If focused_index < start_index the match is before the rerun block and
+                // needs no adjustment.
+            }
         } else {
+            let mut new_matches = new_matches;
             new_matches.append(&mut self.matches);
             self.matches = new_matches;
+
+            // All previous indices shifted forward by the number of newly prepended matches.
+            if let Some(focused_index) = self.raw_focused_match_index {
+                self.raw_focused_match_index = Some(focused_index + new_block_match_count);
+            }
         }
 
         if self.matches.is_empty() {
             self.raw_focused_match_index = None;
-        } else if let Some(mut focused_match_index) = self.raw_focused_match_index {
-            // Ensure the focused match index is still valid.
-            while focused_match_index >= self.matches.len() {
-                focused_match_index = focused_match_index.saturating_sub(1);
+        } else if let Some(focused_match_index) = self.raw_focused_match_index {
+            // Final bounds check.
+            if focused_match_index >= self.matches.len() {
+                self.raw_focused_match_index = Some(self.matches.len() - 1);
             }
-            self.raw_focused_match_index = Some(focused_match_index);
         }
 
         self
@@ -663,5 +749,5 @@ fn update_matches_for_filtered_block<'a>(
 }
 
 #[cfg(test)]
-#[path = "block_list_test.rs"]
+#[path = "block_list_tests.rs"]
 mod tests;

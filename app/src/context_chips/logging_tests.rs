@@ -1,5 +1,6 @@
-use super::*;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
+
+use super::*;
 
 #[test]
 fn test_prompt_chip_log_filename_uses_channel_logfile_stem() {

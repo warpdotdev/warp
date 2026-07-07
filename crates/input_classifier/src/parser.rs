@@ -1,4 +1,6 @@
-use std::{iter::Peekable, mem, str::Chars};
+use std::iter::Peekable;
+use std::mem;
+use std::str::Chars;
 
 use itertools::Itertools;
 

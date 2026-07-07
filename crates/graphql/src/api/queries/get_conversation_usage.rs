@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::{request_context::RequestContext, scalars::Time, schema};
+use crate::request_context::RequestContext;
+use crate::scalars::Time;
+use crate::schema;
 
 /*
 query GetConversationUsage(
@@ -23,6 +25,7 @@ query GetConversationUsage(
           usageMetadata {
             contextWindowUsage
             creditsSpent
+            platformCreditsSpent
             summarized
             tokenUsage { modelId totalTokens }
             warpTokenUsage { modelId totalTokens tokenUsageByCategory { category tokens } }
@@ -111,12 +114,31 @@ pub struct ConversationUsage {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ConversationUsageMetadata {
     pub context_window_usage: f64,
+    pub context_window_segments: Vec<ContextWindowSegment>,
     pub credits_spent: f64,
+    pub platform_credits_spent: f64,
     pub summarized: bool,
     pub token_usage: Vec<ModelTokenUsage>,
     pub warp_token_usage: Vec<TokenUsage>,
     pub byok_token_usage: Vec<TokenUsage>,
     pub tool_usage_metadata: ToolUsageMetadata,
+}
+
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextWindowSegmentType {
+    Unknown,
+    SystemPrompt,
+    ToolDefinitions,
+    ConversationHistory,
+    LatestInput,
+    Images,
+    Other,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ContextWindowSegment {
+    pub segment_type: ContextWindowSegmentType,
+    pub token_count: i32,
 }
 
 fn convert_token_usage(
@@ -168,9 +190,34 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             was_summarized: gql.summarized,
             context_window_usage: gql.context_window_usage as f32,
             credits_spent: gql.credits_spent as f32,
+            platform_credits_spent: gql.platform_credits_spent as f32,
             credits_spent_for_last_block: None,
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),
+            context_window_segments: gql.context_window_segments.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<ContextWindowSegmentType> for persistence::model::ContextWindowSegmentType {
+    fn from(value: ContextWindowSegmentType) -> Self {
+        match value {
+            ContextWindowSegmentType::Unknown => Self::Unknown,
+            ContextWindowSegmentType::SystemPrompt => Self::SystemPrompt,
+            ContextWindowSegmentType::ToolDefinitions => Self::ToolDefinitions,
+            ContextWindowSegmentType::ConversationHistory => Self::ConversationHistory,
+            ContextWindowSegmentType::LatestInput => Self::LatestInput,
+            ContextWindowSegmentType::Images => Self::Images,
+            ContextWindowSegmentType::Other => Self::Other,
+        }
+    }
+}
+
+impl From<&ContextWindowSegment> for persistence::model::ContextWindowSegment {
+    fn from(gql: &ContextWindowSegment) -> Self {
+        Self {
+            segment_type: gql.segment_type.into(),
+            token_count: u32::try_from(gql.token_count).unwrap_or_default(),
         }
     }
 }

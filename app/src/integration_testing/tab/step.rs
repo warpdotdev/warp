@@ -1,6 +1,7 @@
 use warpui::integration::TestStep;
 
-use crate::integration_testing::{step::new_step_with_default_assertions, tab::assert_tab_title};
+use crate::integration_testing::step::new_step_with_default_assertions;
+use crate::integration_testing::tab::assert_tab_title;
 
 /// Checks whether the current tab has an expected title.
 /// #Panics if any of the assertions fail (including if the tab title doesn't match

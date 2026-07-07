@@ -1,15 +1,16 @@
+use std::any::Any;
 use std::collections::HashMap;
-use std::{any::Any, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use command::r#async::Command;
 use itertools::Itertools as _;
 
+use super::shared::shell_escape_single_quotes;
+use super::{CommandExecutor, CommandOutput, ExecuteCommandOptions};
 use crate::env_vars::{serialize_variables_for_shell, EnvVarValue};
 use crate::terminal::shell::Shell;
-
-use super::{CommandExecutor, CommandOutput, ExecuteCommandOptions};
 
 /// `CommandExecutor` implementation that executes the given `command` in a forked process
 /// that establishes a one-off SSH session with the same remote host as the active SSH session
@@ -57,7 +58,10 @@ impl CommandExecutor for RemoteCommandExecutor {
             command_str.push(';');
         }
         if let Some(current_directory_path) = current_directory_path {
-            command_str.push_str(&format!("cd '{current_directory_path}' && "));
+            // Ensure the path escapes embedded single quotes from the remote host's serialized block.
+            let escaped_path =
+                shell_escape_single_quotes(current_directory_path, shell.shell_type());
+            command_str.push_str(&format!("cd '{escaped_path}' && "));
         }
         command_str.push_str(command);
 

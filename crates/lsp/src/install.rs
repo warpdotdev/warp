@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
-
 #[cfg(all(feature = "local_fs", unix))]
 use async_fs::unix::PermissionsExt;
+use serde::Deserialize;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {

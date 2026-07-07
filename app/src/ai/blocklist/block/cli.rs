@@ -1,48 +1,58 @@
-use parking_lot::{FairMutex, RwLock};
-use pathfinder_color::ColorU;
-use settings::Setting as _;
+use std::cmp::Ordering;
+use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{cmp::Ordering, rc::Rc};
-use warp_core::features::FeatureFlag;
-use warp_core::report_error;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::new_scrollable::SingleAxisConfig;
-use warpui::elements::{
-    ClippedScrollStateHandle, ConstrainedBox, Empty, Fill, FormattedTextElement, Highlight,
-    HighlightedHyperlink, Hoverable, MainAxisAlignment, MainAxisSize, NewScrollable, SavePosition,
-    SelectableArea, SizeConstraintCondition, SizeConstraintSwitch,
-};
-use warpui::fonts::Weight;
-use warpui::platform::{Cursor, OperatingSystem};
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 
 use lazy_static::lazy_static;
-use pathfinder_geometry::vector::vec2f;
-
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
+use parking_lot::{FairMutex, RwLock};
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
+use settings::Setting as _;
+use warp_core::features::FeatureFlag;
+use warp_core::report_error;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::appearance::Appearance;
-use warp_editor::{
-    content::buffer::InitialBufferState, render::element::VerticalExpansionBehavior,
+use warp_core::ui::theme::color::internal_colors;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::element::VerticalExpansionBehavior;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::SingleAxisConfig;
+use warpui::elements::{
+    resizable_state_handle, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragBarSide, DropShadow, Empty,
+    Expanded, Fill, Flex, FormattedTextElement, Highlight, HighlightedHyperlink, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning,
+    ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
+    ResizableStateHandle, SavePosition, SelectableArea, SelectionHandle, Shrinkable,
+    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
-use warpui::r#async::Timer;
+use warpui::fonts::{Properties, Style, Weight};
+use warpui::keymap::{EditableBinding, Keystroke};
+use warpui::platform::{Cursor, OperatingSystem};
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, DropShadow,
-        Expanded, Flex, MouseStateHandle, OffsetPositioning, ParentElement,
-        PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SelectionHandle,
-        Shrinkable, Stack, Text,
-    },
-    fonts::{Properties, Style},
-    keymap::{EditableBinding, Keystroke},
-    r#async::SpawnedFutureHandle,
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
 
-use crate::ai::agent::{AIAgentPtyWriteMode, CancellationReason};
+use super::cli_controller::{CLISubagentController, CLISubagentEvent, UserTakeOverReason};
+use super::model::{AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus};
+use super::view_impl::common::{
+    render_debug_footer, render_failed_output, render_informational_footer, render_text_sections,
+    DebugFooterProps, FailedOutputProps, TextSectionsProps,
+};
+use super::view_impl::output::are_all_text_sections_empty;
+use super::{EmbeddedCodeEditorView, SecretRedactionState, TableSectionHandles};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::icons::yellow_stop_icon;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentPtyWriteMode,
+    AIAgentText, AIAgentTextSection, CancellationReason, ProgrammingLanguage, WebSearchStatus,
+};
 use crate::ai::blocklist::block::view_impl::common::{
     render_query_text, UserQueryProps, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
     BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
@@ -51,72 +61,47 @@ use crate::ai::blocklist::block::view_impl::common::{
     LOAD_OUTPUT_MESSAGE_FOR_READING_FILES, LOAD_OUTPUT_MESSAGE_FOR_SEARCH_CODEBASE,
     LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH,
 };
+use crate::ai::blocklist::block::TextLocation;
+use crate::ai::blocklist::code_block::CodeSnippetButtonHandles;
+use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ai::blocklist::permissions::is_agent_mode_autonomy_allowed;
+use crate::ai::blocklist::{
+    BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIPermissions,
+};
 use crate::ai::control_code_parser::{parse_control_codes_from_bytes, ParsedControlCodeOutput};
-use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions};
-use crate::menu::MenuItemFields;
-use crate::send_telemetry_from_ctx;
+use crate::ai::execution_profiles::profiles::{
+    AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
+};
+use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
+use crate::code::editor_management::CodeSource;
+use crate::editor::InteractionState;
+use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::AISettings;
+use crate::settings_view::SettingsSection;
 use crate::terminal::input::SET_INPUT_MODE_TERMINAL_ACTION_NAME;
 use crate::terminal::model::block::BlockId;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::{ShellLaunchData, TerminalModel};
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::util::link_detection::{detect_links, DetectedLinksState};
+use crate::view_components::action_button::{
+    ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
+};
+use crate::view_components::compactible_action_button::{
+    render_compact_and_regular_button_rows, CompactibleActionButton, RenderCompactibleActionButton,
+};
+use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::DismissibleToast;
 use crate::workspace::WorkspaceAction;
-use crate::ToastStack;
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, task::TaskId, AIAgentActionType, AIAgentOutput,
-            AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, ProgrammingLanguage,
-            WebSearchStatus,
-        },
-        blocklist::{
-            code_block::CodeSnippetButtonHandles, BlocklistAIActionModel, BlocklistAIHistoryEvent,
-            BlocklistAIPermissions,
-        },
-        execution_profiles::profiles::{AIExecutionProfilesModel, AIExecutionProfilesModelEvent},
-    },
-    code::{editor::view::CodeEditorView, editor_management::CodeSource},
-    editor::InteractionState,
-    menu::{Event as MenuEvent, Menu, MenuVariant},
-    settings_view::SettingsSection,
-    terminal::safe_mode_settings::get_secret_obfuscation_mode,
-    ui_components::{blended_colors, icons::Icon},
-    view_components::{
-        action_button::{ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme},
-        compactible_action_button::{
-            render_compact_and_regular_button_rows, CompactibleActionButton,
-            RenderCompactibleActionButton,
-        },
-        compactible_split_action_button::CompactibleSplitActionButton,
-    },
-    BlocklistAIHistoryModel,
-};
-
-use crate::ai::agent::AIAgentInput;
-use crate::ai::blocklist::block::TextLocation;
-use crate::util::link_detection::{detect_links, DetectedLinksState};
-
-use crate::ai::agent::icons::yellow_stop_icon;
-use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
-
-use super::cli_controller::{CLISubagentController, CLISubagentEvent, UserTakeOverReason};
-use super::model::AIBlockModelHelper;
-use super::TableSectionHandles;
-use super::{
-    model::{AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus},
-    view_impl::{
-        common::{
-            render_debug_footer, render_failed_output, render_informational_footer,
-            render_text_sections, DebugFooterProps, FailedOutputProps, TextSectionsProps,
-        },
-        output::are_all_text_sections_empty,
-    },
-    EmbeddedCodeEditorView, SecretRedactionState,
-};
+use crate::{send_telemetry_from_ctx, BlocklistAIHistoryModel, ToastStack};
 const MENU_WIDTH: f32 = 200.0;
 const MAX_HEIGHT: f32 = 320.0;
+const MIN_RESIZABLE_WIDTH: f32 = 360.0;
+const MIN_RESIZABLE_HEIGHT: f32 = 40.0;
+const MIN_REMAINING_WINDOW_WIDTH: f32 = 200.0;
+const MIN_REMAINING_WINDOW_HEIGHT: f32 = 100.0;
 const AVATAR_RIGHT_MARGIN: f32 = 8.;
 const CONTENT_PADDING: f32 = 12.;
 const ALLOW_ACTION_POSITION_ID: &str = "allow-action-position-id";
@@ -145,7 +130,8 @@ const HAS_PENDING_NON_TRANSFER_CONTROL_ACTION_CONTEXT_KEY: &str =
 const BLOCKED_ACTION_MESSAGE_FOR_TRANSFER_CONTROL: &str = "Agent is asking you to take control.";
 
 pub fn init(app: &mut AppContext) {
-    use warpui::keymap::{macros::*, FixedBinding};
+    use warpui::keymap::macros::*;
+    use warpui::keymap::FixedBinding;
 
     app.register_fixed_bindings([
         FixedBinding::new(
@@ -234,6 +220,8 @@ pub struct CLISubagentView {
 
     is_input_dismissed: bool,
     input_dismiss_timer_handle: Option<SpawnedFutureHandle>,
+    resizable_width: ResizableStateHandle,
+    resizable_height: ResizableStateHandle,
 
     current_working_directory: Option<String>,
     shell_launch_data: Option<ShellLaunchData>,
@@ -488,6 +476,8 @@ impl CLISubagentView {
             always_allow_read_files_checked,
             is_input_dismissed: false,
             input_dismiss_timer_handle: None,
+            resizable_width: resizable_state_handle(MIN_RESIZABLE_WIDTH),
+            resizable_height: resizable_state_handle(MAX_HEIGHT),
             current_working_directory,
             shell_launch_data,
             selected_text: Arc::new(RwLock::new(None)),
@@ -734,9 +724,8 @@ impl CLISubagentView {
                             .and_then(|language| language.to_extension())
                         {
                             // Since this is a code snippet, construct a fake path name for looking up the language.
-                            let fake_path_string = format!("snippet.{extension}");
-                            let fake_path = std::path::Path::new(&fake_path_string);
-                            view.set_language_with_path(fake_path, ctx);
+                            let fake_path = format!("/snippet.{extension}");
+                            view.set_language_with_local_path(Path::new(&fake_path), ctx);
                         }
                     }
                     let starting_line_number = source.as_ref().and_then(|s| {
@@ -977,6 +966,11 @@ impl View for CLISubagentView {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let semantic_selection = SemanticSelection::handle(app).as_ref(app);
+        let resizable_height = self
+            .resizable_height
+            .lock()
+            .map(|g| g.size())
+            .unwrap_or(MAX_HEIGHT);
 
         let mut result = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
@@ -1035,6 +1029,7 @@ impl View for CLISubagentView {
                         child: selectable_text.finish(),
                         background_color: internal_colors::accent_bg(theme).into(),
                         border: Some(Border::all(1.).with_border_fill(theme.accent())),
+                        max_height: resizable_height,
                     },
                     app,
                 )
@@ -1148,6 +1143,7 @@ impl View for CLISubagentView {
                                             border: Some(Border::all(1.).with_border_fill(
                                                 internal_colors::neutral_3(theme),
                                             )),
+                                            max_height: resizable_height,
                                         },
                                         app,
                                     )
@@ -1175,6 +1171,7 @@ impl View for CLISubagentView {
                                                 internal_colors::neutral_3(theme),
                                             ),
                                         ),
+                                        max_height: resizable_height,
                                     },
                                     app,
                                 )
@@ -1190,57 +1187,64 @@ impl View for CLISubagentView {
 
         let mut output_border = Border::all(1.).with_border_fill(internal_colors::neutral_3(theme));
         if let AIBlockOutputStatus::Failed { error, .. } = &status {
-            output_border = Border::all(1.).with_border_color(theme.ui_error_color());
-            output_items.add_child(render_failed_output(
-                FailedOutputProps {
-                    error,
-                    is_ai_input_enabled: false,
-                    invalid_api_key_button_handle: &self
-                        .state_handles
-                        .invalid_api_key_button_handle,
-                    aws_bedrock_credentials_error_view: None,
-                    icon_right_margin: AVATAR_RIGHT_MARGIN,
-                },
-                app,
-            ));
+            // While an automatic resume is still in flight, keep the failed exchange
+            // quiet: don't switch to the error border, and skip the banner, the "won't
+            // count towards usage" notice, and the debug footer. The full failure UI is
+            // surfaced only once recovery has actually failed. Dogfood builds (Local/Dev)
+            // opt out so developers still see every transport failure aggressively.
+            if !error.should_suppress_during_recovery() {
+                output_border = Border::all(1.).with_border_color(theme.ui_error_color());
+                output_items.add_child(render_failed_output(
+                    FailedOutputProps {
+                        error,
+                        is_ai_input_enabled: false,
+                        invalid_api_key_button_handle: &self
+                            .state_handles
+                            .invalid_api_key_button_handle,
+                        aws_bedrock_credentials_error_view: None,
+                        icon_right_margin: AVATAR_RIGHT_MARGIN,
+                    },
+                    app,
+                ));
 
-            if !self.model.is_restored() && !error.is_invalid_api_key() {
-                output_items.add_child(
-                    Container::new(render_informational_footer(
-                        app,
-                        "This response won't count towards your usage. \"Take over\" to continue."
-                            .to_string(),
-                    ))
-                    .with_margin_top(8.)
-                    .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
-                    .finish(),
-                );
+                if !self.model.is_restored() && !error.is_invalid_api_key() {
+                    output_items.add_child(
+                        Container::new(render_informational_footer(
+                            app,
+                            "This response won't count towards your usage. \"Take over\" to continue."
+                                .to_string(),
+                        ))
+                        .with_margin_top(8.)
+                        .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
+                        .finish(),
+                    );
 
-                output_items.add_child(
-                    Container::new(render_debug_footer(
-                        DebugFooterProps {
-                            conversation: self.model.conversation(app),
-                            model: self.model.as_ref(),
-                            debug_copy_button_handle: self
-                                .state_handles
-                                .debug_copy_button_handle
-                                .clone(),
-                            submit_issue_button_handle: self
-                                .state_handles
-                                .submit_issue_button_handle
-                                .clone(),
-                            should_render_feedback_below: true,
-                        },
-                        |debug_id, ctx| {
-                            ctx.dispatch_typed_action(CLISubagentAction::CopyDebugId(debug_id))
-                        },
-                        |ctx| ctx.dispatch_typed_action(CLISubagentAction::OpenFeedbackDocs),
-                        app,
-                    ))
-                    .with_margin_top(8.)
-                    .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
-                    .finish(),
-                );
+                    output_items.add_child(
+                        Container::new(render_debug_footer(
+                            DebugFooterProps {
+                                conversation: self.model.conversation(app),
+                                model: self.model.as_ref(),
+                                debug_copy_button_handle: self
+                                    .state_handles
+                                    .debug_copy_button_handle
+                                    .clone(),
+                                submit_issue_button_handle: self
+                                    .state_handles
+                                    .submit_issue_button_handle
+                                    .clone(),
+                                should_render_feedback_below: true,
+                            },
+                            |debug_id, ctx| {
+                                ctx.dispatch_typed_action(CLISubagentAction::CopyDebugId(debug_id))
+                            },
+                            |ctx| ctx.dispatch_typed_action(CLISubagentAction::OpenFeedbackDocs),
+                            app,
+                        ))
+                        .with_margin_top(8.)
+                        .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
+                        .finish(),
+                    );
+                }
             }
         }
 
@@ -1277,6 +1281,7 @@ impl View for CLISubagentView {
                         child: output.finish(),
                         background_color: internal_colors::neutral_2(appearance.theme()),
                         border: Some(output_border),
+                        max_height: resizable_height,
                     },
                     app,
                 )
@@ -1296,6 +1301,7 @@ impl View for CLISubagentView {
                                 input: input.clone(),
                                 mode,
                                 scroll_state: self.state_handles.input_scroll_state.clone(),
+                                max_height: resizable_height,
                             },
                             app,
                         )),
@@ -1396,7 +1402,24 @@ impl View for CLISubagentView {
             );
         }
 
-        result.finish()
+        let content = result.finish();
+        let width_resizable = Resizable::new(self.resizable_width.clone(), content)
+            .with_dragbar_side(DragBarSide::Left)
+            .on_resize(|ctx, _| ctx.notify())
+            .with_bounds_callback(Box::new(|window_size| {
+                let max = (window_size.x() - MIN_REMAINING_WINDOW_WIDTH).max(MIN_RESIZABLE_WIDTH);
+                (MIN_RESIZABLE_WIDTH, max)
+            }))
+            .finish();
+
+        Resizable::new(self.resizable_height.clone(), width_resizable)
+            .with_dragbar_side(DragBarSide::Top)
+            .on_resize(|ctx, _| ctx.notify())
+            .with_bounds_callback(Box::new(|window_size| {
+                let max = (window_size.y() - MIN_REMAINING_WINDOW_HEIGHT).max(MIN_RESIZABLE_HEIGHT);
+                (MIN_RESIZABLE_HEIGHT, max)
+            }))
+            .finish()
     }
 
     fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {
@@ -1708,6 +1731,7 @@ struct ScrollableContainerProps {
     child: Box<dyn Element>,
     background_color: ColorU,
     border: Option<Border>,
+    max_height: f32,
 }
 
 fn render_scrollable_container(props: ScrollableContainerProps, _app: &AppContext) -> Container {
@@ -1716,6 +1740,7 @@ fn render_scrollable_container(props: ScrollableContainerProps, _app: &AppContex
         child,
         background_color,
         border,
+        max_height,
     } = props;
 
     let scrollable = NewScrollable::vertical(
@@ -1731,7 +1756,7 @@ fn render_scrollable_container(props: ScrollableContainerProps, _app: &AppContex
     .finish();
 
     let clipped = ConstrainedBox::new(scrollable)
-        .with_max_height(MAX_HEIGHT)
+        .with_max_height(max_height)
         .finish();
 
     let mut container = Container::new(clipped)
@@ -1915,6 +1940,7 @@ struct WriteToPtyInputProps {
     input: bytes::Bytes,
     mode: AIAgentPtyWriteMode,
     scroll_state: ClippedScrollStateHandle,
+    max_height: f32,
 }
 
 fn render_write_to_pty_input(props: WriteToPtyInputProps, app: &AppContext) -> Box<dyn Element> {
@@ -1922,6 +1948,7 @@ fn render_write_to_pty_input(props: WriteToPtyInputProps, app: &AppContext) -> B
         input,
         mode,
         scroll_state,
+        max_height,
     } = props;
 
     let appearance = Appearance::as_ref(app);
@@ -1967,7 +1994,7 @@ fn render_write_to_pty_input(props: WriteToPtyInputProps, app: &AppContext) -> B
     .finish();
 
     let clipped = ConstrainedBox::new(scrollable)
-        .with_max_height(MAX_HEIGHT)
+        .with_max_height(max_height)
         .finish();
 
     Container::new(clipped)

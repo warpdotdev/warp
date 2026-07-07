@@ -1,6 +1,6 @@
 use crate::schema;
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct PublicUserProfile {
     pub display_name: Option<String>,
     pub email: Option<String>,

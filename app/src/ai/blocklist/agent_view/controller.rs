@@ -1,23 +1,23 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
+use std::time::Duration;
 
 use instant::Instant;
-
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
 use warpui::keymap::Keystroke;
-use warpui::AppContext;
-use warpui::{
-    r#async::SpawnedFutureHandle, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
-};
-
-use crate::terminal::input::message_bar::{Message, MessageItem};
-use crate::terminal::input::slash_commands::SlashCommandTrigger;
-use crate::util::bindings::keybinding_name_to_keystroke;
-use crate::{
-    ai::agent::conversation::AIConversationId, terminal::TerminalModel, BlocklistAIHistoryModel,
-};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{DismissalStrategy, EphemeralMessage, EphemeralMessageModel};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::orchestration_topology::{
+    adjacent_orchestration_child_conversation_id, OrchestrationNavigationDirection,
+};
+use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::input::slash_commands::SlashCommandTrigger;
+use crate::terminal::TerminalModel;
+use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::BlocklistAIHistoryModel;
 
 /// Error returned when entering the agent view fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -98,7 +98,7 @@ impl PendingConfirmation {
 ///
 /// Depending on the entrypoint, an `AgentView` block representing the entry may be inserted into
 /// the terminal blocklist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentViewEntryOrigin {
     /// Entered agent view from user input (e.g. /agent or cmd-enter keypress).
     Input {
@@ -136,6 +136,8 @@ pub enum AgentViewEntryOrigin {
     ThirdPartyCloudAgent,
     /// Entered agent view via the CLI (e.g. `warp agent run`).
     Cli,
+    /// Entered agent view via the headless TUI frontend.
+    Tui,
     /// Entered agent view by adding an image (drag-and-drop or paste).
     ImageAdded,
     /// Entered agent view by executing a slash command that requires agent mode.
@@ -144,8 +146,8 @@ pub enum AgentViewEntryOrigin {
     },
     SlashInit,
     CreateEnvironment,
-    /// Entered agent view by executing a slash command that requires agent mode.
-    Keybinding,
+    /// Entered agent view from the new-conversation keybinding.
+    Keybinding(Keystroke),
     /// Entered agent view by attaching context from the code review panel.
     CodeReviewContext,
     /// Entered agent view from codex integration modal.
@@ -180,6 +182,10 @@ pub enum AgentViewEntryOrigin {
 
     /// Entered agent view by clearing the buffer (Cmd+K) while already in agent view.
     ClearBuffer,
+
+    /// Entered agent view via the "Jump to Latest Agent Message" command, which
+    /// returns to the most recent conversation from the terminal.
+    JumpToLatestAgentMessage,
 
     // The variants below actually correspond to callsites where the selected conversation is
     // updated, but don't actually correspond to entering the agent view. They exist so we can
@@ -256,6 +262,13 @@ impl AgentViewState {
     pub fn display_mode(&self) -> Option<AgentViewDisplayMode> {
         match self {
             AgentViewState::Active { display_mode, .. } => Some(*display_mode),
+            AgentViewState::Inactive => None,
+        }
+    }
+
+    pub fn origin(&self) -> Option<AgentViewEntryOrigin> {
+        match self {
+            AgentViewState::Active { origin, .. } => Some(origin.clone()),
             AgentViewState::Inactive => None,
         }
     }
@@ -387,6 +400,11 @@ impl AgentViewController {
         self.pane_group_id
     }
 
+    /// Returns the [`EntityId`] of the [`TerminalView`] that owns this controller.
+    pub fn terminal_view_id(&self) -> EntityId {
+        self.terminal_view_id
+    }
+
     pub fn set_pane_group_id(&mut self, pane_group_id: EntityId) {
         self.pane_group_id = Some(pane_group_id);
     }
@@ -407,6 +425,21 @@ impl AgentViewController {
         &self.agent_view_state
     }
 
+    /// Resolves the conversation adjacent to the active agent-view conversation
+    /// in the canonical orchestration pill order.
+    pub fn adjacent_orchestration_conversation_id(
+        &self,
+        direction: OrchestrationNavigationDirection,
+        app: &AppContext,
+    ) -> Option<AIConversationId> {
+        let active_conversation_id = self.agent_view_state.active_conversation_id()?;
+        adjacent_orchestration_child_conversation_id(
+            BlocklistAIHistoryModel::as_ref(app),
+            active_conversation_id,
+            direction,
+        )
+    }
+
     /// Returns whether the user is allowed to exit agent view.
     /// This is used to determine both whether the escape key should work
     /// and whether the escape keybinding should be displayed.
@@ -419,8 +452,10 @@ impl AgentViewController {
                 .active_block()
                 .is_active_and_long_running();
 
-        // In a non-ambient agent case, users cannot exit the fullscreen agent view with an active long running command.
-        if is_fullscreen_with_long_running {
+        // Cloud agent panes do not have the same underlying terminal ownership
+        // constraint (no local shell process), so long-running third party agent
+        // commands should not trap the user in agent view.
+        if is_fullscreen_with_long_running && !model.is_dummy_cloud_mode_session() {
             return Err(ExitAgentViewError::LongRunningCommand);
         }
 
@@ -554,6 +589,26 @@ impl AgentViewController {
         keybinding_name: &str,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        let Some(keystroke) = keybinding_name_to_keystroke(keybinding_name, ctx) else {
+            log::warn!(
+                "Expected keybinding for slash command {keybinding_name}, but none was found"
+            );
+            return true;
+        };
+
+        self.should_start_new_conversation_for_keystroke(keystroke, ctx)
+    }
+
+    /// Decides whether a keybinding-triggered new conversation should proceed immediately.
+    ///
+    /// We only require a second press when the user is already in an active, non-empty
+    /// conversation. This protects against accidental conversation resets from muscle-memory
+    /// keypresses, while preserving single-step behavior for explicit typed/slash-menu execution.
+    pub fn should_start_new_conversation_for_keystroke(
+        &mut self,
+        keystroke: Keystroke,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
         enum Decision {
             StartNewConversation,
             ArmConfirmation {
@@ -579,13 +634,6 @@ impl AgentViewController {
             if conversation.is_empty() {
                 break 'decision Decision::StartNewConversation;
             }
-
-            let Some(keystroke) = keybinding_name_to_keystroke(keybinding_name, ctx) else {
-                log::warn!(
-                    "Expected keybinding for slash command {keybinding_name}, but none was found"
-                );
-                break 'decision Decision::StartNewConversation;
-            };
 
             let normalized_keystroke = keystroke.normalized();
             if self.is_new_conversation_keybinding_confirmation_active_for(
@@ -695,7 +743,7 @@ impl AgentViewController {
                 .active_block()
                 .is_active_and_long_running()
                 && !terminal_model.is_conversation_transcript_viewer()
-                && !matches!(origin, AgentViewEntryOrigin::ThirdPartyCloudAgent)
+                && !matches!(&origin, AgentViewEntryOrigin::ThirdPartyCloudAgent)
         };
 
         if is_long_running {
@@ -765,7 +813,8 @@ impl AgentViewController {
                 history_model.start_new_conversation(
                     self.terminal_view_id,
                     false,
-                    matches!(origin, AgentViewEntryOrigin::CloudAgent),
+                    matches!(&origin, AgentViewEntryOrigin::CloudAgent),
+                    matches!(&origin, AgentViewEntryOrigin::ThirdPartyCloudAgent),
                     ctx,
                 )
             });
@@ -777,7 +826,7 @@ impl AgentViewController {
 
         self.agent_view_state = AgentViewState::Active {
             conversation_id,
-            origin,
+            origin: origin.clone(),
             display_mode,
             original_conversation_length: exchange_count,
         };
@@ -918,13 +967,14 @@ impl AgentViewController {
             .map(|conversation| conversation.exchange_count())
             .unwrap_or(0);
 
+        let was_ambient_agent = origin == AgentViewEntryOrigin::CloudAgent;
         ctx.emit(AgentViewControllerEvent::ExitedAgentView {
             conversation_id,
             origin,
             display_mode,
             original_exchange_count: original_conversation_length,
             final_exchange_count,
-            was_ambient_agent: origin == AgentViewEntryOrigin::CloudAgent,
+            was_ambient_agent,
             is_exit_before_new_entrance,
         });
     }

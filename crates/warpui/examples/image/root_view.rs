@@ -1,11 +1,9 @@
 use pathfinder_color::ColorU;
-use warpui::{
-    elements::{
-        CacheOption, ConstrainedBox, Flex, Icon, Image, MainAxisAlignment, MainAxisSize,
-        ParentElement, Rect, Stack,
-    },
-    AppContext, Element, Entity, TypedActionView, View,
+use warpui::elements::{
+    CacheOption, ConstrainedBox, Flex, Icon, Image, MainAxisAlignment, MainAxisSize, ParentElement,
+    Rect, Stack,
 };
+use warpui::{AppContext, Element, Entity, TypedActionView, View};
 
 pub struct RootView {}
 

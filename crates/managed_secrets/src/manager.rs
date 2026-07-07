@@ -1,21 +1,21 @@
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
 
 use vec1::vec1;
-
 use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::ManagedSecret;
-use warpui::{Entity, SingletonEntity};
-
-use crate::{
-    ManagedSecretValue,
-    client::{
-        IdentityTokenOptions, ManagedSecretConfigs, ManagedSecretsClient, SecretOwner,
-        TaskIdentityToken,
-    },
-    envelope::UploadKey,
-    gcp::{self, GcpWorkloadIdentityFederationError, GcpWorkloadIdentityFederationToken},
-};
 use warp_graphql::queries::task_secrets::ManagedSecretValue as GqlManagedSecretValue;
+use warpui_core::{Entity, SingletonEntity};
+
+use crate::ManagedSecretValue;
+use crate::client::{
+    IdentityTokenOptions, ManagedSecretConfigs, ManagedSecretsClient, SecretOwner,
+    TaskIdentityToken,
+};
+use crate::envelope::UploadKey;
+use crate::gcp::{self, GcpWorkloadIdentityFederationError, GcpWorkloadIdentityFederationToken};
 
 /// Singleton model for working with Warp-managed secrets.
 pub struct ManagedSecretManager {
@@ -161,8 +161,12 @@ impl ManagedSecretManager {
         &self,
         task_id: String,
     ) -> impl Future<Output = anyhow::Result<HashMap<String, ManagedSecretValue>>> + use<> {
-        let client = self.client.clone();
-        async move {
+        // Define and invoke an inner async function to simplify tracing instrumentation.
+        #[tracing::instrument(name = "get_task_secrets", skip_all, err, fields(tags.cloud_agent = true))]
+        async fn inner(
+            client: Arc<dyn ManagedSecretsClient>,
+            task_id: String,
+        ) -> anyhow::Result<HashMap<String, ManagedSecretValue>> {
             // We only need the workload token for the duration of the request.
             let workload_token =
                 warp_isolation_platform::issue_workload_token(Some(Duration::from_mins(5))).await?;
@@ -195,6 +199,9 @@ impl ManagedSecretManager {
                             v.aws_region,
                         )
                     }
+                    GqlManagedSecretValue::ManagedSecretOpenAiApiKeyValue(v) => {
+                        ManagedSecretValue::openai_api_key(v.api_key, v.base_url)
+                    }
                     GqlManagedSecretValue::Unknown => {
                         return Err(anyhow::anyhow!(
                             "Unknown secret value type for secret: {}",
@@ -206,6 +213,8 @@ impl ManagedSecretManager {
             }
             Ok(secrets)
         }
+
+        inner(self.client.clone(), task_id)
     }
 
     /// Issue a short-lived OIDC identity token for the current task.

@@ -1,6 +1,7 @@
+use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+
 use super::pane::{PaneId, TerminalPaneId};
 use super::{PaneState, SplitPaneState};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 /// Centralized focus state for a pane group.
 /// This model tracks which pane is focused, which session is active,

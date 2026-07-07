@@ -1,6 +1,7 @@
 //! Tests for the file tree snapshot module.
 
-use std::{path::Path, sync::Arc};
+use std::path::Path;
+use std::sync::Arc;
 
 use sum_tree::Item;
 

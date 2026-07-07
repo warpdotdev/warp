@@ -1,33 +1,32 @@
 mod convert;
 
-use std::{fmt::Display, ops::Range, path::PathBuf, time::Duration};
+use std::fmt::Display;
+use std::ops::Range;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumDiscriminants;
 use uuid::Uuid;
+pub use warp_multi_agent_api::LifecycleEventType;
 use warp_terminal::model::BlockId;
 
-use crate::{
-    agent::{
-        action_result::{
-            AIAgentActionResultType, AskUserQuestionResult, CallMCPToolResult,
-            CreateDocumentsResult, EditDocumentsResult, FetchConversationResult, FileGlobResult,
-            FileGlobV2Result, GrepResult, InsertReviewCommentsResult, ReadDocumentsResult,
-            ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult, ReadSkillResult,
-            RequestCommandOutputResult, RequestComputerUseResult, RequestFileEditsResult,
-            SearchCodebaseResult, SendMessageToAgentResult, StartAgentResult, StartAgentVersion,
-            SuggestNewConversationResult, SuggestPromptResult,
-            TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
-            WriteToLongRunningShellCommandResult,
-        },
-        AIAgentCitation, FileLocations,
-    },
-    diff_validation::ParsedDiff,
-    document::AIDocumentId,
-    skills::SkillReference,
+use crate::agent::action_result::{
+    AIAgentActionResultType, AskUserQuestionResult, CallMCPToolResult, CreateDocumentsResult,
+    EditDocumentsResult, FetchConversationResult, FileGlobResult, FileGlobV2Result, GrepResult,
+    InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
+    ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
+    RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
+    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, StartRecordingResult,
+    StopRecordingResult, SuggestNewConversationResult, SuggestPromptResult,
+    TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
+    WaitForEventsResult, WriteToLongRunningShellCommandResult,
 };
-pub use warp_multi_agent_api::LifecycleEventType;
+use crate::agent::{AIAgentCitation, FileLocations};
+use crate::diff_validation::ParsedDiff;
+use crate::document::AIDocumentId;
+use crate::skills::SkillReference;
 
 #[derive(Debug, Clone, Eq, PartialEq, EnumDiscriminants)]
 pub enum AIAgentActionType {
@@ -48,7 +47,7 @@ pub enum AIAgentActionType {
         /// result instead.
         wait_until_completion: bool,
 
-        /// [`Some(true)`] iff the LLM thinks that the `command` might invoke pager.
+        /// [`Some(true)`] iff the LLM thinks that the `command` might invoke a pager.
         uses_pager: Option<bool>,
 
         /// The AI's rationale for requesting a command.
@@ -138,13 +137,29 @@ pub enum AIAgentActionType {
 
     RequestComputerUse(RequestComputerUseRequest),
 
+    /// AI requested to start recording a video of the computer-use session.
+    /// Capture configuration (frame rate, limits) is server-owned and arrives
+    /// on the tool call; the client applies it. `frame_rate` of 0 means unset.
+    StartRecording {
+        frame_rate: u32,
+        max_duration: Option<Duration>,
+        max_size_bytes: Option<u64>,
+    },
+
+    /// AI requested to stop an in-progress recording and publish the video.
+    StopRecording {
+        recording_id: String,
+    },
+
     // AI requested to read a skill.
     ReadSkill(ReadSkillRequest),
 
     FetchConversation {
         conversation_id: String,
     },
-
+    // TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 action support once
+    // old preview orchestration history no longer needs parse/display/result compatibility.
+    // Linear issue: QUALITY-788.
     StartAgent {
         version: StartAgentVersion,
         name: String,
@@ -167,6 +182,68 @@ pub enum AIAgentActionType {
     AskUserQuestion {
         questions: Vec<AskUserQuestionItem>,
     },
+
+    /// AI requested batched orchestration of one-or-more child agents that
+    /// share run-wide configuration (model, harness, execution mode).
+    /// The full per-child prompt is computed at dispatch time as
+    /// `base_prompt + "\n\n" + agent_run_configs[i].prompt` (or just
+    /// `base_prompt` when the per-agent `prompt` is empty).
+    RunAgents(RunAgentsRequest),
+
+    /// Synthesized from a server-emitted Message::ToolCall::WaitForEvents;
+    /// dispatched by WaitForEventsExecutor.
+    WaitForEvents {
+        /// tool_call_id of the unresolved WaitForEvents call; used to
+        /// match inbound resume signals.
+        tool_call_id: String,
+        /// 0 means "unset" (prost flat-scalar convention); the executor
+        /// falls back to a default.
+        idle_timeout_seconds: i32,
+    },
+}
+
+/// Run-wide + per-agent configuration for a `RunAgents` tool call.
+///
+/// Mirrors the proto `RunAgents` message. Server-resolved fields
+/// (`model_id`, `harness_type`, `execution_mode`'s remote details) are
+/// folded in by the server's final tool-call re-emission once the
+/// payload is complete; the client renders the full layout from a
+/// fully-resolved instance only.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RunAgentsRequest {
+    pub summary: String,
+    pub base_prompt: String,
+    pub skills: Vec<SkillReference>,
+    pub model_id: String,
+    pub harness_type: String,
+    pub execution_mode: RunAgentsExecutionMode,
+    pub agent_run_configs: Vec<RunAgentsAgentRunConfig>,
+    pub plan_id: String,
+    /// Resolved client-side at dispatch time; not serialized to the wire.
+    pub harness_auth_secret_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum RunAgentsExecutionMode {
+    Local,
+    Remote {
+        environment_id: String,
+        worker_host: String,
+        computer_use_enabled: bool,
+    },
+}
+
+impl RunAgentsExecutionMode {
+    pub fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote { .. })
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RunAgentsAgentRunConfig {
+    pub name: String,
+    pub prompt: String,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -175,6 +252,11 @@ pub enum StartAgentExecutionMode {
         /// `None` selects the legacy embedded local child-agent flow.
         /// `Some(...)` selects a third-party CLI harness to launch locally.
         harness_type: Option<String>,
+        /// `None` inherits the parent agent's preferred LLM (legacy behavior).
+        /// `Some(_)` overrides the child's preferred LLM with the supplied
+        /// model id (used by the orchestrate confirmation card so the user's
+        /// model selection is honored on local launches).
+        model_id: Option<String>,
     },
     Remote {
         environment_id: String,
@@ -184,18 +266,27 @@ pub enum StartAgentExecutionMode {
         worker_host: String,
         harness_type: String,
         title: String,
+        /// Name of a managed secret to forward as the authentication
+        /// credential for the remote child when running a non-Oz harness.
+        /// `None` means no client-side secret was selected — the remote
+        /// environment falls back to its own ambient credentials.
+        auth_secret_name: Option<String>,
     },
 }
 
 impl StartAgentExecutionMode {
     /// Constructs a local execution mode using the legacy v1 default harness.
     pub fn local_with_defaults() -> Self {
-        Self::Local { harness_type: None }
+        Self::Local {
+            harness_type: None,
+            model_id: None,
+        }
     }
     /// Constructs a local execution mode for a specific third-party harness.
     pub fn local_harness(harness_type: String) -> Self {
         Self::Local {
             harness_type: Some(harness_type),
+            model_id: None,
         }
     }
     /// Constructs a remote execution mode using the legacy v1 defaults for
@@ -209,6 +300,7 @@ impl StartAgentExecutionMode {
             worker_host: String::new(),
             harness_type: String::new(),
             title: String::new(),
+            auth_secret_name: None,
         }
     }
 }
@@ -297,6 +389,12 @@ impl AIAgentActionType {
             Self::RequestComputerUse(_) => {
                 AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Cancelled)
             }
+            Self::StartRecording { .. } => {
+                AIAgentActionResultType::StartRecording(StartRecordingResult::Cancelled)
+            }
+            Self::StopRecording { .. } => {
+                AIAgentActionResultType::StopRecording(StopRecordingResult::Cancelled)
+            }
             Self::ReadSkill(_) => AIAgentActionResultType::ReadSkill(ReadSkillResult::Cancelled),
             Self::FetchConversation { .. } => {
                 AIAgentActionResultType::FetchConversation(FetchConversationResult::Cancelled)
@@ -316,6 +414,10 @@ impl AIAgentActionType {
             }
             Self::AskUserQuestion { .. } => {
                 AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Cancelled)
+            }
+            Self::RunAgents(_) => AIAgentActionResultType::RunAgents(RunAgentsResult::Cancelled),
+            Self::WaitForEvents { .. } => {
+                AIAgentActionResultType::WaitForEvents(WaitForEventsResult::Cancelled)
             }
         }
     }
@@ -352,6 +454,8 @@ impl AIAgentActionType {
                 format!("Insert {} code review comments", comments.len())
             }
             Self::RequestComputerUse(_) => "Request computer use".to_string(),
+            Self::StartRecording { .. } => "Start recording".to_string(),
+            Self::StopRecording { .. } => "Stop recording".to_string(),
             Self::ReadSkill(_) => "Read skill".to_string(),
             Self::FetchConversation { .. } => "Fetch conversation".to_string(),
             Self::StartAgent { name, .. } => format!("Start agent: {name}"),
@@ -362,6 +466,10 @@ impl AIAgentActionType {
             Self::AskUserQuestion { questions } => {
                 format!("Ask user {} question(s)", questions.len())
             }
+            Self::RunAgents(req) => {
+                format!("Orchestrate {} agent(s)", req.agent_run_configs.len())
+            }
+            Self::WaitForEvents { .. } => "Wait for events".to_string(),
         }
     }
 }
@@ -510,6 +618,12 @@ impl Display for AIAgentActionType {
             AIAgentActionType::RequestComputerUse(req) => {
                 write!(f, "RequestComputerUse: {}", req.task_summary)
             }
+            AIAgentActionType::StartRecording { .. } => {
+                write!(f, "StartRecording")
+            }
+            AIAgentActionType::StopRecording { recording_id } => {
+                write!(f, "StopRecording: {recording_id}")
+            }
             AIAgentActionType::ReadSkill(req) => {
                 write!(f, "ReadSkill: {}", req.skill)
             }
@@ -533,6 +647,24 @@ impl Display for AIAgentActionType {
             }
             AIAgentActionType::AskUserQuestion { questions } => {
                 write!(f, "AskUserQuestion: {} question(s)", questions.len())
+            }
+            AIAgentActionType::RunAgents(req) => {
+                let names = req
+                    .agent_run_configs
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "Orchestrate: summary='{}' agents=[{names}]", req.summary,)
+            }
+            AIAgentActionType::WaitForEvents {
+                tool_call_id,
+                idle_timeout_seconds,
+            } => {
+                write!(
+                    f,
+                    "WaitForEvents: tool_call_id={tool_call_id} idle_timeout_seconds={idle_timeout_seconds}"
+                )
             }
         }
     }
@@ -665,7 +797,8 @@ pub struct CreateDocumentsRequest {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct UseComputerRequest {
     pub action_summary: String,
-    pub actions: Vec<computer_use::Action>,
+    /// Each action carries the surface (screen or a specific window) it targets.
+    pub actions: Vec<computer_use::TargetedAction>,
     /// If set, a screenshot will be captured after the actions are executed.
     pub screenshot_params: Option<computer_use::ScreenshotParams>,
 }

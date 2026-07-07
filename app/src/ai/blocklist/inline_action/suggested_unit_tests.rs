@@ -1,39 +1,36 @@
 use std::sync::Arc;
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use rand::{distributions::Alphanumeric, thread_rng, Rng as _};
-use warp_core::{settings::ToggleableSetting, ui::appearance::Appearance};
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng as _};
+use warp_core::settings::ToggleableSetting;
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Flex, FormattedTextElement,
+    HighlightedHyperlink, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Text,
+};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Flex, FormattedTextElement,
-        HighlightedHyperlink, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-        SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Text,
-    },
-    platform::Cursor,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    ai::{
-        agent::{AIAgentActionId, AIIdentifiers},
-        predict::prompt_suggestions::{
-            ACCEPT_PROMPT_SUGGESTION_KEYBINDING, REJECT_PROMPT_SUGGESTION_KEYSTROKE,
-        },
-    },
-    send_telemetry_from_ctx,
-    server::telemetry::ToggleCodeSuggestionsSettingSource,
-    settings::AISettings,
-    ui_components::{blended_colors, icons::Icon},
-    view_components::{
-        action_button::{ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme},
-        compactible_action_button::{
-            render_compact_and_regular_button_rows, CompactibleActionButton,
-            MEDIUM_SIZE_SWITCH_THRESHOLD,
-        },
-    },
-    TelemetryEvent,
+use crate::ai::agent::{AIAgentActionId, AIIdentifiers};
+use crate::ai::predict::prompt_suggestions::{
+    ACCEPT_PROMPT_SUGGESTION_KEYBINDING, REJECT_PROMPT_SUGGESTION_KEYSTROKE,
 };
+use crate::server::telemetry::ToggleCodeSuggestionsSettingSource;
+use crate::settings::AISettings;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
+};
+use crate::view_components::compactible_action_button::{
+    render_compact_and_regular_button_rows, CompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD,
+};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 const ACCEPT_LABEL: &str = "Generate tests";
 const CANCEL_LABEL: &str = "Dismiss";

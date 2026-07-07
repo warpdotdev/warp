@@ -1,3 +1,9 @@
+use std::ops::Range;
+
+use fuzzy_match::match_indices_case_insensitive;
+use itertools::Itertools;
+use warpui::{AppContext, ModelHandle};
+
 use crate::pane_group::PaneId;
 use crate::search::command_palette::navigation::render::CommandRenderInfo;
 use crate::search::command_palette::navigation::search_item::SearchItem;
@@ -5,10 +11,6 @@ use crate::search::command_palette::navigation::DataSource;
 use crate::search::data_source::QueryResult;
 use crate::search::SyncDataSource;
 use crate::session_management::{CommandContext, SessionNavigationData, SessionSource};
-use fuzzy_match::match_indices_case_insensitive;
-use itertools::Itertools;
-use std::ops::Range;
-use warpui::{AppContext, ModelHandle};
 
 /// A session that was fuzzy matched against a search term.
 pub struct MatchedSession {
@@ -242,7 +244,12 @@ impl SessionSearcher for FuzzySessionSearcher {
 pub use full_text_searcher::FullTextSessionSearcher;
 #[cfg(not(target_family = "wasm"))]
 mod full_text_searcher {
-    use crate::define_search_schema;
+    use std::collections::HashMap;
+
+    use itertools::Itertools;
+    use warp_search_core::define_search_schema;
+    use warpui::{AppContext, ModelHandle};
+
     use crate::pane_group::PaneId;
     use crate::search::command_palette::navigation::search::{
         searchable_session_string_and_ranges, MatchedSession, SearcherAction,
@@ -252,9 +259,6 @@ mod full_text_searcher {
     use crate::search::data_source::QueryResult;
     use crate::search::searcher::{DEFAULT_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR};
     use crate::session_management::{SessionNavigationData, SessionSource};
-    use itertools::Itertools;
-    use std::collections::HashMap;
-    use warpui::{AppContext, ModelHandle};
 
     define_search_schema!(
         schema_name: SESSION_SEARCH_SCHEMA,

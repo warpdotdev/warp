@@ -1,11 +1,12 @@
+use warpui::elements::{
+    ClippedScrollStateHandle, Container, CrossAxisAlignment, DispatchEventResult, EventHandler,
+    Flex, Hoverable, MouseInBehavior, MouseStateHandle, ParentElement, SavePosition, ScrollTarget,
+    ScrollToPositionMode,
+};
+use warpui::keymap::FixedBinding;
+use warpui::ui_components::button::Button;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        ClippedScrollStateHandle, Container, CrossAxisAlignment, DispatchEventResult, EventHandler,
-        Flex, Hoverable, MouseInBehavior, MouseStateHandle, ParentElement, SavePosition,
-        ScrollTarget, ScrollToPositionMode,
-    },
-    keymap::FixedBinding,
-    ui_components::{button::Button, components::UiComponent},
     AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
 };
 
@@ -129,6 +130,15 @@ impl NumberShortcutButtonBuilder {
             button_builder: Box::new(button_builder),
             on_click: Box::new(on_click),
         }
+    }
+
+    /// Builds just this option's visual element, with no click or keyboard handling. The
+    /// ask-user-question card uses it to lay out off-screen measurement copies of every option, so
+    /// a multi-question card can size itself to its tallest question. Only the rendered size matters
+    /// there, so the button builder is invoked in its unselected state and the interactive
+    /// `on_click` half is dropped.
+    pub fn build_measurement_element(&self, app: &AppContext) -> Box<dyn Element> {
+        (self.button_builder)(false, app).build().finish()
     }
 }
 

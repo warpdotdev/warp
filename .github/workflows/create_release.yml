@@ -73,7 +73,7 @@ jobs:
       should_publish: ${{ steps.set_publish.outputs.should_publish }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Get channel configuration
         id: get-config
@@ -111,6 +111,9 @@ jobs:
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
+          # See https://github.com/orgs/community/discussions/151442 for why we need to use
+          # a PAT here.
+          GITHUB_TOKEN: ${{ secrets.CREATE_RELEASE_TAG_PUSH_PAT }}
 
       - name: Create GitHub release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
@@ -150,7 +153,7 @@ jobs:
           - arch: x86_64
             dmg_name_suffix: x86_64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -270,7 +273,7 @@ jobs:
     if: ${{ inputs.build_macos != false }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -417,7 +420,7 @@ jobs:
           - arch: aarch64
           - arch: x86_64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -508,6 +511,96 @@ jobs:
         env:
           DEBUG_FILE_OR_FOLDER_PATH: ${{ steps.bundle_cli.outputs.dsym_path }}
 
+  release_macos_tui:
+    name: Build Release (macOS TUI ${{ matrix.arch }})
+    runs-on: macos-26-xlarge
+    needs: prepare_release
+    # The Warp TUI is currently a dev-only, macOS-only artifact. Keep this job
+    # scoped to the dev channel; it rides the existing nightly dev cut.
+    if: ${{ inputs.build_macos != false && inputs.channel == 'dev' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+          - arch: x86_64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      - name: Ensure rust target is installed
+        run: rustup target add ${{ matrix.arch }}-apple-darwin
+        shell: bash
+
+      # Install go toolchain, as it may be needed for some build steps.
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: stable
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Build ${{ matrix.arch }} binary
+        id: bundle_tui
+        run: |
+          script/bundle --read-passwords-from-env --channel $CHANNEL --arch ${{ matrix.arch }} --artifact tui
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          WARP_DEVELOPER_ID_CERT: ${{ secrets.WARP_DEVELOPER_ID_CERT }}
+          WARP_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.WARP_DEVELOPER_ID_CERT_PASSWORD }}
+          WARP_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.WARP_CODESIGN_KEYCHAIN_PASSWORD }}
+          WARP_NOTARIZATION_APPLE_ID: ${{ secrets.WARP_NOTARIZATION_APPLE_ID }}
+          WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
+
+      - name: Package TUI binary
+        run: |
+          mv ${{ steps.bundle_tui.outputs.binary_path }} warp-tui-${{ steps.get-config.outputs.channel }}
+          tar czf warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz warp-tui-${{ steps.get-config.outputs.channel }} -C "$(dirname "${{ steps.bundle_tui.outputs.bundled_resources_dir }}")" resources
+
+      - name: Add TUI to GitHub release assets
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        with:
+          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
+          files: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        with:
+          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+
+      - name: Upload TUI to Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        with:
+          path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
+          destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/macos/${{ matrix.arch }}
+          headers: |-
+            cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
+
+      - name: Upload TUI as workflow artifact
+        if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
+
   release_linux_x86:
     name: Build Release (Linux x86_64)
     runs-on: namespace-profile-ubuntu-20-04
@@ -523,7 +616,7 @@ jobs:
       # compiles and runs the generator once per job instead of per-package.
       SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -591,7 +684,10 @@ jobs:
       # Namespace's User Bundled Cache persists target/ between jobs on the same profile, which can
       # leave stale packages from a previous channel's build in the linux bundle output dir.
       - name: Clean stale bundle output
-        run: rm -rf target/*/bundle/linux
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
         shell: bash
 
       - name: Bundle app
@@ -668,7 +764,7 @@ jobs:
 
   release_linux_cli_x86:
     name: Build Release (Linux CLI x86_64)
-    runs-on: namespace-profile-ubuntu-20-04
+    runs-on: namespace-profile-ubuntu-22-04
     needs: prepare_release
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
@@ -677,7 +773,7 @@ jobs:
       # compiles and runs the generator once per job instead of per-package.
       SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -742,7 +838,10 @@ jobs:
       # Namespace's User Bundled Cache persists target/ between jobs on the same profile, which can
       # leave stale packages from a previous channel's build in the linux bundle output dir.
       - name: Clean stale bundle output
-        run: rm -rf target/*/bundle/linux
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
         shell: bash
 
       - name: Bundle CLI
@@ -856,7 +955,7 @@ jobs:
       # compiles and runs the generator once per job instead of per-package.
       SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -940,12 +1039,12 @@ jobs:
 
   build_linux_cli_arm_binaries:
     name: Build Release (Linux CLI ARM)
-    runs-on: namespace-profile-ubuntu-20-04-arm
+    runs-on: namespace-profile-ubuntu-22-04
     needs: prepare_release
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -986,7 +1085,7 @@ jobs:
         id: build_cli
         run: |
           # Build the CLI only
-          script/bundle --channel $CHANNEL --artifact cli --packages none
+          script/bundle --channel $CHANNEL --artifact cli --packages none --arch aarch64
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -1027,7 +1126,7 @@ jobs:
       SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
       - name: Checkout sources
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
 
@@ -1283,7 +1382,7 @@ jobs:
     if: ${{ inputs.build_web != false }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -1408,7 +1507,7 @@ jobs:
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
       TRUSTED_SIGNING_CERT_PROFILE: warpterminal
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -1561,6 +1660,7 @@ jobs:
       - release_macos_single_arch
       - release_macos_universal
       - release_macos_cli
+      - release_macos_tui
       - release_linux_x86
       - release_linux_arm
       - release_linux_cli_x86
@@ -1581,6 +1681,11 @@ jobs:
           fi
           if [[ ${{ needs.release_macos_cli.result }} != 'success' ]]; then
             FAILED+=('MacOS CLI')
+          fi
+          # The TUI job only runs on the dev channel, so only treat it as a
+          # failure there (it is intentionally skipped elsewhere).
+          if [[ ${{ needs.release_macos_tui.result }} != 'success' && ${{ inputs.channel }} == 'dev' ]]; then
+            FAILED+=('MacOS TUI')
           fi
           if [[ ${{ needs.release_linux_x86.result }} != 'success' ]]; then
               FAILED+=("Linux x86_64")
@@ -1629,7 +1734,7 @@ jobs:
       - release_web
       - release_windows
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         name: Checkout sources
         with:
           # Fetch history for all tags and branches so we can compare revisions
@@ -1643,75 +1748,116 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - name: Obtain a GitHub App Installation Access Token
+      # Stable releases use the Oz changelog-draft agent for higher-quality,
+      # human-reviewable output. Non-stable channels (dev/preview/beta) use the
+      # legacy generate-changelog action to avoid spending Oz agent tokens on
+      # daily dev cuts and preview RCs.
+      - name: Generate changelog via Oz (stable only)
+        if: inputs.channel == 'stable'
+        uses: warpdotdev/oz-agent-action@ce1621abf6a8ed8afdd4e4cc994545ede8fe1c6f # main
+        with:
+          prompt: |
+            Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.
+
+            Output directory: ${{ runner.temp }}/changelog-draft
+
+            Follow the workflow in .agents/skills/changelog-draft/SKILL.md exactly.
+            Make sure to produce both output files: changelog-draft.md and changelog-draft.json.
+            The release workflow may run from warpdotdev/warp-internal. When fetching PR data, pass the checked-out repository ("${{ github.repository }}") to fetch_prs.py and rely on the script's repo-sync normalization to resolve public warpdotdev/warp PR numbers, URLs, and authors. The script intentionally omits non-repo-sync PRs from warp-internal because they are private internal changes. Do not infer or synthesize public PR links manually.
+
+            After writing the output files, print the full contents of changelog-draft.md to stdout so it appears in the workflow log.
+
+            You are running in a GitHub Actions workflow. The repo is checked out at the default branch (HEAD) with full history. Use the release_tag input as the git range endpoint — do NOT check out the release tag. `gh` is authenticated. Do not commit, push, or create PRs.
+          warp_api_key: ${{ secrets.WARP_API_KEY }}
+          share: team
+      - name: Upload raw Markdown changelog artifact (stable only)
+        if: inputs.channel == 'stable'
+        id: upload_changelog_draft_markdown
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: changelog-draft-markdown
+          path: ${{ runner.temp }}/changelog-draft/changelog-draft.md
+          if-no-files-found: error
+
+      - name: Convert draft JSON to release format (stable only)
+        if: inputs.channel == 'stable'
+        shell: bash
+        run: |
+          python3 .agents/skills/changelog-draft/scripts/convert_to_release_json.py \
+            --input "${{ runner.temp }}/changelog-draft/changelog-draft.json" \
+            --output "${{ runner.temp }}/changelog-draft/changelog-release.json"
+
+      - name: Obtain a GitHub App Installation Access Token (non-stable only)
+        if: inputs.channel != 'stable'
         id: github_app_auth
         run: |
           TOKEN="$(npx obtain-github-app-installation-access-token ci ${{ secrets.GH_APP_CREDENTIALS_TOKEN }})"
           echo "::add-mask::$TOKEN"
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
 
-      - name: Generate changelog
-        uses: warpdotdev/generate-changelog@main
-        id: generate_changelog
+      - name: Generate changelog via legacy action (non-stable only)
+        if: inputs.channel != 'stable'
+        id: legacy_changelog
+        uses: warpdotdev/generate-changelog@70f534c1e030dafb45046ae57e4aa4d43a2f5c84 # main
         with:
           channel: ${{ inputs.channel }}
           github_auth_token: ${{ steps.github_app_auth.outputs.token }}
           version: ${{ needs.prepare_release.outputs.release_tag }}
 
+      - name: Load changelog into step output
+        id: generate_changelog
+        shell: bash
+        env:
+          LEGACY_CHANGELOG: ${{ steps.legacy_changelog.outputs.changelog }}
+        run: |
+          # Bridge step: picks whichever generator ran for this channel and
+          # re-emits the changelog as outputs.changelog so downstream Slack/GCS
+          # steps work unchanged.
+          if [[ "${{ inputs.channel }}" == "stable" ]]; then
+            CHANGELOG_FILE="${{ runner.temp }}/changelog-draft/changelog-release.json"
+            if [ ! -f "$CHANGELOG_FILE" ]; then
+              echo "::error::changelog-release.json not found at $CHANGELOG_FILE"
+              exit 1
+            fi
+            jq empty "$CHANGELOG_FILE"
+            {
+              echo "changelog<<CHANGELOG_EOF"
+              cat "$CHANGELOG_FILE"
+              echo "CHANGELOG_EOF"
+            } >> $GITHUB_OUTPUT
+          else
+            echo "$LEGACY_CHANGELOG" | jq empty
+            {
+              echo "changelog<<CHANGELOG_EOF"
+              printf '%s\n' "$LEGACY_CHANGELOG"
+              echo "CHANGELOG_EOF"
+            } >> $GITHUB_OUTPUT
+          fi
+
       - name: Build Slack changelog payload
         id: build_slack_payload
         shell: bash
         env:
-          CHANGELOG_MD: ${{ steps.generate_changelog.outputs.changelog }}
+          CHANGELOG_JSON: ${{ steps.generate_changelog.outputs.changelog }}
           RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          MARKDOWN_ARTIFACT_URL: ${{ steps.upload_changelog_draft_markdown.outputs.artifact-url }}
         run: |
-          # Rename the keys in the Changelog JSON to something more human readable.
-          # This is the changelog that goes to slack so it doesn't need to be extremely filtered.
-          NEW_CHANGELOG=$(echo $CHANGELOG_MD | jq 'with_entries(if .key == "newFeatures" then .key = "New Features" else . end)' | jq 'with_entries(if .key == "improvements" then .key = "Improvements" else . end)' | jq 'with_entries(if .key == "bugFixes" then .key = "Bug Fixes" else . end)' | jq 'with_entries(if .key == "images" then .key = "Image" else . end)')
-
-          # Generate the full markdown text as individual lines.
-          MARKDOWN=$(echo "$NEW_CHANGELOG" | jq -r 'to_entries[] | select(.value | length > 0) | "*\(.key)*", (.value[] | "  \u2022 \(.)")')
-
-          if [ -z "$MARKDOWN" ]; then
+          CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
+          SLACK_PAYLOAD="${{ runner.temp }}/slack-changelog-payload.json"
+          printf '%s\n' "$CHANGELOG_JSON" > "$CHANGELOG_INPUT"
+          python3 .agents/skills/changelog-draft/scripts/build_slack_payload.py \
+            --input "$CHANGELOG_INPUT" \
+            --release-tag "$RELEASE_TAG" \
+            --markdown-artifact-url "$MARKDOWN_ARTIFACT_URL" \
+            --output "$SLACK_PAYLOAD"
+          if ! jq -e '.blocks | length > 0' "$SLACK_PAYLOAD" >/dev/null; then
             echo "has_content=" >> $GITHUB_OUTPUT
             exit 0
           fi
           echo "has_content=true" >> $GITHUB_OUTPUT
 
-          # Split markdown into chunks of <= 3000 characters at newline boundaries.
-          # Each chunk will become its own section block in the Slack payload.
-          CHUNKS='[]'
-          BUFFER=""
-          while IFS= read -r line; do
-            if [ -z "$BUFFER" ]; then
-              CANDIDATE="$line"
-            else
-              CANDIDATE="$BUFFER"
-              CANDIDATE+=$'\n'
-              CANDIDATE+="$line"
-            fi
-            if [ ${#CANDIDATE} -gt 3000 ]; then
-              # Flush the current buffer as a chunk (if non-empty), start a new one with this line.
-              if [ -n "$BUFFER" ]; then
-                CHUNKS=$(echo "$CHUNKS" | jq --arg chunk "$BUFFER" '. + [$chunk]')
-              fi
-              BUFFER="$line"
-            else
-              BUFFER="$CANDIDATE"
-            fi
-          done <<< "$MARKDOWN"
-          # Flush the remaining buffer.
-          if [ -n "$BUFFER" ]; then
-            CHUNKS=$(echo "$CHUNKS" | jq --arg chunk "$BUFFER" '. + [$chunk]')
-          fi
-
-          # Build the full Slack Block Kit payload: header block + one section block per chunk.
-          PAYLOAD=$(echo "$CHUNKS" | jq -c \
-            --arg version "$RELEASE_TAG" \
-            '{blocks: ([{type: "header", text: {type: "plain_text", text: ("Changelog for " + $version)}}] + [.[] | {type: "section", text: {type: "mrkdwn", text: .}}])}')
-
           echo "payload<<SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
-          echo "$PAYLOAD" >> $GITHUB_OUTPUT
+          cat "$SLACK_PAYLOAD" >> $GITHUB_OUTPUT
           echo "SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
 
       - name: Post to a Slack channel
@@ -1742,7 +1888,7 @@ jobs:
           NEW_FEATURES=$(echo $CHANGELOG_SECTIONS | jq 'with_entries(select(.key == "New features"))' | jq -r 'to_entries[] | "* \(.value[])"' | awk -v ORS='\n' '1')
           IMPROVEMENTS=$(echo $CHANGELOG_SECTIONS | jq 'with_entries(select(.key == "Improvements"))' | jq -r 'to_entries[] | "* \(.value[])"' | awk -v ORS='\n' '1')
           # Extract the image URL from the list, and use the latest URL even if there are multiple
-          IMAGE=$(echo $CHANGELOG | jq -r '.image | if length > 0 then .[-1] else "" end')
+          IMAGE=$(echo $CHANGELOG | jq -r '.images | if length > 0 then .[-1] else "" end')
           # Extract Oz updates as a JSON array
           OZ_UPDATES=$(echo $CHANGELOG | jq -c '.oz_updates // []')
           # Tweak the structure of the JSON, add in a top-level date field, and add in the markdown_sections field

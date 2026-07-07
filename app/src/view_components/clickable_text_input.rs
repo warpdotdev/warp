@@ -1,18 +1,15 @@
-use crate::{
-    appearance::Appearance,
-    editor::{EditorOptions, EditorView, Event as EditorEvent, TextOptions},
-};
+use warpui::elements::{Container, CornerRadius, Dismiss, MouseStateHandle, Radius};
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{Container, CornerRadius, Dismiss, MouseStateHandle, Radius},
-    fonts::Weight,
-    platform::Cursor,
-    ui_components::{
-        button::ButtonVariant,
-        components::{UiComponent, UiComponentStyles},
-    },
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
+
+use crate::appearance::Appearance;
+use crate::editor::{EditorOptions, EditorView, Event as EditorEvent, TextOptions};
 
 /// This View is a text that can be hovered over. Upon clicking,
 /// the text becomes a text input that can be submitted

@@ -1,15 +1,13 @@
 //! Compact free-form text input used by inline AI block actions.
+use warpui::presenter::ChildView;
 use warpui::{
-    presenter::ChildView, AppContext, Element, Entity, FocusContext, SingletonEntity, View,
-    ViewContext, ViewHandle,
+    AppContext, Element, Entity, FocusContext, SingletonEntity, View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    editor::{
-        EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey,
-        PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, TextOptions,
-    },
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey,
+    PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, TextOptions,
 };
 
 /// Wraps an [`EditorView`] for inline prompts that need a lightweight text input.

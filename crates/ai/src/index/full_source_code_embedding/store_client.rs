@@ -1,9 +1,8 @@
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::time::Duration;
+
 use async_trait::async_trait;
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-    time::Duration,
-};
 
 use super::{
     CodebaseContextConfig, ContentHash, EmbeddingConfig, Error, Fragment, NodeHash, RepoMetadata,

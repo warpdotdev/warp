@@ -1,19 +1,13 @@
-use warpui::{
-    AppContext, Element, SizeConstraint,
-    elements::{Border, CornerRadius, Empty, Radius},
-    geometry::vector::vec2f,
-};
-
-use crate::{
-    editor::RunnableCommandModel,
-    extract_block,
-    render::{
-        BLOCK_FOOTER_HEIGHT,
-        model::{BlockItem, RenderState, viewport::ViewportItem},
-    },
-};
+use warpui_core::elements::{Border, CornerRadius, Empty, Radius};
+use warpui_core::geometry::vector::vec2f;
+use warpui_core::{AppContext, Element, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
+use crate::editor::RunnableCommandModel;
+use crate::extract_block;
+use crate::render::BLOCK_FOOTER_HEIGHT;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 /// [`RenderableBlock`] implementation for runnable command blocks.
 pub struct RenderableRunnableCommand {
@@ -48,7 +42,12 @@ impl RenderableBlock for RenderableRunnableCommand {
         &self.viewport_item
     }
 
-    fn layout(&mut self, _model: &RenderState, ctx: &mut warpui::LayoutContext, app: &AppContext) {
+    fn layout(
+        &mut self,
+        _model: &RenderState,
+        ctx: &mut warpui_core::LayoutContext,
+        app: &AppContext,
+    ) {
         self.footer.layout(
             SizeConstraint::strict(vec2f(
                 self.viewport_item.content_size.x(),
@@ -61,7 +60,7 @@ impl RenderableBlock for RenderableRunnableCommand {
 
     fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, app: &AppContext) {
         let content = model.content();
-        let code_block = extract_block!(self.viewport_item, content, (block, BlockItem::RunnableCodeBlock{code_block_type: _, paragraph_block}) => block.code_block(paragraph_block));
+        let code_block = extract_block!(self.viewport_item, content, (block, BlockItem::RunnableCodeBlock{paragraph_block, ..}) => block.code_block(paragraph_block));
 
         let styles = model.styles();
         let code_style = &styles.code_text;
@@ -87,7 +86,9 @@ impl RenderableBlock for RenderableRunnableCommand {
 
         // Place the button at a higher z-index for event handling. See the comment on
         // `RichTextElement::content_z_index` for context.
-        ctx.paint.scene.start_layer(warpui::ClipBounds::ActiveLayer);
+        ctx.paint
+            .scene
+            .start_layer(warpui_core::ClipBounds::ActiveLayer);
 
         // Position the block footer right below the content area, flush with its right-hand edge.
         // This gives the footer some padding relative to the visible area with a background.
@@ -102,15 +103,19 @@ impl RenderableBlock for RenderableRunnableCommand {
         ctx.paint.scene.stop_layer();
     }
 
-    fn after_layout(&mut self, ctx: &mut warpui::AfterLayoutContext, app: &warpui::AppContext) {
+    fn after_layout(
+        &mut self,
+        ctx: &mut warpui_core::AfterLayoutContext,
+        app: &warpui_core::AppContext,
+    ) {
         self.footer.after_layout(ctx, app);
     }
 
     fn dispatch_event(
         &mut self,
         _model: &crate::render::model::RenderState,
-        event: &warpui::event::DispatchedEvent,
-        ctx: &mut warpui::EventContext,
+        event: &warpui_core::event::DispatchedEvent,
+        ctx: &mut warpui_core::EventContext,
         app: &AppContext,
     ) -> bool {
         self.footer.dispatch_event(event, ctx, app)

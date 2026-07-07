@@ -1,6 +1,7 @@
-use super::*;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
+
+use super::*;
 
 #[test]
 fn foreground_color_with_minimum_contrast_foreground_already_meets_minimum() {

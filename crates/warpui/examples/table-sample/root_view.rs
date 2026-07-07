@@ -1,6 +1,6 @@
-use crate::CaptureConfig;
-use image::ImageEncoder;
 use std::sync::{Arc, Mutex};
+
+use image::ImageEncoder;
 use warpui::color::ColorU;
 use warpui::elements::{
     ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, Empty, Fill, Flex,
@@ -12,10 +12,12 @@ use warpui::fonts::FamilyId;
 use warpui::keymap::FixedBinding;
 use warpui::platform::CapturedFrame;
 use warpui::presenter::ChildView;
-use warpui::SingletonEntity as _;
 use warpui::{
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
+    ViewHandle, WindowId,
 };
+
+use crate::CaptureConfig;
 
 const TOTAL_DEMOS: usize = 13;
 

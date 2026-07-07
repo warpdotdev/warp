@@ -1,44 +1,38 @@
+use std::ops::Deref;
+use std::sync::Arc;
+
 use lazy_static::lazy_static;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
-use std::{ops::Deref, sync::Arc};
 use thiserror::Error;
 use validator::ValidateEmail;
-
-use super::{
-    settings_page::{
-        MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, PAGE_PADDING,
-    },
-    SettingsSection,
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Fill,
+    Flex, FormattedTextElement, HighlightedHyperlink, Icon, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, Rect, Shrinkable,
 };
-use crate::{
-    appearance::Appearance,
-    auth::AuthStateProvider,
-    editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions},
-    safe_info, send_telemetry_from_ctx,
-    server::{
-        server_api::referral::{ReferralInfo, ReferralsClient},
-        telemetry::TelemetryEvent,
-    },
-    ui_components::blended_colors,
-    view_components::ToastFlavor,
-};
+use warpui::fonts::Weight;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Fill,
-        Flex, FormattedTextElement, HighlightedHyperlink, Icon, MainAxisSize, MouseStateHandle,
-        ParentElement, Radius, Rect, Shrinkable,
-    },
-    fonts::Weight,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
     AppContext, Entity, EventContext, FocusContext, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
+
+use super::settings_page::{
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, PAGE_PADDING,
+};
+use super::SettingsSection;
+use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
+use crate::server::server_api::referral::{ReferralInfo, ReferralsClient};
+use crate::server::telemetry::TelemetryEvent;
+use crate::ui_components::blended_colors;
+use crate::view_components::ToastFlavor;
+use crate::{safe_info, send_telemetry_from_ctx};
 
 const HEADER_FONT_SIZE: f32 = 18.;
 const HEADER_MARGIN_BOTTOM: f32 = 32.;

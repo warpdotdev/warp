@@ -45,7 +45,7 @@ pub trait FindableRichContentView: View {
 /// New rich content views do _not_ require a new `FindableRichContentHandle` implementation;
 /// this is an implementation detail of the `FindModel`-internal usage of the
 /// `FindableRichContentView` trait.
-pub(super) trait FindableRichContentHandle {
+pub(crate) trait FindableRichContentHandle {
     fn run_find(&self, options: &FindOptions, ctx: &mut AppContext) -> Vec<RichContentMatchId>;
 
     fn clear_matches(&self, ctx: &mut AppContext);

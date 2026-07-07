@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Script to format (Rust) code.
+
+set -e
+cd "$(dirname "$0")/.."
+
+EXTRA_ARGS=()
+
+while (( "$#" )); do
+  case "$1" in
+    --check)
+      EXTRA_ARGS+=("--check")
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+# Format with specific configuration around how module imports are formatted.
+#
+# We need to set RUSTC_BOOTSTRAP to allow using unstable features on a stable toolchain.
+RUSTC_BOOTSTRAP=1 cargo fmt -- --config imports_granularity=Module --config group_imports=StdExternalCrate "${EXTRA_ARGS[@]}"

@@ -1,12 +1,9 @@
 use pathfinder_color::ColorU;
 use sum_tree::SumTree;
 
-use crate::content::{
-    cursor::BufferSumTree,
-    text::{BlockLineBreakBehavior, BlockType, ColorMarker},
-};
-
 use super::text::{BufferBlockStyle, BufferSummary, BufferText, MarkerDir};
+use crate::content::cursor::BufferSumTree;
+use crate::content::text::{BlockLineBreakBehavior, BlockType, ColorMarker};
 
 #[cfg(test)]
 #[path = "validation_tests.rs"]

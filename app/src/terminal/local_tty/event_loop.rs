@@ -3,26 +3,24 @@
 
 //! The main event loop which performs I/O on the pseudoterminal.
 
-use std::{
-    borrow::Cow,
-    collections::VecDeque,
-    io::{self, ErrorKind, Read, Write},
-    marker::Send,
-    ops::DerefMut,
-    sync::Arc,
-    thread::{self, JoinHandle},
-};
+use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::io::{self, ErrorKind, Read, Write};
+use std::marker::Send;
+use std::ops::DerefMut;
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 
 use log::error;
 use mio::{self, Events, Interest};
 use parking_lot::{FairMutex, FairMutexGuard};
 
-use crate::terminal::{
-    event_listener::ChannelEventListener, local_tty, model::ansi, TerminalModel,
-};
-use crate::terminal::{model::terminal_model::ExitReason, writeable_pty::Message};
-
 use super::mio_channel::Receiver;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi;
+use crate::terminal::model::terminal_model::ExitReason;
+use crate::terminal::writeable_pty::Message;
+use crate::terminal::{local_tty, TerminalModel};
 
 /// The size of the buffer to read data into from the PTY.
 const READ_BUFFER_SIZE: usize = 0x4_0000;
@@ -248,11 +246,17 @@ where
             };
 
             // Process the bytes read into the buffer.
+            let mut terminal_response_sequences = Vec::new();
             state.parser.parse_bytes(
                 terminal.deref_mut(),
                 &buf[..bytes_in_buffer],
-                &mut self.pty.writer(),
+                &mut terminal_response_sequences,
             );
+            if !terminal_response_sequences.is_empty() {
+                state
+                    .write_list
+                    .push_back(Cow::Owned(terminal_response_sequences));
+            }
 
             bytes_processed += bytes_in_buffer;
             bytes_in_buffer = 0;
@@ -372,10 +376,16 @@ where
 
                     // If there were no events but `poll` returned, that means we hit the timeout.
                     if events.is_empty() {
-                        state
-                            .parser
-                            .finish_sync_output(&mut *self.terminal.lock(), &mut self.pty.writer());
-                        continue;
+                        let mut terminal_response_sequences = Vec::new();
+                        state.parser.finish_sync_output(
+                            &mut *self.terminal.lock(),
+                            &mut terminal_response_sequences,
+                        );
+                        if !terminal_response_sequences.is_empty() {
+                            state
+                                .write_list
+                                .push_back(Cow::Owned(terminal_response_sequences));
+                        }
                     }
 
                     for event in events.iter() {

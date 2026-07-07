@@ -1,47 +1,41 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use super::color::{blend::Blend, contrast::MinimumAllowedContrast, ContrastingColor};
-use super::theme::color::internal_colors::{self, text_main};
-use super::theme::{Fill, WarpTheme};
-use warpui::color::ColorU;
-use warpui::elements::{
+use warpui_core::color::ColorU;
+use warpui_core::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
+    Icon, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
+    Radius, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::platform::Cursor;
-use warpui::ui_components::components::UiComponent;
-use warpui::ui_components::keyboard_shortcut::KeyboardShortcut;
-use warpui::ui_components::link::{LinkStyles, OnClickFn};
-use warpui::ui_components::list::{List, ListStyle};
-use warpui::ui_components::radio_buttons::{
+use warpui_core::fonts::{FamilyId, Properties, Weight};
+use warpui_core::geometry::vector::{vec2f, Vector2F};
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::Cursor;
+use warpui_core::ui_components::button::{Button, ButtonVariant};
+use warpui_core::ui_components::checkbox::Checkbox;
+use warpui_core::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui_core::ui_components::keyboard_shortcut::KeyboardShortcut;
+use warpui_core::ui_components::link::{Link, LinkStyles, OnClickFn};
+use warpui_core::ui_components::list::{List, ListStyle};
+use warpui_core::ui_components::progress_bar::ProgressBar;
+use warpui_core::ui_components::radio_buttons::{
     RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle, RadioButtons,
 };
-use warpui::ui_components::slider::{Slider, SliderStateHandle};
-use warpui::ui_components::switch::{Switch, SwitchStateHandle, TRACK_COLOR};
-use warpui::ui_components::text::WrappableText;
-use warpui::ui_components::toggle_menu::{
+use warpui_core::ui_components::slider::{Slider, SliderStateHandle};
+use warpui_core::ui_components::switch::{Switch, SwitchStateHandle, TRACK_COLOR};
+use warpui_core::ui_components::text::{Paragraph, Span, WrappableText};
+use warpui_core::ui_components::text_input::TextInput;
+use warpui_core::ui_components::toggle_menu::{
     ToggleMenu, ToggleMenuCallback, ToggleMenuItem, ToggleMenuStateHandle,
 };
-use warpui::ui_components::tool_tip::{Tooltip, TooltipWithSublabel};
-use warpui::View;
-use warpui::{
-    elements::{Icon, MouseStateHandle},
-    fonts::FamilyId,
-    keymap::Keystroke,
-    ui_components::{
-        button::{Button, ButtonVariant},
-        checkbox::Checkbox,
-        components::{Coords, UiComponentStyles},
-        link::Link,
-        progress_bar::ProgressBar,
-        text::{Paragraph, Span},
-        text_input::TextInput,
-    },
-    Element, ViewHandle,
-};
+use warpui_core::ui_components::tool_tip::{Tooltip, TooltipWithSublabel};
+use warpui_core::{Element, View, ViewHandle};
+
+use super::color::blend::Blend;
+use super::color::contrast::MinimumAllowedContrast;
+use super::color::ContrastingColor;
+use super::theme::color::internal_colors::{self, text_main};
+use super::theme::{Fill, WarpTheme};
 
 const CLOSE_SVG_PATH: &str = "bundled/svg/close.svg";
 const COPY_SVG_PATH: &str = "bundled/svg/copy.svg";

@@ -1,4 +1,5 @@
-use std::{os::fd::RawFd, time::Duration};
+use std::os::fd::RawFd;
+use std::time::Duration;
 
 use nix::sys::termios::{self, Termios};
 use nix::Result;

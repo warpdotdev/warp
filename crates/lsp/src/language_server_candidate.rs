@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use crate::CommandBuilder;
 use async_trait::async_trait;
+
+use crate::CommandBuilder;
 
 /// Defines the detection and installation for a specific Language Server.
 ///

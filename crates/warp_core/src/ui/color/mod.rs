@@ -1,4 +1,4 @@
-use warpui::color::ColorU;
+use warpui_core::color::ColorU;
 
 use self::contrast::{high_enough_contrast, pick_constrasting_color, MinimumAllowedContrast};
 

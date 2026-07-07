@@ -2,13 +2,13 @@
 // wrapper implementation that allows us to not import the above type elsewhere in this workspace.
 #![allow(clippy::disallowed_types)]
 
-use async_process::Child;
 use std::ffi::OsStr;
-use std::fmt;
 use std::future::Future;
-use std::io;
 use std::path::Path;
 use std::process::{ExitStatus, Output, Stdio};
+use std::{fmt, io};
+
+use async_process::Child;
 
 /// Wrapper around a [`async_process::Command`] that ensures any new Command is set with the windows
 /// `CREATE_NO_WINDOW` flag to avoid a console window temporarily popping up.
@@ -39,6 +39,7 @@ impl Command {
     /// let mut cmd = Command::new("ls");
     /// ```
     pub fn new<S: AsRef<OsStr>>(program: S) -> Command {
+        let program = crate::wsl::translate_program_for_spawn(program.as_ref());
         let inner = async_process::Command::new(program);
         Self::new_internal(inner)
     }
@@ -51,6 +52,7 @@ impl Command {
     /// See [`setsid(2)`](https://man7.org/linux/man-pages/man2/setsid.2.html).
     #[cfg(unix)]
     pub fn new_with_session<S: AsRef<OsStr>>(program: S) -> Command {
+        let program = crate::wsl::translate_program_for_spawn(program.as_ref());
         let mut command = std::process::Command::new(program);
 
         // SAFETY: `pre_exec` requires the closure to be async-signal-safe.
@@ -77,6 +79,7 @@ impl Command {
     /// This allows for killing any other processes spawned by this process
     /// when we kill this process.
     pub fn new_with_process_group<S: AsRef<OsStr>>(program: S) -> Command {
+        let program = crate::wsl::translate_program_for_spawn(program.as_ref());
         #[allow(unused_mut)]
         let mut command = std::process::Command::new(program);
 

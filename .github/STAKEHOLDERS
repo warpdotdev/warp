@@ -37,11 +37,6 @@
 /crates/lsp/ @kevinyang372 @moirahuang
 /crates/repo_metadata/ @kevinyang372
 
-# Settings and keybindings
-/app/src/settings/ @lucieleblanc
-/app/src/settings_view/ @lucieleblanc
-/app/src/resource_center/keybindings_page.rs @lucieleblanc
-
 # Input editor / window, tab, and pane management / grep tool call
 /app/src/terminal/input/ @vkodithala
 /app/src/pane_group/ @vkodithala
@@ -67,17 +62,11 @@
 /app/resources/tab_configs/ @moirahuang
 /crates/warp_util/src/worktree_names.rs @moirahuang
 
-# Onboarding / code review and git diff
-/app/src/ai/onboarding.rs @kevinchevalier
-/app/src/code_review/ @kevinchevalier
-/app/src/code/diff_viewer.rs @kevinchevalier
-/app/src/code/inline_diff.rs @kevinchevalier
-/crates/onboarding/ @kevinchevalier
-
 # MCP and skills
 /app/src/ai/mcp/ @peicodes @vkodithala
 /app/src/ai/skills/ @peicodes @vkodithala
 /crates/mcp/ @peicodes @vkodithala
+/resources/bundled/skills/feedback/ @captainsafia
 
 # File-based MCP (overrides MCP and skills above)
 /app/src/ai/mcp/file_based_manager.rs @vkodithala
@@ -105,20 +94,20 @@
 /app/src/terminal/view/inline_banner/ @harryalbert
 
 # Blocklist UX / modality and cloud mode UI / shell compatibility / completions and bootstrap / warpifying
-/app/src/ai/blocklist/ @zachbai
-/app/src/root_view.rs @zachbai
+/app/src/ai/blocklist/ @zachbai @MaggieShan
+/app/src/root_view.rs @zachbai @MaggieShan
 /app/src/terminal/bootstrap.rs @zachbai
-/app/src/terminal/warpify/ @zachbai
-/app/src/settings_view/warpify_page.rs @zachbai
+/app/src/terminal/warpify/ @zachbai @MaggieShan
+/app/src/settings_view/warpify_page.rs @zachbai @MaggieShan
 /app/assets/bundled/bootstrap/ @zachbai
-/crates/warp_completer/ @zachbai @szgupta @alokedesai
+/crates/warp_completer/ @zachbai @szgupta @alokedesai @acarl005
 
 # Agent mode
 /app/src/ai/agent/ @zachbai
 
 # Vertical tabs
-/app/src/workspace/view/vertical_tabs.rs @zachbai
-/app/src/workspace/view/vertical_tabs/ @zachbai
+/app/src/workspace/view/vertical_tabs.rs @johnturcoo
+/app/src/workspace/view/vertical_tabs/ @johnturcoo
 
 # Image attachment, voice input, and passive suggestions
 /app/src/ai/attachment_utils.rs @Advait-M
@@ -130,6 +119,7 @@
 
 # Rich input
 /app/src/terminal/view/use_agent_footer/ @Advait-M
+/app/src/terminal/view/use_agent_footer/warpify_footer.rs @MaggieShan
 /app/src/terminal/input/cli_agent.rs @Advait-M
 
 # UI framework
@@ -148,14 +138,33 @@
 /app/src/platform/mac/ @alokedesai
 /resources/linux/ @acarl005
 
-# /pr-comments
-/app/src/search/slash_command_menu/static_commands/commands.rs @lucieleblanc
+# Windows and Linux (and winit) platform
+/crates/warpui/src/windowing/winit/ @acarl005 @vorporeal @alokedesai
+/app/src/terminal/local_tty/windows/ @vorporeal @acarl005
+/app/src/autoupdate/windows.rs @acarl005
+/app/src/autoupdate/linux.rs @vorporeal
+/app/src/app_services/windows/ @acarl005
+/app/src/app_services/linux/ @vorporeal
+/app/src/terminal/writeable_pty/bootstrap_file/windows.rs @acarl005
+/app/assets/bundled/bootstrap/pwsh.ps1 @acarl005
+/app/assets/bundled/bootstrap/pwsh_init_shell.ps1 @acarl005
 
 # Grep tool call UI
 /app/src/ai/blocklist/action_model/execute/grep.rs @vkodithala
 
 # Long-running shell commands
-/app/src/ai/blocklist/action_model/execute/shell_command.rs @vkodithala
+/app/src/ai/blocklist/action_model/execute/shell_command.rs @vkodithala @MaggieShan
+/app/src/ai/blocklist/block/cli.rs @vkodithala @MaggieShan
+/app/src/ai/blocklist/block/cli_controller.rs @vkodithala @MaggieShan
+
+# Vim
+/crates/vim/ @liliwilson
+/app/src/vim_registers.rs @liliwilson
+/app/src/code/editor/view/vim_handler.rs @liliwilson
+/app/src/code/editor/view/vim_handler_tests.rs @liliwilson
+/app/src/editor/view/vim_handler_test.rs @liliwilson
+/app/src/terminal/view/inline_banner/vim_mode.rs @liliwilson
+/app/src/settings/vim_banner.rs @liliwilson
 
 ###########################################################################
 # Team: Platform
@@ -169,14 +178,7 @@
 /crates/warp_server_client/ @ianhodge
 
 # Session sharing
-/app/src/terminal/shared_session/ @abhishekp106 @szgupta @bnavetta
-
-# Agent profiles and execution permissions
-/app/src/ai/cloud_agent_config/ @abhishekp106
-/app/src/ai/cloud_agent_settings.rs @abhishekp106
-/app/src/ai/execution_profiles/ @abhishekp106
-/app/src/terminal/profile_model_selector.rs @abhishekp106
-/app/src/settings_view/execution_profile_view.rs @abhishekp106
+/app/src/terminal/shared_session/ @szgupta @bnavetta
 
 # Environment setup / agent management view
 /app/src/ai/agent_management/ @liliwilson
@@ -208,6 +210,14 @@
 /crates/isolation_platform/ @bnavetta @ianhodge
 /crates/managed_secrets/ @bnavetta @ianhodge
 /crates/warp_web_event_bus/ @bnavetta @ianhodge
+
+# Command signatures v2
+/command-signatures-v2/ @zachbai
+
+# OS-level bootstrap scripts
+/script/linux/bootstrap @acarl005
+/script/macos/bootstrap @acarl005
+/script/windows/bootstrap.ps1 @acarl005
 
 # Shell completions in the Warp CLI
 /crates/warp_cli/src/completions.rs @zachbai @szgupta @alokedesai

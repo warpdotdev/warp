@@ -1,22 +1,15 @@
 use float_cmp::assert_approx_eq;
 use warpui::App;
 
-use crate::{
-    ai::blocklist::agent_view::AgentViewState,
-    terminal::{
-        event_listener::ChannelEventListener,
-        model::{
-            ansi::{self, Handler as _, PreexecValue},
-            blocks::{
-                insert_block,
-                tests::{command_finished_and_precmd, input_string, new_bootstrapped_block_list},
-            },
-            test_utils,
-        },
-    },
-};
-
 use super::*;
+use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{self, Handler as _, PreexecValue};
+use crate::terminal::model::blocks::insert_block;
+use crate::terminal::model::blocks::tests::{
+    command_finished_and_precmd, input_string, new_bootstrapped_block_list,
+};
+use crate::terminal::model::test_utils;
 
 #[test]
 pub fn test_selection_range_cleared_when_block_finishes() {

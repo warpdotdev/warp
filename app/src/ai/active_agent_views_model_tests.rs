@@ -13,6 +13,46 @@ fn new_task_id() -> AmbientAgentTaskId {
 }
 
 #[test]
+fn conversation_switch_updates_last_focused_terminal_state() {
+    App::test((), |mut app| async move {
+        let model = setup_model(&mut app);
+        let window = WindowId::new();
+        let terminal = EntityId::new();
+        let conversation_1 = AIConversationId::new();
+        let conversation_2 = AIConversationId::new();
+
+        model.update(&mut app, |model, ctx| {
+            model.handle_pane_focus_change(window, Some(terminal), None, ctx);
+            model.update_focused_conversation_for_terminal(
+                terminal,
+                Some(ConversationOrTaskId::ConversationId(conversation_1)),
+            );
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(model.get_last_focused_terminal_id(), Some(terminal));
+            assert_eq!(
+                model.get_last_focused_conversation(),
+                Some(ConversationOrTaskId::ConversationId(conversation_1))
+            );
+        });
+
+        model.update(&mut app, |model, _| {
+            model.update_focused_conversation_for_terminal(
+                terminal,
+                Some(ConversationOrTaskId::ConversationId(conversation_2)),
+            );
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(model.get_last_focused_terminal_id(), Some(terminal));
+            assert_eq!(
+                model.get_last_focused_conversation(),
+                Some(ConversationOrTaskId::ConversationId(conversation_2))
+            );
+        });
+    });
+}
+
+#[test]
 fn per_window_focused_state_is_independent() {
     App::test((), |mut app| async move {
         let model = setup_model(&mut app);
@@ -88,6 +128,10 @@ fn last_focused_terminal_tracks_most_recent_globally() {
         });
         model.read(&app, |model, _| {
             assert_eq!(model.get_last_focused_terminal_id(), Some(terminal_a));
+            assert_eq!(
+                model.get_last_focused_conversation(),
+                Some(ConversationOrTaskId::TaskId(task_a))
+            );
         });
 
         model.update(&mut app, |model, ctx| {
@@ -95,6 +139,10 @@ fn last_focused_terminal_tracks_most_recent_globally() {
         });
         model.read(&app, |model, _| {
             assert_eq!(model.get_last_focused_terminal_id(), Some(terminal_b));
+            assert_eq!(
+                model.get_last_focused_conversation(),
+                Some(ConversationOrTaskId::TaskId(task_b))
+            );
         });
 
         // Clearing window B's focus should NOT clear last_focused (it persists).
@@ -103,6 +151,10 @@ fn last_focused_terminal_tracks_most_recent_globally() {
         });
         model.read(&app, |model, _| {
             assert_eq!(model.get_last_focused_terminal_id(), Some(terminal_b));
+            assert_eq!(
+                model.get_last_focused_conversation(),
+                Some(ConversationOrTaskId::TaskId(task_b))
+            );
         });
     });
 }
@@ -140,6 +192,72 @@ fn focus_change_without_task_id_has_no_conversation() {
 
         model.read(&app, |model, _| {
             assert_eq!(model.get_focused_conversation(window), None);
+        });
+    });
+}
+
+#[test]
+fn ambient_session_registration_replaces_stale_terminal_for_same_task() {
+    App::test((), |mut app| async move {
+        let model = setup_model(&mut app);
+        let terminal_a = EntityId::new();
+        let terminal_b = EntityId::new();
+        let task = new_task_id();
+
+        model.update(&mut app, |model, ctx| {
+            model.register_ambient_session(terminal_a, task, ctx);
+            model.register_ambient_session(terminal_b, task, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert_eq!(
+                model.get_terminal_view_id_for_ambient_task(task),
+                Some(terminal_b)
+            );
+            assert_eq!(model.ambient_sessions.len(), 1);
+        });
+    });
+}
+
+#[test]
+fn ambient_session_unregister_keeps_task_open_until_last_terminal_is_removed() {
+    App::test((), |mut app| async move {
+        let model = setup_model(&mut app);
+        let terminal_a = EntityId::new();
+        let terminal_b = EntityId::new();
+        let task = new_task_id();
+
+        model.update(&mut app, |model, _| {
+            model.ambient_sessions.insert(terminal_a, task);
+            model.ambient_sessions.insert(terminal_b, task);
+            model
+                .last_opened_times
+                .insert(ConversationOrTaskId::TaskId(task), Utc::now());
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.unregister_ambient_session(terminal_a, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert_eq!(
+                model.get_terminal_view_id_for_ambient_task(task),
+                Some(terminal_b)
+            );
+            assert!(model
+                .last_opened_times
+                .contains_key(&ConversationOrTaskId::TaskId(task)));
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.unregister_ambient_session(terminal_b, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert_eq!(model.get_terminal_view_id_for_ambient_task(task), None);
+            assert!(!model
+                .last_opened_times
+                .contains_key(&ConversationOrTaskId::TaskId(task)));
         });
     });
 }

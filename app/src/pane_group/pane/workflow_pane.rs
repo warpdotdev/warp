@@ -1,22 +1,22 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::Context;
+use url::Url;
+use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
+
 use super::{
     DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, PaneView, ShareableLink,
     ShareableLinkError,
 };
-use crate::{
-    app_state::{LeafContents, WorkflowPaneSnapshot},
-    drive::{items::WarpDriveItemId, OpenWarpDriveObjectSettings},
-    server::ids::SyncId,
-    workflows::{
-        manager::{WorkflowManager, WorkflowOpenSource},
-        workflow_view::{WorkflowView, WorkflowViewEvent},
-        WorkflowSelectionSource, WorkflowSource, WorkflowType, WorkflowViewMode,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
-};
-use anyhow::Context;
-use std::{collections::HashMap, sync::Arc};
-use url::Url;
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
+use crate::app_state::{LeafContents, WorkflowPaneSnapshot};
+use crate::drive::items::WarpDriveItemId;
+use crate::drive::OpenWarpDriveObjectSettings;
+use crate::server::ids::SyncId;
+use crate::workflows::manager::{WorkflowManager, WorkflowOpenSource};
+use crate::workflows::workflow_view::{WorkflowView, WorkflowViewEvent};
+use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType, WorkflowViewMode};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub struct WorkflowPane {
     view: ViewHandle<PaneView<WorkflowView>>,

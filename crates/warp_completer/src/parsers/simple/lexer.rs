@@ -1,4 +1,5 @@
-use super::{token::Token, EscapeChar};
+use super::token::Token;
+use super::EscapeChar;
 use crate::meta::{Span, Spanned, SpannedItem};
 
 /// Iterator for converting a string into a series of Tokens
@@ -214,5 +215,5 @@ impl<'a> Iterator for Lexer<'a> {
 }
 
 #[cfg(test)]
-#[path = "lexer_test.rs"]
+#[path = "lexer_tests.rs"]
 mod tests;

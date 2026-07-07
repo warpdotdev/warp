@@ -1,6 +1,6 @@
-use super::*;
-
 use toml_edit::Item;
+
+use super::*;
 
 #[test]
 fn test_json_to_toml_round_trip_bool() {

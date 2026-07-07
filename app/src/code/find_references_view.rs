@@ -3,39 +3,36 @@
 //! This module provides a hover card that shows all references to a symbol
 //! as a flat list with file info, line numbers, and syntax-highlighted code snippets.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 use lsp::ReferenceLocation;
 use pathfinder_geometry::vector::Vector2F;
 use string_offset::CharOffset;
-use warp_core::ui::{
-    appearance::Appearance, icons::Icon as WarpIcon, theme::color::internal_colors,
-};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::icons::Icon as WarpIcon;
+use warp_core::ui::theme::color::internal_colors;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_files::FileModel;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, Fill, Flex, Hoverable, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, ScrollbarWidth,
+    Shrinkable, Stack, Text,
+};
+use warpui::keymap::FixedBinding;
+use warpui::platform::Cursor;
+use warpui::prelude::Align;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Fill, Flex, Hoverable,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        Radius, ScrollbarWidth, Shrinkable, Stack, Text,
-    },
-    keymap::FixedBinding,
-    platform::Cursor,
-    prelude::Align,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::search::result_renderer::ItemHighlightState;
-use warpui::ui_components::components::UiComponent;
-
-use super::{
-    editor::view::{CodeEditorRenderOptions, CodeEditorView},
-    global_buffer_model::GlobalBufferModel,
-};
+use super::editor::view::{CodeEditorRenderOptions, CodeEditorView};
+use super::global_buffer_model::GlobalBufferModel;
 use crate::editor::InteractionState;
-use warp_editor::{
-    content::buffer::InitialBufferState, render::element::VerticalExpansionBehavior,
-};
+use crate::search::result_renderer::ItemHighlightState;
 
 /// Maximum height for the find references card.
 pub const FIND_REFERENCES_CARD_MAX_HEIGHT: f32 = 300.;
@@ -135,7 +132,7 @@ impl ReferenceEntryWithUi {
         let content = trimmed.to_string();
         let file_path = self.entry.file_path.clone();
         self.editor_view.update(ctx, |view, ctx| {
-            view.set_language_with_path(&file_path, ctx);
+            view.set_language_with_local_path(&file_path, ctx);
             let state = InitialBufferState::plain_text(&content);
             view.reset(state, ctx);
         });
@@ -346,7 +343,7 @@ impl FindReferencesView {
             view.set_interaction_state(InteractionState::Disabled, ctx);
 
             // Set up syntax highlighting based on file extension
-            view.set_language_with_path(&file_path, ctx);
+            view.set_language_with_local_path(&file_path, ctx);
 
             // Reset with the reference line content
             let state = InitialBufferState::plain_text(&content);

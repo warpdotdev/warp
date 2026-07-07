@@ -5,9 +5,22 @@ use warp_multi_agent_api as api;
 /// A citation listed in an AI response.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum AIAgentCitation {
-    WarpDriveObject { uid: String },
-    WarpDocumentation { path: String },
-    WebPage { url: String },
+    WarpDriveObject {
+        uid: String,
+    },
+    WarpDocumentation {
+        path: String,
+    },
+    WebPage {
+        url: String,
+    },
+    /// A memory from an attached memory store. `content` is the raw memory
+    /// text shown as a preview in the chip.
+    AgentMemory {
+        memory_store_id: String,
+        memory_id: String,
+        content: String,
+    },
 }
 
 impl Display for AIAgentCitation {
@@ -21,6 +34,13 @@ impl Display for AIAgentCitation {
             }
             AIAgentCitation::WebPage { url } => {
                 write!(f, "Web Page: {url}")
+            }
+            AIAgentCitation::AgentMemory {
+                memory_store_id,
+                memory_id,
+                ..
+            } => {
+                write!(f, "Agent Memory: {memory_store_id}/{memory_id}")
             }
         }
     }

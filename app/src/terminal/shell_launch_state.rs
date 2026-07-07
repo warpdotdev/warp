@@ -1,6 +1,6 @@
+use super::available_shells::AvailableShell;
+use super::shell::ShellName;
 use crate::terminal::shell::ShellType;
-
-use super::{available_shells::AvailableShell, shell::ShellName};
 
 /// The current state of launching a shell.
 #[derive(Clone, Debug)]

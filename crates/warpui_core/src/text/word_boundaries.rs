@@ -1,11 +1,11 @@
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::iter::Peekable;
-use std::{borrow::Cow, collections::HashSet};
 
 use itertools::Either;
 use string_offset::CharOffset;
 
 use super::point::Point;
-
 use super::words::is_default_word_boundary;
 use super::TextBuffer;
 
@@ -18,6 +18,19 @@ pub enum WordBoundariesPolicy {
     Custom(HashSet<char>),
     /// Break words only on ASCII whitespace
     OnlyWhitespace,
+}
+
+impl WordBoundariesPolicy {
+    /// Returns whether `c` is a word-boundary (separator) character under this policy.
+    pub fn is_word_boundary(&self, c: char) -> bool {
+        match self {
+            WordBoundariesPolicy::Default => is_default_word_boundary(c),
+            WordBoundariesPolicy::Custom(boundary_chars) => {
+                c.is_whitespace() || boundary_chars.contains(&c)
+            }
+            WordBoundariesPolicy::OnlyWhitespace => c.is_whitespace(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -150,13 +163,7 @@ impl<'a, T: TextBuffer + ?Sized> WordBoundaries<'a, T> {
     }
 
     fn is_word_boundary(&self, c: char) -> bool {
-        match self.policy.as_ref() {
-            WordBoundariesPolicy::Default => is_default_word_boundary(c),
-            WordBoundariesPolicy::Custom(boundary_chars) => {
-                c.is_whitespace() || boundary_chars.contains(&c)
-            }
-            WordBoundariesPolicy::OnlyWhitespace => c.is_whitespace(),
-        }
+        self.policy.is_word_boundary(c)
     }
 }
 

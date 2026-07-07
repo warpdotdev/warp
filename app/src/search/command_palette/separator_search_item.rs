@@ -1,11 +1,11 @@
+use ordered_float::OrderedFloat;
+use warpui::elements::{Empty, Text};
+use warpui::{AppContext, Element, SingletonEntity};
+
+use crate::appearance::Appearance;
+use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::item::SearchItem;
 use crate::search::result_renderer::ItemHighlightState;
-use crate::{appearance::Appearance, search::command_palette::mixer::CommandPaletteItemAction};
-use ordered_float::OrderedFloat;
-use warpui::{
-    elements::{Empty, Text},
-    AppContext, Element, SingletonEntity,
-};
 
 /// A simple separator item that displays a title to visually separate sections in search results.
 #[derive(Debug)]

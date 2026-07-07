@@ -1,21 +1,19 @@
 mod helper;
 mod model_impl;
 
+use chrono::TimeDelta;
 pub use helper::AIBlockModelHelper;
 pub use model_impl::*;
 use session_sharing_protocol::common::ParticipantId;
 use warp_core::features::FeatureFlag;
-
-use crate::ai::{
-    agent::{
-        conversation::AIConversationId, AIAgentExchangeId, AIAgentInput, AIAgentOutput,
-        CancellationReason, PassiveSuggestionTrigger, PassiveSuggestionTriggerType,
-        RenderableAIError, ServerOutputId, Shared,
-    },
-    llms::LLMId,
-};
-use chrono::TimeDelta;
 use warpui::{AppContext, ViewContext};
+
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIAgentExchangeId, AIAgentInput, AIAgentOutput, CancellationReason, PassiveSuggestionTrigger,
+    PassiveSuggestionTriggerType, RenderableAIError, ServerOutputId, Shared,
+};
+use crate::ai::llms::LLMId;
 
 #[derive(Debug, Clone, Copy)]
 pub enum PassiveRequestType {
@@ -222,22 +220,20 @@ pub trait AIBlockModel {
 pub mod testing {
     use warpui::{AppContext, ViewContext};
 
-    use crate::ai::{
-        agent::{
-            conversation::AIConversationId, AIAgentInput, AIAgentOutput, ServerOutputId, Shared,
-        },
-        blocklist::{
-            model::{AIRequestType, PassiveRequestType, PassiveSuggestionTriggerType},
-            AIBlock,
-        },
-        llms::LLMId,
-    };
-
     use super::{AIBlockModel, AIBlockOutputStatus, OutputStatusUpdateCallback};
+    use crate::ai::agent::conversation::AIConversationId;
+    use crate::ai::agent::{AIAgentInput, AIAgentOutput, ServerOutputId, Shared};
+    use crate::ai::blocklist::model::{
+        AIRequestType, PassiveRequestType, PassiveSuggestionTriggerType,
+    };
+    use crate::ai::blocklist::AIBlock;
+    use crate::ai::llms::LLMId;
 
     pub struct FakeAIBlockModel {
         input: Vec<AIAgentInput>,
-        output: Shared<AIAgentOutput>,
+        /// `None` models a block that is still streaming output, so its status
+        /// stays [`AIBlockOutputStatus::Pending`].
+        output: Option<Shared<AIAgentOutput>>,
         model_id: LLMId,
     }
 
@@ -245,7 +241,17 @@ pub mod testing {
         pub fn new(input: Vec<AIAgentInput>, output: AIAgentOutput) -> Self {
             Self {
                 input,
-                output: Shared::new(output),
+                output: Some(Shared::new(output)),
+                model_id: "fake-llm".to_owned().into(),
+            }
+        }
+
+        /// Builds a fake model whose status stays [`AIBlockOutputStatus::Pending`],
+        /// modeling a block that is still streaming output.
+        pub fn new_streaming(input: Vec<AIAgentInput>) -> Self {
+            Self {
+                input,
+                output: None,
                 model_id: "fake-llm".to_owned().into(),
             }
         }
@@ -255,8 +261,11 @@ pub mod testing {
         type View = AIBlock;
 
         fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
-            AIBlockOutputStatus::Complete {
-                output: self.output.clone(),
+            match &self.output {
+                Some(output) => AIBlockOutputStatus::Complete {
+                    output: output.clone(),
+                },
+                None => AIBlockOutputStatus::Pending,
             }
         }
 

@@ -3,9 +3,9 @@ pub mod handle;
 
 use std::any::Any;
 
+pub use self::context::*;
+pub use self::handle::*;
 use crate::Entity;
-
-pub use self::{context::*, handle::*};
 
 pub trait AnyModel {
     fn as_any(&self) -> &dyn Any;

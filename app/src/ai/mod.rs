@@ -13,22 +13,38 @@ pub mod ambient_agents;
 pub(crate) mod artifact_download;
 pub mod artifacts;
 pub(crate) mod attachment_utils;
+pub mod auth_secret_types;
 #[cfg(not(target_family = "wasm"))]
 pub mod aws_credentials;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod bedrock_credentials;
 pub(crate) mod block_context;
 pub(crate) mod blocklist;
+#[cfg(any(feature = "local_fs", not(target_family = "wasm")))]
+pub(crate) mod codebase_auto_indexing;
 pub mod control_code_parser;
 pub(crate) mod conversation_details_panel;
 pub(crate) mod conversation_navigation;
+pub(crate) mod conversation_rename;
 pub(crate) mod conversation_status_ui;
 pub(crate) mod conversation_utils;
+pub(crate) mod custom_model_router_editor;
+pub(crate) mod custom_model_routers;
 pub(crate) mod document;
+#[cfg(not(target_family = "wasm"))]
+pub mod geap_credentials;
 pub(crate) mod get_relevant_files;
+pub mod harness_availability;
 pub(crate) mod harness_display;
 pub(crate) mod llms;
+pub(crate) mod local_harness_setup;
+pub(crate) mod metadata_project_rules;
 pub mod onboarding;
 pub(crate) mod persisted_workspace;
 pub(crate) mod predict;
+#[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+pub(crate) mod remote_agent_context;
+pub(crate) mod remote_context_files;
 pub mod request_usage_model;
 pub(crate) mod restored_conversations;
 pub(crate) mod skills;
@@ -41,6 +57,7 @@ pub mod agent_sdk;
 pub mod cloud_agent_config;
 pub mod cloud_agent_settings;
 pub mod cloud_environments;
+pub mod connected_self_hosted_workers;
 pub mod execution_profiles;
 pub mod facts;
 pub(crate) mod generate_block_title;

@@ -1,30 +1,31 @@
 //! File search row rendering components.
 //!
-//! This module provides UI components for rendering file and directory search results
-//! in search interfaces. It handles the display of file names with their parent paths,
-//! supports fuzzy match highlighting, and intelligently truncates long paths while
-//! preserving important information.
+//! This module provides UI components for rendering file and directory search
+//! results in search interfaces. It handles the display of file names with
+//! their parent paths and supports fuzzy match highlighting.
 //!
-//! The main functionality includes:
-//! - Rendering file/directory names with optional path context
-//! - Highlighting fuzzy match results in both filename and path portions
-//! - Smart truncation of long file paths with ellipsis
-//! - Responsive layout that adapts to different highlight states
+//! Two truncation mechanisms are available:
+//! - An optional combined character-count cap (`max_combined_length`) that
+//!   pre-truncates the path's trailing characters with `...`. Useful for very
+//!   compact UIs.
+//! - Pixel-aware clipping by the text layout engine, which fades or renders a
+//!   leading `…` when the row is too narrow to fit the full path. This is the
+//!   default for callers that pass `max_combined_length: None`.
+
+use std::path::Path;
 
 use fuzzy_match::FuzzyMatchResult;
-use std::path::Path;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Container, CrossAxisAlignment, Flex, Highlight, MainAxisSize, ParentElement, Shrinkable, Text,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Element};
+use warpui::text_layout::{ClipConfig, ClipDirection, ClipStyle};
+use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::ai_context_menu::safe_truncate;
 use crate::search::ItemHighlightState;
-use warpui::SingletonEntity;
 
 pub const MAX_COMBINED_LENGTH: usize = 55;
 
@@ -178,12 +179,17 @@ pub fn render_file_search_row(
         );
     }
 
-    // Create path text with lighter color and highlights
+    // Create path text with lighter color and highlights. Clipping happens at the
+    // leading edge with a literal `…` so the trailing (more informative) directories
+    // remain visible when the row is too narrow to show the full path.
     let path_text = if !path_display.is_empty() {
         let mut path_text =
             Text::new_inline(path_display, appearance.ui_font_family(), path_font_size)
                 .with_color(path_color)
-                .with_clip(ClipConfig::start())
+                .with_clip(ClipConfig {
+                    direction: ClipDirection::Start,
+                    style: ClipStyle::Ellipsis,
+                })
                 .soft_wrap(false);
 
         if !path_highlights.is_empty() {

@@ -1,5 +1,7 @@
+use gloo_storage::errors::StorageError;
+use gloo_storage::{LocalStorage, Storage};
+
 use super::UserPreferences;
-use gloo_storage::{errors::StorageError, LocalStorage, Storage};
 
 /// An implementation of the [`UserPreferences`] trait using the local storage
 /// property of the Web Storage API for persistence.

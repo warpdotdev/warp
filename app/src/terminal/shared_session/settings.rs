@@ -1,8 +1,7 @@
 use std::time::Duration;
 
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 
 define_settings_group!(SharedSessionSettings, settings: [
     onboarding_block_shown: SessionSharingOnboardingBlockShown {
@@ -10,6 +9,7 @@ define_settings_group!(SharedSessionSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     inactivity_period_before_ending_session: InactivityPeriodBeforeEndingSession {
@@ -18,6 +18,7 @@ define_settings_group!(SharedSessionSettings, settings: [
         default: Duration::from_secs(1800),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     inactivity_period_before_warning: InactivityPeriodBeforeWarning {
@@ -26,6 +27,7 @@ define_settings_group!(SharedSessionSettings, settings: [
         default: Duration::from_secs(1500),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     inactivity_period_before_revoking_roles: InactivityPeriodBeforeRevokingRoles {
@@ -34,6 +36,7 @@ define_settings_group!(SharedSessionSettings, settings: [
         default: Duration::from_secs(600),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     // Killswitch: when false, the sharer ignores viewer terminal size reports.
@@ -42,6 +45,7 @@ define_settings_group!(SharedSessionSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
 ]);

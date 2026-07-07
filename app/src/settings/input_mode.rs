@@ -1,7 +1,7 @@
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+
 use crate::terminal::block_list_viewport::InputMode;
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
 
 define_settings_group!(InputModeSettings, settings: [
     input_mode: InputModeState {
@@ -11,6 +11,7 @@ define_settings_group!(InputModeSettings, settings: [
         default: InputMode::PinnedToBottom,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "InputMode",
         toml_path: "appearance.input.input_mode",

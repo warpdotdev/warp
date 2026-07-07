@@ -1,21 +1,16 @@
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    },
-    keymap::FixedBinding,
-    ui_components::{
-        button::{Button, ButtonVariant},
-        components::{UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+use warpui::elements::{
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
-
-use crate::ui_components::icons::Icon;
+use warpui::keymap::FixedBinding;
+use warpui::ui_components::button::{Button, ButtonVariant};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::numbered_button::render_recommended_badge;
+use crate::ui_components::icons::Icon;
 
 const MARGIN_BETWEEN_BUTTONS: f32 = 4.;
 const HAS_OPTIONS: &str = "HasOptions";

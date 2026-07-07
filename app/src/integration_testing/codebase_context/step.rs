@@ -1,17 +1,14 @@
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use settings::Setting;
-use warpui::{
-    async_assert,
-    integration::{AssertionOutcome, StepData, TestStep},
-    App, ReadModel, SingletonEntity, UpdateModel, WindowId,
-};
+use warpui::integration::{AssertionOutcome, StepData, TestStep};
+use warpui::{async_assert, App, ReadModel, SingletonEntity, UpdateModel, WindowId};
 
-use crate::{
-    integration_testing::step::new_step_with_default_assertions, settings::CodeSettings,
-    workspace::ActiveSession,
-};
+use crate::integration_testing::step::new_step_with_default_assertions;
+use crate::settings::CodeSettings;
+use crate::workspace::ActiveSession;
 
 const SYNC_DEFAULT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const CWD_DATA_KEY: &str = "cwd";

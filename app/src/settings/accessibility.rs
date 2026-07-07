@@ -1,6 +1,5 @@
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 use warpui::accessibility::AccessibilityVerbosity;
 
 define_settings_group!(AccessibilitySettings, settings: [
@@ -9,6 +8,7 @@ define_settings_group!(AccessibilitySettings, settings: [
         default: AccessibilityVerbosity::default(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "AccessibilityVerbosity",
         toml_path: "accessibility.accessibility_verbosity",

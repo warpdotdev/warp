@@ -1,36 +1,40 @@
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::anyhow;
 use async_channel;
 use chrono::{DateTime, Utc};
 use futures::stream::AbortHandle;
 use ignore::gitignore::Gitignore;
+use instant::Instant;
 #[cfg(feature = "local_fs")]
-use repo_metadata::entry::IgnoredPathStrategy;
+use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy};
 use repo_metadata::Repository;
-use std::{path::Path, sync::Arc};
 use warp_core::safe_error;
-use warpui::{Entity, ModelContext, ModelHandle};
+use warpui_core::{Entity, ModelContext, ModelHandle};
 
+use super::fragment_metadata::{
+    FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates,
+};
+use super::manager::{
+    CodebaseIndexFinishedStatus, CodebaseIndexStatus, FragmentMetadataLookupError,
+    RetrieveFileError,
+};
+use super::merkle_tree::{MerkleTree, SerializedCodebaseIndex};
+#[cfg(feature = "local_fs")]
+use super::search_shaping::build_fragments_from_file_contents;
+use super::search_shaping::{fragments_to_context_locations, ReadFragmentResult};
+use super::store_client::StoreClient;
+use super::sync_client::{FlushFragmentResult, SyncOperationError};
 use super::{
-    fragment_metadata::{FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates},
-    manager::{CodebaseIndexFinishedStatus, CodebaseIndexStatus, RetrieveFileError},
-    merkle_tree::{MerkleTree, SerializedCodebaseIndex},
-    store_client::StoreClient,
-    sync_client::{FlushFragmentResult, SyncOperationError},
     CodebaseContextConfig, ContentHash, EmbeddingConfig, Error, Fragment, NodeHash, RepoMetadata,
 };
-use crate::{
-    index::locations::{CodeContextLocation, FileFragmentLocation},
-    telemetry::{AITelemetryEvent, CodebaseContextSyncType},
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
-};
-use instant::Instant;
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-    path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use crate::index::locations::CodeContextLocation;
+use crate::telemetry::{AITelemetryEvent, CodebaseContextSyncType};
+use crate::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -44,12 +48,11 @@ cfg_if::cfg_if! {
             Entry,
             matches_gitignores,
             full_source_code_embedding::sync_client::CodebaseIndexSyncOperation,
-            full_source_code_embedding::FragmentLocation
         };
         use warp_core::send_telemetry_from_ctx;
         use warp_core::interval_timer::IntervalTimer;
-        use warpui::r#async::Timer;
-        use warpui::SingletonEntity;
+        use warpui_core::r#async::Timer;
+        use warpui_core::SingletonEntity;
         use warp_core::sync_queue::SyncQueue;
         use sha2::Digest;
     }
@@ -316,7 +319,9 @@ pub enum CodebaseIndexEvent {
         retrieval_id: RetrievalID,
         error: Error,
     },
-    SyncStateUpdated,
+    SyncStateUpdated {
+        root_path: PathBuf,
+    },
     IndexMetadataUpdated {
         root_path: PathBuf,
         event: WorkspaceMetadataEvent,
@@ -498,6 +503,13 @@ impl CodebaseIndex {
         store_client: Arc<dyn StoreClient>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self
+            .pending_file_changes
+            .as_ref()
+            .is_none_or(|changed_files| changed_files.is_empty())
+        {
+            return;
+        }
         let last_server_synced_root_node = self.last_server_synced_root_node();
         let old_state = self.update_tree_sync_state(
             TreeSourceSyncState::Syncing {
@@ -876,7 +888,9 @@ impl CodebaseIndex {
         ctx: &mut ModelContext<Self>,
     ) -> TreeSourceSyncState {
         let old_state = std::mem::replace(&mut self.tree_sync_state, new_state);
-        ctx.emit(CodebaseIndexEvent::SyncStateUpdated);
+        ctx.emit(CodebaseIndexEvent::SyncStateUpdated {
+            root_path: self.repo_path.clone(),
+        });
         old_state
     }
 
@@ -885,7 +899,9 @@ impl CodebaseIndex {
         if let TreeSourceSyncState::Syncing { sync_progress, .. } = &mut self.tree_sync_state {
             *sync_progress = Some(progress);
 
-            ctx.emit(CodebaseIndexEvent::SyncStateUpdated);
+            ctx.emit(CodebaseIndexEvent::SyncStateUpdated {
+                root_path: self.repo_path.clone(),
+            });
         }
     }
 
@@ -920,6 +936,9 @@ impl CodebaseIndex {
         // First traverse the repo path to retrieve all files we want to parse.
         let mut files = Vec::new();
         let mut remaining_file_quotas = max_num_files_limit;
+        // Codebase embedding must not operate on a partial tree: the file limit
+        // is an intentional cost cap, so exceeding it fails the build rather
+        // than silently indexing a breadth-first subset of the repository.
         let entry = Entry::build_tree(
             &repo_path,
             &mut files,
@@ -928,6 +947,7 @@ impl CodebaseIndex {
             MAX_DEPTH,
             0,
             &IgnoredPathStrategy::Exclude, // override_ignore_for_files
+            BudgetExceededBehavior::FailFast,
         )?;
 
         Ok(BuildFileTreeResult {
@@ -1318,6 +1338,30 @@ impl CodebaseIndex {
         self.leaf_node_to_fragment_metadatas.get(leaf_hash.as_ref())
     }
 
+    pub(super) fn fragment_metadatas_from_hashes(
+        &self,
+        root_hash: &NodeHash,
+        content_hashes: &[ContentHash],
+    ) -> Result<HashMap<ContentHash, Vec<FragmentMetadata>>, FragmentMetadataLookupError> {
+        let current_root_hash = self
+            .last_server_synced_root_node()
+            .ok_or(FragmentMetadataLookupError::IndexNotSynced)?;
+        if &current_root_hash != root_hash {
+            return Err(FragmentMetadataLookupError::RootHashMismatch {
+                requested: root_hash.clone(),
+                current: current_root_hash,
+            });
+        }
+
+        Ok(content_hashes
+            .iter()
+            .filter_map(|hash| {
+                self.fragment_metadatas_from_hash(hash)
+                    .map(|metadata| (hash.clone(), metadata.clone()))
+            })
+            .collect())
+    }
+
     fn repo_metadata(&self) -> RepoMetadata {
         RepoMetadata {
             path: Some(self.repo_path.to_string_lossy().to_string()),
@@ -1342,12 +1386,20 @@ impl CodebaseIndex {
     }
 
     pub(super) fn codebase_index_status(&self) -> CodebaseIndexStatus {
-        let has_synced_version = self.last_server_synced_root_node().is_some();
+        let root_hash = self.last_server_synced_root_node();
+        let has_synced_version = root_hash.is_some();
+        #[cfg(feature = "local_fs")]
+        let has_pending_file_changes = self
+            .pending_file_changes
+            .as_ref()
+            .is_some_and(|changes| !changes.is_empty());
+        #[cfg(not(feature = "local_fs"))]
+        let has_pending_file_changes = false;
         match &self.tree_sync_state {
             TreeSourceSyncState::Synced {
                 server_sync_result, ..
             } => CodebaseIndexStatus {
-                has_pending: false,
+                has_pending: has_pending_file_changes,
                 has_synced_version,
                 last_sync_successful: Some(match server_sync_result {
                     ServerSyncResult::Success => CodebaseIndexFinishedStatus::Completed,
@@ -1356,18 +1408,21 @@ impl CodebaseIndex {
                     }
                 }),
                 sync_progress: None,
+                root_hash: root_hash.clone(),
             },
             TreeSourceSyncState::InitializeTreeFailure(e) => CodebaseIndexStatus {
                 has_pending: false,
                 has_synced_version,
                 last_sync_successful: Some(CodebaseIndexFinishedStatus::Failed(e.into())),
                 sync_progress: None,
+                root_hash: root_hash.clone(),
             },
             TreeSourceSyncState::Syncing { sync_progress, .. } => CodebaseIndexStatus {
                 has_pending: true,
                 has_synced_version,
                 last_sync_successful: None,
                 sync_progress: *sync_progress,
+                root_hash: root_hash.clone(),
             },
         }
     }
@@ -1622,82 +1677,21 @@ impl CodebaseIndex {
         }
     }
 
-    // Convert fragments into CodeContextLocations. This function groups and dedupes fragments in the same file.
-    // It also allows the caller to define a context line number surrounding the relevant fragment.
     fn process_fragments(
         &self,
         fragments: Vec<Fragment>,
         context_lines: usize,
     ) -> HashSet<CodeContextLocation> {
-        // Map to collect fragments by file path
-        let mut fragments_by_path: HashMap<&PathBuf, Vec<Range<usize>>> = HashMap::new();
-        let mut whole_files = HashSet::new();
-
-        // First pass - collect all fragments and their line ranges by file path
-        for fragment in &fragments {
-            if let Some(metadata) = self
-                .fragment_metadatas_from_hash(&fragment.content_hash)
-                .and_then(|metadatas| {
-                    metadatas.iter().find(|m| {
-                        m.absolute_path == fragment.location.absolute_path
-                            && m.location.byte_range == fragment.location.byte_range
-                    })
-                })
-            {
-                // Add line range with context to the appropriate file's collection
-                let path = &fragment.location.absolute_path;
-                let start = metadata.location.start_line.saturating_sub(context_lines);
-                let end = metadata.location.end_line + 1 + context_lines; // Make the range inclusive on both ends
-
-                fragments_by_path.entry(path).or_default().push(start..end);
-            } else {
-                // Fallback to whole file if metadata not found
-                whole_files.insert(fragment.location.absolute_path.clone());
-            }
-        }
-
-        // Second pass - process each file's fragments
-        let mut result = HashSet::new();
-
-        // Process each file's fragments
-        for (path, mut line_ranges) in fragments_by_path {
-            if line_ranges.is_empty() {
-                continue;
-            }
-
-            // We can skip the fragments if the entire file is already included in the context.
-            if whole_files.contains(path) {
-                continue;
-            }
-
-            // Sort ranges by start position
-            line_ranges.sort_by_key(|range| range.start);
-
-            // Merge overlapping or adjacent ranges
-            let mut merged_ranges: Vec<Range<usize>> = Vec::new();
-            for range in line_ranges {
-                if let Some(last) = merged_ranges.last_mut() {
-                    // If current range overlaps or is adjacent to the last one, merge them
-                    if range.start <= last.end {
-                        last.end = last.end.max(range.end);
-                    } else {
-                        merged_ranges.push(range);
-                    }
-                } else {
-                    merged_ranges.push(range);
-                }
-            }
-
-            // Add file fragment location with all merged ranges
-            result.insert(CodeContextLocation::Fragment(FileFragmentLocation {
-                path: path.clone(),
-                line_ranges: merged_ranges,
-            }));
-        }
-
-        // Add whole files to the result set
-        result.extend(whole_files.into_iter().map(CodeContextLocation::WholeFile));
-        result
+        // Keep local and remote search aligned by using the same fragment-to-context expansion
+        // helper for range merging, deduping, and context-line handling.
+        fragments_to_context_locations(
+            fragments,
+            |content_hash| {
+                self.fragment_metadatas_from_hash(content_hash)
+                    .map(Vec::as_slice)
+            },
+            context_lines,
+        )
     }
 
     /// A new index built from a snapshot. This constructor builds the index and starts
@@ -2100,13 +2094,14 @@ impl CodebaseIndex {
                     match entry.and_then(|entry| dunce::canonicalize(entry.path())) {
                         Ok(child_path) => {
                             // Ignore paths that are excluded by .gitignore, end with .git, or are symlinks.
-                            if matches_gitignores(
-                                &child_path,
-                                is_dir,
-                                &*gitignores,
-                                false, /* check_ancestors */
-                            ) || child_path.ends_with(".git")
+                            if child_path.ends_with(".git")
                                 || child_path.is_symlink()
+                                || matches_gitignores(
+                                    &child_path,
+                                    child_path.is_dir(),
+                                    &*gitignores,
+                                    false, /* check_ancestors */
+                                )
                             {
                                 continue;
                             }
@@ -2244,13 +2239,14 @@ impl CodebaseIndex {
                     match entry.and_then(|entry| dunce::canonicalize(entry.path())) {
                         Ok(child_path) => {
                             // Ignore paths that are excluded by .gitignore, end with .git, or are symlinks.
-                            if matches_gitignores(
-                                &child_path,
-                                is_dir,
-                                &*gitignores,
-                                false, /* check_ancestors */
-                            ) || child_path.ends_with(".git")
+                            if child_path.ends_with(".git")
                                 || child_path.is_symlink()
+                                || matches_gitignores(
+                                    &child_path,
+                                    child_path.is_dir(),
+                                    &*gitignores,
+                                    false, /* check_ancestors */
+                                )
                             {
                                 continue;
                             }
@@ -2320,98 +2316,22 @@ impl CodebaseIndex {
     }
 }
 
-#[derive(Default)]
-pub struct ReadFragmentResult {
-    pub successfully_read: Vec<Fragment>,
-    pub fail_to_read: Vec<ContentHash>,
-    pub fail_to_read_path: Vec<PathBuf>,
-}
-
 #[cfg(feature = "local_fs")]
 pub(super) async fn build_fragments_from_metadata(
     metadatas: impl IntoIterator<Item = (ContentHash, FragmentMetadata)>,
 ) -> ReadFragmentResult {
-    let mut fragments = Vec::new();
-    let mut fail_to_read = Vec::new();
-    let mut fail_to_read_path = Vec::new();
-
-    // Group fragments by file path
-    let mut fragments_by_path: HashMap<_, Vec<_>> = HashMap::new();
-    for (content_hash, metadata) in metadatas {
-        fragments_by_path
-            .entry(metadata.absolute_path)
-            .or_default()
-            .push((content_hash, metadata.location.byte_range));
-    }
-
-    // Process each file and its fragments
-    for (file_path, file_fragments) in fragments_by_path {
-        let mut has_failed_to_read_fragments = false;
-        // Read the file content once
-        if let Ok(file_content) = async_fs::read_to_string(&file_path).await {
-            // Process all fragments for this file
-            for (content_hash, fragment_ranges) in file_fragments {
-                let start_idx = fragment_ranges.start.as_usize();
-                let end_idx = fragment_ranges.end.as_usize();
-
-                if start_idx <= end_idx
-                    && end_idx <= file_content.len()
-                    && file_content.is_char_boundary(start_idx)
-                    && file_content.is_char_boundary(end_idx)
-                {
-                    let content = file_content[start_idx..end_idx].to_string();
-                    if content.is_empty() {
-                        log::trace!(
-                            "Fragment for {:?} with range {:?} is empty",
-                            file_path.display(),
-                            fragment_ranges
-                        );
-                        fail_to_read.push(content_hash);
-                        has_failed_to_read_fragments = true;
-                    } else if ContentHash::from_content(&content) != content_hash {
-                        log::trace!(
-                            "Fragment for {:?} with range {:?} does not match its content hash",
-                            file_path.display(),
-                            fragment_ranges
-                        );
-                        fail_to_read.push(content_hash);
-                        has_failed_to_read_fragments = true;
-                    } else {
-                        fragments.push(Fragment {
-                            content,
-                            content_hash,
-                            location: FragmentLocation {
-                                absolute_path: file_path.clone(),
-                                byte_range: fragment_ranges,
-                            },
-                        });
-                    }
-                } else {
-                    log::trace!("Invalid byte range {fragment_ranges:?} for file: {file_path:?}");
-                    fail_to_read.push(content_hash);
-                    has_failed_to_read_fragments = true;
-                }
-            }
-        } else {
-            log::trace!("Failed to read file: {file_path:?}");
-            fail_to_read.extend(
-                file_fragments
-                    .into_iter()
-                    .map(|(content_hash, _)| content_hash),
-            );
-            has_failed_to_read_fragments = true;
-        }
-
-        if has_failed_to_read_fragments {
-            fail_to_read_path.push(file_path);
+    let metadatas = metadatas.into_iter().collect::<Vec<_>>();
+    let mut file_contents = HashMap::new();
+    for path in metadatas
+        .iter()
+        .map(|(_, metadata)| metadata.absolute_path.clone())
+        .collect::<HashSet<_>>()
+    {
+        if let Ok(file_content) = async_fs::read_to_string(&path).await {
+            file_contents.insert(path, file_content);
         }
     }
-
-    ReadFragmentResult {
-        successfully_read: fragments,
-        fail_to_read,
-        fail_to_read_path,
-    }
+    build_fragments_from_file_contents(metadatas, &file_contents)
 }
 
 #[cfg(not(feature = "local_fs"))]

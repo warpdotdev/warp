@@ -1,22 +1,19 @@
 use itertools::Itertools;
-use warpui::{
-    elements::{Container, CrossAxisAlignment, Flex, ParentElement, Shrinkable},
-    presenter::ChildView,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
+use warpui::elements::{Container, CrossAxisAlignment, Flex, ParentElement, Shrinkable};
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
-use crate::{
-    appearance::Appearance,
-    editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions},
-    report_if_error, send_telemetry_from_ctx,
-    server::telemetry::TelemetryEvent,
-    settings_view::features_page::render_group,
-    terminal::session_settings::*,
-    view_components::{dropdown::TOP_MENU_BAR_HEIGHT, Dropdown, DropdownItem},
-};
+use crate::appearance::Appearance;
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings_view::features_page::render_group;
+use crate::terminal::session_settings::*;
+use crate::view_components::dropdown::TOP_MENU_BAR_HEIGHT;
+use crate::view_components::{Dropdown, DropdownItem};
+use crate::{report_if_error, send_telemetry_from_ctx};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::enum_variant_names)]
 pub enum WorkingDirectoryAction {
     /// Sets the mode that should be used for all new sessions, independent of
@@ -387,12 +384,11 @@ fn create_editor(
     editor.update(ctx, |editor, ctx| {
         editor.set_buffer_text(&initial_value, ctx);
     });
-    let editor_handle = editor.clone();
-    ctx.subscribe_to_view(&editor, move |me, _, event, ctx| match event {
+    ctx.subscribe_to_view(&editor, move |me, editor, event, ctx| match event {
         // If the user presses enter or focus moves out of the editor view,
         // update our configuration to match the current value.
         EditorEvent::Blurred | EditorEvent::Enter => {
-            let editor_contents = editor_handle.as_ref(ctx).buffer_text(ctx);
+            let editor_contents = editor.as_ref(ctx).buffer_text(ctx);
             me.handle_action(
                 &WorkingDirectoryAction::SetCustomWorkingDirectoryValue(source, editor_contents),
                 ctx,

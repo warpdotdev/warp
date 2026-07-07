@@ -1,14 +1,31 @@
-use crate::default_terminal::DefaultTerminal;
-use crate::gpu_state::{GPUState, GPUStateEvent};
-use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
-#[cfg(feature = "local_tty")]
-use crate::terminal::session_settings::WorkingDirectoryConfig;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use ::settings::{Setting, ToggleableSetting};
 use lazy_static::lazy_static;
+use strum::IntoEnumIterator;
+use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
-use warpui::platform::GraphicsBackend;
+use warp_core::semantic_selection::{
+    SemanticSelection, SemanticSelectionChangedEvent, SmartSelectEnabled,
+};
+use warpui::elements::{
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
+    DispatchEventResult, Element, Empty, EventHandler, Fill, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseState, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+};
+use warpui::keymap::{ContextPredicate, FixedBinding, Keystroke};
+use warpui::platform::{Cursor, GraphicsBackend};
 use warpui::rendering::GPUPowerPreference;
-use warpui::{elements::DispatchEventResult, platform::Cursor};
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::{
+    Action, AppContext, DisplayIdx, Entity, EventContext, ModelHandle, SingletonEntity, Tracked,
+    TypedActionView, View, ViewContext, ViewHandle, WindowId,
+};
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use {
     crate::settings::ForceX11, crate::settings::LinuxAppConfiguration,
@@ -19,42 +36,45 @@ use super::keybindings::KeyBindingModifyingState;
 #[cfg(feature = "local_tty")]
 use super::settings_page::render_sub_sub_header;
 use super::settings_page::{
-    add_setting, build_reset_button, render_body_item_label, render_dropdown_item_label,
-    render_local_only_icon, Category, LocalOnlyIconState, MatchData, PageType, SettingsWidget,
-    TOGGLE_BUTTON_RIGHT_PADDING,
+    add_setting, build_reset_button, build_toggle_element, render_body_item,
+    render_body_item_label, render_dropdown_item, render_dropdown_item_label,
+    render_local_only_icon, AdditionalInfo, Category, LocalOnlyIconState, MatchData, PageType,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, CONTENT_FONT_SIZE,
+    HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
 };
-use super::settings_page::{
-    render_body_item, render_dropdown_item, AdditionalInfo, SettingsPageMeta,
-    SettingsPageViewHandle, ToggleState, CONTENT_FONT_SIZE, HEADER_PADDING,
+use super::{
+    features, flags, render_beta_chip, DisplayCount, SettingsAction, SettingsSection,
+    ToggleSettingActionPair,
 };
-use super::{features, SettingsAction};
-use super::{flags, DisplayCount};
-use super::{SettingsSection, ToggleSettingActionPair};
+use crate::appearance::Appearance;
+use crate::default_terminal::DefaultTerminal;
 use crate::editor::{
-    Event as EditorEvent, SingleLineEditorOptions, TextOptions,
+    EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions,
     ACCEPT_AUTOSUGGESTION_KEYBINDING_NAME,
 };
+use crate::features::FeatureFlag;
+use crate::gpu_state::{GPUState, GPUStateEvent};
+use crate::root_view::QuakeModePinPosition;
 use crate::search::command_search::settings::{
     CommandSearchSettings, ShowGlobalWorkflowsInUniversalSearch,
 };
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::ai::AISettings;
+use crate::settings::native_preference::{NativePreferenceSettings, UserNativePreference};
 use crate::settings::{
-    AISettingsChangedEvent, ScrollSettingsChangedEvent, ShowChangelogAfterUpdate,
-    UserNativeRedirectPreference,
-};
-use crate::settings::{
-    AliasExpansionEnabled, AliasExpansionSettings, AppEditorSettings, AtContextMenuInTerminalMode,
-    AutocompleteSymbols, AutosuggestionKeybindingHint, ChangelogSettings, CloudPreferencesSettings,
-    CodeSettings, CommandCorrections, CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior,
-    DefaultSessionMode, EnableSlashCommandsInTerminal, EnableSshWrapper, ErrorUnderliningEnabled,
-    ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
-    LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
-    OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU, PreferredGraphicsBackend,
-    QuakeModeSettings, ScrollSettings, SelectionSettings, ShowAutosuggestionIgnoreButton,
-    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior, VimModeEnabled,
-    VimStatusBar, VimUnnamedSystemClipboard, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
-    QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    AISettingsChangedEvent, AliasExpansionEnabled, AliasExpansionSettings, AppEditorSettings,
+    AtContextMenuInTerminalMode, AutocompleteSymbols, AutosuggestionKeybindingHint,
+    ChangelogSettings, CloudPreferencesSettings, CodeEditorLineNumberMode,
+    CodeEditorLineNumberModeSetting, CodeSettings, CommandCorrections, CompletionsOpenWhileTyping,
+    CopyOnSelect, CtrlTabBehavior, DefaultSessionMode, EnableSlashCommandsInTerminal,
+    ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, InputSettings,
+    InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
+    MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
+    PreferredGraphicsBackend, QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent,
+    SelectionSettings, ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate,
+    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior,
+    UserNativeRedirectPreference, VimModeEnabled, VimStatusBar, VimUnnamedSystemClipboard,
+    DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -63,55 +83,32 @@ use crate::terminal::general_settings::{
     AutoOpenCodeReviewPaneOnFirstAgentChange, GeneralSettings, LinkTooltip, LoginItem,
     QuitOnLastWindowClosed, RestoreSession, ShowWarningBeforeQuitting,
 };
+use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
 use crate::terminal::keys_settings::{
     ActivationHotkeyEnabled, CtrlTabBehaviorSetting, KeysSettings, KeysSettingsChangedEvent,
 };
 #[cfg(feature = "local_tty")]
 use crate::terminal::session_settings::StartupShellOverride;
+#[cfg(feature = "local_tty")]
+use crate::terminal::session_settings::WorkingDirectoryConfig;
 use crate::terminal::session_settings::{
     Notifications, NotificationsMode, NotificationsSettings, SessionSettings,
     SessionSettingsChangedEvent, ShouldConfirmCloseSession,
 };
 use crate::terminal::settings::{
-    MaximumGridSize, ShowTerminalZeroStateBlock, TerminalSettings, UseAudibleBell,
+    AsyncFindEnabled, MaximumGridSize, Osc52ClipboardAccess, Osc52ClipboardAccessSetting,
+    ShowTerminalZeroStateBlock, TerminalSettings, TerminalSettingsChangedEvent, UseAudibleBell,
 };
-use crate::terminal::{BlockListSettings, SnackbarEnabled};
+use crate::terminal::{BlockListSettings, PreserveInputFocusOnBlockSelection, SnackbarEnabled};
 use crate::undo_close::UndoCloseSettings;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::{
     keybinding_name_to_display_string, reset_keybinding_to_default, set_custom_keybinding,
 };
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
-use crate::workspace::tab_settings::{NewTabPlacement, TabSettings};
+use crate::workspace::tab_settings::{NewTabPlacement, TabSettings, TabSettingsChangedEvent};
 use crate::workspace::WorkspaceAction;
-use crate::{appearance::Appearance, settings::native_preference::NativePreferenceSettings};
-use crate::{editor::EditorView, settings::native_preference::UserNativePreference};
-use crate::{features::FeatureFlag, terminal::settings::TerminalSettingsChangedEvent};
 use crate::{report_if_error, send_telemetry_from_ctx, themes, GlobalResourceHandles};
-use crate::{root_view::QuakeModePinPosition, workspace::tab_settings::TabSettingsChangedEvent};
-use ::settings::{Setting, ToggleableSetting};
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use strum::IntoEnumIterator;
-use warp_core::channel::ChannelState;
-use warp_core::semantic_selection::{
-    SemanticSelection, SemanticSelectionChangedEvent, SmartSelectEnabled,
-};
-use warpui::elements::{
-    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
-    Element, Empty, EventHandler, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseState, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-};
-use warpui::keymap::{ContextPredicate, FixedBinding, Keystroke};
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{
-    Action, AppContext, DisplayIdx, Entity, EventContext, ModelHandle, SingletonEntity, Tracked,
-    TypedActionView, View, ViewContext, ViewHandle, WindowId,
-};
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "macos")] {
@@ -294,20 +291,25 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             context,
             flags::AUTOSUGGESTION_KEYBINDING_HINT_FLAG,
         ),
-    ];
-
-    if !FeatureFlag::SSHTmuxWrapper.is_enabled() {
-        toggle_binding_pairs.push(ToggleSettingActionPair::new(
-            "Warp SSH wrapper",
+        ToggleSettingActionPair::new(
+            "autosuggestion ignore button",
             builder(SettingsAction::FeaturesPageToggle(
-                #[allow(deprecated)]
-                FeaturesPageAction::ToggleSshWrapper,
+                FeaturesPageAction::ToggleShowAutosuggestionIgnoreButton,
             )),
             context,
-            #[allow(deprecated)]
-            flags::LEGACY_SSH_WRAPPER_CONTEXT_FLAG,
-        ))
-    }
+            flags::SHOW_AUTOSUGGESTION_IGNORE_BUTTON_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::AllowIgnoringInputSuggestions.is_enabled()),
+    ];
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "reuse existing SSH ControlMaster in the Warp SSH wrapper",
+        builder(SettingsAction::FeaturesPageToggle(
+            FeaturesPageAction::ToggleSshReuseControlMaster,
+        )),
+        context,
+        flags::SSH_REUSE_CONTROL_MASTER_CONTEXT_FLAG,
+    ));
 
     toggle_binding_pairs.push(ToggleSettingActionPair::new(
         "show tooltip on click on links",
@@ -317,6 +319,78 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         context,
         flags::LINK_TOOLTIP_CONTEXT_FLAG,
     ));
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "long-running command notifications",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleLongRunningNotifications,
+            )),
+            &(context.to_owned() & id!(flags::NOTIFICATIONS_CONTEXT_FLAG)),
+            flags::LONG_RUNNING_NOTIFICATIONS_FLAG,
+        )
+        .is_supported_on_current_platform(
+            SessionSettings::as_ref(app)
+                .notifications
+                .is_supported_on_current_platform(),
+        ),
+    );
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "agent task completion notifications",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleAgentTaskCompletedNotifications,
+            )),
+            &(context.to_owned() & id!(flags::NOTIFICATIONS_CONTEXT_FLAG)),
+            flags::AGENT_TASK_COMPLETED_NOTIFICATIONS_FLAG,
+        )
+        .is_supported_on_current_platform(
+            SessionSettings::as_ref(app)
+                .notifications
+                .is_supported_on_current_platform(),
+        ),
+    );
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "needs-attention notifications",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleNeedsAttentionNotifications,
+            )),
+            &(context.to_owned() & id!(flags::NOTIFICATIONS_CONTEXT_FLAG)),
+            flags::NEEDS_ATTENTION_NOTIFICATIONS_FLAG,
+        )
+        .is_supported_on_current_platform(
+            SessionSettings::as_ref(app)
+                .notifications
+                .is_supported_on_current_platform(),
+        ),
+    );
+    #[cfg(target_os = "macos")]
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "notification sounds",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleNotificationSound,
+            )),
+            &(context.to_owned() & id!(flags::NOTIFICATIONS_CONTEXT_FLAG)),
+            flags::NOTIFICATION_SOUND_FLAG,
+        )
+        .is_supported_on_current_platform(
+            SessionSettings::as_ref(app)
+                .notifications
+                .is_supported_on_current_platform(),
+        ),
+    );
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "in-app agent notifications",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleAgentInAppNotifications,
+            )),
+            context,
+            flags::AGENT_IN_APP_NOTIFICATIONS_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::HOANotifications.is_enabled()),
+    );
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
@@ -330,6 +404,21 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         .is_supported_on_current_platform(
             GeneralSettings::as_ref(app)
                 .show_warning_before_quitting
+                .is_supported_on_current_platform(),
+        ),
+    );
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "mouse reporting",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleMouseReporting,
+            )),
+            context,
+            flags::MOUSE_REPORTING_CONTEXT_FLAG,
+        )
+        .is_supported_on_current_platform(
+            AltScreenReporting::as_ref(app)
+                .mouse_reporting_enabled
                 .is_supported_on_current_platform(),
         ),
     );
@@ -470,6 +559,23 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         context,
         flags::SMART_SELECT_FLAG,
     ));
+    if FeatureFlag::AgentView.is_enabled() && AISettings::as_ref(app).is_any_ai_enabled(app) {
+        toggle_binding_pairs.push(
+            ToggleSettingActionPair::new(
+                "help block in new sessions",
+                builder(SettingsAction::FeaturesPageToggle(
+                    FeaturesPageAction::ToggleShowTerminalZeroStateBlock,
+                )),
+                context,
+                flags::SHOW_TERMINAL_ZERO_STATE_BLOCK_FLAG,
+            )
+            .is_supported_on_current_platform(
+                TerminalSettings::as_ref(app)
+                    .show_terminal_zero_state_block
+                    .is_supported_on_current_platform(),
+            ),
+        );
+    }
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
@@ -482,6 +588,30 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         )
         .with_enabled(|| FeatureFlag::AgentView.is_enabled()),
     );
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "'@' context menu in terminal mode",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleAtContextMenuInTerminalMode,
+            )),
+            context,
+            flags::AT_CONTEXT_MENU_IN_TERMINAL_FLAG,
+        )
+        .is_supported_on_current_platform(
+            InputSettings::as_ref(app)
+                .at_context_menu_in_terminal_mode
+                .is_supported_on_current_platform(),
+        ),
+    );
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "preserve input focus on block selection",
+        builder(SettingsAction::FeaturesPageToggle(
+            FeaturesPageAction::TogglePreserveInputFocusOnBlockSelection,
+        )),
+        context,
+        flags::PRESERVE_INPUT_FOCUS_ON_BLOCK_SELECTION_FLAG,
+    ));
 
     if FeatureFlag::AgentView.is_enabled() && AISettings::as_ref(app).is_any_ai_enabled(app) {
         toggle_binding_pairs.push(
@@ -500,6 +630,38 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             ),
         );
     }
+    if FeatureFlag::AIContextMenuCode.is_enabled() {
+        toggle_binding_pairs.push(
+            ToggleSettingActionPair::new(
+                "codebase symbols in the '@' context menu",
+                builder(SettingsAction::FeaturesPageToggle(
+                    FeaturesPageAction::ToggleOutlineCodebaseSymbolsForAtContextMenu,
+                )),
+                context,
+                flags::OUTLINE_CODEBASE_SYMBOLS_FOR_AT_CONTEXT_MENU_FLAG,
+            )
+            .is_supported_on_current_platform(
+                InputSettings::as_ref(app)
+                    .outline_codebase_symbols_for_at_context_menu
+                    .is_supported_on_current_platform(),
+            ),
+        );
+    }
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "global workflows in Command Search",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleGlobalWorkflowsInUniversalSearch,
+            )),
+            context,
+            flags::GLOBAL_WORKFLOWS_IN_COMMAND_SEARCH_FLAG,
+        )
+        .is_supported_on_current_platform(
+            CommandSearchSettings::as_ref(app)
+                .show_global_workflows_in_universal_search
+                .is_supported_on_current_platform(),
+        ),
+    );
 
     if GPUState::as_ref(app).is_low_power_gpu_available() {
         toggle_binding_pairs.push(
@@ -561,16 +723,16 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum FeaturesPageAction {
     ToggleCopyOnSelect,
+    ToggleAsyncFind,
     ToggleNotifications,
     ToggleRestoreSession,
     ToggleAutocompleteSymbols,
     ToggleLinuxClipboardSelection,
     ToggleOpenLinksInDesktopApp,
-    #[deprecated]
-    ToggleSshWrapper,
+    ToggleSshReuseControlMaster,
     ToggleSnackbar,
     ToggleLinkTooltip,
     ToggleCompletionsOpenWhileTyping,
@@ -628,6 +790,7 @@ pub enum FeaturesPageAction {
     SetCtrlTabBehavior(CtrlTabBehavior),
     SetPreferredGraphicsBackend(Option<GraphicsBackend>),
     SetNewTabPlacement(NewTabPlacement),
+    SetOsc52ClipboardAccess(Osc52ClipboardAccess),
     SetDefaultSessionMode(DefaultSessionMode),
     SetDefaultTabConfig(String),
     SearchForKeybinding(String),
@@ -643,8 +806,10 @@ pub enum FeaturesPageAction {
     ToggleOutlineCodebaseSymbolsForAtContextMenu,
     ToggleAutoOpenCodeReviewPane,
     ToggleShowTerminalInputMessageLine,
+    TogglePreserveInputFocusOnBlockSelection,
     ToggleAgentInAppNotifications,
     MakeWarpDefaultTerminal,
+    SetCodeEditorLineNumberMode(CodeEditorLineNumberMode),
 }
 
 lazy_static! {
@@ -716,7 +881,6 @@ impl FeaturesPageAction {
         let reporting_settings = AltScreenReporting::as_ref(ctx);
         let selection_settings = SelectionSettings::as_ref(ctx);
         let input_settings = InputSettings::as_ref(ctx);
-        let ssh_settings = SshSettings::as_ref(ctx);
         let keys_settings = KeysSettings::as_ref(ctx);
         match self {
             Self::ToggleCopyOnSelect => TelemetryEvent::FeaturesPageAction {
@@ -757,10 +921,13 @@ impl FeaturesPageAction {
                 action: "ToggleAutocompleteSymbols".to_string(),
                 value: to_string(*AppEditorSettings::as_ref(ctx).autocomplete_symbols),
             },
-            #[allow(deprecated)]
-            Self::ToggleSshWrapper => TelemetryEvent::FeaturesPageAction {
-                action: "ToggleSshWrapper".to_string(),
-                value: to_string(*ssh_settings.enable_legacy_ssh_wrapper.value()),
+            Self::ToggleSshReuseControlMaster => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleSshReuseControlMaster".to_string(),
+                value: to_string(
+                    *SshSettings::as_ref(ctx)
+                        .reuse_existing_control_master
+                        .value(),
+                ),
             },
             Self::SetGlobalHotkeyMode(mode) => TelemetryEvent::FeaturesPageAction {
                 action: "SetGlobalHotkeyMode".to_string(),
@@ -1022,6 +1189,10 @@ impl FeaturesPageAction {
                 action: "ToggleVimStatusBar".to_string(),
                 value: to_string(*AppEditorSettings::as_ref(ctx).vim_status_bar.value()),
             },
+            Self::SetCodeEditorLineNumberMode(mode) => TelemetryEvent::FeaturesPageAction {
+                action: "SetCodeEditorLineNumberMode".to_string(),
+                value: format!("{mode:?}"),
+            },
             Self::SetTabBehavior(tab_behavior) => TelemetryEvent::FeaturesPageAction {
                 action: "SetTabBehavior".to_string(),
                 value: format!("{tab_behavior:?}"),
@@ -1033,6 +1204,10 @@ impl FeaturesPageAction {
             Self::SetNewTabPlacement(new_tab_placement) => TelemetryEvent::FeaturesPageAction {
                 action: "SetNewTabPlacement".to_string(),
                 value: format!("{new_tab_placement:?}"),
+            },
+            Self::SetOsc52ClipboardAccess(access) => TelemetryEvent::FeaturesPageAction {
+                action: "SetOsc52ClipboardAccess".to_string(),
+                value: format!("{access:?}"),
             },
             Self::SetDefaultSessionMode(mode) => TelemetryEvent::FeaturesPageAction {
                 action: "SetDefaultSessionMode".to_string(),
@@ -1144,6 +1319,13 @@ impl FeaturesPageAction {
                     *GeneralSettings::as_ref(ctx).auto_open_code_review_pane_on_first_agent_change,
                 ),
             },
+            Self::TogglePreserveInputFocusOnBlockSelection => {
+                let settings = BlockListSettings::as_ref(ctx);
+                TelemetryEvent::FeaturesPageAction {
+                    action: "TogglePreserveInputFocusOnBlockSelection".to_string(),
+                    value: to_string(*settings.preserve_input_focus_on_block_selection),
+                }
+            }
             Self::SetNotificationToastDuration => TelemetryEvent::FeaturesPageAction {
                 action: "SetNotificationToastDuration".to_string(),
                 value: format!(
@@ -1154,6 +1336,10 @@ impl FeaturesPageAction {
             Self::ToggleAgentInAppNotifications => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleAgentInAppNotifications".to_string(),
                 value: to_string(*AISettings::as_ref(ctx).show_agent_notifications),
+            },
+            Self::ToggleAsyncFind => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleAsyncFind".to_string(),
+                value: to_string(*TerminalSettings::as_ref(ctx).async_find_enabled),
             },
         }
     }
@@ -1196,6 +1382,7 @@ pub struct FeaturesPageView {
 
     button_mouse_states: MouseStateHandles,
     ctrl_tab_behavior_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+    code_editor_line_number_mode_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
 
     global_hotkey_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     activation_hotkey_keybinding_editor_state: KeybindingEditorState,
@@ -1222,10 +1409,6 @@ pub struct FeaturesPageView {
     mouse_scroll_input_editor: ViewHandle<EditorView>,
     valid_mouse_scroll_multiplier: bool,
 
-    // Whether or not the SSH wrapper value was changed while the page has been
-    // open.
-    ssh_wrapper_toggled: bool,
-
     #[cfg(feature = "local_fs")]
     external_editor_view: ViewHandle<features::ExternalEditorView>,
     word_boundary_editor: ViewHandle<EditorView>,
@@ -1233,6 +1416,7 @@ pub struct FeaturesPageView {
     tab_behavior_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     graphics_backend_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     new_tab_placement_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+    osc52_clipboard_access_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     default_session_mode_dropdown: ViewHandle<FilterableDropdown<FeaturesPageAction>>,
     tab_behavior: Tracked<TabBehavior>,
     completions_keystroke: Tracked<String>,
@@ -1329,12 +1513,10 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 })
             }
-            #[allow(deprecated)]
-            ToggleSshWrapper => {
-                self.ssh_wrapper_toggled = true;
+            ToggleSshReuseControlMaster => {
                 SshSettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
                     report_if_error!(ssh_settings
-                        .enable_legacy_ssh_wrapper
+                        .reuse_existing_control_master
                         .toggle_and_save_value(ctx));
                 });
             }
@@ -1740,6 +1922,13 @@ impl TypedActionView for FeaturesPageView {
             SetNewTabPlacement(new_tab_placement) => {
                 self.set_new_tab_placement(new_tab_placement, ctx)
             }
+            SetOsc52ClipboardAccess(access) => {
+                TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+                    report_if_error!(terminal_settings
+                        .osc52_clipboard_access
+                        .set_value(*access, ctx));
+                });
+            }
             SetDefaultSessionMode(mode) => self.set_default_session_mode(mode, ctx),
             SetDefaultTabConfig(path) => {
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
@@ -1886,6 +2075,13 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 })
             }
+            TogglePreserveInputFocusOnBlockSelection => {
+                BlockListSettings::handle(ctx).update(ctx, |blocklist_settings, ctx| {
+                    report_if_error!(blocklist_settings
+                        .preserve_input_focus_on_block_selection
+                        .toggle_and_save_value(ctx));
+                });
+            }
             SetNotificationToastDuration => {
                 let user_input = self
                     .notification_toast_duration_editor
@@ -1908,6 +2104,21 @@ impl TypedActionView for FeaturesPageView {
             MakeWarpDefaultTerminal => {
                 DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
                     default_terminal.make_warp_default(ctx);
+                });
+            }
+            SetCodeEditorLineNumberMode(mode) => {
+                AppEditorSettings::handle(ctx).update(ctx, |editor_settings, ctx| {
+                    report_if_error!(editor_settings
+                        .code_editor_line_number_mode
+                        .set_value(*mode, ctx));
+                    ctx.notify();
+                });
+            }
+            ToggleAsyncFind => {
+                TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+                    report_if_error!(terminal_settings
+                        .async_find_enabled
+                        .toggle_and_save_value(ctx));
                 });
             }
         }
@@ -1937,12 +2148,15 @@ impl FeaturesPageView {
         );
 
         // Listen for model changes on all the settings that are used in this view.
-        ctx.subscribe_to_model(&AppEditorSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&AppEditorSettings::handle(ctx), |me, _, _, ctx| {
+            Self::update_code_editor_line_number_mode_dropdown(
+                me.code_editor_line_number_mode_dropdown.clone(),
+                ctx,
+            );
+            ctx.notify();
+        });
 
         ctx.subscribe_to_model(&SelectionSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
-
-        // TODO(CORE-3029): Remove when we launch the new SSH Warpification.
-        ctx.subscribe_to_model(&SshSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&AltScreenReporting::handle(ctx), |_, _, _, ctx| {
             ctx.notify()
         });
@@ -2053,6 +2267,15 @@ impl FeaturesPageView {
                         );
                     });
                 }
+                if matches!(
+                    event,
+                    TerminalSettingsChangedEvent::Osc52ClipboardAccessSetting { .. }
+                ) {
+                    Self::update_osc52_clipboard_access_dropdown(
+                        me.osc52_clipboard_access_dropdown.clone(),
+                        ctx,
+                    );
+                }
                 ctx.notify()
             },
         );
@@ -2131,8 +2354,10 @@ impl FeaturesPageView {
         });
 
         let new_tab_placement_dropdown = ctx.add_typed_action_view(Dropdown::new);
-
         Self::update_new_tab_placement_dropdown(new_tab_placement_dropdown.clone(), ctx);
+
+        let osc52_clipboard_access_dropdown = ctx.add_typed_action_view(Dropdown::new);
+        Self::update_osc52_clipboard_access_dropdown(osc52_clipboard_access_dropdown.clone(), ctx);
 
         ctx.subscribe_to_model(&TabSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(event, TabSettingsChangedEvent::NewTabPlacement { .. }) {
@@ -2170,6 +2395,12 @@ impl FeaturesPageView {
 
         let ctrl_tab_behavior_dropdown = ctx.add_typed_action_view(Dropdown::new);
         Self::update_ctrl_tab_behavior_dropdown(ctrl_tab_behavior_dropdown.clone(), ctx);
+
+        let code_editor_line_number_mode_dropdown = ctx.add_typed_action_view(Dropdown::new);
+        Self::update_code_editor_line_number_mode_dropdown(
+            code_editor_line_number_mode_dropdown.clone(),
+            ctx,
+        );
 
         ctx.subscribe_to_model(&KeysSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
@@ -2399,8 +2630,6 @@ impl FeaturesPageView {
             max_block_size_input_editor: block_size_editor,
             valid_max_block_size: true,
 
-            ssh_wrapper_toggled: false,
-
             #[cfg(feature = "local_fs")]
             external_editor_view,
             word_boundary_editor,
@@ -2408,8 +2637,10 @@ impl FeaturesPageView {
 
             tab_behavior_dropdown,
             ctrl_tab_behavior_dropdown,
+            code_editor_line_number_mode_dropdown,
             graphics_backend_dropdown,
             new_tab_placement_dropdown,
+            osc52_clipboard_access_dropdown,
             default_session_mode_dropdown,
             tab_behavior: Default::default(),
 
@@ -2514,6 +2745,11 @@ impl FeaturesPageView {
             general_widgets.push(Box::new(DefaultTerminalWidget::default()));
         }
 
+        // The widget is the opt-in surface for channels where `FeatureFlag::AsyncFind`
+        // is off. Channels with the flag on force the feature on and hide the toggle
+        // entirely; see `TerminalSettings::is_async_find_enabled`.
+        general_widgets.push(Box::new(AsyncFindWidget::default()));
+
         let app_editor_settings = AppEditorSettings::as_ref(ctx);
 
         let notifications_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
@@ -2522,14 +2758,6 @@ impl FeaturesPageView {
         let mut session_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![];
 
         session_widgets.push(Box::new(BlockLimitWidget::default()));
-
-        if !FeatureFlag::SSHTmuxWrapper.is_enabled()
-            && SshSettings::as_ref(ctx)
-                .enable_legacy_ssh_wrapper
-                .is_supported_on_current_platform()
-        {
-            session_widgets.push(Box::new(SSHWrapperWidget::default()));
-        }
 
         let session_settings = SessionSettings::as_ref(ctx);
 
@@ -2591,6 +2819,12 @@ impl FeaturesPageView {
 
         let mut text_editing_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
             vec![Box::new(AutocompleteSymbolsWidget::default())];
+        if app_editor_settings
+            .code_editor_line_number_mode
+            .is_supported_on_current_platform()
+        {
+            text_editing_widgets.push(Box::new(CodeEditorLineNumberModeWidget::default()));
+        }
 
         if app_editor_settings
             .vim_mode
@@ -2680,6 +2914,14 @@ impl FeaturesPageView {
 
         editor_widgets.push(Box::new(TabKeyBehaviorWidget::default()));
 
+        let blocklist_settings = BlockListSettings::as_ref(ctx);
+        if blocklist_settings
+            .preserve_input_focus_on_block_selection
+            .is_supported_on_current_platform()
+        {
+            editor_widgets.push(Box::new(PreserveInputFocusOnBlockSelectionWidget::default()));
+        }
+
         let mut terminal_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![];
 
         let reporting_settings = AltScreenReporting::as_ref(ctx);
@@ -2716,6 +2958,7 @@ impl FeaturesPageView {
 
         terminal_widgets.push(Box::new(SmartSelectWidget::default()));
         terminal_widgets.push(Box::new(CopyOnSelectWidget::default()));
+        terminal_widgets.push(Box::new(Osc52ClipboardAccessWidget::default()));
         terminal_widgets.push(Box::new(NewTabPlacementWidget::default()));
 
         let mut system_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![];
@@ -2768,6 +3011,41 @@ impl FeaturesPageView {
         PageType::new_categorized(categories, None)
     }
 
+    fn update_code_editor_line_number_mode_dropdown(
+        dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        dropdown.update(ctx, |dropdown, ctx| {
+            let values = [
+                CodeEditorLineNumberMode::Absolute,
+                CodeEditorLineNumberMode::Relative,
+            ];
+
+            let current_value = *AppEditorSettings::as_ref(ctx)
+                .code_editor_line_number_mode
+                .value();
+
+            let selected_index = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or(0);
+
+            dropdown.set_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.dropdown_item_label(),
+                            FeaturesPageAction::SetCodeEditorLineNumberMode(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
+        });
+    }
+
     fn update_ctrl_tab_behavior_dropdown(
         dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
         ctx: &mut ViewContext<Self>,
@@ -2776,6 +3054,7 @@ impl FeaturesPageView {
             let values = vec![
                 CtrlTabBehavior::ActivatePrevNextTab,
                 CtrlTabBehavior::CycleMostRecentSession,
+                CtrlTabBehavior::CycleMostRecentTab,
             ];
 
             let current_value = *KeysSettings::as_ref(ctx).ctrl_tab_behavior;
@@ -3303,6 +3582,39 @@ impl FeaturesPageView {
     fn set_new_tab_placement(&mut self, value: &NewTabPlacement, ctx: &mut ViewContext<Self>) {
         let _ = TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
             tab_settings.new_tab_placement.set_value(*value, ctx)
+        });
+    }
+
+    fn update_osc52_clipboard_access_dropdown(
+        dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        dropdown.update(ctx, |dropdown, ctx| {
+            let values = vec![
+                Osc52ClipboardAccess::Deny,
+                Osc52ClipboardAccess::WriteOnly,
+                Osc52ClipboardAccess::ReadWrite,
+            ];
+            let current_value = *TerminalSettings::as_ref(ctx).osc52_clipboard_access;
+
+            let selected_index = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or(0);
+
+            dropdown.set_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.as_dropdown_label(),
+                            FeaturesPageAction::SetOsc52ClipboardAccess(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
         });
     }
 
@@ -4049,10 +4361,6 @@ impl SettingsPageMeta for FeaturesPageView {
             display_count.0 = ctx.windows().display_count();
             ctx.notify();
         });
-
-        // Make sure we're not already showing the hint text for the SSH wrapper
-        // toggle when the user switches to the page.
-        self.ssh_wrapper_toggled = false;
 
         // Fetch the latest tab behavior state in case the user changed their keybindings
         // since we last loaded this page.
@@ -4877,65 +5185,6 @@ impl SettingsWidget for BlockLimitWidget {
 }
 
 #[derive(Default)]
-struct SSHWrapperWidget {
-    additional_info_link: MouseStateHandle,
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for SSHWrapperWidget {
-    type View = FeaturesPageView;
-
-    fn search_terms(&self) -> &str {
-        "ssh wrapper"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ui_builder = appearance.ui_builder();
-        render_body_item::<FeaturesPageAction>(
-            "Warp SSH Wrapper".into(),
-            Some(AdditionalInfo {
-                mouse_state: self.additional_info_link.clone(),
-                on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/warpify/ssh-legacy#implementation".into(),
-                )),
-                secondary_text: if view.ssh_wrapper_toggled {
-                    Some("This change will take effect in new sessions".to_string())
-                } else {
-                    None
-                },
-                tooltip_override_text: None,
-            }),
-            LocalOnlyIconState::for_setting(
-                EnableSshWrapper::storage_key(),
-                EnableSshWrapper::sync_to_cloud(),
-                &mut view
-                    .button_mouse_states
-                    .local_only_icon_tooltip_states
-                    .borrow_mut(),
-                app,
-            ),
-            ToggleState::Enabled,
-            appearance,
-            ui_builder
-                .switch(self.switch_state.clone())
-                .check(*SshSettings::as_ref(app).enable_legacy_ssh_wrapper.value())
-                .build()
-                .on_click(move |ctx, _, _| {
-                    #[allow(deprecated)]
-                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleSshWrapper);
-                })
-                .finish(),
-            None,
-        )
-    }
-}
-
-#[derive(Default)]
 struct DesktopNotificationsWidget {
     additional_info_link: MouseStateHandle,
     switch_state: SwitchStateHandle,
@@ -5338,6 +5587,13 @@ impl SettingsWidget for ExtraMetaKeysWidget {
     }
 }
 
+/// Stable `&'static str` id for the global-hotkey settings widget, exposed for
+/// the `warp://settings?widget=global_hotkey` deeplink (see
+/// `settings_widget_deeplink_target`).
+pub(crate) fn global_hotkey_widget_id() -> &'static str {
+    GlobalHotkeyWidget::static_widget_id()
+}
+
 #[derive(Default)]
 struct GlobalHotkeyWidget {}
 
@@ -5527,6 +5783,49 @@ impl SettingsWidget for AutocompleteSymbolsWidget {
     }
 }
 
+#[derive(Default)]
+struct CodeEditorLineNumberModeWidget {}
+
+impl SettingsWidget for CodeEditorLineNumberModeWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "line number relative line vim gutter code editor"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let mut column = Flex::column();
+        add_setting(
+            &mut column,
+            &AppEditorSettings::as_ref(app).code_editor_line_number_mode,
+            || {
+                render_dropdown_item(
+                    appearance,
+                    "Code editor line numbers:",
+                    None,
+                    None,
+                    LocalOnlyIconState::for_setting(
+                        CodeEditorLineNumberModeSetting::storage_key(),
+                        CodeEditorLineNumberModeSetting::sync_to_cloud(),
+                        &mut view
+                            .button_mouse_states
+                            .local_only_icon_tooltip_states
+                            .borrow_mut(),
+                        app,
+                    ),
+                    None,
+                    &view.code_editor_line_number_mode_dropdown,
+                )
+            },
+        );
+        column.finish()
+    }
+}
 #[derive(Default)]
 struct ErrorUnderliningWidget {
     switch_state: SwitchStateHandle,
@@ -6120,6 +6419,54 @@ impl SettingsWidget for ShowTerminalInputMessageLineWidget {
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(
                         FeaturesPageAction::ToggleShowTerminalInputMessageLine,
+                    );
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct PreserveInputFocusOnBlockSelectionWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for PreserveInputFocusOnBlockSelectionWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "preserve input focus block selection navigate arrow keys"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Preserve input focus on block selection".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                PreserveInputFocusOnBlockSelection::storage_key(),
+                PreserveInputFocusOnBlockSelection::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*BlockListSettings::as_ref(app).preserve_input_focus_on_block_selection)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(
+                        FeaturesPageAction::TogglePreserveInputFocusOnBlockSelection,
                     );
                 })
                 .finish(),
@@ -6849,6 +7196,42 @@ impl SettingsWidget for CopyOnSelectWidget {
 }
 
 #[derive(Default)]
+struct Osc52ClipboardAccessWidget {}
+
+impl SettingsWidget for Osc52ClipboardAccessWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "clipboard osc 52 osc52 paste copy access terminal program"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            "Clipboard access (OSC 52)",
+            Some("Controls whether programs running in the terminal can read or write your system clipboard."),
+            None,
+            LocalOnlyIconState::for_setting(
+                Osc52ClipboardAccessSetting::storage_key(),
+                Osc52ClipboardAccessSetting::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            None,
+            &view.osc52_clipboard_access_dropdown,
+        )
+    }
+}
+
+#[derive(Default)]
 struct NewTabPlacementWidget {}
 
 impl SettingsWidget for NewTabPlacementWidget {
@@ -7258,5 +7641,75 @@ impl SettingsWidget for GraphicsBackendWidget {
             );
         }
         col.finish()
+    }
+}
+
+#[derive(Default)]
+struct AsyncFindWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for AsyncFindWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "async asynchronous fast find search"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        // Here, the feature flag being enabled means the feature is force-enabled,
+        // so we don't need to render the toggle.
+        !FeatureFlag::AsyncFind.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+
+        let label = render_body_item_label::<FeaturesPageAction>(
+            "Asynchronous find".into(),
+            None,
+            None,
+            LocalOnlyIconState::for_setting(
+                AsyncFindEnabled::storage_key(),
+                AsyncFindEnabled::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+        );
+
+        let label_with_chip = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(label)
+            .with_child(render_beta_chip(appearance))
+            .finish();
+
+        let switch = ui_builder
+            .switch(self.switch_state.clone())
+            .check(*TerminalSettings::as_ref(app).async_find_enabled)
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(FeaturesPageAction::ToggleAsyncFind);
+            })
+            .finish();
+
+        build_toggle_element(
+            label_with_chip,
+            switch,
+            appearance,
+            Some(
+                "Use an improved implementation of find to keep the UI responsive while searching for matches on large outputs."
+                    .into(),
+            ),
+        )
     }
 }

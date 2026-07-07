@@ -1,4 +1,5 @@
-use std::{ffi::c_void, str::FromStr};
+use std::ffi::c_void;
+use std::str::FromStr;
 
 use windows::Win32::Foundation::HANDLE;
 

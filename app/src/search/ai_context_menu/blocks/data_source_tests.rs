@@ -1,4 +1,7 @@
 use chrono::{Duration, Local};
+use fuzzy_match::FuzzyMatchResult;
+use warp_core::command::ExitCode;
+use warpui::{App, SingletonEntity};
 
 use crate::search::ai_context_menu::blocks::data_source::BlockDataSource;
 use crate::search::ai_context_menu::blocks::search_item::BlockSearchItem;
@@ -10,10 +13,6 @@ use crate::test_util::terminal::{
     add_window_with_id_and_terminal, add_window_with_terminal, initialize_app_for_terminal_view,
 };
 use crate::workspace::ActiveSession;
-
-use fuzzy_match::FuzzyMatchResult;
-use warp_core::command::ExitCode;
-use warpui::{App, SingletonEntity};
 
 /// Helper to create a `BlockSearchItem` with the given parameters.
 fn make_block_search_item(

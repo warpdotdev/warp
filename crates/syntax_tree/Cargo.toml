@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 rangemap.workspace = true
 arborium.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 warp_editor.workspace = true
 languages.workspace = true
 futures.workspace = true

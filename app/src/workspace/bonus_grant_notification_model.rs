@@ -1,11 +1,13 @@
+use std::collections::HashSet;
+
+use chrono::{Duration, Utc};
+use warp_core::settings::Setting;
+use warpui::{Entity, ModelContext, SingletonEntity};
+
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BonusGrant, BonusGrantScope,
 };
 use crate::terminal::general_settings::GeneralSettings;
-use chrono::{Duration, Utc};
-use std::collections::HashSet;
-use warp_core::settings::Setting;
-use warpui::{Entity, ModelContext, SingletonEntity};
 
 pub struct BonusGrantNotificationModel {
     /// In-memory tracking of grants shown during this session. This prevents duplicate
@@ -27,7 +29,7 @@ impl SingletonEntity for BonusGrantNotificationModel {}
 
 impl BonusGrantNotificationModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
             if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
                 me.check_for_new_bonus_grants(ctx);
             }

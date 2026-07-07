@@ -4,24 +4,23 @@ pub mod util;
 #[cfg_attr(target_family = "wasm", path = "wasm.rs")]
 mod imp;
 
-use crate::tab_configs::{TabConfig, TabConfigError};
-use crate::themes::theme::WarpThemeConfig;
-use crate::{
-    launch_configs::launch_config::LaunchConfig, themes::theme::ThemeKind,
-    workflows::workflow::Workflow,
-};
-use lazy_static::lazy_static;
 #[cfg(feature = "local_fs")]
 use std::path::Path;
 use std::path::PathBuf;
-use warp_core::ui::theme::WarpTheme;
-use warpui::{Entity, ModelContext, SingletonEntity};
 
-#[cfg(test)]
 pub(crate) use imp::load_tab_configs;
 #[cfg(feature = "local_fs")]
 pub use imp::load_workflows;
 pub use imp::{load_launch_configs, load_theme_configs};
+use lazy_static::lazy_static;
+use warp_core::ui::theme::WarpTheme;
+use warpui::{Entity, ModelContext, SingletonEntity};
+
+use crate::ai::custom_model_routers::{CustomModelRouter, ModelConfigError};
+use crate::launch_configs::launch_config::LaunchConfig;
+use crate::tab_configs::{TabConfig, TabConfigError};
+use crate::themes::theme::{ThemeKind, WarpThemeConfig};
+use crate::workflows::workflow::Workflow;
 
 lazy_static! {
     pub static ref LAUNCH_CONFIG_COMMENT: String = format!(
@@ -63,6 +62,12 @@ pub enum WarpConfigUpdateEvent {
     /// Emitted when one or more tab config files failed to parse.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     TabConfigErrors(Vec<TabConfigError>),
+    /// The local `custom_model_routers/` custom model routers were created, modified, or deleted.
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+    ModelConfigs,
+    /// Emitted when one or more `custom_model_routers/` files failed to parse.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    ModelConfigErrors(Vec<ModelConfigError>),
     /// The settings file (`settings.toml`) was created, modified, or deleted.
     #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
     Settings,
@@ -89,6 +94,12 @@ pub struct WarpConfig {
     tab_config_errors: Vec<TabConfigError>,
     theme_config: WarpThemeConfig,
     local_user_workflows: Vec<Workflow>,
+    /// User-defined custom model routers loaded from `~/.warp/custom_model_routers/`.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    custom_model_routers: Vec<CustomModelRouter>,
+    /// Errors for `custom_model_routers/` files that failed to parse.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    custom_model_router_errors: Vec<ModelConfigError>,
 }
 
 /// Platform-independent parts of WarpConfig.
@@ -118,6 +129,18 @@ impl WarpConfig {
 
     pub fn local_user_workflows(&self) -> &Vec<Workflow> {
         &self.local_user_workflows
+    }
+
+    /// The local (YAML-sourced) custom model routers.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn custom_model_routers(&self) -> &Vec<CustomModelRouter> {
+        &self.custom_model_routers
+    }
+
+    /// Parse errors for `custom_model_routers/` files that failed to load.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn custom_model_router_errors(&self) -> &Vec<ModelConfigError> {
+        &self.custom_model_router_errors
     }
 
     /// Saving the newly created launch configuration to the WarpConfig that we currently
@@ -189,9 +212,15 @@ pub fn launch_configs_dir() -> PathBuf {
 }
 
 /// Returns the path to the directory containing the user's tab configs.
-#[cfg_attr(target_family = "wasm", expect(dead_code))]
 pub fn tab_configs_dir() -> PathBuf {
     base_dir().join("tab_configs")
+}
+
+/// Returns the path to the directory containing the user's custom model router
+/// configs (`~/.warp/custom_model_routers/`). Each file defines a single router.
+#[cfg_attr(target_family = "wasm", expect(dead_code))]
+pub fn custom_model_routers_dir() -> PathBuf {
+    base_dir().join("custom_model_routers")
 }
 
 /// Returns the path to the directory containing the built-in default tab configs.
@@ -400,5 +429,5 @@ impl Entity for WarpConfig {
 impl SingletonEntity for WarpConfig {}
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

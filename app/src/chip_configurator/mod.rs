@@ -9,7 +9,6 @@ pub(crate) use modal_shell::{
     render_chip_editor_modal, render_chip_editor_sections, ChipEditorModalConfig,
     ChipEditorMouseHandles, ChipEditorSectionsConfig,
 };
-
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
@@ -27,8 +26,7 @@ use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::appearance::Appearance;
 use crate::context_chips::display_chip::{chip_container, udi_font_size};
 use crate::context_chips::renderer::{ChipDragState, Renderer as ContextChipRenderer};
-use crate::context_chips::spacing;
-use crate::context_chips::{ChipAvailability, ContextChipKind};
+use crate::context_chips::{spacing, ChipAvailability, ContextChipKind};
 use crate::ui_components::icons;
 
 const USED_CHIPS_POSITION_ID: &str = "chip_cfg_used";
@@ -233,7 +231,8 @@ impl ControlItemRenderer {
             } else {
                 appearance.theme().surface_1()
             };
-            let color = appearance.theme().sub_text_color(background).into_solid();
+            let color =
+                crate::context_chips::readable_chip_label_color(appearance.theme(), background);
 
             let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
@@ -329,7 +328,7 @@ pub struct CurrentDraggingState {
     pub current_location: ChipLocation,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ChipConfiguratorAction {
     StartDraggingChip { location: ChipLocation },
     DragChip { current_position: RectF },
@@ -420,6 +419,15 @@ impl ChipConfigurator {
         self.right_chips.clear();
         self.unused_chips.clear();
         self.current_dragging_state = None;
+    }
+
+    /// Whether any zone currently holds chips (i.e. the configurator is open /
+    /// populated).
+    pub fn has_items(&self) -> bool {
+        !self.used_chips.is_empty()
+            || !self.left_chips.is_empty()
+            || !self.right_chips.is_empty()
+            || !self.unused_chips.is_empty()
     }
 
     pub fn left_item_kinds(&self) -> Vec<AgentToolbarItemKind> {

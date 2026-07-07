@@ -3,18 +3,16 @@
 #[cfg(feature = "local_fs")]
 use std::path::Path;
 
-use warpui::{
-    elements::{
-        Border, Container, CornerRadius, Flex, MouseStateHandle, ParentElement, Radius, Text,
-    },
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Element, EventContext, SingletonEntity,
+use warpui::elements::{
+    Border, Container, CornerRadius, Flex, MouseStateHandle, ParentElement, Radius, Text,
 };
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, EventContext, SingletonEntity};
 
-use crate::{
-    appearance::Appearance, settings::PrivacySettings, terminal::model::secrets::SecretLevel,
-    ui_components::blended_colors,
-};
+use crate::appearance::Appearance;
+use crate::settings::PrivacySettings;
+use crate::terminal::model::secrets::SecretLevel;
+use crate::ui_components::blended_colors;
 
 /// A link to be shown in a tooltip
 pub struct TooltipLink<OnClick> {
@@ -241,15 +239,16 @@ where
 /// This checks:
 /// - Whether Warp is already the default editor (skip if so)
 /// - Whether this file is openable in Warp (skips binary files and directories)
-/// - Whether Warp is an OS-level default editor (skips Markdown files)
+/// - Whether the file renders in Warp's notebook viewer, which is reached via a
+///   different affordance (skips Markdown and, when enabled, Jupyter notebooks)
 #[cfg(feature = "local_fs")]
 pub fn should_show_open_in_warp_link(path: &Path, app: &AppContext) -> bool {
-    use crate::{
-        code::view::is_binary_file,
-        notebooks::file::is_markdown_file,
-        util::file::external_editor::{settings::EditorChoice, EditorSettings},
-    };
     use warpui::SingletonEntity;
+
+    use crate::code::view::is_binary_file;
+    use crate::notebooks::file::renders_in_warp_notebook_viewer;
+    use crate::util::file::external_editor::settings::EditorChoice;
+    use crate::util::file::external_editor::EditorSettings;
 
     let settings = EditorSettings::as_ref(app);
 
@@ -257,7 +256,7 @@ pub fn should_show_open_in_warp_link(path: &Path, app: &AppContext) -> bool {
         return false;
     }
 
-    !is_markdown_file(path) && !is_binary_file(path) && !path.is_dir()
+    !renders_in_warp_notebook_viewer(path) && !is_binary_file(path) && !path.is_dir()
 }
 
 #[cfg(not(feature = "local_fs"))]

@@ -5,29 +5,34 @@ use languages::{language_by_filename, Language};
 use warp_editor::content::buffer::{Buffer, BufferSnapshot};
 use warp_editor::content::selection_model::BufferSelectionModel;
 use warp_editor::content::text::IndentBehavior;
-use warpui::App;
-
-use crate::SyntaxTreeState;
+use warp_util::standardized_path::StandardizedPath;
+use warpui_core::App;
 
 use super::*;
+use crate::SyntaxTreeState;
 
 // Simple stub function to allow compilation - can be improved later
 fn mock_buffer_and_tree(text_content: &str, language: Arc<Language>) -> (Buffer, Tree) {
     // Create a tree by parsing the text
     let snapshot = BufferSnapshot::from_plain_text(text_content);
-    let tree = warpui::r#async::block_on(async {
+    let tree = warpui_core::r#async::block_on(async {
         SyntaxTreeState::parse_text(snapshot, None, &language).await
-    });
+    })
+    .expect("test buffer is small and should parse");
 
     // Create a minimal buffer
     let buffer = Buffer::new(Box::new(|_, _| IndentBehavior::Ignore));
     (buffer, tree)
 }
 
+fn test_path(filename: &str) -> StandardizedPath {
+    StandardizedPath::try_new(&format!("/{filename}")).expect("test path should be absolute")
+}
+
 #[test]
 fn test_indent_query() {
     App::test((), |mut app| async move {
-        let language = language_by_filename(std::path::Path::new("test.rs"))
+        let language = language_by_filename(&test_path("test.rs"))
             .expect("Should contain language rule for rust");
         let text_content = r#"impl Test {
         fn first_func() {
@@ -55,9 +60,10 @@ fn test_indent_query() {
         });
 
         let buffer_snapshot = buffer_handle.read(&app, |buffer, _| buffer.buffer_snapshot());
-        let tree = warpui::r#async::block_on(async {
+        let tree = warpui_core::r#async::block_on(async {
             SyntaxTreeState::parse_text(buffer_snapshot, None, &language).await
-        });
+        })
+        .expect("test buffer is small and should parse");
 
         let query = language.as_ref().indents_query.as_ref().unwrap();
 
@@ -116,7 +122,7 @@ fn test_indent_query() {
 #[test]
 fn test_indent_query_on_go() {
     App::test((), |mut app| async move {
-        let language = language_by_filename(std::path::Path::new("test.go"))
+        let language = language_by_filename(&test_path("test.go"))
             .expect("Should contain language rule for go");
         let text_content = r#"package logic
         import (
@@ -151,9 +157,10 @@ fn test_indent_query_on_go() {
         });
 
         let buffer_snapshot = buffer_handle.read(&app, |buffer, _| buffer.buffer_snapshot());
-        let tree = warpui::r#async::block_on(async {
+        let tree = warpui_core::r#async::block_on(async {
             SyntaxTreeState::parse_text(buffer_snapshot, None, &language).await
-        });
+        })
+        .expect("test buffer is small and should parse");
 
         let query = &language.as_ref().indents_query.as_ref().unwrap();
 
@@ -210,8 +217,8 @@ fn test_indent_query_on_go() {
 
 #[test]
 fn test_indent_query_on_go_bracket_expansion() {
-    let language = language_by_filename(std::path::Path::new("test.go"))
-        .expect("Should contain language rule for go");
+    let language =
+        language_by_filename(&test_path("test.go")).expect("Should contain language rule for go");
     let (buffer, tree) = mock_buffer_and_tree(
         r#"func test(){}
         func test() {
@@ -250,7 +257,7 @@ fn test_indent_query_on_go_bracket_expansion() {
 // source: https://peps.python.org/pep-0008/#indentation
 #[test]
 fn test_indent_query_on_python() {
-    let language = language_by_filename(std::path::Path::new("test.py"))
+    let language = language_by_filename(&test_path("test.py"))
         .expect("Should contain language rule for python");
     let (buffer, tree) = mock_buffer_and_tree(
         r#"# Aligned with opening delimiter.
@@ -300,7 +307,7 @@ fn test_indent_query_on_python() {
 
 #[test]
 fn test_indent_query_on_python_colon() {
-    let language = language_by_filename(std::path::Path::new("test.py"))
+    let language = language_by_filename(&test_path("test.py"))
         .expect("Should contain language rule for python");
     let (if_buffer, if_tree) = mock_buffer_and_tree(r#"if x:"#, language.clone());
     let query = &language.as_ref().indents_query.as_ref().unwrap();
@@ -601,7 +608,7 @@ def foo():
 
 #[test]
 fn test_indent_query_on_javascript() {
-    let language = language_by_filename(std::path::Path::new("test.js"))
+    let language = language_by_filename(&test_path("test.js"))
         .expect("Should contain language rule for javascript");
     let (buffer, tree) = mock_buffer_and_tree(
         r#"// Import the 'fs' module, commonly used for file operations
@@ -661,7 +668,7 @@ fn test_indent_query_on_javascript() {
 
 #[test]
 fn test_indent_query_on_typescript() {
-    let language = language_by_filename(std::path::Path::new("test.ts"))
+    let language = language_by_filename(&test_path("test.ts"))
         .expect("Should contain language rule for typescript");
     let (buffer, tree) = mock_buffer_and_tree(
         r#"import { User } from './types';

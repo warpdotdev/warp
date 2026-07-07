@@ -1,7 +1,5 @@
 use std::rc::Rc;
 
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::blocklist::inline_action::code_diff_view::DiffSessionType;
 use ai::diff_validation::DiffType;
 #[cfg(not(target_family = "wasm"))]
 use warp_files::{FileModel, FileModelEvent};
@@ -14,12 +12,13 @@ use warpui::elements::ChildView;
 use warpui::SingletonEntity;
 use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
-use super::diff_viewer::DiffViewer;
-use super::diff_viewer::DisplayMode;
+use super::diff_viewer::{DiffViewer, DisplayMode};
 use super::editor::scroll::{ScrollPosition, ScrollTrigger};
 use super::editor::view::{CodeEditorEvent, CodeEditorView};
 use super::editor::NavBarBehavior;
 use super::DiffResult;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::blocklist::inline_action::code_diff_view::DiffSessionType;
 use crate::editor::InteractionState;
 
 pub enum InlineDiffViewEvent {
@@ -128,9 +127,15 @@ impl InlineDiffView {
         let file_id = match session_type {
             DiffSessionType::Local => {
                 let Some(local_path) = file_path.to_local_path() else {
-                    log::error!(
-                        "Failed to convert StandardizedPath to local path: {file_path}; \
-                         diff will be read-only",
+                    crate::safe_error!(
+                        safe: (
+                            "Failed to convert StandardizedPath to local path; diff will be \
+                            read-only"
+                        ),
+                        full: (
+                            "Failed to convert StandardizedPath to local path: {file_path}; diff \
+                            will be read-only"
+                        )
                     );
                     return;
                 };

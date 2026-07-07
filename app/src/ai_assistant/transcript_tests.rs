@@ -1,20 +1,16 @@
-use crate::{
-    appearance, test_util::settings::initialize_settings_for_tests,
-    workspaces::user_workspaces::UserWorkspaces,
-};
-
-use warpui::{platform::WindowStyle, App};
-
-use crate::ai_assistant::{
-    requests::Requests,
-    test_util::{
-        default_assistant_transcript_part, default_code_block_segment, default_formatted_message,
-        default_other_segment,
-    },
-    utils::{CodeBlockIndex, TranscriptPart, TranscriptPartSubType},
-};
+use warpui::platform::WindowStyle;
+use warpui::App;
 
 use super::Transcript;
+use crate::ai_assistant::requests::Requests;
+use crate::ai_assistant::test_util::{
+    default_assistant_transcript_part, default_code_block_segment, default_formatted_message,
+    default_other_segment,
+};
+use crate::ai_assistant::utils::{CodeBlockIndex, TranscriptPart, TranscriptPartSubType};
+use crate::appearance;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 // Mocked data to make it easy to test.
 lazy_static::lazy_static! {

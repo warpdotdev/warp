@@ -4,20 +4,16 @@ mod environment;
 mod pipes;
 mod proc_thread_attribute_list;
 
-use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
-use super::shell::{DirectShellStarter, ShellStarter, WslShellStarter};
-use super::spawner::PtyHandle;
-use super::{mio_channel, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
-use crate::terminal::local_tty::spawner::{PtySpawnInfo, PtySpawner};
-use crate::terminal::writeable_pty;
-use child::ChildExitWatcher;
-use conpty_api::ConptyApiError;
-use environment::get_shell_environment_variables;
-pub use environment::get_user_and_system_env_variable;
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle as _;
 use std::path::PathBuf;
+
+use child::ChildExitWatcher;
+pub use conpty_api::ConptyApi;
+use conpty_api::ConptyApiError;
+use environment::get_shell_environment_variables;
+pub use environment::get_user_and_system_env_variable;
 use thiserror::Error;
 use warpui::{AppContext, SingletonEntity};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
@@ -29,8 +25,13 @@ use windows::Win32::System::Threading::{
     STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
 };
 
+use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
+use super::shell::{DirectShellStarter, ShellStarter, WslShellStarter};
+use super::spawner::PtyHandle;
+use super::{mio_channel, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
+use crate::terminal::local_tty::spawner::{PtySpawnInfo, PtySpawner};
 use crate::terminal::local_tty::windows::proc_thread_attribute_list::ProcThreadAttributeList;
-pub use conpty_api::ConptyApi;
+use crate::terminal::writeable_pty;
 
 trait ToCoord {
     fn to_coord(&self) -> COORD;

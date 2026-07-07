@@ -1,10 +1,10 @@
+use std::collections::HashMap;
+
 use smol_str::SmolStr;
 
 use super::*;
-use crate::terminal::model::session::{
-    command_executor::testing::TestCommandExecutor, SessionInfo,
-};
-use std::collections::HashMap;
+use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+use crate::terminal::model::session::SessionInfo;
 
 #[test]
 fn test_is_expandable_alias_when_expandable() {

@@ -1,11 +1,11 @@
 use pathfinder_color::ColorU;
+use warpui::elements::{Align, ConstrainedBox, ParentElement, Rect, Stack, Text};
 use warpui::fonts::FamilyId;
-use warpui::SingletonEntity as _;
+use warpui::keymap::FixedBinding;
+use warpui::presenter::ChildView;
 use warpui::{
-    elements::{Align, ConstrainedBox, ParentElement, Rect, Stack, Text},
-    keymap::FixedBinding,
-    presenter::ChildView,
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle,
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
 
 // We could initiate global action and bindings here.

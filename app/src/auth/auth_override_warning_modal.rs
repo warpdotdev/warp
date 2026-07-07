@@ -1,24 +1,18 @@
 use pathfinder_color::ColorU;
-
 use warp_core::ui::appearance::Appearance;
-use warpui::elements::Container;
-use warpui::elements::Fill;
-use warpui::FocusContext;
-use warpui::SingletonEntity;
-use warpui::TypedActionView;
+use warpui::elements::{ChildView, Container, Fill};
+use warpui::ui_components::components::{Coords, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
+use super::auth_manager::{AuthManager, AuthManagerEvent};
+use super::auth_override_warning_body::AuthOverrideWarningBodyEvent;
 use crate::auth::auth_override_warning_body::AuthOverrideWarningBody;
 use crate::auth::auth_view_modal::AuthRedirectPayload;
 use crate::modal::Modal;
 use crate::root_view::unthemed_window_border;
-
-use warpui::elements::ChildView;
-use warpui::ui_components::components::{Coords, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, View, ViewContext, ViewHandle};
-
-use super::auth_manager::AuthManager;
-use super::auth_manager::AuthManagerEvent;
-use super::auth_override_warning_body::AuthOverrideWarningBodyEvent;
 
 pub struct AuthOverrideWarningModal {
     auth_override_warning_modal: ViewHandle<Modal<AuthOverrideWarningBody>>,

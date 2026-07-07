@@ -1,7 +1,5 @@
-use super::{
-    object::{CloudObjectEventEntrypoint, ObjectMetadata},
-    object_permissions::ObjectPermissions,
-};
+use super::object::{CloudObjectEventEntrypoint, ObjectMetadata};
+use super::object_permissions::ObjectPermissions;
 use crate::schema;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
@@ -32,6 +30,12 @@ pub enum GenericStringObjectFormat {
     JsonCloudEnvironment,
     #[cynic(rename = "JsonScheduledAmbientAgent")]
     JsonScheduledAmbientAgent,
+    /// Fallback for GSO formats this client build does not recognize (for example
+    /// server-only formats such as `JsonRunner`). Without this, decoding a Drive
+    /// sync response that contains an unknown format fails for the entire response.
+    /// This variant only arises when deserializing; we never serialize it.
+    #[cynic(fallback)]
+    Unknown,
 }
 
 #[derive(cynic::InputObject, Debug)]
@@ -58,6 +62,7 @@ impl std::fmt::Display for GenericStringObjectFormat {
             GenericStringObjectFormat::JsonTemplatableMCPServer => "JsonTemplatableMCPServer",
             GenericStringObjectFormat::JsonCloudEnvironment => "JsonCloudEnvironment",
             GenericStringObjectFormat::JsonScheduledAmbientAgent => "JsonScheduledAmbientAgent",
+            GenericStringObjectFormat::Unknown => "Unknown",
         };
         write!(f, "{s}")
     }

@@ -1,12 +1,9 @@
 use itertools::Itertools;
 use testing::{assert_rows_equal, ToRows as _};
 
-use crate::model::{
-    char_or_str::CharOrStr,
-    grid::cell::{Cell, Flags},
-};
-
 use super::*;
+use crate::model::char_or_str::CharOrStr;
+use crate::model::grid::cell::{Cell, Flags};
 
 #[test]
 fn test_row_iteration() {
@@ -253,4 +250,28 @@ fn test_clear_after_truncate_front() {
         storage.rows_from(1).next().expect("should have a row")[0].c,
         '2'
     );
+}
+
+#[test]
+fn test_clear_after_truncate_front_then_resize_and_push_does_not_panic() {
+    let old_cols = 20;
+    let new_cols = 21;
+    let initial_content = "abcdefghijklmnopqrst\n".repeat(100);
+    let rows = initial_content.as_str().to_rows(old_cols);
+
+    let mut storage = FlatStorage::new(old_cols, Some(1), None);
+    storage.push_rows(&rows);
+    assert_eq!(storage.total_rows(), 1);
+
+    storage.clear();
+    storage.set_columns(new_cols);
+
+    let new_rows = "new output\n".to_rows(new_cols);
+    storage.push_rows(&new_rows);
+
+    let row = storage
+        .rows_from(0)
+        .next()
+        .expect("should materialize a row after clearing and resizing storage");
+    assert_eq!(row[0].c, 'n');
 }

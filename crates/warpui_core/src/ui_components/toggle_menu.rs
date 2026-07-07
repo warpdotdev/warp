@@ -1,24 +1,21 @@
-use std::{borrow::Cow, rc::Rc, sync::Arc};
+use std::borrow::Cow;
+use std::rc::Rc;
+use std::sync::Arc;
 
-use crate::{
-    elements::{
-        Container, CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisSize, MouseStateHandle,
-        ParentElement, Shrinkable,
-    },
-    platform::Cursor,
-    scene::{CornerRadius, Radius},
-    AppContext, Element, EventContext,
-};
-
+use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 
-use super::{
-    components::{UiComponent, UiComponentStyles},
-    text::Span,
+use super::components::{UiComponent, UiComponentStyles};
+use super::text::Span;
+use crate::elements::{
+    Container, CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisSize, MouseStateHandle,
+    ParentElement, Shrinkable,
 };
-use lazy_static::lazy_static;
+use crate::platform::Cursor;
+use crate::scene::{CornerRadius, Radius};
+use crate::{AppContext, Element, EventContext};
 
 const BORDER_RADIUS: f32 = 4.;
 const BUTTON_VERTICAL_PADDING: f32 = 2.;

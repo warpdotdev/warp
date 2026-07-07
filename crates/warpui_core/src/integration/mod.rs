@@ -1,11 +1,8 @@
-use std::{
-    collections::HashSet,
-    env,
-    ffi::OsStr,
-    fs,
-    io::ErrorKind,
-    path::{Path, PathBuf},
-};
+use std::collections::HashSet;
+use std::ffi::OsStr;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 mod action_log;
 mod artifacts;

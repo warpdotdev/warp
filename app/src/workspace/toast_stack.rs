@@ -1,9 +1,7 @@
 use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
 
-use crate::{
-    view_components::{DismissibleToast, ToastType},
-    workspace::WorkspaceAction,
-};
+use crate::view_components::{DismissibleToast, ToastType};
+use crate::workspace::WorkspaceAction;
 
 /// A global model that provides an interface to open a workspace-level
 /// toast. This allows callers to add a toast from any context that has

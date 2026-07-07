@@ -1,19 +1,17 @@
+use warpui::elements::{
+    Border, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+};
+use warpui::keymap::macros::*;
+use warpui::keymap::{FixedBinding, Keystroke};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::keyboard_shortcut::KeyboardShortcut;
+use warpui::ui_components::text::Span;
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
-use warpui::{
-    elements::{
-        Border, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex, Hoverable,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
-    },
-    keymap::{macros::*, FixedBinding, Keystroke},
-    platform::Cursor,
-    ui_components::{
-        components::{Coords, UiComponent, UiComponentStyles},
-        keyboard_shortcut::KeyboardShortcut,
-        text::Span,
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
 
 type ItemLabelFn<T> = Box<dyn Fn(&T, &AppContext) -> Span>;
 

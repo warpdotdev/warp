@@ -37,6 +37,15 @@ impl PricingInfoModel {
             .find(|p| &p.plan == plan)
     }
 
+    /// Returns the pricing data for all known plans, or an empty slice if
+    /// pricing information has not yet been fetched from the server.
+    pub fn plans(&self) -> &[PlanPricing] {
+        self.pricing_info
+            .as_ref()
+            .map(|info| info.plans.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Returns the overage cost in dollars (converted from cents).
     #[allow(dead_code)]
     pub fn overage_cost_dollars(&self) -> Option<f64> {

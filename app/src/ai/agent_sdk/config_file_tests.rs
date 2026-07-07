@@ -3,9 +3,9 @@
 use std::io::Write as _;
 
 use serde_json::json;
+use warp_cli::mcp::MCPSpec;
 
 use crate::ai::ambient_agents::AgentConfigSnapshot;
-use warp_cli::mcp::MCPSpec;
 
 fn write_temp(suffix: &str, contents: &str) -> tempfile::NamedTempFile {
     let mut file = tempfile::Builder::new().suffix(suffix).tempfile().unwrap();
@@ -96,6 +96,7 @@ fn merge_precedence_cli_over_file_and_merges_mcp() {
     let cli = AgentConfigSnapshot {
         name: Some("cli-name".to_string()),
         environment_id: None,
+        runner_id: None,
         model_id: Some("cli-model".to_string()),
         base_prompt: None,
         mcp_servers: Some(serde_json::Map::from_iter([(

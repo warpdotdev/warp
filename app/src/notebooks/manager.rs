@@ -1,31 +1,26 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures_util::stream::AbortHandle;
 use markdown_parser::markdown_parser::parse_markdown_to_raw_text;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::{
-    r#async::SpawnedFutureHandle, Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle,
-    WindowId,
+    Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle, WindowId,
 };
 
-use crate::{
-    cloud_object::{
-        model::persistence::{CloudModel, CloudModelEvent},
-        Owner,
-    },
-    drive::OpenWarpDriveObjectSettings,
-    pane_group::{NotebookPane, PaneContent},
-    safe_debug, safe_warn,
-    server::{
-        cloud_objects::update_manager::{
-            ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::SyncId,
-    },
-    workspace::PaneViewLocator,
+use super::notebook::NotebookView;
+use super::CloudNotebook;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::Owner;
+use crate::drive::OpenWarpDriveObjectSettings;
+use crate::pane_group::{NotebookPane, PaneContent};
+use crate::server::cloud_objects::update_manager::{
+    ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
-
-use super::{notebook::NotebookView, CloudNotebook};
+use crate::server::ids::SyncId;
+use crate::workspace::PaneViewLocator;
+use crate::{safe_debug, safe_warn};
 
 #[cfg(test)]
 #[path = "manager_tests.rs"]
@@ -146,7 +141,12 @@ impl NotebookManager {
         }
     }
 
-    fn handle_cloud_model_event(&mut self, event: &CloudModelEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_cloud_model_event(
+        &mut self,
+        _: ModelHandle<CloudModel>,
+        event: &CloudModelEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if let CloudModelEvent::ObjectUpdated { type_and_id, .. } = event {
             if let Some(notebook_id) = type_and_id.as_notebook_id() {
                 self.update_raw_text_for_notebook(notebook_id, ctx);
@@ -292,6 +292,7 @@ impl NotebookManager {
 
     fn handle_update_manager_event(
         &mut self,
+        _: ModelHandle<UpdateManager>,
         event: &UpdateManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {

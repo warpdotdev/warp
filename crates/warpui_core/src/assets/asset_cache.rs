@@ -1,18 +1,23 @@
-use anyhow::anyhow;
-use anyhow::{Error, Result};
+use std::any::{Any, TypeId};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use anyhow::{anyhow, Error, Result};
 use async_channel::{self, Receiver, Sender};
 use bytes::Bytes;
 use derivative::Derivative;
-use futures::FutureExt as _;
-use futures::{future::BoxFuture, Future};
-use std::any::{Any, TypeId};
-use std::pin::Pin;
-use std::{cell::RefCell, collections::HashMap, hash::Hash, rc::Rc, sync::Arc};
-
-use crate::image_cache::ImageCache;
-use crate::{r#async::executor, Entity, ModelContext, SingletonEntity};
+use futures::future::BoxFuture;
+use futures::{Future, FutureExt as _};
 
 use super::AssetProvider;
+use crate::image_cache::ImageCache;
+use crate::r#async::executor;
+use crate::{Entity, ModelContext, SingletonEntity};
 
 pub trait FetchAsset: crate::r#async::Spawnable + Future<Output = Result<Bytes>> {}
 impl<T: crate::r#async::Spawnable + Future<Output = Result<Bytes>> + ?Sized> FetchAsset for T {}
@@ -60,6 +65,41 @@ impl std::fmt::Debug for AsyncAssetId {
     }
 }
 
+/// A content fingerprint for a local file on disk.
+///
+/// Used as part of an [`AssetSource::LocalFile`] cache key so that a file whose
+/// contents change on disk is treated as a distinct asset and re-read, rather
+/// than served from a now-stale cache entry.
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
+pub struct LocalFileContentVersion {
+    modified: Option<SystemTime>,
+    file_size: u64,
+}
+
+impl LocalFileContentVersion {
+    /// Builds a content version by reading filesystem metadata for `path`.
+    ///
+    /// Performs blocking filesystem I/O, so this must only be called off the
+    /// render hot path (for example, once when a view resolves its image
+    /// sources), never on every frame. Returns `None` when metadata cannot be
+    /// read.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn for_path(path: impl AsRef<std::path::Path>) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self {
+            modified: metadata.modified().ok(),
+            file_size: metadata.len(),
+        })
+    }
+
+    /// Filesystem metadata is unavailable on WASM, so a local-file content
+    /// version is never computed there.
+    #[cfg(target_arch = "wasm32")]
+    pub fn for_path(_path: impl AsRef<std::path::Path>) -> Option<Self> {
+        None
+    }
+}
+
 /// A "URI" for some data file. In other words, the location of an asset.
 #[derive(Derivative)]
 #[derivative(Clone, Hash, PartialEq, Eq, Debug)]
@@ -81,9 +121,37 @@ pub enum AssetSource {
         path: &'static str,
     },
     /// Accessible in the user's local filesystem at the provided path.
-    LocalFile { path: String },
+    LocalFile {
+        path: String,
+        /// Optional content fingerprint. When present, it makes the cache key
+        /// sensitive to on-disk changes so an edited file is re-read instead of
+        /// served stale. `None` preserves path-only caching for callers that do
+        /// not need invalidation.
+        content_version: Option<LocalFileContentVersion>,
+    },
     /// Image loaded directly with bytes
     Raw { id: String },
+}
+
+impl AssetSource {
+    /// Returns this source with a freshly-read local-file content version
+    /// attached when it is an [`AssetSource::LocalFile`]; all other variants are
+    /// returned unchanged.
+    ///
+    /// Reads filesystem metadata, so call this off the render hot path (for
+    /// example, once when a view resolves its image sources), never per frame.
+    pub fn with_local_file_content_version(self) -> Self {
+        match self {
+            AssetSource::LocalFile { path, .. } => {
+                let content_version = LocalFileContentVersion::for_path(&path);
+                AssetSource::LocalFile {
+                    path,
+                    content_version,
+                }
+            }
+            other => other,
+        }
+    }
 }
 
 /// The public representation of an asset's current state (i.e., in-memory availability).
@@ -163,6 +231,7 @@ pub struct AssetCache {
     inner: Rc<RefCell<HashMap<AssetHandle, AssetStateInternal>>>,
 
     bundled_asset_provider: Box<dyn AssetProvider>,
+    image_cache: ImageCache,
     foreground_executor: Rc<executor::Foreground>,
     background_executor: Arc<executor::Background>,
 }
@@ -192,15 +261,18 @@ impl Asset for String {
 
 impl AssetCache {
     const MAX_RAW_ASSET_SIZE: usize = 320 * 1000 * 1000; // 320MB
+    const MAX_VERSIONED_LOCAL_FILE_ASSET_SIZE: usize = 320 * 1000 * 1000; // 320MB
 
     pub fn new(
         bundled_asset_provider: Box<dyn AssetProvider>,
+        image_cache: ImageCache,
         foreground_executor: Rc<executor::Foreground>,
         background_executor: Arc<executor::Background>,
     ) -> Self {
         Self {
             inner: Rc::new(RefCell::new(HashMap::new())),
             bundled_asset_provider,
+            image_cache,
             foreground_executor,
             background_executor,
         }
@@ -275,6 +347,59 @@ impl AssetCache {
         evicted_image_ids
     }
 
+    fn evict_versioned_local_file_assets(
+        assets: &mut HashMap<AssetHandle, AssetStateInternal>,
+        max_total_size: usize,
+    ) -> Vec<AssetSource> {
+        let mut versioned_local_file_assets: Vec<_> = assets
+            .iter()
+            .filter_map(|(handle, state)| {
+                if matches!(
+                    handle.source,
+                    AssetSource::LocalFile {
+                        content_version: Some(_),
+                        ..
+                    }
+                ) {
+                    if let AssetStateInternal::Loaded {
+                        timestamp,
+                        size_in_bytes,
+                        ..
+                    } = state
+                    {
+                        return Some((handle.clone(), *timestamp, *size_in_bytes));
+                    }
+                }
+                None
+            })
+            .collect();
+        let mut total_size = versioned_local_file_assets
+            .iter()
+            .map(|(_, _, size_in_bytes)| size_in_bytes)
+            .sum::<usize>();
+
+        if total_size <= max_total_size {
+            return vec![];
+        }
+
+        versioned_local_file_assets.sort_by_key(|(_, timestamp, _)| *timestamp);
+        let mut evicted_sources = vec![];
+
+        for (handle, _, size_in_bytes) in versioned_local_file_assets {
+            if total_size <= max_total_size {
+                break;
+            }
+
+            if assets.remove(&handle).is_some() {
+                total_size -= size_in_bytes;
+                evicted_sources.push(handle.source.clone());
+                assets.insert(handle, AssetStateInternal::Evicted);
+            }
+        }
+
+        evicted_sources
+    }
+
     /// The main API of the asset cache. Given the location of an asset, returns an indicator of the
     /// in-memory availability of the asset. If the asset is not already loaded or loading, a background
     /// task is spawned to perform the retrieval.
@@ -317,7 +442,7 @@ impl AssetCache {
                     };
                     assets.insert(key.clone(), asset_state);
                 }
-                AssetSource::LocalFile { path } => {
+                AssetSource::LocalFile { path, .. } => {
                     assets.insert(key.clone(), AssetStateInternal::loading());
                     self.load_asynchronously::<T>(
                         source.clone(),
@@ -434,6 +559,7 @@ impl AssetCache {
 
         // Spawn a receiver on the foreground executor.
         let assets = Rc::downgrade(&self.inner);
+        let image_cache = self.image_cache.clone();
         self.foreground_executor
             .spawn_boxed(Box::pin(async move {
                 let result = match rx.await {
@@ -483,6 +609,15 @@ impl AssetCache {
                         assets.insert(handle, AssetStateInternal::Error(Rc::new(err)));
                     }
                 }
+
+                let evicted_sources = Self::evict_versioned_local_file_assets(
+                    &mut assets,
+                    Self::MAX_VERSIONED_LOCAL_FILE_ASSET_SIZE,
+                );
+                drop(assets);
+                for source in evicted_sources {
+                    image_cache.evict_image(&source);
+                }
             }))
             .detach();
     }
@@ -498,3 +633,7 @@ impl Entity for AssetCache {
 }
 
 impl SingletonEntity for AssetCache {}
+
+#[cfg(test)]
+#[path = "asset_cache_tests.rs"]
+mod tests;

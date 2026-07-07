@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -11,26 +12,33 @@ use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
-use crate::server::server_api::ServerApi;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::terminal::model::block::BlockId;
-use crate::terminal::CLIAgent;
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::read_jsonl;
 use super::codex_transcript::{
-    codex_sessions_root, find_session_file, parse_session_meta, write_envelope, CodexResumeInfo,
-    CodexTranscriptEnvelope,
+    codex_sessions_root, find_session_file, parse_session_meta, rehydrate_codex_transcript,
+    CodexResumeInfo, CodexTranscriptEnvelope,
 };
 use super::json_utils::read_json_file_or_default;
-use super::{write_temp_file, HarnessRunner, ResumePayload, SavePoint, ThirdPartyHarness};
+use super::{
+    write_temp_file, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
+};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
+use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::mcp::JSONTransportType;
+use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
+use crate::server::server_api::ServerApi;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::CLIAgent;
 
 pub(crate) struct CodexHarness;
 
@@ -38,6 +46,9 @@ pub(crate) struct CodexHarness;
 const CODEX_CLI_FORMAT: &str = "codex_cli";
 /// Slash command Codex's TUI recognises as a graceful shutdown.
 const CODEX_EXIT_COMMAND: &str = "/exit";
+/// Allow the Warp-installed Codex plugin hooks to run in vetted driver sessions
+/// without requiring an unattended `/hooks` review step.
+const CODEX_BYPASS_HOOK_TRUST_FLAG: &str = "--dangerously-bypass-hook-trust";
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -54,18 +65,32 @@ impl ThirdPartyHarness for CodexHarness {
         Some("https://developers.openai.com/codex/cli")
     }
 
-    fn prepare_environment_config(
-        &self,
-        working_dir: &Path,
-        system_prompt: Option<&str>,
-        secrets: &HashMap<String, ManagedSecretValue>,
-    ) -> Result<(), AgentDriverError> {
-        prepare_codex_environment_config(working_dir, system_prompt, secrets).map_err(|error| {
-            AgentDriverError::HarnessConfigSetupFailed {
-                harness: self.cli_agent().command_prefix().to_owned(),
-                error,
-            }
-        })
+    fn auth_check_command(&self) -> Option<String> {
+        let cli = self.cli_agent().command_prefix();
+        Some(format!("{cli} login status"))
+    }
+
+    fn runtime_error_patterns(&self) -> &'static [&'static str] {
+        &[
+            // Quota / billing.
+            "Quota exceeded. Check your plan and billing details.",
+            "You've hit your usage limit",
+            // Upstream HTTP failures Codex surfaces verbatim. The 401 form
+            // matches invalid-API-key and wrong-endpoint variants.
+            "unexpected status 401",
+            "Incorrect API key provided",
+            "invalid API key",
+            // Region/endpoint block (Anthropic-style global vs US-only
+            // routing surfaced through Codex's upstream client).
+            "Access blocked by Cloudflare",
+            // OAuth refresh failures — all five Codex variants share this
+            // substring (see upstream session/token messages).
+            "could not be refreshed",
+        ]
+    }
+
+    fn requires_verified_platform_plugin(&self) -> bool {
+        FeatureFlag::CodexPlugin.is_enabled()
     }
 
     /// Fetch the codex transcript for the current task's conversation and wrap it into a
@@ -91,21 +116,50 @@ impl ThirdPartyHarness for CodexHarness {
         prompt: &str,
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
+        context: Option<&str>,
         working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<ResumePayload>,
+        resolved_env_vars: &HashMap<OsString, OsString>,
+        resolved_secrets: &HashMap<String, ManagedSecretValue>,
+        resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
+        // Prepare the environment config files.
+        prepare_codex_environment_config(
+            working_dir,
+            system_prompt,
+            resolved_env_vars,
+            resolved_secrets,
+            resolved_mcp_servers,
+            third_party_harness_model_config,
+        )
+        .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+            harness: self.cli_agent().command_prefix().to_owned(),
+            error,
+        })?;
+
         // The ResumePayload shouldn't contain non-Codex information, error if it does.
         let codex_resume = resume.map(CodexResumeInfo::try_from).transpose()?;
 
-        // Mirror Claude harness behavior: prepend the resumption preamble to
-        // the user-turn prompt so codex treats it as immediate intent.
-        let owned_prompt = match resumption_prompt {
-            Some(preamble) if !preamble.is_empty() => format!("{preamble}\n\n{prompt}"),
-            _ => prompt.to_string(),
-        };
+        // Mirror Claude harness behavior: prepend the resumption preamble and server context
+        // to the user-turn prompt so codex treats it as immediate intent.
+        // Order: resumption_prompt → context → prompt
+        let mut parts: Vec<&str> = Vec::new();
+        if let Some(preamble) = resumption_prompt {
+            if !preamble.is_empty() {
+                parts.push(preamble);
+            }
+        }
+        if let Some(ctx) = context {
+            if !ctx.is_empty() {
+                parts.push(ctx);
+            }
+        }
+        parts.push(prompt);
+        let owned_prompt = parts.join("\n\n");
         let client: Arc<dyn HarnessSupportClient> = server_api;
         Ok(Box::new(CodexHarnessRunner::new(
             self.cli_agent().command_prefix(),
@@ -123,17 +177,20 @@ impl ThirdPartyHarness for CodexHarness {
 ///
 /// `--dangerously-bypass-approvals-and-sandbox` disables both the sandbox and approval
 /// prompts so the agent can run autonomously.
+/// `--dangerously-bypass-hook-trust` allows the orchestration plugin hooks installed by
+/// Warp to run without a manual hook review in unattended driver sessions. Driver setup
+/// verifies the Codex platform plugin before launching commands with this flag.
 /// `Some(session_id)` indicates that we want to resume that prior session. Unlike claude,
 /// codex does not support assigning a session_id to a new conversation.
 fn codex_command(cli_name: &str, session_id: Option<&Uuid>, prompt_path: &str) -> String {
     match session_id {
         Some(session_id) => format!(
-            "{cli_name} resume --dangerously-bypass-approvals-and-sandbox {session_id} \
+            "{cli_name} resume --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} {session_id} \
              \"$(cat '{prompt_path}')\""
         ),
         None => {
             format!(
-                "{cli_name} --dangerously-bypass-approvals-and-sandbox \"$(cat '{prompt_path}')\""
+                "{cli_name} --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} \"$(cat '{prompt_path}')\""
             )
         }
     }
@@ -149,6 +206,7 @@ enum CodexRunnerState {
 
 struct CodexHarnessRunner {
     command: String,
+    cli_name: String,
     /// Held so the temp file is cleaned up when the runner is dropped.
     _temp_prompt_file: NamedTempFile,
     client: Arc<dyn HarnessSupportClient>,
@@ -176,26 +234,22 @@ impl CodexHarnessRunner {
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<CodexResumeInfo>,
     ) -> Result<Self, AgentDriverError> {
-        let temp_file = write_temp_file("oz_prompt_", prompt)?;
+        let temp_file = write_temp_file("oz_prompt_", prompt, ".txt")?;
         let prompt_path = temp_file.path().display().to_string();
 
         let (session_id, preexisting_conversation_id, transcript_path) = match resume {
             Some(CodexResumeInfo {
                 conversation_id,
                 session_id,
-                envelope,
+                mut envelope,
             }) => {
-                let sessions_root = codex_sessions_root().map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to resolve codex sessions root"),
-                    )
-                })?;
-                let path = write_envelope(&envelope, &sessions_root).map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to rehydrate codex transcript"),
-                    )
-                })?;
-                (Some(session_id), Some(conversation_id), Some(path))
+                let continuation = rehydrate_codex_transcript(&mut envelope, _working_dir)
+                    .map_err(AgentDriverError::ConfigBuildFailed)?;
+                (
+                    Some(session_id),
+                    Some(conversation_id),
+                    Some(continuation.transcript_path),
+                )
             }
             None => (None, None, None),
         };
@@ -213,6 +267,7 @@ impl CodexHarnessRunner {
 
         Ok(Self {
             command,
+            cli_name: cli_command.to_string(),
             _temp_prompt_file: temp_file,
             client,
             terminal_driver,
@@ -245,9 +300,14 @@ impl CodexHarnessRunner {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl HarnessRunner for CodexHarnessRunner {
+    fn harness_name(&self) -> &str {
+        &self.cli_name
+    }
+
     async fn start(
         &self,
         foreground: &ModelSpawner<AgentDriver>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
         // Resume runs reuse the prior server conversation id; fresh runs mint a new one.
         let conversation_id = match self.preexisting_conversation_id {
@@ -256,14 +316,17 @@ impl HarnessRunner for CodexHarnessRunner {
                 id
             }
             None => {
-                let id = self
-                    .client
-                    .create_external_conversation(CODEX_CLI_FORMAT)
-                    .await
-                    .map_err(|e| {
-                        log::error!("Failed to create external conversation: {e}");
-                        AgentDriverError::ConfigBuildFailed(e)
-                    })?;
+                let id = setup_events
+                    .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
+                        self.client
+                            .create_external_conversation(CODEX_CLI_FORMAT)
+                            .await
+                            .map_err(|e| {
+                                log::error!("Failed to create external conversation: {e}");
+                                AgentDriverError::ConfigBuildFailed(e)
+                            })
+                    })
+                    .await?;
                 log::info!("Created external conversation {id}");
                 id
             }
@@ -282,6 +345,10 @@ impl HarnessRunner for CodexHarnessRunner {
             conversation_id,
             block_id: command_handle.block_id().clone(),
         };
+
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
 
         Ok(command_handle)
     }
@@ -394,7 +461,9 @@ async fn upload_transcript(
     };
     let Some(transcript_path) = transcript_path else {
         if is_final {
-            log::warn!("No codex rollout file found at final save for session {session_id}; transcript was never uploaded");
+            log::warn!(
+                "No codex rollout file found at final save for session {session_id}; transcript was never uploaded"
+            );
         } else {
             log::debug!("No codex rollout file yet for session {session_id}");
         }
@@ -420,6 +489,7 @@ async fn upload_transcript(
 }
 
 const CODEX_CONFIG_DIR: &str = ".codex";
+const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const CODEX_AGENTS_OVERRIDE_FILE_NAME: &str = "AGENTS.override.md";
 const CODEX_AUTH_FILE_NAME: &str = "auth.json";
 const CODEX_CONFIG_TOML_FILE_NAME: &str = "config.toml";
@@ -431,31 +501,60 @@ const CODEX_TRUST_LEVEL_TRUSTED: &str = "trusted";
 /// Top-level config key codex reads to override the built-in `openai` provider's base URL
 /// (codex `core/src/config/mod.rs`).
 const CODEX_OPENAI_BASE_URL_KEY: &str = "openai_base_url";
-/// US data-residency endpoint. Our OpenAI keys are issued under a US-residency project,
-/// which rejects requests to the global host with `401 incorrect_hostname`.
-/// TODO(REMOTE-1509): plumb a region-tagged auth secret instead of hardcoding the URL.
-const CODEX_OPENAI_BASE_URL: &str = "https://us.api.openai.com/v1";
-
+const CODEX_CHECK_FOR_UPDATE_ON_STARTUP_KEY: &str = "check_for_update_on_startup";
+const CODEX_MODEL_KEY: &str = "model";
+const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
+/// Target model for the `[notice.model_migrations]` table that suppresses Codex's
+/// "choose a newer model" upgrade prompt at session launch. We stamp this for any
+/// pinned model id (even when it already matches the target) so the unattended
+/// cloud run never blocks on the prompt.
+///
+/// TODO: Ideally, we would make this server-driven so we don't depend on a client
+/// release to change this.
+const CODEX_MODEL_MIGRATIONS_TARGET: &str = "gpt-5.4";
 fn prepare_codex_environment_config(
     working_dir: &Path,
     system_prompt: Option<&str>,
-    secrets: &HashMap<String, ManagedSecretValue>,
+    resolved_env_vars: &HashMap<OsString, OsString>,
+    resolved_secrets: &HashMap<String, ManagedSecretValue>,
+    resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
 ) -> Result<()> {
-    let home_dir =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
-    let codex_dir = home_dir.join(CODEX_CONFIG_DIR);
+    let codex_dir = codex_config_dir()?;
 
     if let Some(prompt) = system_prompt {
         write_codex_agents_override(&codex_dir, prompt)?;
     }
 
-    match resolve_openai_api_key(secrets) {
+    match resolve_openai_api_key(resolved_env_vars) {
         Some(api_key) => prepare_codex_auth(&codex_dir.join(CODEX_AUTH_FILE_NAME), &api_key)?,
         None => log::info!("No OPENAI_API_KEY available; skipping Codex auth.json seed"),
     }
 
-    prepare_codex_config_toml(&codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME), working_dir)?;
+    // Resolve the base URL directly from the typed OpenAI secret. This avoids
+    // leaking base_url into the child process environment and ensures we only
+    // apply it when the typed secret is the active API key source.
+    let openai_base_url = resolve_openai_base_url_from_secret(resolved_secrets, resolved_env_vars);
+
+    prepare_codex_config_toml(
+        &codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME),
+        working_dir,
+        resolved_mcp_servers,
+        third_party_harness_model_config,
+        openai_base_url.as_deref(),
+    )?;
     Ok(())
+}
+
+fn codex_config_dir() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var(CODEX_HOME_ENV) {
+        if !dir.is_empty() {
+            return Ok(PathBuf::from(dir));
+        }
+    }
+    dirs::home_dir()
+        .map(|home| home.join(CODEX_CONFIG_DIR))
+        .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
 }
 
 fn write_codex_agents_override(codex_dir: &Path, system_prompt: &str) -> Result<()> {
@@ -515,8 +614,7 @@ fn write_codex_auth_json(path: &Path, auth: &CodexAuthDotJson) -> Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write as _;
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -535,33 +633,77 @@ fn write_codex_auth_json(path: &Path, auth: &CodexAuthDotJson) -> Result<()> {
     Ok(())
 }
 
-/// Returns the OpenAI API key for Codex auth, preferring the `OPENAI_API_KEY` env
-/// var so the seeded `auth.json` matches the credential the launched Codex process
-/// will see. [`AgentDriver::new`] skips a managed `OPENAI_API_KEY` secret when the
-/// env var is already set, so we mirror that precedence here.
-fn resolve_openai_api_key(secrets: &HashMap<String, ManagedSecretValue>) -> Option<String> {
+/// Returns the OpenAI API key for Codex auth.
+///
+/// Checks the worker-injected process env first (not in the resolved map since
+/// `build_secret_env_vars` skips env vars already present in the process env),
+/// then falls back to the resolved secret env vars map.
+fn resolve_openai_api_key(resolved_env_vars: &HashMap<OsString, OsString>) -> Option<String> {
+    // Worker-injected process env wins.
     if let Ok(value) = std::env::var(OPENAI_API_KEY_ENV) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
             return Some(trimmed.to_owned());
         }
     }
-    if let Some(ManagedSecretValue::RawValue { value }) = secrets.get(OPENAI_API_KEY_ENV) {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_owned());
-        }
+    // Otherwise use the resolved value from the secrets map.
+    resolved_env_vars
+        .get(OsStr::new(OPENAI_API_KEY_ENV))
+        .and_then(|v| v.to_str())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+/// Returns the OpenAI base URL from the typed secret, if applicable.
+///
+/// The base URL is only used when the typed `OpenaiApiKey` secret is the active
+/// source of `OPENAI_API_KEY`. If a worker-injected process env already provides
+/// the API key, the typed-secret base URL is not applied (the worker controls
+/// both the key and endpoint).
+fn resolve_openai_base_url_from_secret(
+    secrets: &HashMap<String, ManagedSecretValue>,
+    resolved_env_vars: &HashMap<OsString, OsString>,
+) -> Option<String> {
+    // If the worker already injected an API key, the typed secret lost
+    // precedence — do not apply its base URL.
+    if std::env::var(OPENAI_API_KEY_ENV)
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        return None;
     }
-    None
+
+    // Only apply when the resolved env vars actually contain OPENAI_API_KEY
+    // from the typed secret (i.e. the secret was not skipped).
+    resolved_env_vars.get(OsStr::new(OPENAI_API_KEY_ENV))?;
+
+    secrets.values().find_map(|secret| match secret {
+        ManagedSecretValue::OpenaiApiKey { base_url, .. } => base_url
+            .as_ref()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
+        _ => None,
+    })
 }
 
 /// Edit `~/.codex/config.toml` via `toml_edit` to seed the harness defaults
 /// while preserving anything that might already exist there. We handle:
 /// - project trust: for a working dir and all of its git repo subdirectories,
 ///   set the projects to `trusted`.
-/// - base URL: set `openai_base_url = "<US data-residency endpoint>"` so we
-///   hit the regional host our API keys require.
-fn prepare_codex_config_toml(config_toml_path: &Path, working_dir: &Path) -> Result<()> {
+/// - base URL: when `openai_base_url` is provided (from the secret's `base_url`
+///   field), write it to config.toml. When absent, skip the key entirely so
+///   Codex uses the provider's default global endpoint.
+/// - update checks: disable Codex's startup update prompt for unattended runs.
+/// - model override: when a non-default harness model config is
+///   supplied, write the top-level `model` key so Codex pins the chosen model
+///   for new sessions.
+fn prepare_codex_config_toml(
+    config_toml_path: &Path,
+    working_dir: &Path,
+    resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
+    openai_base_url: Option<&str>,
+) -> Result<()> {
     let existing = match fs::read_to_string(config_toml_path) {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -579,7 +721,13 @@ fn prepare_codex_config_toml(config_toml_path: &Path, working_dir: &Path) -> Res
         )
     })?;
 
-    set_codex_openai_base_url(&mut doc, CODEX_OPENAI_BASE_URL);
+    // Only write openai_base_url when the secret specifies one.
+    if let Some(url) = openai_base_url {
+        set_codex_openai_base_url(&mut doc, url);
+    }
+    set_codex_check_for_update_on_startup(&mut doc, false);
+    set_codex_model(&mut doc, third_party_harness_model_config);
+    set_codex_model_reasoning_effort(&mut doc, third_party_harness_model_config);
 
     let canonical = working_dir.canonicalize().with_context(|| {
         format!(
@@ -598,6 +746,8 @@ fn prepare_codex_config_toml(config_toml_path: &Path, working_dir: &Path) -> Res
         set_codex_project_trust_level(&mut doc, &key, CODEX_TRUST_LEVEL_TRUSTED);
     }
 
+    write_codex_mcp_servers(&mut doc, resolved_mcp_servers);
+
     if let Some(parent) = config_toml_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!("Failed to create Codex config dir at {}", parent.display())
@@ -614,6 +764,70 @@ fn prepare_codex_config_toml(config_toml_path: &Path, working_dir: &Path) -> Res
 /// Set the top-level `openai_base_url` key, overwriting any existing value.
 fn set_codex_openai_base_url(doc: &mut toml_edit::DocumentMut, base_url: &str) {
     doc[CODEX_OPENAI_BASE_URL_KEY] = toml_edit::value(base_url);
+}
+
+fn set_codex_check_for_update_on_startup(doc: &mut toml_edit::DocumentMut, enabled: bool) {
+    doc[CODEX_CHECK_FOR_UPDATE_ON_STARTUP_KEY] = toml_edit::value(enabled);
+}
+
+fn set_codex_model_reasoning_effort(
+    doc: &mut toml_edit::DocumentMut,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
+) {
+    let Some(reasoning_level) = third_party_harness_model_config
+        .and_then(|config| config.reasoning_level.as_deref())
+        .filter(|level| !level.is_empty())
+    else {
+        doc.remove(CODEX_MODEL_REASONING_EFFORT_KEY);
+        return;
+    };
+    doc[CODEX_MODEL_REASONING_EFFORT_KEY] = toml_edit::value(reasoning_level);
+}
+
+fn set_codex_model(
+    doc: &mut toml_edit::DocumentMut,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
+) {
+    let Some(model_id) = third_party_harness_model_config
+        .map(|config| config.model_id.as_str())
+        .filter(|id| !id.is_empty() && *id != "default")
+    else {
+        // No model specified or "default" selected — remove any pre-existing
+        // key so Codex uses its own default.
+        doc.remove(CODEX_MODEL_KEY);
+        return;
+    };
+    doc[CODEX_MODEL_KEY] = toml_edit::value(model_id);
+
+    // Codex's TUI prompts the user to upgrade older models on session launch even when
+    // a `model` key has been pinned. Stamping a migration entry keyed on the chosen
+    // model id suppresses that prompt for the unattended cloud run. We do this
+    // unconditionally rather than enumerating a list of "old" models on the client:
+    // mapping the migration target to itself (e.g. `gpt-5.4 = "gpt-5.4"`) is a no-op
+    // for Codex, and keeping the client free of model-version knowledge means we
+    // don't have to ship a client update every time Anthropic/OpenAI ages out a model.
+    set_codex_model_migration(doc, model_id, CODEX_MODEL_MIGRATIONS_TARGET);
+}
+
+fn set_codex_model_migration(
+    doc: &mut toml_edit::DocumentMut,
+    from_model_id: &str,
+    to_model_id: &str,
+) {
+    if !doc.contains_table("notice") {
+        let mut notice_tbl = toml_edit::Table::new();
+        notice_tbl.set_implicit(true);
+        doc.insert("notice", toml_edit::Item::Table(notice_tbl));
+    }
+    let migrations_tbl = doc["notice"]
+        .as_table_mut()
+        .expect("notice table inserted above")
+        .entry("model_migrations")
+        .or_insert_with(toml_edit::table)
+        .as_table_mut()
+        .expect("model_migrations entry is a table");
+    migrations_tbl.set_implicit(false);
+    migrations_tbl[from_model_id] = toml_edit::value(to_model_id);
 }
 
 /// Return immediate subdirectories of `dir` that contain a `.git`.
@@ -653,6 +867,71 @@ fn set_codex_project_trust_level(
         .expect("project entry is a table");
     proj_tbl.set_implicit(false);
     proj_tbl["trust_level"] = toml_edit::value(trust_level);
+}
+
+/// Write resolved MCP servers into `[mcp_servers.<name>]` sections in the Codex config.
+fn write_codex_mcp_servers(
+    doc: &mut toml_edit::DocumentMut,
+    servers: &HashMap<String, JSONMCPServer>,
+) {
+    if servers.is_empty() {
+        return;
+    }
+    if !doc.contains_table("mcp_servers") {
+        let mut tbl = toml_edit::Table::new();
+        tbl.set_implicit(true);
+        doc.insert("mcp_servers", toml_edit::Item::Table(tbl));
+    }
+    let mcp_tbl = doc["mcp_servers"]
+        .as_table_mut()
+        .expect("mcp_servers table inserted above");
+
+    for (name, server) in servers {
+        let entry = mcp_tbl
+            .entry(name)
+            .or_insert_with(toml_edit::table)
+            .as_table_mut()
+            .expect("mcp_servers entry is a table");
+        entry.set_implicit(false);
+
+        match &server.transport_type {
+            JSONTransportType::CLIServer {
+                command,
+                args,
+                env,
+                working_directory,
+            } => {
+                entry["command"] = toml_edit::value(command.as_str());
+                if !args.is_empty() {
+                    let mut arr = toml_edit::Array::new();
+                    for arg in args {
+                        arr.push(arg.as_str());
+                    }
+                    entry["args"] = toml_edit::value(arr);
+                }
+                if !env.is_empty() {
+                    let mut env_tbl = toml_edit::InlineTable::new();
+                    for (k, v) in env {
+                        env_tbl.insert(k, v.as_str().into());
+                    }
+                    entry["env"] = toml_edit::value(env_tbl);
+                }
+                if let Some(cwd) = working_directory {
+                    entry["cwd"] = toml_edit::value(cwd.as_str());
+                }
+            }
+            JSONTransportType::SSEServer { url, headers } => {
+                entry["url"] = toml_edit::value(url.as_str());
+                if !headers.is_empty() {
+                    let mut hdrs_tbl = toml_edit::InlineTable::new();
+                    for (k, v) in headers {
+                        hdrs_tbl.insert(k, v.as_str().into());
+                    }
+                    entry["http_headers"] = toml_edit::value(hdrs_tbl);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,3 @@ edition = "2024"
 authors.workspace = true
 publish.workspace = true
 license.workspace = true
-
-[dependencies]
-warpui.workspace = true

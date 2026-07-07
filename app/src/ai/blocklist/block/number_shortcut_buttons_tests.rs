@@ -1,12 +1,12 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use std::{cell::RefCell, rc::Rc};
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::new_scrollable::SingleAxisConfig;
+use warpui::elements::{ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Fill};
+use warpui::platform::WindowStyle;
 use warpui::{
-    elements::{
-        new_scrollable::SingleAxisConfig, ChildView, Clipped, ClippedScrollStateHandle,
-        ConstrainedBox, Fill,
-    },
-    platform::WindowStyle,
     App, Entity, Event, Presenter, TypedActionView, View, ViewContext, ViewHandle, WindowId,
     WindowInvalidation,
 };

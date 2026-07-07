@@ -7,7 +7,6 @@ mod view;
 
 pub use data_source::SelectRewindPoint;
 pub use view::{RewindMenuEvent, RewindMenuView};
-
 use warpui::keymap::Keystroke;
 
 use crate::terminal::input::inline_menu::{

@@ -1,21 +1,17 @@
-use super::{action_log, overlay, TestSetupUtils};
-use crate::keymap::PerPlatformKeystroke;
-use crate::platform::OperatingSystem;
-use crate::{
-    event::{Event, KeyEventDetails},
-    keymap::Keystroke,
-    platform::Window,
-    r#async::Timer,
-    App, WindowId,
-};
+use std::any::Any;
+use std::backtrace::Backtrace;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
 use instant::Instant;
-use std::{
-    any::Any,
-    backtrace::Backtrace,
-    collections::{HashMap, VecDeque},
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+
+use super::{action_log, overlay, TestSetupUtils};
+use crate::event::{Event, KeyEventDetails};
+use crate::keymap::{Keystroke, PerPlatformKeystroke};
+use crate::platform::{OperatingSystem, Window};
+use crate::r#async::Timer;
+use crate::{App, WindowId};
 
 const MAX_WAKEUPS_PER_SECOND: u64 = 60;
 const THROTTLE_PERIOD: Duration = Duration::from_micros(1000 * 1000 / MAX_WAKEUPS_PER_SECOND);

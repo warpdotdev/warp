@@ -1,5 +1,6 @@
-use chrono::{DateTime, Days, Utc};
 use std::path::PathBuf;
+
+use chrono::{DateTime, Days, Utc};
 
 /// Public-facing metadata persisted in SQLite
 #[derive(Debug, Default, Clone)]

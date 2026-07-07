@@ -596,5 +596,5 @@ impl Dimensions for GridStorage {
 }
 
 #[cfg(test)]
-#[path = "grid_test.rs"]
+#[path = "grid_tests.rs"]
 mod tests;

@@ -1,8 +1,6 @@
+use std::io;
 pub use std::sync::mpsc::SendError;
-use std::{
-    io,
-    sync::{mpsc, Arc, Mutex},
-};
+use std::sync::{mpsc, Arc, Mutex};
 
 use mio::{event, Token, Waker};
 

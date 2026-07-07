@@ -6,26 +6,24 @@ use pathfinder_geometry::vector::vec2f;
 use uuid::Uuid;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::ChildView;
-use warpui::keymap::Keystroke;
-use warpui::r#async::Timer;
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, EventHandler, Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
-    },
-    fonts::Weight,
-    r#async::SpawnedFutureHandle,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, EventHandler, Flex, Hoverable, Icon, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
 };
-use warpui::{Action, ViewHandle};
-
-use crate::{appearance::Appearance, themes::theme::Fill};
+use warpui::fonts::Weight;
+use warpui::keymap::Keystroke;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
 use super::action_button::ActionButton;
+use crate::appearance::Appearance;
+use crate::themes::theme::Fill;
 
 const TOAST_WIDTH: f32 = 464.;
 const TOAST_CORNER_RADIUS: f32 = 4.;

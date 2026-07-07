@@ -1,45 +1,60 @@
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use std::collections::HashMap;
+#[cfg(feature = "local_tty")]
+use std::path::PathBuf;
 #[cfg(feature = "local_tty")]
 use std::sync::mpsc::SyncSender;
 
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::agent::Harness;
 #[cfg(feature = "local_tty")]
 use warpui::geometry::vector::Vector2F;
+#[cfg(not(target_family = "wasm"))]
+use warpui::r#async::FutureExt;
 #[cfg(feature = "local_tty")]
 use warpui::ModelHandle;
 use warpui::ViewContext;
 #[cfg(not(target_family = "wasm"))]
 use warpui::{SingletonEntity, View, ViewHandle};
 
-#[cfg(feature = "local_tty")]
-use crate::pane_group::TerminalViewResources;
-#[cfg(feature = "local_tty")]
-use crate::persistence::ModelEvent;
-#[cfg(feature = "local_tty")]
-use crate::server::server_api::ServerApiProvider;
-#[cfg(feature = "local_tty")]
-use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
-#[cfg(feature = "local_tty")]
-use crate::terminal::TerminalManager;
-
+use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
     environment::prepare_environment, terminal::TerminalDriver, WARP_DRIVE_SYNC_TIMEOUT,
 };
 #[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use crate::banner::BannerState;
+#[cfg(feature = "local_tty")]
+use crate::pane_group::TerminalViewResources;
+#[cfg(feature = "local_tty")]
+use crate::persistence::ModelEvent;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::ids::{ServerId, SyncId};
+#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
+use crate::server::server_api::ServerApiProvider;
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use crate::terminal::available_shells::AvailableShell;
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use crate::terminal::local_tty::{
+    create_terminal_view_surface, TerminalManager as LocalTtyTerminalManager,
+    TerminalViewSurfaceConfig,
+};
 #[cfg(feature = "remote_tty")]
 use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
-#[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
-#[cfg(not(target_family = "wasm"))]
-use warpui::r#async::FutureExt;
-
-use super::TerminalView;
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use crate::terminal::shared_session::IsSharedSessionCreator;
+#[cfg(feature = "local_tty")]
+use crate::terminal::TerminalManager;
 
 /// Default base Docker image used for newly created sandbox shells.
 ///
@@ -59,7 +74,7 @@ fn create_docker_sandbox_view(
     resources: TerminalViewResources,
     initial_size: Vector2F,
     model_event_sender: Option<SyncSender<ModelEvent>>,
-    #[allow(dead_code)] sbx_path: std::path::PathBuf,
+    #[allow(dead_code)] sbx_path: PathBuf,
     ctx: &mut ViewContext<TerminalView>,
 ) -> (
     ViewHandle<TerminalView>,
@@ -67,7 +82,7 @@ fn create_docker_sandbox_view(
 ) {
     cfg_if::cfg_if! {
         if #[cfg(feature = "remote_tty")] {
-            let terminal_manager = RemoteTtyTerminalManager::create_model(
+            let terminal_init = RemoteTtyTerminalManager::create_model(
                 resources,
                 initial_size,
                 model_event_sender,
@@ -75,36 +90,55 @@ fn create_docker_sandbox_view(
                 None, /* initial_input_config */
                 ctx,
             );
+            let terminal_manager = terminal_init.manager;
+            let terminal_view = terminal_init.view;
         } else if #[cfg(feature = "local_tty")] {
             let user_default_shell_unsupported_banner_model_handle =
-                ctx.add_model(|_| crate::banner::BannerState::default());
+                ctx.add_model(|_| BannerState::default());
 
-            let chosen_shell = Some(crate::terminal::available_shells::AvailableShell::new_docker_sandbox_shell(
+            let chosen_shell = Some(AvailableShell::new_docker_sandbox_shell(
                 sbx_path,
                 DEFAULT_DOCKER_SANDBOX_BASE_IMAGE.map(str::to_owned),
             ));
 
-            let terminal_manager = crate::terminal::local_tty::TerminalManager::create_model(
+            let model_event_sender_for_surface = model_event_sender.clone();
+            let window_id = ctx.window_id();
+            let terminal_init = LocalTtyTerminalManager::<TerminalView>::create_model(
                 None,
-                std::collections::HashMap::new(),
-                crate::terminal::shared_session::IsSharedSessionCreator::No,
-                resources,
+                HashMap::new(),
+                IsSharedSessionCreator::No,
                 None, /* restored_blocks */
-                None, /* conversation_restoration */
                 user_default_shell_unsupported_banner_model_handle,
                 initial_size,
                 model_event_sender,
-                ctx.window_id(),
                 chosen_shell,
-                None, /* initial_input_config */
                 ctx,
+                |surface_init, ctx| {
+                    create_terminal_view_surface(
+                        TerminalViewSurfaceConfig {
+                            resources,
+                            model_event_sender: model_event_sender_for_surface,
+                            window_id,
+                            initial_input_config: None,
+                            conversation_restoration: None,
+                            has_conversation_restoration: false,
+                            is_historical: false,
+                            should_use_live_appearance: false,
+                            has_restored_command_blocks: false,
+                        },
+                        surface_init,
+                        ctx,
+                    )
+                },
             );
+            let terminal_manager = terminal_init.manager;
+            let terminal_view = terminal_init.surface;
         } else {
             log::info!("USING MOCK TERMINAL MANAGER!!!!!");
+            use crate::terminal::MockTerminalManager;
             use crate::terminal::shell::{ShellName, ShellType};
             use crate::terminal::ShellLaunchState;
-
-            let terminal_manager = crate::terminal::MockTerminalManager::create_model(
+            let terminal_init = MockTerminalManager::create_model(
                 ShellLaunchState::ShellSpawned {
                     available_shell: None,
                     display_name: ShellName::blank(),
@@ -117,10 +151,11 @@ fn create_docker_sandbox_view(
                 ctx.window_id(),
                 ctx,
             );
+            let terminal_manager = terminal_init.manager;
+            let terminal_view = terminal_init.view;
         }
     }
 
-    let terminal_view = terminal_manager.as_ref(ctx).view();
     (terminal_view, terminal_manager)
 }
 
@@ -154,7 +189,7 @@ impl TerminalView {
     #[cfg(feature = "local_tty")]
     fn create_and_push_docker_sandbox_with_sbx(
         &self,
-        sbx_path: std::path::PathBuf,
+        sbx_path: PathBuf,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(pane_stack) = self
@@ -205,6 +240,12 @@ impl TerminalView {
         ctx: &mut ViewContext<V>,
     ) {
         let terminal_driver = TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx);
+        // Local Docker sandbox tabs are not backed by an Oz run ID, so setup event reporting is
+        // intentionally disabled for this environment preparation path.
+        let setup_events = SetupClientEventReporter::noop(
+            ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
+            ctx.background_executor().clone(),
+        );
 
         let spawner = terminal_driver.update(ctx, |_, ctx| ctx.spawner());
         let sync_future = UpdateManager::as_ref(ctx).initial_load_complete();
@@ -234,6 +275,8 @@ impl TerminalView {
                 // Look up the environment by hardcoded ID.
                 let environment = spawner
                     .spawn(|_, ctx| {
+                        use crate::cloud_object::CloudObjectLookup as _;
+
                         let server_id = ServerId::try_from("SVhg783GBFQHk1OfdPfFU9").ok()?;
                         let sync_id = SyncId::ServerId(server_id);
                         CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx)
@@ -251,6 +294,7 @@ impl TerminalView {
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
+                            setup_events,
                             ctx,
                         )
                     })

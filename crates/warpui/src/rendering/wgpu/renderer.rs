@@ -8,14 +8,14 @@ use frame::Frame;
 use pathfinder_geometry::vector::Vector2F;
 use util::with_error_scope;
 use warpui_core::platform::CapturedFrame;
-use wgpu::wgc::{device::DeviceError, present::SurfaceError};
+use wgpu::wgc::device::DeviceError;
+use wgpu::wgc::present::SurfaceError;
 
+pub use super::resources::{GetSurfaceTextureError, SurfaceConfigureError};
 use crate::r#async::block_on;
 use crate::rendering::wgpu::Resources;
 use crate::rendering::{GlyphConfig, GlyphRasterBoundsFn, RasterizeGlyphFn};
 use crate::Scene;
-
-pub use super::resources::{GetSurfaceTextureError, SurfaceConfigureError};
 
 const ENCODER_DESCRIPTOR: wgpu::CommandEncoderDescriptor = wgpu::CommandEncoderDescriptor {
     label: Some("Command encoder"),

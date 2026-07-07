@@ -1,8 +1,10 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{protocol::Message, Client, ClientError};
+use crate::protocol::Message;
+use crate::{Client, ClientError};
 
 pub(crate) type ServiceId = String;
 

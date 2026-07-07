@@ -1,8 +1,7 @@
 use std::path::Path;
 
-use crate::terminal::cli_agent::CLIAgent;
-
 use super::*;
+use crate::terminal::cli_agent::CLIAgent;
 
 fn generated_worktree_path_string(repo: &str, worktree_name: &str) -> String {
     super::super::tab_config::generated_worktree_path(Path::new(repo), worktree_name)

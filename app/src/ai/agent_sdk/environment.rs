@@ -1,28 +1,32 @@
 use std::collections::HashSet;
 
 use comfy_table::Cell;
-use inquire::{error::InquireError, Confirm, Select};
+use cynic::QueryBuilder;
+use inquire::error::InquireError;
+use inquire::{Confirm, Select};
 use serde::Serialize;
-use warp_cli::{
-    agent::OutputFormat,
-    environment::{EnvironmentCommand, ImageCommand},
-    scope::ObjectScope,
-    GlobalOptions,
+use warp_cli::agent::OutputFormat;
+use warp_cli::environment::{EnvironmentCommand, ImageCommand};
+use warp_cli::scope::ObjectScope;
+use warp_cli::GlobalOptions;
+use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
+use warp_graphql::queries::list_warp_dev_images::{
+    ListWarpDevImages, ListWarpDevImagesResult, ListWarpDevImagesVariables,
 };
+use warp_graphql::queries::user_repo_auth_status::UserRepoAuthStatusEnum;
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
-use crate::ai::agent_sdk::output::{self, TableFormat};
-
 use crate::ai::agent_sdk::driver::WARP_DRIVE_SYNC_TIMEOUT;
 use crate::ai::agent_sdk::oauth_flow::poll_oauth_until_terminal;
+use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, BaseImage, CloudAmbientAgentEnvironment,
     CloudAmbientAgentEnvironmentModel, GithubRepo,
 };
 use crate::auth::UserUid;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
-use crate::cloud_object::CloudObject;
+use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::server::cloud_objects::update_manager::{
     ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
@@ -31,12 +35,6 @@ use crate::server::server_api::ServerApiProvider;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::CloudObjectTypeAndId;
-use cynic::QueryBuilder;
-use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
-use warp_graphql::queries::list_warp_dev_images::{
-    ListWarpDevImages, ListWarpDevImagesResult, ListWarpDevImagesVariables,
-};
-use warp_graphql::queries::user_repo_auth_status::UserRepoAuthStatusEnum;
 
 const WARP_DEV_ENVIRONMENTS_REPO: &str = "https://github.com/warpdotdev/warp-dev-environments";
 
@@ -756,7 +754,7 @@ impl EnvironmentCommandRunner {
         // We should subscribe to the UpdateManager here because we want to wait
         // for our environment to be assigned a ServerId. Environments are not
         // usable without first being synced.
-        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, event, ctx| {
+        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
             if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
                 if matches!(result.operation, ObjectOperation::Create { .. })
                     && matches!(result.success_type, OperationSuccessType::Success)
@@ -1001,7 +999,7 @@ impl EnvironmentCommandRunner {
         });
 
         // Subscribe to UpdateManager to wait for the update to complete
-        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, event, ctx| {
+        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
             if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
                 if matches!(result.operation, ObjectOperation::Update)
                     && result.server_id == Some(server_id)
@@ -1087,7 +1085,7 @@ impl EnvironmentCommandRunner {
         });
 
         // Listen to the UpdateManager for a completed object deletion
-        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, event, ctx| {
+        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
             if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
                 if matches!(result.operation, ObjectOperation::Delete { .. }) {
                     match result.success_type {

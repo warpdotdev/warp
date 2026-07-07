@@ -13,7 +13,6 @@ use std::cmp::Ordering;
 
 pub use lookup::*;
 pub use registry::*;
-
 use serde::{Deserialize, Serialize};
 use warp_js::TypedJsFunctionRef;
 
@@ -227,5 +226,5 @@ impl Opt {
 }
 
 #[cfg(test)]
-#[path = "signatures_test.rs"]
+#[path = "signatures_tests.rs"]
 mod test;

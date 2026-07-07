@@ -1,5 +1,6 @@
 //! Generic model for tracking the selected item in an inline menu.
 use std::collections::HashSet;
+
 use warpui::elements::MouseStateHandle;
 use warpui::{Entity, ModelContext};
 

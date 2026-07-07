@@ -1,16 +1,15 @@
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::AIConversation;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::history_model::AIConversationMetadata;
-use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
-use crate::terminal::view::blocklist_filter;
-use crate::undo_close::UndoCloseStack;
-use crate::workspace::PaneViewLocator;
-use crate::workspace::WorkspaceRegistry;
-use chrono::TimeZone;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+
+use chrono::TimeZone;
 use warpui::{AppContext, EntityId, SingletonEntity, WindowId};
+
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
+use crate::terminal::view::blocklist_filter;
+use crate::undo_close::UndoCloseStack;
+use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
 
 /// Result from matching a conversation.
 /// terminal_view_id and window_id are optional because, when we add restored conversations,
@@ -187,7 +186,7 @@ impl ConversationNavigationData {
                     // Skip conversation transcript viewers, as they are stored elsewhere
                     // and should not be presented as regular user conversations.
                     if history_model
-                        .is_terminal_view_conversation_transcript_viewer(terminal_view_id)
+                        .is_terminal_surface_conversation_transcript_viewer(terminal_view_id)
                     {
                         continue;
                     }
@@ -200,7 +199,7 @@ impl ConversationNavigationData {
 
                     // Get all continuable conversations for this terminal view
                     for conversation in
-                        history_model.all_live_conversations_for_terminal_view(terminal_view_id)
+                        history_model.all_live_conversations_for_terminal_surface(terminal_view_id)
                     {
                         if !all_conversation_ids.contains(&conversation.id()) {
                             if conversation.should_exclude_from_navigation() {
@@ -257,7 +256,8 @@ impl ConversationNavigationData {
             .iter()
             .for_each(|(terminal_id, conversation)| {
                 if conversation.should_exclude_from_navigation()
-                    || history_model.is_terminal_view_conversation_transcript_viewer(*terminal_id)
+                    || history_model
+                        .is_terminal_surface_conversation_transcript_viewer(*terminal_id)
                     || !blocklist_filter::conversation_would_render_in_blocklist(conversation)
                 {
                     // Track the ID so the historical loop below doesn't re-add it.
@@ -288,7 +288,8 @@ impl ConversationNavigationData {
             .iter()
             .for_each(|(terminal_id, conversation)| {
                 if conversation.should_exclude_from_navigation()
-                    || history_model.is_terminal_view_conversation_transcript_viewer(*terminal_id)
+                    || history_model
+                        .is_terminal_surface_conversation_transcript_viewer(*terminal_id)
                     || !blocklist_filter::conversation_would_render_in_blocklist(conversation)
                 {
                     // Track the ID so the historical loop below doesn't re-add it.

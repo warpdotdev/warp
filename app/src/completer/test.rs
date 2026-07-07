@@ -6,16 +6,13 @@ use itertools::Itertools;
 use typed_path::TypedPathBuf;
 #[cfg(windows)]
 use typed_path::{UnixComponent, WindowsComponent, WindowsPrefix};
-use warp_completer::completer::PathCompletionContext;
-use warp_completer::completer::{CompletionContext, EngineDirEntry};
+use warp_completer::completer::{CompletionContext, EngineDirEntry, PathCompletionContext};
 use warp_completer::signatures::CommandRegistry;
 use warpui::App;
 
 use crate::completer::SessionContext;
-use crate::terminal::model::session::Session;
-use crate::terminal::model::session::{
-    command_executor::testing::TestCommandExecutor, SessionInfo,
-};
+use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+use crate::terminal::model::session::{Session, SessionInfo};
 use crate::test_util::{Stub, VirtualFS};
 
 fn test_session_context(session: Session, cwd: TypedPathBuf, app: &App) -> SessionContext {
@@ -371,4 +368,69 @@ pub fn test_session_context_lists_directory_entries_remotely_with_special_charac
     let file_names = vec![r"a.txt", r"b file.txt", r"c's.txt", r"#d&.txt"];
 
     perform_special_characters_in_path_test(Session::test_remote(), file_names);
+}
+
+#[test]
+pub fn test_session_context_refresh_directory_entries_bypasses_cache() {
+    App::test((), |app| async move {
+        VirtualFS::test(
+            "test_session_context_refresh_directory_entries_bypasses_cache",
+            |dirs, mut sandbox| {
+                sandbox.touch(vec![Stub::EmptyFile("first.txt")]);
+
+                let tests_dir = TypedPathBuf::from(dirs.tests().to_string_lossy().as_bytes());
+                let ctx = test_session_context(Session::test(), tests_dir.clone(), &app);
+
+                // Prime the shared cache with the directory's initial contents.
+                let cached = warpui::r#async::block_on(
+                    ctx.path_completion_context()
+                        .expect("Path completion context should exist with active session")
+                        .list_directory_entries(tests_dir.clone()),
+                );
+                assert_eq!(
+                    HashSet::<EngineDirEntry>::from_iter(Arc::unwrap_or_clone(cached)),
+                    HashSet::from_iter([EngineDirEntry::test_file("first.txt")]),
+                );
+
+                // Add a file on disk after the listing has already been cached.
+                sandbox.touch(vec![Stub::EmptyFile("second.txt")]);
+
+                // `list_directory_entries` keeps returning the stale cached listing.
+                let stale = warpui::r#async::block_on(
+                    ctx.path_completion_context()
+                        .expect("Path completion context should exist with active session")
+                        .list_directory_entries(tests_dir.clone()),
+                );
+                assert_eq!(
+                    HashSet::<EngineDirEntry>::from_iter(Arc::unwrap_or_clone(stale)),
+                    HashSet::from_iter([EngineDirEntry::test_file("first.txt")]),
+                );
+
+                // `refresh_directory_entries` re-reads from disk and overwrites the cached entry.
+                let refreshed =
+                    warpui::r#async::block_on(ctx.refresh_directory_entries(tests_dir.clone()));
+                assert_eq!(
+                    HashSet::<EngineDirEntry>::from_iter(Arc::unwrap_or_clone(refreshed)),
+                    HashSet::from_iter([
+                        EngineDirEntry::test_file("first.txt"),
+                        EngineDirEntry::test_file("second.txt"),
+                    ]),
+                );
+
+                // Subsequent cached reads now observe the refreshed listing.
+                let after_refresh = warpui::r#async::block_on(
+                    ctx.path_completion_context()
+                        .expect("Path completion context should exist with active session")
+                        .list_directory_entries(tests_dir),
+                );
+                assert_eq!(
+                    HashSet::<EngineDirEntry>::from_iter(Arc::unwrap_or_clone(after_refresh)),
+                    HashSet::from_iter([
+                        EngineDirEntry::test_file("first.txt"),
+                        EngineDirEntry::test_file("second.txt"),
+                    ]),
+                );
+            },
+        );
+    });
 }

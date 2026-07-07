@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+COMMON_SKILLS_REPO="warpdotdev/common-skills"
+COMMON_SKILLS_REF="${WARP_COMMON_SKILLS_REF:-main}"
+RAW_BASE_URL="${WARP_COMMON_SKILLS_RAW_BASE_URL:-https://raw.githubusercontent.com/${COMMON_SKILLS_REPO}/${COMMON_SKILLS_REF}/scripts}"
+RESOLVER_NAME="resolve_common_skills"
+
+execute_resolver_from_dir() {
+  local script_path="${WARP_COMMON_SKILLS_SCRIPTS_DIR%/}/${RESOLVER_NAME}"
+
+  if [[ -x "${script_path}" ]]; then
+    exec "${script_path}" "$@"
+  fi
+
+  if [[ -f "${script_path}" ]]; then
+    exec bash "${script_path}" "$@"
+  fi
+
+  echo "error: could not execute ${RESOLVER_NAME} from WARP_COMMON_SKILLS_SCRIPTS_DIR=${WARP_COMMON_SKILLS_SCRIPTS_DIR}" >&2
+  exit 1
+}
+
+execute_resolver_from_remote() {
+  local raw_url="${RAW_BASE_URL%/}/${RESOLVER_NAME}"
+  local temp_script=""
+  local status=0
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "error: curl is required to fetch ${raw_url}" >&2
+    return 1
+  fi
+
+  temp_script="$(mktemp "${TMPDIR:-/tmp}/common-skills-resolver.XXXXXX")"
+  if curl -fsSL "${raw_url}" -o "${temp_script}"; then
+    :
+  else
+    status=$?
+    rm -f "${temp_script}"
+    return "${status}"
+  fi
+
+  if bash "${temp_script}" "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -f "${temp_script}"
+  return "${status}"
+}
+
+if [[ -n "${WARP_COMMON_SKILLS_SCRIPTS_DIR:-}" ]]; then
+  execute_resolver_from_dir "$@"
+fi
+
+execute_resolver_from_remote "$@"

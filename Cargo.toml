@@ -36,6 +36,10 @@ asset_macro = { path = "crates/asset_macro" }
 channel_versions = { path = "crates/channel_versions", default-features = false }
 command = { path = "crates/command" }
 command-signatures-v2 = { path = "crates/command-signatures-v2" }
+cloud_objects = { path = "crates/cloud_objects" }
+cloud_object_client = { path = "crates/cloud_object_client" }
+cloud_object_persistence = { path = "crates/cloud_object_persistence" }
+cloud_object_models = { path = "crates/cloud_object_models" }
 computer_use = { path = "crates/computer_use" }
 field_mask = { path = "crates/field_mask" }
 firebase = { path = "crates/firebase" }
@@ -46,15 +50,19 @@ http_server = { path = "crates/http_server" }
 input_classifier = { path = "crates/input_classifier" }
 integration = { path = "crates/integration" }
 ipc = { path = "crates/ipc" }
+ipynb_parser = { path = "crates/ipynb_parser" }
 jsonrpc = { path = "crates/jsonrpc" }
 languages = { path = "crates/languages" }
+local_control = { path = "crates/local_control" }
 lsp = { path = "crates/lsp" }
 markdown_parser = { path = "crates/markdown_parser" }
+mcp = { path = "crates/mcp" }
 natural_language_detection = { path = "crates/natural_language_detection" }
 node_runtime = { path = "crates/node_runtime" }
 onboarding = { path = "crates/onboarding" }
 persistence = { path = "crates/persistence" }
 prevent_sleep = { path = "crates/prevent_sleep" }
+remote_server = { path = "crates/remote_server" }
 repo_metadata = { path = "crates/repo_metadata" }
 settings = { path = "crates/settings" }
 settings_value = { path = "crates/settings_value", default-features = false }
@@ -68,12 +76,13 @@ vim = { path = "crates/vim" }
 virtual-fs = { path = "crates/virtual_fs" }
 voice_input = { path = "crates/voice_input" }
 warp = { path = "app" }
+warp_assets = { path = "crates/warp_assets" }
+warp_channel_config = { path = "crates/warp_channel_config" }
 warp_cli = { path = "crates/warp_cli" }
 warp_completer = { path = "crates/warp_completer" }
 warp_core = { path = "crates/warp_core" }
 warp_editor = { path = "crates/editor" }
 warp_features = { path = "crates/warp_features" }
-remote_server = { path = "crates/remote_server" }
 warp_files = { path = "crates/warp_files" }
 warp_graphql = { path = "crates/graphql" }
 warp_graphql_schema = { path = "crates/warp_graphql_schema" }
@@ -81,7 +90,10 @@ warp_isolation_platform = { path = "crates/isolation_platform" }
 warp_js = { path = "crates/warp_js" }
 warp_logging = { path = "crates/warp_logging" }
 warp_managed_secrets = { path = "crates/managed_secrets" }
+warp_multi_agent_client = { path = "crates/warp_multi_agent_client" }
 warp_ripgrep = { path = "crates/warp_ripgrep" }
+warp_search_core = { path = "crates/warp_search_core" }
+warp_server_auth = { path = "crates/warp_server_auth" }
 warp_server_client = { path = "crates/warp_server_client" }
 warp_terminal = { path = "crates/warp_terminal" }
 warp_util = { path = "crates/warp_util" }
@@ -115,6 +127,7 @@ bitflags = { version = "2.4.0", features = ["serde"] }
 bitflags-serde-legacy = "0.1.1"
 block = "0.1.6"
 blocking = "1.6.2"
+bounded-vec-deque = "0.1"
 bytemuck = { version = "1.13.1" }
 bytes = { version = "1.11.1", features = ["serde"] }
 command-corrections = { git = "https://github.com/warpdotdev/command-corrections.git", rev = "eae08c8c51d9bc9741fcb17eef2c21f696aebbeb" }
@@ -131,11 +144,12 @@ cynic = { version = "3" }
 cynic-codegen = { version = "3", features = ["rkyv"] }
 dashmap = "6.1.0"
 derive_more = "0.99.17"
-diesel = { version = "2.3.4", default-features = false }
+diesel = { version = "2.3.8", default-features = false }
 directories = "6.0"
 dunce = "1.0.1"
 enum-iterator = "1.1.3"
 env_logger = "0.10.0"
+event-listener = "5.4.0"
 float-cmp = "0.9.0"
 font-kit = { git = "https://github.com/warpdotdev/font-kit", rev = "a04b225ecb639bb850f21d05212cfdc7465000f3", default-features = false, features = [
   "source",
@@ -165,6 +179,7 @@ image = { version = "0.25.9", default-features = false, features = [
   "webp",
 ] }
 instant = { version = "0.1.12", features = ["wasm-bindgen"] }
+iso8601-duration = { version = "0.2.0", features = ["chrono", "serde"] }
 itertools = "0.14.0"
 jaq-json = { version = "2.0", features = ["serde"] }
 # Disabling the default `formats` feature is intended to avoid pulling in
@@ -178,27 +193,38 @@ lazy_static = "1.4.0"
 libc = "0.2.81"
 line-ending = "1.4.0"
 log = { version = "0.4", features = ["serde", "std"] }
-mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev = "f7233f69965c59760fad98d684c786569814d821" }
+mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev = "8d3f789c2eb49335d7bf247a06bb649f59b6d4ed" }
 mime_guess = "2.0"
 minimp4 = "0.1.2"
 nix = { version = "0.26.4", default-features = false, features = ["signal"] }
-notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "f3afcda3058941e17e09689afea40e2a2db057e0" }
+notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "91b719849bc04ef251bcb2cc61076b099204e970" }
 nom = "7.1.1"
 num-traits = "0.2"
-# We disable default features as the "rustls-tls" feature enables the reqwest
-# feature of the same name, which itself enables the "rustls-tls-webpki-roots"
-# feature, whereas we want to use native roots instead.
-oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest"] }
+oauth2 = { version = "5.0.0", default-features = false }
+opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"] }
+opentelemetry-http = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
+  "gzip-http",
+  "http-proto",
+  "trace",
+  "zstd-http",
+] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["trace"] }
 openh264 = "0.8"
 static_assertions = "1.1.0"
 url = "2.5.4"
 urlocator = "0.1.4"
+mockall = "0.13.1"
 objc = "0.2"
 objc2 = "0.6.3"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSScreen", "objc2-core-foundation"] }
+objc2-av-foundation = { version = "0.3.2", default-features = false }
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std"] }
+objc2-metal = { version = "0.3.2", default-features = false }
+objc2-quartz-core = { version = "0.3.2", default-features = false }
+dispatch2 = { version = "0.3.0", default-features = false, features = ["std", "block2"] }
 once_cell = "1.20.2"
 ordered-float = { version = "3.0.0", features = ["serde"] }
 parking_lot = "0.12.1"
@@ -210,27 +236,26 @@ prost = "0.14.3"
 prost-build = "0.14.3"
 prost-reflect = "0.16.3"
 prost-types = "0.14.3"
+qrcode = { version = "0.14.1", default-features = false }
 rand = "0.8.6"
 rangemap = "1.3.0"
-reqwest = { version = "0.12.28", default-features = false, features = [
+reqwest = { version = "0.13", features = [
   "blocking",
   "brotli",
-  "charset",
   "gzip",
-  "http2",
+  "form",
   "json",
-  "macos-system-configuration",
-  "rustls-tls-native-roots-no-provider",
+  "multipart",
+  "query",
   "stream",
-  "system-proxy",
 ] }
-reqwest-eventsource = "0.6.0"
+reqwest-eventsource = { package = "aha-reqwest-eventsource", version = "0.1" }
 resvg = "0.47.0"
 rust-embed = { version = "8.7.0", features = ["include-exclude"] }
 rustc-hash = "2.1.1"
 rustls = "0.23.39"
 schemars = { version = "1", features = ["chrono04"] }
-sentry = { version = "0.41.0", default-features = false, features = [
+sentry = { version = "0.47.0", default-features = false, features = [
   "anyhow",
   "backtrace",
   "contexts",
@@ -240,7 +265,7 @@ sentry = { version = "0.41.0", default-features = false, features = [
   "reqwest",
   "rustls",
 ] }
-sentry-log = "0.41.0"
+sentry-log = "0.47.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_bytes = "0.11"
 serde-bytes-repr = "0.3"
@@ -248,7 +273,7 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 serde_urlencoded = "0.7"
 serde_with = "2.0.1"
 serde_yaml = "0.8"
-session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "3a12b871dfd1019a66057e4d9b7d5c812b73ee8c" }
+session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "b30fdd06379a3d073b398eabd106abed5b443aae" }
 similar = { version = "2.7", features = ["inline"] }
 simplelog = "0.12.2"
 smallvec = "1.6.1"
@@ -264,6 +289,12 @@ toml_edit = "0.25.5"
 tower = "0.5.2"
 tower-http = "0.6.6"
 tracing = "0.1.40"
+tracing-futures = "0.2.5"
+tracing-opentelemetry = { version = "0.33.0", default-features = false }
+tracing-subscriber = { version = "0.3.22", default-features = false, features = [
+  "registry",
+  "std",
+] }
 arborium = { version = "2", default-features = false, features = [
   "lang-rust",
   "lang-go",
@@ -280,8 +311,10 @@ arborium = { version = "2", default-features = false, features = [
   "lang-css",
   "lang-c",
   "lang-json",
+  "lang-jq",
   "lang-hcl",
   "lang-lua",
+  "lang-nix",
   "lang-ruby",
   "lang-php",
   "lang-toml",
@@ -296,7 +329,9 @@ arborium = { version = "2", default-features = false, features = [
   "lang-xml",
   "lang-vue",
   "lang-dockerfile",
+  "lang-markdown",
 ] }
+unicode-general-category = "1.1.0"
 unicode-width = "0.1.12"
 uuid = { version = "1.1.2", features = ["v4", "serde", "js"] }
 vec1 = { version = "1.8.0", features = ["serde"] }
@@ -304,7 +339,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "aa2f9cde164a5b48ac01087d417d1188771f9b6d" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "4de32f256901e34905817e5d88081130a54b6384" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -348,8 +383,8 @@ dirs = "6.0.0"
 rayon = "1.10.0"
 sha2 = "0.10"
 shellexpand = "3.1.1"
-warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "00a032b8ea0ee5711e2077e39a92dc9ca2051cd3", default-features = false }
-winit = { git = "https://github.com/warpdotdev/winit.git", rev = "7ef01853ae3fe952e6014080a88dc4352662dfb1" }
+warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "a937ae35dfe20eaed030664ad52b36657390b162", default-features = false }
+winit = { git = "https://github.com/warpdotdev/winit.git", rev = "a4e0ecb5f9626ccac9445a73dc28354b52423abc" }
 x11rb = "0.13.0"
 mockito = "1.7.0"
 sysinfo = { version = "0.37.0", default-features = false, features = [
@@ -376,7 +411,7 @@ typed-path = "0.10.0"
 streaming-iterator = "0.1.0"
 derivative = "2.2.0"
 parquet = { version = "55.0.0", features = ["arrow"] }
-rmcp = { git = "https://github.com/warpdotdev/rmcp.git", rev = "c0f65dc441af7d714b9c453ac5e7ef641451abe3" }
+rmcp = { version = "1.6" }
 
 [profile.release]
 # Use line-tables-only (debug = 1) rather than full debuginfo (debug = 2 /
@@ -402,6 +437,8 @@ debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
 [profile.dev.package]
+# Improve the performance of core terminal logic.
+warp_terminal.opt-level = 3
 # Minimize the runtime overhead of CPU profiling at the cost of a small
 # increase in compile time for this crate.
 backtrace.opt-level = 3
@@ -505,9 +542,9 @@ objc = { git = "https://github.com/warpdotdev/rust-objc.git", rev = "5b656827fa9
 pathfinder_simd = { git = "https://github.com/warpdotdev/pathfinder.git", rev = "34128a129ca6aee168fbc5060a4f21b4f7e486a9" }
 yaml-rust = { git = "https://github.com/warpdotdev/yaml-rust.git", rev = "51684719d0102ca85ff4b21cec39877a0c669e19" }
 
-tink-core = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/main" }
-tink-proto = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/main" }
-tink-hybrid = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/main" }
+tink-core = { git = "https://github.com/warpdotdev/tink-rust", rev = "54b9ac9af93b0c08b446a7bc0582836c9403a71b" }
+tink-proto = { git = "https://github.com/warpdotdev/tink-rust", rev = "54b9ac9af93b0c08b446a7bc0582836c9403a71b" }
+tink-hybrid = { git = "https://github.com/warpdotdev/tink-rust", rev = "54b9ac9af93b0c08b446a7bc0582836c9403a71b" }
 
 tikv-jemallocator = { git = "https://github.com/warpdotdev/jemallocator.git", rev = "2ee30bfdf7059223b54810e4ea6c666f0a379e0b" }
 tikv-jemalloc-sys = { git = "https://github.com/warpdotdev/jemallocator.git", rev = "2ee30bfdf7059223b54810e4ea6c666f0a379e0b" }
@@ -515,3 +552,7 @@ tikv-jemalloc-sys = { git = "https://github.com/warpdotdev/jemallocator.git", re
 [patch."https://github.com/warpdotdev/warp-proto-apis.git"]
 # Uncomment for local development of warp-proto-apis
 # warp_multi_agent_api = { path = "../warp-proto-apis/apis/multi_agent/v1/gen/rust" }
+
+[patch."https://github.com/warpdotdev/session-sharing-protocol.git"]
+# Uncomment for local development of session-sharing-protocol
+# session-sharing-protocol = { path = "../session-sharing-protocol" }

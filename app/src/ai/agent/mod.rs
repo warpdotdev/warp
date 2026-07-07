@@ -12,50 +12,48 @@ mod task_store;
 pub(super) mod telemetry;
 pub(super) mod util;
 
-// Re-export types that were moved to the ai crate.
-pub use ai::agent::{action::*, action_result::*, AIAgentCitation, FileLocations};
-use warp_core::features::FeatureFlag;
-
-#[cfg(test)]
-mod suggestion_test;
-use crate::ai::block_context::BlockContext;
-use crate::ai::blocklist::block::view_impl::output::are_all_text_sections_empty;
-use crate::ai::skills::SkillDescriptor;
-use crate::code::editor_management::CodeSource;
-use crate::code_review::comments::{
-    AttachedReviewComment as CodeReviewComment, ReviewCommentBatch,
-};
-use crate::search::slash_command_menu::static_commands::commands;
-use crate::server::server_api::AIApiError;
-use ai::skills::ParsedSkill;
-use chrono::{DateTime, Local, TimeDelta};
-use comment::ReviewComment;
-use task::TaskId;
-pub use telemetry::AIIdentifiers;
-
-use warp_editor::render::model::LineCount;
-
-use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::ops::{AddAssign, Deref, DerefMut, Range};
 use std::sync::Arc;
 use std::time::Duration;
+
+// Re-export types that were moved to the ai crate.
+pub use ai::agent::action::*;
+pub use ai::agent::action_result::*;
+use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+pub use ai::agent::{AIAgentCitation, FileLocations};
+use ai::skills::ParsedSkill;
+use chrono::{DateTime, Local, TimeDelta};
+use comment::ReviewComment;
+use derivative::Derivative;
+use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use session_sharing_protocol::common::ParticipantId;
+use task::TaskId;
+pub use telemetry::AIIdentifiers;
 use uuid::Uuid;
+use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+use super::llms::LLMId;
+use crate::ai::block_context::BlockContext;
+use crate::ai::blocklist::block::view_impl::output::are_all_text_sections_empty;
+use crate::ai::skills::SkillDescriptor;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::code::editor_management::CodeSource;
+use crate::code_review::comments::{
+    AttachedReviewComment as CodeReviewComment, ReviewCommentBatch,
+};
+use crate::search::slash_command_menu::static_commands::commands;
+use crate::server::server_api::{AIApiError, DeserializationError};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
 use crate::TelemetryEvent;
-use derivative::Derivative;
-use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
-use serde::{Deserialize, Serialize};
-use session_sharing_protocol::common::ParticipantId;
-
-use super::llms::LLMId;
 
 /// A server supplied ID for a specific AI generated output.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -84,6 +82,8 @@ impl ServerOutputId {
 pub enum CancellationReason {
     /// The user explicitly cancelled without providing a follow-up.
     ManuallyCancelled,
+    /// Warp automatically cancelled the local run so it could continue in Cloud Mode.
+    AutomaticCloudHandoff,
 
     /// The user submitted a follow-up query during streaming which implicitly cancelled the current one.
     FollowUpSubmitted {
@@ -99,21 +99,64 @@ pub enum CancellationReason {
     // The user deleted the conversation while it was in progress.
     Deleted,
 
-    /// The long-running command completed while the agent was still streaming.
+    /// The long-running command completed while the agent was still streaming a response started via inline agent view.
     /// This should be treated as a successful completion, not a cancellation.
-    OptimisticCLISubagentCompletion,
+    /// Note this is only used for inline agent view (user starting an agent to monitor an already running command),
+    /// not when CLI subagent monitors a requested command.
+    CommandFinishedDuringInlineAgentView,
+
+    /// The user manually took control of a long-running command away from the agent.
+    /// The agent conversation is still in progress — it will resume after the command
+    /// finishes or once the user hands control back. The stream is cancelled only to
+    /// stop the CLI subagent monitoring loop, not to end the conversation.
+    CLISubagentUserTakeover,
+
+    /// An agent-issued command caused the shell process to exit (e.g. it ran
+    /// `exit`, or ran a failing command after enabling `set -e`). The in-flight
+    /// stream/actions are cancelled to stop work, but the conversation is
+    /// finalized as a terminal `Error` (with a shell-exit message) by the
+    /// controller rather than reported as a user cancellation.
+    AgentExitedShell,
+}
+
+/// How a [`CancellationReason`] maps to the conversation's resulting status.
+/// This is the single source of truth consumed by the stream- and
+/// action-cancellation machinery; see [`CancellationReason::conversation_outcome`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancellationOutcome {
+    /// Leave the conversation `InProgress`; it will continue on its own (a
+    /// follow-up request or a resumed long-running command) without further user
+    /// input.
+    KeepInProgress,
+    /// Finalize the conversation as a successful completion (`Success`).
+    Succeeded,
+    /// Finalize the conversation as a user cancellation (`Cancelled`).
+    Cancelled,
+    /// Terminal, but a dedicated path (not the cancellation machinery) writes the
+    /// status — the cancellation is only a stop signal and must not stamp a status.
+    /// Currently used for shell exit, which is finalized as `Error` by
+    /// `fail_conversation_due_to_shell_exit`. Unlike `KeepInProgress`, the
+    /// conversation is ending; only the status write is suppressed.
+    FinalizedExternally,
 }
 
 impl Display for CancellationReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CancellationReason::ManuallyCancelled => write!(f, "manual cancellation"),
+            CancellationReason::AutomaticCloudHandoff => write!(f, "automatic cloud handoff"),
             CancellationReason::FollowUpSubmitted { .. } => write!(f, "follow-up submission"),
             CancellationReason::UserCommandExecuted => write!(f, "user command execution"),
             CancellationReason::Reverted => write!(f, "revert"),
             CancellationReason::Deleted => write!(f, "deleted"),
-            CancellationReason::OptimisticCLISubagentCompletion => {
+            CancellationReason::CommandFinishedDuringInlineAgentView => {
                 write!(f, "LRC command completed")
+            }
+            CancellationReason::CLISubagentUserTakeover => {
+                write!(f, "CLI subagent user takeover")
+            }
+            CancellationReason::AgentExitedShell => {
+                write!(f, "agent command exited the shell")
             }
         }
     }
@@ -139,8 +182,36 @@ impl CancellationReason {
         matches!(self, CancellationReason::Reverted)
     }
 
-    pub fn is_lrc_command_completed(&self) -> bool {
-        matches!(self, CancellationReason::OptimisticCLISubagentCompletion)
+    /// How a cancellation reason maps to the
+    /// conversation's resulting status. Every site that finalizes a cancelled
+    /// stream or action consults this instead of re-deriving the disposition,
+    /// so the reason -> status mapping lives in one exhaustive place.
+    /// Note that sometimes the action result is treated as authoritative for determining
+    /// conversation status even when there is a cancellation reason (taking priority over this)
+    pub fn conversation_outcome(&self) -> CancellationOutcome {
+        match self {
+            // The conversation continues without further user input (a follow-up
+            // request or a resumed long-running command drives it forward), so
+            // its status must stay InProgress.
+            CancellationReason::FollowUpSubmitted {
+                is_for_same_conversation: true,
+            }
+            | CancellationReason::CLISubagentUserTakeover => CancellationOutcome::KeepInProgress,
+            // A long-running command finishing (optimistically) or a revert are
+            // successful completions rather than cancellations.
+            CancellationReason::CommandFinishedDuringInlineAgentView
+            | CancellationReason::Reverted => CancellationOutcome::Succeeded,
+            // The shell died under the agent; a dedicated path finalizes this as a
+            // terminal `Error`, so the cancellation machinery must not stamp a status.
+            CancellationReason::AgentExitedShell => CancellationOutcome::FinalizedExternally,
+            CancellationReason::ManuallyCancelled
+            | CancellationReason::AutomaticCloudHandoff
+            | CancellationReason::UserCommandExecuted
+            | CancellationReason::Deleted
+            | CancellationReason::FollowUpSubmitted {
+                is_for_same_conversation: false,
+            } => CancellationOutcome::Cancelled,
+        }
     }
 }
 
@@ -401,6 +472,9 @@ pub struct OutputModelInfo {
     pub model_id: LLMId,
     pub display_name: String,
     pub is_fallback: bool,
+    /// When the provider-side prompt cache for this request is expected to
+    /// expire. `None` means unknown / no cache-expiry info.
+    pub prompt_cache_expires_at: Option<DateTime<Local>>,
 }
 
 impl Display for AIAgentOutput {
@@ -615,9 +689,11 @@ impl AIAgentOutput {
 }
 
 /// Represents user visible errors.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub enum RenderableAIError {
-    QuotaLimit,
+    QuotaLimit {
+        user_display_message: Option<String>,
+    },
     ServerOverloaded,
     InternalWarpError,
     ContextWindowExceeded(String),
@@ -628,16 +704,59 @@ pub enum RenderableAIError {
     AwsBedrockCredentialsExpiredOrInvalid {
         model_name: String,
     },
+    /// A transient network failure (lost connection or truncated response stream). Carries its
+    /// own complete user-facing copy; `kind` preserves the structured cause (including the raw
+    /// API error) so user reports can disambiguate the different causes behind the shared message.
+    TransientNetworkError {
+        kind: TransientNetworkErrorKind,
+        will_attempt_resume: bool,
+        /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
+        /// connectivity before attempting the resume.
+        waiting_for_network: bool,
+    },
     Other {
         error_message: String,
         will_attempt_resume: bool,
         /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
         /// connectivity before attempting the resume.
         waiting_for_network: bool,
+        /// True when the error originates from a user-side issue (e.g., model not allowed,
+        /// blocked due to fraud, plan restriction). Maps the task to FAILED state instead of ERROR.
+        is_user_error: bool,
     },
+    /// An agent-issued command caused the shell process to exit, so the run
+    /// cannot continue. Surfaced as a terminal failure (FAILED) rather than a
+    /// user cancellation.
+    AgentExitedShell,
 }
 
 impl RenderableAIError {
+    const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
+        "Warp lost connection while receiving the agent response. This is usually temporary.";
+    /// User-facing message shown when an agent-issued command exits the shell.
+    pub const AGENT_EXITED_SHELL_MESSAGE: &'static str =
+        "The shell exited while the agent was running a command, so the run could not continue. Ensure the agent is not asked to run commands or source scripts that can exit the shell.";
+    /// Creates a transient network error. `kind` is the structured cause (including the raw API
+    /// error where one exists), preserved so user reports can disambiguate the different causes
+    /// behind the shared user-facing copy.
+    pub fn transient_network_error(
+        will_attempt_resume: bool,
+        waiting_for_network: bool,
+        kind: TransientNetworkErrorKind,
+    ) -> Self {
+        Self::TransientNetworkError {
+            kind,
+            will_attempt_resume,
+            waiting_for_network,
+        }
+    }
+
+    fn is_transient_network_transport_error(error: &reqwest::Error) -> bool {
+        // If reqwest has an HTTP status, the server responded. Preserve the existing generic
+        // rendering for those failures rather than calling them lost connections.
+        error.status().is_none()
+    }
+
     pub fn is_invalid_api_key(&self) -> bool {
         matches!(self, Self::InvalidApiKey { .. })
     }
@@ -653,20 +772,99 @@ impl RenderableAIError {
             Self::Other {
                 will_attempt_resume: true,
                 ..
+            } | Self::TransientNetworkError {
+                will_attempt_resume: true,
+                ..
             }
         )
     }
+
+    /// Whether the failed-output UI should be suppressed while an automatic resume is in
+    /// flight. Release builds stay quiet so transient blips that recover on their own
+    /// don't surface an alarming error; dogfood builds (Local/Dev) keep the old, more
+    /// aggressive behavior so developers still see every transport failure.
+    pub fn should_suppress_during_recovery(&self) -> bool {
+        self.will_attempt_resume() && !ChannelState::channel().is_dogfood()
+    }
+
+    /// Constructs a generic [`RenderableAIError::Other`] from a message.
+    /// `is_user_error` selects the task classification (true → FAILED, false →
+    /// ERROR). The resume/network flags are false: this is for terminal,
+    /// out-of-band errors that are not auto-resumed.
+    pub fn other(error_message: impl Into<String>, is_user_error: bool) -> Self {
+        Self::Other {
+            error_message: error_message.into(),
+            will_attempt_resume: false,
+            waiting_for_network: false,
+            is_user_error,
+        }
+    }
 }
 
-impl From<&AIApiError> for RenderableAIError {
-    fn from(value: &AIApiError) -> Self {
-        match value {
-            AIApiError::QuotaLimit => Self::QuotaLimit,
+/// The cause behind a [`RenderableAIError::TransientNetworkError`]. Kept structured (rather than
+/// collapsed to a free-form string) so user reports preserve the raw error; rendered to text only
+/// at display time.
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum TransientNetworkErrorKind {
+    /// A lost connection or truncated response stream — the raw underlying API error. Rendered via
+    /// `Debug` so reports preserve the full structured error rather than its terse `Display`.
+    #[error("{0:?}")]
+    Api(Arc<AIApiError>),
+    /// The response stream completed with an unfinished exchange and no error event.
+    #[error("stream completed with an unfinished exchange and no error event")]
+    UnfinishedExchange,
+    /// The conversation was left in a transient-error state but the last exchange carried no
+    /// structured error to surface.
+    #[error("no structured error on the last exchange")]
+    MissingExchangeError,
+}
+
+impl From<&Arc<AIApiError>> for RenderableAIError {
+    fn from(value: &Arc<AIApiError>) -> Self {
+        // Non-retryable 4xx errors (403 fraud block, 400 model/plan restriction, etc.)
+        // are user-originating — map them to a user error so the task reaches FAILED
+        // state rather than ERROR state.
+        let is_user_error = !value.is_recoverable();
+        match value.as_ref() {
+            AIApiError::QuotaLimit {
+                user_display_message,
+            } => Self::QuotaLimit {
+                user_display_message: user_display_message.clone(),
+            },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
-            _ => Self::Other {
+            AIApiError::Transport(error)
+            | AIApiError::Deserialization(DeserializationError::Transport(error)) => {
+                // A transport error with no HTTP status is a lost-connection failure; one that
+                // carries a status means the server responded, so it gets generic rendering.
+                if Self::is_transient_network_transport_error(error) {
+                    Self::transient_network_error(
+                        false,
+                        false,
+                        TransientNetworkErrorKind::Api(value.clone()),
+                    )
+                } else {
+                    Self::Other {
+                        error_message: format!("Request failed with error: {value:?}"),
+                        will_attempt_resume: false,
+                        waiting_for_network: false,
+                        is_user_error,
+                    }
+                }
+            }
+            AIApiError::UnexpectedEof => Self::transient_network_error(
+                false,
+                false,
+                TransientNetworkErrorKind::Api(value.clone()),
+            ),
+            AIApiError::Deserialization(DeserializationError::Json(_))
+            | AIApiError::NoContextFound
+            | AIApiError::ErrorStatus(_, _)
+            | AIApiError::Other(_)
+            | AIApiError::Stream { .. } => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
                 waiting_for_network: false,
+                is_user_error,
             },
         }
     }
@@ -675,7 +873,15 @@ impl From<&AIApiError> for RenderableAIError {
 impl Display for RenderableAIError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::QuotaLimit => write!(f, "Quota limit reached."),
+            Self::QuotaLimit {
+                user_display_message,
+            } => {
+                if let Some(message) = user_display_message {
+                    write!(f, "{message}")
+                } else {
+                    write!(f, "Quota limit reached.")
+                }
+            }
             Self::ServerOverloaded => {
                 write!(f, "Warp is currently overloaded. Please try again later.")
             }
@@ -692,7 +898,15 @@ impl Display for RenderableAIError {
                     "AWS Bedrock credentials expired or invalid for {model_name}"
                 )
             }
+            Self::TransientNetworkError { kind, .. } => {
+                write!(
+                    f,
+                    "{}\n\nDebug info: {kind}",
+                    Self::TRANSIENT_NETWORK_ERROR_MESSAGE
+                )
+            }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
+            Self::AgentExitedShell => write!(f, "{}", Self::AGENT_EXITED_SHELL_MESSAGE),
         }
     }
 }
@@ -739,6 +953,7 @@ impl ProgrammingLanguage {
                 "css" => Some("css"),
                 "c" => Some("c"),
                 "json" => Some("json"),
+                "jq" => Some("jq"),
                 "hcl" | "terraform" | "tf" => Some("hcl"),
                 "lua" => Some("lua"),
                 "ruby" | "rb" => Some("rb"),
@@ -755,6 +970,7 @@ impl ProgrammingLanguage {
                 "xml" => Some("xml"),
                 "vue" => Some("vue"),
                 "dockerfile" | "docker" | "containerfile" => Some("dockerfile"),
+                "markdown" | "md" => Some("md"),
                 _ => None,
             },
             Self::Shell(ShellType::PowerShell) => Some("ps1"),
@@ -1520,9 +1736,12 @@ pub enum SubagentType {
     Summarization,
     ConversationSearch {
         query: Option<String>,
-        /// The ID of the conversation being searched. None when searching the
-        /// current conversation.
+        /// Search targets are mutually exclusive; at most one of `conversation_id` or
+        /// `agent_run_id` should be populated for a single conversation search subagent.
+        /// The ID of the conversation being searched.
         conversation_id: Option<String>,
+        /// The ID of the agent run being searched.
+        agent_run_id: Option<String>,
     },
     WarpDocumentationSearch,
     Unknown,
@@ -2017,6 +2236,30 @@ pub enum AIAgentContext {
         branch: Option<String>,
     },
 
+    /// Information about the git repository in the current working directory.
+    Repository {
+        /// The repository name (e.g. "warp-internal").
+        name: String,
+        /// The repository owner/organization (e.g. "warpdotdev"), if determinable from the remote URL.
+        owner: Option<String>,
+    },
+
+    /// Information about the GitHub pull request associated with the current branch.
+    PullRequest {
+        /// The pull request number.
+        #[serde(default, deserialize_with = "deserialize_pull_request_number")]
+        number: i32,
+        /// The pull request state (for example, `OPEN`, `MERGED`, or `CLOSED`).
+        #[serde(default)]
+        state: String,
+        /// Whether the pull request is marked as draft.
+        #[serde(default)]
+        draft: bool,
+        /// The pull request's base branch.
+        #[serde(default)]
+        base_branch: String,
+    },
+
     /// List of available skills is provided to the agent during initialization
     /// or when updated.
     Skills {
@@ -2025,6 +2268,37 @@ pub enum AIAgentContext {
 
     #[serde(untagged)]
     Block(Box<BlockContext>),
+}
+
+fn deserialize_pull_request_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(0),
+        serde_json::Value::String(s) => {
+            if !s.chars().all(|c| c.is_ascii_digit()) {
+                return Ok(0);
+            }
+            Ok(s.parse()
+                .ok()
+                .filter(|number| *number > 0)
+                .unwrap_or_default())
+        }
+        serde_json::Value::Number(n) => {
+            let Some(number) = n.as_i64() else {
+                return Ok(0);
+            };
+            Ok(i32::try_from(number)
+                .ok()
+                .filter(|number| *number > 0)
+                .unwrap_or_default())
+        }
+        value => Err(serde::de::Error::custom(format!(
+            "expected string or number for pull request number, got {value}"
+        ))),
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -2236,16 +2510,12 @@ pub enum StaticQueryType {
     Code,
     Deploy,
     SomethingElse,
-    CustomOnboardingRequest,
     EvaluationSuite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::enum_variant_names)]
 pub enum EntrypointType {
-    Onboarding {
-        chip_type: OnboardingChipType,
-    },
     PromptSuggestion {
         is_static: bool,
         is_coding: bool,
@@ -2454,6 +2724,7 @@ pub enum AIAgentInput {
 
     SummarizeConversation {
         prompt: Option<String>,
+        context: Arc<[AIAgentContext]>,
     },
 
     /// Invoke a skill. The skill content is passed as instructions to the agent.
@@ -2499,6 +2770,15 @@ pub enum AIAgentInput {
         trigger: Option<PassiveSuggestionTrigger>,
         suggestion: PassiveSuggestionResultType,
         context: Arc<[AIAgentContext]>,
+    },
+
+    /// Piggybacked orchestration config update from the plan card.
+    /// Sent on the next outbound request after the user edits the
+    /// config block or toggles approval.
+    OrchestrationConfigUpdate {
+        plan_id: String,
+        config: OrchestrationConfig,
+        status: OrchestrationConfigStatus,
     },
 }
 
@@ -2557,7 +2837,7 @@ impl Display for AIAgentInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UserQuery { .. } => {
-                write!(f, "UserQuery: {}", self.user_query().unwrap_or_default())
+                write!(f, "UserQuery: {}", self.display_query().unwrap_or_default())
             }
             Self::AutoCodeDiffQuery { query, .. } => {
                 write!(f, "AutoCodeDiffQuery: {query}")
@@ -2593,12 +2873,17 @@ impl Display for AIAgentInput {
                 write!(f, "EventsFromAgents({} events)", events.len())
             }
             Self::PassiveSuggestionResult { .. } => write!(f, "PassiveSuggestionResult"),
+            Self::OrchestrationConfigUpdate { .. } => write!(f, "OrchestrationConfigUpdate"),
         }
     }
 }
 
 impl AIAgentInput {
-    pub fn user_query(&self) -> Option<String> {
+    /// Display text for any input that surfaces a prompt-like query in the UI
+    /// (typed queries, slash commands, skill invocations, etc.). Unlike
+    /// [`Self::is_user_query`], which strictly matches the `UserQuery` variant,
+    /// this returns `Some` for several input variants.
+    pub fn display_query(&self) -> Option<String> {
         match self {
             Self::UserQuery {
                 query,
@@ -2650,7 +2935,8 @@ impl AIAgentInput {
             | Self::StartFromAmbientRunPrompt { .. }
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
-            | Self::PassiveSuggestionResult { .. } => None,
+            | Self::PassiveSuggestionResult { .. }
+            | Self::OrchestrationConfigUpdate { .. } => None,
         }
     }
 
@@ -2660,7 +2946,7 @@ impl AIAgentInput {
         &self,
         initial_conversation_query: Option<&String>,
     ) -> Option<String> {
-        let mut query = self.user_query()?;
+        let mut query = self.display_query()?;
         if self
             .user_query_mode()
             .is_none_or(|mode| matches!(mode, UserQueryMode::Normal))
@@ -2745,9 +3031,10 @@ impl AIAgentInput {
             | Self::InvokeSkill { context, .. }
             | Self::StartFromAmbientRunPrompt { context, .. }
             | Self::PassiveSuggestionResult { context, .. } => Some(context),
-            Self::SummarizeConversation { .. }
-            | Self::MessagesReceivedFromAgents { .. }
-            | Self::EventsFromAgents { .. } => None,
+            Self::SummarizeConversation { context, .. } => Some(context),
+            Self::MessagesReceivedFromAgents { .. }
+            | Self::EventsFromAgents { .. }
+            | Self::OrchestrationConfigUpdate { .. } => None,
         }
     }
 
@@ -2778,7 +3065,8 @@ impl AIAgentInput {
             | Self::StartFromAmbientRunPrompt { .. }
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
-            | Self::PassiveSuggestionResult { .. } => None,
+            | Self::PassiveSuggestionResult { .. }
+            | Self::OrchestrationConfigUpdate { .. } => None,
         }
     }
 
@@ -2885,7 +3173,7 @@ impl AIAgentExchange {
         let user_queries: Vec<String> = self
             .input
             .iter()
-            .filter_map(|input| input.user_query())
+            .filter_map(|input| input.display_query())
             .collect();
         user_queries.join("\n")
     }
@@ -2935,7 +3223,9 @@ impl AIAgentExchange {
     }
 
     pub fn has_user_query(&self) -> bool {
-        self.input.iter().any(|input| input.user_query().is_some())
+        self.input
+            .iter()
+            .any(|input| input.display_query().is_some())
     }
 
     pub fn has_accepted_file_edit(&self) -> bool {
@@ -2996,25 +3286,7 @@ pub struct RequestMetadata {
     pub is_auto_resume_after_error: bool,
 }
 
-/// A globally unique ID for a suggested objects.
-///
-/// This is used for telemetry purposes to track and connect both:
-/// - Suggested objects generated by the AI agent
-/// - The corresponding objects stored in the cloud (if the suggestion was accepted)
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SuggestedLoggingId(String);
-
-impl Display for SuggestedLoggingId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for SuggestedLoggingId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
+pub use cloud_object_models::SuggestedLoggingId;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SuggestedRule {
@@ -3060,5 +3332,5 @@ impl Suggestions {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

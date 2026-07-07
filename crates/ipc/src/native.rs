@@ -6,9 +6,10 @@ use futures::{AsyncRead, AsyncWrite};
 use crate::ConnectionAddress;
 
 pub(crate) mod client {
+    use interprocess::local_socket::tokio::LocalSocketStream;
+
     use super::*;
     use crate::client::{ClientError, InitializationError, Result};
-    use interprocess::local_socket::tokio::LocalSocketStream;
 
     /// Returns a tuple containing structs for reading and writing to a local socket, which is the
     /// underlying IPC transport for native (non-wasm) platforms.
@@ -24,9 +25,10 @@ pub(crate) mod client {
 }
 
 pub(crate) mod server {
+    use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream};
+
     use super::*;
     use crate::server::{InitializationError, Result, ServerError};
-    use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream};
 
     pub struct ConnectionImpl {
         stream: LocalSocketStream,
@@ -44,7 +46,7 @@ pub(crate) mod server {
 
     impl ConnectionListenerImpl {
         pub fn new(connection_address: ConnectionAddress) -> Result<Self> {
-            let listener = warpui::r#async::block_on(
+            let listener = warpui_core::r#async::block_on(
                 async move { LocalSocketListener::bind(connection_address.to_string()) }.compat(),
             )
             .map_err(|e| ServerError::Initialization(InitializationError::Io(e)))?;

@@ -1,6 +1,7 @@
-use crate::time::get_current_time;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
+
+use crate::time::get_current_time;
 
 // `DailyAppFocusDuration` records the cumulative duration for focus events that end on each day.
 struct DailyAppFocusDuration {
@@ -83,5 +84,5 @@ impl AppFocusInfo {
 }
 
 #[cfg(test)]
-#[path = "app_focus_telemetry_test.rs"]
+#[path = "app_focus_telemetry_tests.rs"]
 mod tests;

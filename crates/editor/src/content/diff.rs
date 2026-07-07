@@ -3,8 +3,9 @@
 //! This module provides functionality for computing minimal diffs between two text strings,
 //! which is used for auto-reloading files without wiping undo history or disrupting anchors.
 
-use imara_diff::{Algorithm, Diff, InternedInput, Token};
 use std::ops::Range;
+
+use imara_diff::{Algorithm, Diff, InternedInput, Token};
 use string_offset::{ByteOffset, CharOffset};
 
 use super::buffer::{Buffer, ToBufferCharOffset};

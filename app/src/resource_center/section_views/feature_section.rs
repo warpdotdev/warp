@@ -1,31 +1,29 @@
-use crate::{
-    appearance::Appearance,
-    send_telemetry_from_ctx,
-    server::telemetry::TelemetryEvent,
-    settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier},
-    themes::theme::Fill,
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Hoverable, Icon,
+    MouseState, MouseStateHandle, ParentElement, Shrinkable,
 };
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Hoverable, Icon,
-        MouseState, MouseStateHandle, ParentElement, Shrinkable,
-    },
-    fonts::Weight,
-    platform::Cursor,
-    ui_components::components::{UiComponent, UiComponentStyles},
     Action, AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, WindowId,
-};
-
-use crate::resource_center::{
-    complete_tips_and_write_to_user_defaults, main_page::ActionTarget,
-    skip_tips_and_write_to_user_defaults, FeatureItem, FeatureSectionData, Tip, TipsCompleted,
 };
 
 use super::{
     SectionAction, SectionView, CHEVRON_ICON_SIZE, DESCRIPTION_FONT_SIZE, ELLIPSE_ICON_SIZE,
     ELLIPSE_SVG_PATH, ICON_PADDING, ITEM_PADDING_BOTTOM, SCROLLBAR_OFFSET, SECTION_SPACING,
 };
+use crate::appearance::Appearance;
+use crate::resource_center::main_page::ActionTarget;
+use crate::resource_center::{
+    complete_tips_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults, FeatureItem,
+    FeatureSectionData, Tip, TipsCompleted,
+};
+use crate::send_telemetry_from_ctx;
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use crate::themes::theme::Fill;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeatureSection {

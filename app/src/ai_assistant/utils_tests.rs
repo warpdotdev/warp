@@ -1,10 +1,8 @@
+use super::{FormattedTranscriptMessage, TranscriptPart, TranscriptPartSubType};
 use crate::ai_assistant::test_util::{
     default_assistant_transcript_part, default_code_block_segment, default_formatted_message,
     default_other_segment,
 };
-
-use super::{FormattedTranscriptMessage, TranscriptPart, TranscriptPartSubType};
-
 use crate::ai_assistant::utils::CodeBlockIndex;
 
 // Mocked data to make it easy to test.

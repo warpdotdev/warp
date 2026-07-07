@@ -1,25 +1,27 @@
+use ui_components::{button, Component as _, Options as _};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warpui_core::elements::{
+    ClippedScrollStateHandle, Container, CrossAxisAlignment, Flex, FormattedTextElement,
+    MainAxisSize, MouseStateHandle, ParentElement,
+};
+use warpui_core::fonts::Weight;
+use warpui_core::keymap::Keystroke;
+use warpui_core::prelude::Align;
+use warpui_core::text_layout::TextAlignment;
+use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui_core::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
+};
+
 use super::toggle_card::{render_toggle_card, ChipSpec, ToggleCardSpec};
 use super::OnboardingSlide;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel, UICustomizationSettings};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::visuals::{intention_terminal_visual, intention_visual};
 use crate::OnboardingIntention;
-use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors};
-use warpui::prelude::Align;
-use warpui::{
-    elements::{
-        ClippedScrollStateHandle, Container, CrossAxisAlignment, Flex, FormattedTextElement,
-        MainAxisSize, MouseStateHandle, ParentElement,
-    },
-    fonts::Weight,
-    keymap::Keystroke,
-    text_layout::TextAlignment,
-    ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
-};
 
 /// Which setting card is currently selected (expanded).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,8 +129,9 @@ impl CustomizeUISlide {
         appearance: &Appearance,
         intention: OnboardingIntention,
         ui: &UICustomizationSettings,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let bottom_nav = Align::new(self.render_bottom_nav(appearance, intention)).finish();
+        let bottom_nav = Align::new(self.render_bottom_nav(appearance, app)).finish();
 
         slide_content::onboarding_slide_content(
             vec![
@@ -255,6 +258,24 @@ impl CustomizeUISlide {
         let mut chips = vec![];
 
         if ui.tools_panel_enabled(&intention) {
+            chips.push(ChipSpec {
+                label: "File explorer",
+                is_enabled: ui.show_project_explorer,
+                mouse_state: self.chip_file_explorer_mouse.clone(),
+                on_click: Box::new(|ctx, _, _| {
+                    ctx.dispatch_typed_action(CustomizeSlideAction::ToggleToolsSubSetting {
+                        setting: ToolsPanelSubSetting::ProjectExplorer,
+                    });
+                }),
+                on_hover: Some(Box::new(|is_hovered, ctx, _, _| {
+                    if is_hovered {
+                        ctx.dispatch_typed_action(CustomizeSlideAction::HoverToolsChip {
+                            setting: ToolsPanelSubSetting::ProjectExplorer,
+                        });
+                    }
+                })),
+            });
+
             // Conversation history chip is only shown for the agent intention.
             if is_agent {
                 chips.push(ChipSpec {
@@ -275,24 +296,6 @@ impl CustomizeUISlide {
                     })),
                 });
             }
-
-            chips.push(ChipSpec {
-                label: "File explorer",
-                is_enabled: ui.show_project_explorer,
-                mouse_state: self.chip_file_explorer_mouse.clone(),
-                on_click: Box::new(|ctx, _, _| {
-                    ctx.dispatch_typed_action(CustomizeSlideAction::ToggleToolsSubSetting {
-                        setting: ToolsPanelSubSetting::ProjectExplorer,
-                    });
-                }),
-                on_hover: Some(Box::new(|is_hovered, ctx, _, _| {
-                    if is_hovered {
-                        ctx.dispatch_typed_action(CustomizeSlideAction::HoverToolsChip {
-                            setting: ToolsPanelSubSetting::ProjectExplorer,
-                        });
-                    }
-                })),
-            });
 
             chips.push(ChipSpec {
                 label: "Global file search",
@@ -402,11 +405,7 @@ impl CustomizeUISlide {
 
     // --- Bottom nav ---
 
-    fn render_bottom_nav(
-        &self,
-        appearance: &Appearance,
-        intention: OnboardingIntention,
-    ) -> Box<dyn Element> {
+    fn render_bottom_nav(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
@@ -437,8 +436,7 @@ impl CustomizeUISlide {
             },
         );
 
-        let is_terminal = matches!(intention, OnboardingIntention::Terminal);
-        let (step_index, step_count) = if is_terminal { (1, 4) } else { (1, 5) };
+        let (step_index, step_count) = self.onboarding_state.as_ref(app).progress();
         bottom_nav::onboarding_bottom_nav(
             appearance,
             step_index,
@@ -537,12 +535,8 @@ impl CustomizeUISlide {
                         "async/png/onboarding/terminal_intention/terminal_customize_horizontal_tabs.png"
                     }
                 } else {
-                    // Default chip: conversation for agent, file explorer for terminal.
-                    let default_chip = if is_agent {
-                        ToolsPanelSubSetting::ConversationHistory
-                    } else {
-                        ToolsPanelSubSetting::ProjectExplorer
-                    };
+                    // Default chip: file explorer for both intents (matches the new tools panel order).
+                    let default_chip = ToolsPanelSubSetting::ProjectExplorer;
                     let chip = hovered_chip.unwrap_or(default_chip);
                     if is_agent {
                         match (chip, vertical) {
@@ -644,7 +638,7 @@ impl View for CustomizeUISlide {
         let ui = self.model_ui_customization(app);
 
         layout::static_left(
-            || self.render_content(appearance, intention, &ui),
+            || self.render_content(appearance, intention, &ui, app),
             || self.render_visual(appearance, intention, &ui),
         )
     }

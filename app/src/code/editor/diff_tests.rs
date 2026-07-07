@@ -4,9 +4,8 @@ use rangemap::RangeMap;
 use unindent::Unindent as _;
 use warp_editor::multiline::{MultilineStr, MultilineString};
 
-use crate::code::editor::diff::ChangeType;
-
 use super::DiffModel;
+use crate::code::editor::diff::ChangeType;
 
 #[test]
 fn test_diff_generation() {

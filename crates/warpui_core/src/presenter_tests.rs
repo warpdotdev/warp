@@ -1,6 +1,7 @@
-use crate::presenter::PositionCache;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
+
+use crate::presenter::PositionCache;
 
 #[test]
 fn test_position_cache_caching() {

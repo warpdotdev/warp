@@ -1,11 +1,10 @@
 use std::rc::Rc;
 
-use crate::model::grid::{
-    cell::{Cell, Flags},
-    row::Row,
-};
-
-use super::{grapheme::Grapheme, style::BgAndStyle, EndOfPromptMarker, FlatStorage};
+use super::grapheme::Grapheme;
+use super::style::BgAndStyle;
+use super::{EndOfPromptMarker, FlatStorage};
+use crate::model::grid::cell::{Cell, Flags};
+use crate::model::grid::row::Row;
 
 /// An iterator over [`Row`]s in the grid.
 ///

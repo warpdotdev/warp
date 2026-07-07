@@ -1,13 +1,10 @@
-use std::{
-    fmt::{Debug, Display},
-    marker::Unpin,
-};
+use std::fmt::{Debug, Display};
+use std::marker::Unpin;
 
-use futures::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader},
-    AsyncRead, AsyncWrite,
-};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use futures::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use futures::{AsyncRead, AsyncWrite};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::service::ServiceId;

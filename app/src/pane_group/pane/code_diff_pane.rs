@@ -1,16 +1,14 @@
 use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
 
-use crate::{
-    ai::blocklist::inline_action::code_diff_view::{CodeDiffView, CodeDiffViewEvent},
-    app_state::{CodePaneSnapShot, CodePaneTabSnapshot, LeafContents},
-    code::editor_management::{CodeManager, CodeSource},
-    pane_group::PaneGroup,
-};
-
+use super::code_diff_pane_model::CodeDiffPaneModel;
 use super::{
-    code_diff_pane_model::CodeDiffPaneModel, DetachType, PaneConfiguration, PaneContent, PaneEvent,
-    PaneId, PaneView, ShareableLink, ShareableLinkError,
+    DetachType, PaneConfiguration, PaneContent, PaneEvent, PaneId, PaneView, ShareableLink,
+    ShareableLinkError,
 };
+use crate::ai::blocklist::inline_action::code_diff_view::{CodeDiffView, CodeDiffViewEvent};
+use crate::app_state::{CodePaneSnapShot, CodePaneTabSnapshot, LeafContents};
+use crate::code::editor_management::{CodeManager, CodeSource};
+use crate::pane_group::PaneGroup;
 
 pub struct CodeDiffPane {
     view: ViewHandle<PaneView<CodeDiffView>>,

@@ -10,6 +10,9 @@ crash_reporting = ["dep:sentry", "dep:sentry-log"]
 integration_tests = []
 local_fs = []
 release_bundle = []
+# Enabled when building the self-contained standalone CLI binary (see the bundle
+# script). Keep in sync with the `app` crate's `standalone` feature.
+standalone = []
 test-util = ["dep:mockito", "warp_features/test-util"]
 
 [dependencies]
@@ -21,6 +24,7 @@ dirs.workspace = true
 directories.workspace = true
 shellexpand.workspace = true
 enum-iterator.workspace = true
+futures-lite.workspace = true
 warp_features.workspace = true
 itertools.workspace = true
 getset.workspace = true
@@ -28,6 +32,7 @@ http.workspace = true
 lazy_static.workspace = true
 log.workspace = true
 parking_lot.workspace = true
+pin-project.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 settings.workspace = true
@@ -39,6 +44,7 @@ strum.workspace = true
 strum_macros.workspace = true
 sysinfo.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 concat-idents.workspace = true
 url.workspace = true
 regex.workspace = true
@@ -46,13 +52,13 @@ websocket.workspace = true
 instant.workspace = true
 schemars = "1"
 settings_value = { workspace = true, features = ["derive"] }
+warp_util.workspace = true
 async-broadcast.workspace = true
 futures.workspace = true
 line-ending.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 warpui_extras = { workspace = true, features = ["default"] }
 mockito = { workspace = true, optional = true }
-asset_macro.workspace = true
 string-offset.workspace = true
 inventory = "0.3.20"
 chrono.workspace = true
@@ -61,8 +67,6 @@ chrono.workspace = true
 tokio.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa.workspace = true
-objc.workspace = true
 objc2-foundation = { workspace = true, features = [
     "NSString",
     "NSURL",

@@ -9,11 +9,10 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use warp_multi_agent_api as api;
-
 use api::message::tool_call::Tool;
 use api::message::tool_call_result::Result as ToolCallResultType;
 use api::message::Message;
+use warp_multi_agent_api as api;
 
 use super::task::helper::{SubagentExt, ToolExt};
 
@@ -243,7 +242,8 @@ fn write_task_messages(
             | Message::SystemQuery(_)
             | Message::CodeReview(_)
             | Message::ServerEvent(_)
-            | Message::InvokeSkill(_) => {}
+            | Message::InvokeSkill(_)
+            | Message::OrchestrationConfigSnapshot(_) => {}
         }
     }
     Ok(())
@@ -507,10 +507,25 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
                 out.push_str(&format!("  - deleted: {}\n", df.file_path));
             }
         }
+        Tool::RunAgents(o) => {
+            out.push_str(&format!(
+                "summary: \"{}\"\n",
+                escape_yaml_string(&o.summary)
+            ));
+            out.push_str("agents:\n");
+            for cfg in &o.agent_run_configs {
+                out.push_str(&format!(
+                    "  - name: \"{}\"\n",
+                    escape_yaml_string(&cfg.name)
+                ));
+            }
+        }
         // No additional args worth serializing.
         Tool::ReadShellCommandOutput(_)
         | Tool::UseComputer(_)
         | Tool::RequestComputerUse(_)
+        | Tool::StartRecording(_)
+        | Tool::StopRecording(_)
         | Tool::SuggestPlan(_)
         | Tool::SuggestCreatePlan(_)
         | Tool::SuggestNewConversation(_)
@@ -519,13 +534,65 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
         | Tool::InitProject(_)
         | Tool::Server(_)
         | Tool::Subagent(_)
-        | Tool::TransferShellCommandControlToUser(_) => {}
+        | Tool::TransferShellCommandControlToUser(_)
+        | Tool::WaitForEvents(_) => {}
     }
 }
 
 /// Writes content from structured tool call results.
 fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType) {
     match result {
+        ToolCallResultType::RunAgentsResult(r) => match &r.outcome {
+            Some(api::run_agents_result::Outcome::Launched(launched)) => {
+                out.push_str("status: launched\n");
+                out.push_str(&format!("agent_count: {}\n", launched.agents.len()));
+                if !launched.agents.is_empty() {
+                    out.push_str("agents:\n");
+                    for agent in &launched.agents {
+                        out.push_str(&format!(
+                            "  - name: \"{}\"\n",
+                            escape_yaml_string(&agent.name)
+                        ));
+                        match &agent.result {
+                            Some(api::run_agents_result::agent_outcome::Result::Launched(
+                                launched,
+                            )) => {
+                                out.push_str("    status: launched\n");
+                                out.push_str(&format!("    agent_id: {}\n", launched.agent_id));
+                            }
+                            Some(api::run_agents_result::agent_outcome::Result::Failed(failed)) => {
+                                out.push_str("    status: failed\n");
+                                out.push_str(&format!(
+                                    "    error: \"{}\"\n",
+                                    escape_yaml_string(&failed.error)
+                                ));
+                            }
+                            None => {
+                                out.push_str("    status: unknown\n");
+                            }
+                        }
+                    }
+                    out.push_str(
+                        "next_step: \"Use send_message_to_agent with the existing agent_id instead of running agents again.\"\n",
+                    );
+                }
+            }
+            Some(api::run_agents_result::Outcome::Denied(denied)) => {
+                out.push_str("status: launch_denied\n");
+                out.push_str(&format!(
+                    "reason: \"{}\"\n",
+                    escape_yaml_string(&denied.reason)
+                ));
+            }
+            Some(api::run_agents_result::Outcome::Failure(failure)) => {
+                out.push_str("status: failure\n");
+                out.push_str(&format!(
+                    "error: \"{}\"\n",
+                    escape_yaml_string(&failure.error)
+                ));
+            }
+            None => {}
+        },
         ToolCallResultType::StartAgentV2(r) => match &r.result {
             Some(api::start_agent_v2_result::Result::Success(s)) => {
                 out.push_str(&format!("agent_id: {}\n", s.agent_id));
@@ -535,6 +602,8 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
             }
             None => {}
         },
+        ToolCallResultType::WaitForEvents(_) => {}
+        ToolCallResultType::StartRecording(_) | ToolCallResultType::StopRecording(_) => {}
         ToolCallResultType::RunShellCommand(r) => {
             if let Some(res) = &r.result {
                 use api::run_shell_command_result::Result;

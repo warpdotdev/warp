@@ -1,6 +1,20 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use channel_versions::overrides::TargetOS;
+use parking_lot::RwLock;
+use warp_core::semantic_selection::SemanticSelection;
+use warp_core::ui::theme::WarpTheme;
+use warpui::elements::{
+    Border, Container, CrossAxisAlignment, Flex, Icon, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, SelectableArea, SelectionHandle, Text,
+};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+
+use super::render::{HORIZONTAL_TEXT_MARGIN, SSH_DOCS_URL, SUBSHELL_DOCS_URL};
+use super::settings::WarpifySettings;
+use super::{render, subshell_bootstrap_success_block_bytes, WarpificationSource};
 use crate::ai::agent::ProgrammingLanguage;
 use crate::ai::blocklist::code_block::{render_runnable_code_snippet, CodeSnippetButtonHandles};
 use crate::appearance::Appearance;
@@ -9,23 +23,6 @@ use crate::terminal::shell::{Shell, ShellType};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::workspace::WorkspaceAction;
-use channel_versions::overrides::TargetOS;
-use parking_lot::RwLock;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_core::ui::theme::WarpTheme;
-use warpui::elements::{
-    CrossAxisAlignment, Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle, SelectableArea,
-    SelectionHandle, Text,
-};
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
-    elements::{Border, Container, Flex, ParentElement},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
-
-use super::render::{HORIZONTAL_TEXT_MARGIN, SSH_DOCS_URL, SUBSHELL_DOCS_URL};
-use super::settings::WarpifySettings;
-use super::{render, subshell_bootstrap_success_block_bytes, WarpificationSource};
 
 const VERTICAL_TEXT_MARGIN: f32 = 16.;
 
@@ -69,7 +66,6 @@ impl WarpifySuccessBlock {
         spawning_command: String,
         subshell_info: Option<SubshellInitializationInfo>,
         shell: Shell,
-        disable_tmux: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&WarpifySettings::handle(ctx), move |_, _, _, ctx| {
@@ -96,7 +92,6 @@ impl WarpifySuccessBlock {
                         &subshell_info,
                         shell.shell_type(),
                         remote_os,
-                        disable_tmux,
                     );
                     if command.is_empty() {
                         return ("".into(), false);

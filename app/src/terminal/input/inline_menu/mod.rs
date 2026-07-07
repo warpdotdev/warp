@@ -6,17 +6,17 @@ pub(crate) mod positioning;
 pub mod styles;
 mod view;
 
-use super::{InputSuggestionsMode, UserQueryMenuAction};
-use serde::{Deserialize, Serialize};
-
 pub use message_bar::{InlineMenuMessageArgs, InlineMenuMessageBarArgs};
 pub use message_provider::{default_navigation_message_items, InlineMenuMessageProvider};
 pub use model::{InlineMenuModel, InlineMenuModelEvent, InlineMenuTabConfig};
 pub use positioning::InlineMenuPositioner;
+use serde::{Deserialize, Serialize};
 pub use view::{
     DetailsRenderConfig, InlineMenuAction, InlineMenuClickBehavior, InlineMenuEvent,
-    InlineMenuHeaderConfig, InlineMenuRowAction, InlineMenuView,
+    InlineMenuHeaderConfig, InlineMenuRowAction, InlineMenuView, QueryResultRendererExt,
 };
+
+use super::{InputSuggestionsMode, UserQueryMenuAction};
 
 /// Identifies a specific inline menu type.
 #[derive(

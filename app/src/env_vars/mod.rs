@@ -1,6 +1,7 @@
+pub use cloud_object_models::{
+    CloudEnvVarCollection, CloudEnvVarCollectionModel, EnvVar, EnvVarCollection, EnvVarValue,
+};
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-use view::command_dialog::EnvVarSecretCommand;
 use warp_util::path::ShellFamily;
 
 pub mod active_env_var_collection_data;
@@ -8,21 +9,17 @@ pub mod env_var_collection_block;
 pub mod manager;
 pub mod view;
 
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
-    },
-    drive::items::{env_var_collection::WarpDriveEnvVarCollection, WarpDriveItem},
-    external_secrets::ExternalSecret,
-    server::{ids::SyncId, sync_queue::QueueItem},
-    terminal::shell::ShellType,
-    Appearance, CloudObjectTypeAndId,
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::model::json_model::JsonModel;
+use crate::cloud_object::{
+    GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, Revision,
 };
+use crate::drive::items::env_var_collection::WarpDriveEnvVarCollection;
+use crate::drive::items::WarpDriveItem;
+use crate::server::ids::SyncId;
+use crate::server::sync_queue::QueueItem;
+use crate::terminal::shell::ShellType;
+use crate::{Appearance, CloudObjectTypeAndId};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EnvVarCollectionType {
@@ -38,48 +35,12 @@ impl EnvVarCollectionType {
     }
 }
 
-pub type CloudEnvVarCollection =
-    GenericCloudObject<GenericStringObjectId, CloudEnvVarCollectionModel>;
-pub type CloudEnvVarCollectionModel = GenericStringModel<EnvVarCollection, JsonSerializer>;
-
-/// Defines the data model for a single environment variable
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct EnvVar {
-    // Variable name
-    pub name: String,
-    // Variable value
-    pub value: EnvVarValue,
-    // Description of variable
-    pub description: Option<String>,
+pub trait EnvVarExt {
+    fn get_initialization_string(&self, shell_type: ShellType) -> String;
 }
 
-/// Defines the various forms a value can take
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum EnvVarValue {
-    // Represents a string variable, i.e. PORT=4000
-    Constant(String),
-    // Represents a computed secret, i.e. gcloud print auth token
-    Command(EnvVarSecretCommand),
-    // Represents a secret from an external secret manager
-    Secret(ExternalSecret),
-}
-
-impl Default for EnvVarValue {
-    fn default() -> Self {
-        EnvVarValue::Constant(String::new())
-    }
-}
-
-impl EnvVar {
-    pub fn new(name: String, value: String, description: Option<String>) -> Self {
-        Self {
-            name,
-            value: EnvVarValue::Constant(value),
-            description,
-        }
-    }
-
-    pub fn get_initialization_string(&self, shell_type: ShellType) -> String {
+impl EnvVarExt for EnvVar {
+    fn get_initialization_string(&self, shell_type: ShellType) -> String {
         let shell_family = ShellFamily::from(shell_type);
         let name = shell_family.escape(&self.name);
         let value = get_init_command_for_env_var(&self.value, shell_family);
@@ -111,37 +72,23 @@ fn get_init_command_for_env_var(value: &EnvVarValue, shell_family: ShellFamily) 
     }
 }
 
-/// Defines the data model for a cloud synced collection of environment variables.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct EnvVarCollection {
-    // Collection title
-    pub title: Option<String>,
-    // Description of collection
-    pub description: Option<String>,
-    // Environment variables associated with this collection
-    pub vars: Vec<EnvVar>,
+pub trait EnvVarCollectionExt {
+    fn export_variables_for_shell(&self, shell_type: ShellType) -> String;
 }
 
-impl EnvVarCollection {
-    #[allow(dead_code)]
-    pub fn new(title: Option<String>, description: Option<String>, vars: Vec<EnvVar>) -> Self {
-        Self {
-            title,
-            description,
-            vars,
-        }
+impl EnvVarCollectionExt for EnvVarCollection {
+    fn export_variables_for_shell(&self, shell_type: ShellType) -> String {
+        serialize_variables_for_shell(self.key_value_iter(), shell_type)
     }
+}
 
+trait EnvVarCollectionKeyValueIter {
+    fn key_value_iter(&self) -> impl Iterator<Item = (&str, &EnvVarValue)>;
+}
+
+impl EnvVarCollectionKeyValueIter for EnvVarCollection {
     fn key_value_iter(&self) -> impl Iterator<Item = (&str, &EnvVarValue)> {
         self.vars.iter().map(|var| (var.name.as_str(), &var.value))
-    }
-
-    pub fn export_variables(&self, delimiter: &str, shell_family: ShellFamily) -> String {
-        serialize_variables_internal(self.key_value_iter(), "", "=", "", delimiter, shell_family)
-    }
-
-    pub fn export_variables_for_shell(&self, shell_type: ShellType) -> String {
-        serialize_variables_for_shell(self.key_value_iter(), shell_type)
     }
 }
 
@@ -188,13 +135,6 @@ impl StringModel for EnvVarCollection {
         None
     }
 
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::EnvVarCollection(server_envvar_collection) = server_cloud_object {
-            return Some(server_envvar_collection.model.clone().string_model);
-        }
-        None
-    }
-
     fn should_show_activity_toasts() -> bool {
         true
     }
@@ -234,12 +174,6 @@ impl StringModel for EnvVarCollection {
 impl JsonModel for EnvVarCollection {
     fn json_object_type() -> JsonObjectType {
         JsonObjectType::EnvVarCollection
-    }
-}
-
-impl PartialEq<CloudEnvVarCollection> for CloudEnvVarCollection {
-    fn eq(&self, other: &CloudEnvVarCollection) -> bool {
-        self.model().string_model == other.model().string_model && self.id == other.id
     }
 }
 

@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::{env, path};
 
+use anyhow::{anyhow, Result};
 use warpui::{AppContext, SingletonEntity};
 
 use crate::system::SystemInfo;

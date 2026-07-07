@@ -5,12 +5,6 @@
 //!
 //! Separated into its own module so the two codepaths are easy to distinguish.
 
-use crate::code_review::code_review_view::{
-    CodeReviewAction, CodeReviewHeaderFields, PrimaryGitActionMode,
-};
-use crate::code_review::diff_selector::DiffSelector;
-use crate::menu::Menu;
-use crate::view_components::action_button::ActionButton;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warpui::elements::{
@@ -20,9 +14,14 @@ use warpui::elements::{
 };
 use warpui::{Element, ViewHandle};
 
-use crate::appearance::Appearance;
-
 use super::CodeReviewHeader;
+use crate::appearance::Appearance;
+use crate::code_review::code_review_view::{
+    CodeReviewAction, CodeReviewHeaderFields, PrimaryGitActionMode,
+};
+use crate::code_review::diff_selector::DiffSelector;
+use crate::menu::Menu;
+use crate::view_components::action_button::ActionButton;
 
 impl CodeReviewHeader {
     /// Entry-point for the new header layout (feature-flagged behind

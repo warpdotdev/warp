@@ -1,9 +1,9 @@
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warpui::{AppContext, SingletonEntity};
 
-use crate::{terminal::model::ObfuscateSecrets, workspaces::user_workspaces::UserWorkspaces};
+use crate::terminal::model::ObfuscateSecrets;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// How secrets should be displayed in the block list
 #[derive(
@@ -76,6 +76,7 @@ define_settings_group!(SafeModeSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "privacy.secret_redaction.enabled",
         description: "Whether secret redaction is enabled to detect and obscure secrets in terminal output.",
@@ -85,6 +86,7 @@ define_settings_group!(SafeModeSettings, settings: [
         default: SecretDisplayMode::Strikethrough,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "privacy.secret_redaction.secret_display_mode_setting",
         description: "Controls how detected secrets are visually displayed in the terminal.",
@@ -95,6 +97,7 @@ define_settings_group!(SafeModeSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "privacy.secret_redaction.hide_secrets_in_block_list",
         description: "Whether to hide detected secrets in the block list using asterisks.",

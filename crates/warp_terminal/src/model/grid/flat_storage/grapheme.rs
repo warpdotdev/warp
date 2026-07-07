@@ -2,12 +2,9 @@ use std::num::NonZeroU16;
 
 use string_offset::ByteOffset;
 
-use crate::model::{
-    char_or_str::CharOrStr,
-    grid::cell::{self, Cell},
-};
-
 use super::index::GraphemeInfo;
+use crate::model::char_or_str::CharOrStr;
+use crate::model::grid::cell::{self, Cell};
 
 /// A grapheme is a collection of [`char`]s that, together, represent a single
 /// "user-perceived character".

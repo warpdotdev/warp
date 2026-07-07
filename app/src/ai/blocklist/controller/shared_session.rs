@@ -6,11 +6,13 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
 use warp_core::features::FeatureFlag;
+use warp_multi_agent_api::client_action::Action;
+use warp_multi_agent_api::message::Message;
 use warp_multi_agent_api::response_event::{stream_finished, ClientActions};
-use warp_multi_agent_api::{client_action::Action, message::Message};
+use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
-use super::{BlocklistAIController, RequestInput};
+use super::{BlocklistAIController, RequestInput, SessionContext};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
 use crate::ai::attachment_utils::{
@@ -20,12 +22,18 @@ use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
-use warpui::{AppContext, ModelContext, SingletonEntity};
 
 #[derive(Default)]
 pub(super) struct SharedSessionState {
     // The current active request id for the shared session (used if subsequent events do not provide a request id)
     current_response_id: Option<ResponseStreamId>,
+    /// `true` if shared response streams should be ignored, used to skip processing MAA response streams that
+    /// originate from session sharing replay when joining a new shared session for a follow-up on an existing
+    /// ambient agent conversation.
+    should_suppress_replayed_response_for_existing_conversation: bool,
+    /// Per-stream latch derived from the gate above once we decide the current replay should be
+    /// ignored.
+    should_skip_current_replayed_response: bool,
     // The participant who initiated the current response stream
     current_response_initiator: Option<ParticipantId>,
     // The sharer's participant ID (set when session sharing starts)
@@ -33,6 +41,13 @@ pub(super) struct SharedSessionState {
 }
 
 impl BlocklistAIController {
+    /// Controls whether replayed events for an already-restored shared-session conversation should
+    /// be ignored to avoid duplicating content appended from follow-up scrollback.
+    pub fn set_should_suppress_existing_agent_conversation_replay(&mut self, value: bool) {
+        self.shared_session_state
+            .should_suppress_replayed_response_for_existing_conversation = value;
+    }
+
     /// Returns the current conversation ID for the active shared session stream.
     /// Returns None if there's no active shared session conversation.
     pub(crate) fn get_current_shared_session_conversation_id(
@@ -98,16 +113,19 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         let stream_id = ResponseStreamId::for_shared_session(&init_event);
-        self.shared_session_state.current_response_id = Some(stream_id.clone());
-        let terminal_view_id = self.terminal_view_id;
+        self.shared_session_state.current_response_id = None;
+        self.shared_session_state
+            .should_skip_current_replayed_response = false;
+        let terminal_surface_id = self.terminal_surface_id;
         let history = BlocklistAIHistoryModel::handle(ctx);
 
         // If the server conversation already exists locally (matched by server_conversation_token), reuse it.
         // Otherwise, if we're currently in an empty agent view conversation, reuse that
         // local conversation ID and bind the incoming server token to it.
         // This preserves block visibility for terminal blocks created in the given agent view.
-        let conversation_id = self
-            .find_existing_conversation_by_server_token(&init_event.conversation_id, ctx)
+        let existing_conversation_id =
+            self.find_existing_conversation_by_server_token(&init_event.conversation_id, ctx);
+        let conversation_id = existing_conversation_id
             .or_else(|| {
                 let selected_conversation_id = self
                     .context_model
@@ -143,9 +161,27 @@ impl BlocklistAIController {
             })
             .unwrap_or_else(|| {
                 history.update(ctx, |h, ctx| {
-                    h.start_new_conversation(terminal_view_id, false, true, ctx)
+                    h.start_new_conversation(terminal_surface_id, false, true, false, ctx)
                 })
             });
+        if self.should_skip_replayed_response_for_existing_conversation(
+            existing_conversation_id,
+            &init_event.request_id,
+            ctx,
+        ) {
+            self.shared_session_state.current_response_id = Some(stream_id);
+            self.shared_session_state
+                .should_skip_current_replayed_response = true;
+            return;
+        }
+
+        self.shared_session_state.current_response_id = Some(stream_id.clone());
+        if existing_conversation_id.is_some() {
+            history.update(ctx, |history, ctx| {
+                history.set_viewing_shared_session_for_conversation(conversation_id, true);
+                ctx.notify();
+            });
+        }
 
         let Some(conversation) = history.as_ref(ctx).conversation(&conversation_id) else {
             log::error!(
@@ -169,30 +205,34 @@ impl BlocklistAIController {
                     &self.active_session,
                     self.get_current_response_initiator(),
                     conversation_id,
-                    self.terminal_view_id,
+                    self.terminal_surface_id,
                     ctx,
                 ),
                 stream_id.clone(),
-                self.terminal_view_id,
+                self.terminal_surface_id,
                 ctx,
             );
 
             history_model.initialize_output_for_response_stream(
                 &stream_id,
                 conversation_id,
-                self.terminal_view_id,
+                self.terminal_surface_id,
                 init_event.clone(),
                 ctx,
             );
 
             // Mark conversation as in progress and active/selected
             history_model.update_conversation_status(
-                self.terminal_view_id,
+                self.terminal_surface_id,
                 conversation_id,
                 ConversationStatus::InProgress,
                 ctx,
             );
-            history_model.set_active_conversation_id(conversation_id, self.terminal_view_id, ctx);
+            history_model.set_active_conversation_id(
+                conversation_id,
+                self.terminal_surface_id,
+                ctx,
+            );
         });
         self.context_model.update(ctx, |context_model, ctx| {
             context_model.set_pending_query_state_for_existing_conversation(
@@ -203,11 +243,64 @@ impl BlocklistAIController {
         });
     }
 
+    /// Returns whether replayed events for an already-populated shared-session conversation should
+    /// be ignored to avoid duplicating content that was restored from scrollback.
+    fn should_skip_replayed_response_for_existing_conversation(
+        &self,
+        existing_conversation_id: Option<AIConversationId>,
+        init_request_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let Some(conversation_id) = existing_conversation_id else {
+            log::info!(
+                "should_skip_replayed_response: no existing conversation id, not skipping \
+                 (request_id={init_request_id})"
+            );
+            return false;
+        };
+        let is_receiving_replay = self
+            .terminal_model
+            .lock()
+            .is_receiving_agent_conversation_replay();
+        let suppress_enabled = self
+            .shared_session_state
+            .should_suppress_replayed_response_for_existing_conversation;
+        if !is_receiving_replay || !suppress_enabled {
+            log::info!(
+                "should_skip_replayed_response: not skipping \
+                 (request_id={init_request_id}, conversation_id={conversation_id:?}, \
+                 is_receiving_replay={is_receiving_replay}, suppress_enabled={suppress_enabled})"
+            );
+            return false;
+        }
+
+        // Only skip the replayed response when our local task already has the given request_id.
+        // New exchanges (e.g. the user's first post-handoff prompt) carry unseen request_ids and must flow through normally.
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let found = history.conversation(&conversation_id).is_some_and(|conv| {
+            conv.all_tasks()
+                .any(|task| task.messages().any(|msg| msg.request_id == init_request_id))
+        });
+        if !found {
+            log::info!(
+                "should_skip_replayed_response: not skipping, request_id not found in local \
+                 conversation (request_id={init_request_id}, conversation_id={conversation_id:?})"
+            );
+        }
+        found
+    }
+
     fn on_shared_client_actions(
         &mut self,
         actions: warp_multi_agent_api::response_event::ClientActions,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self
+            .shared_session_state
+            .should_skip_current_replayed_response
+        {
+            return;
+        }
         let Some(stream_id) = self.shared_session_state.current_response_id.clone() else {
             log::warn!("Received shared session client actions with no active response stream id.");
             return;
@@ -223,13 +316,16 @@ impl BlocklistAIController {
         };
 
         self.update_directory_context_from_client_actions(&actions, ctx);
+        let skill_path_origin =
+            SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         history_model.update(ctx, |history_model, ctx| {
             if let Err(e) = history_model.apply_client_actions(
                 &stream_id,
                 actions.actions,
                 conversation_id,
-                self.terminal_view_id,
+                self.terminal_surface_id,
+                &skill_path_origin,
                 ctx,
             ) {
                 log::error!(
@@ -315,6 +411,15 @@ impl BlocklistAIController {
         finished: warp_multi_agent_api::response_event::StreamFinished,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self
+            .shared_session_state
+            .should_skip_current_replayed_response
+        {
+            self.shared_session_state.current_response_id.take();
+            self.shared_session_state
+                .should_skip_current_replayed_response = false;
+            return;
+        }
         let Some(stream_id) = self.shared_session_state.current_response_id.take() else {
             log::warn!("Shared Finished missing request_id");
             return;
@@ -366,7 +471,7 @@ impl BlocklistAIController {
     }
 
     /// Finds an existing client conversation whose server_conversation_token matches `server_token`.
-    /// Searches only live conversations for this terminal view. Returns None if no match is found.
+    /// Searches only live conversations for this terminal surface. Returns None if no match is found.
     pub fn find_existing_conversation_by_server_token(
         &self,
         server_token: &str,
@@ -375,7 +480,7 @@ impl BlocklistAIController {
         let history = BlocklistAIHistoryModel::handle(ctx);
         history
             .as_ref(ctx)
-            .all_live_conversations_for_terminal_view(self.terminal_view_id)
+            .all_live_conversations_for_terminal_surface(self.terminal_surface_id)
             .find_map(|conv| {
                 conv.server_conversation_token()
                     .and_then(|t| (t.as_str() == server_token).then_some(conv.id()))
@@ -401,8 +506,10 @@ impl BlocklistAIController {
                 .conversation(&conv_id)
                 .map(|conversation| stream_finished::ConversationUsageMetadata {
                     context_window_usage: conversation.context_window_usage(),
-                    credits_spent: conversation.credits_spent(),
+                    credits_spent: conversation.inference_credits_spent(),
+                    platform_credits_spent: conversation.platform_credits_spent(),
                     summarized: conversation.was_summarized(),
+                    total_input_tokens: 0,
                     #[allow(deprecated)]
                     token_usage: conversation
                         .token_usage()
@@ -419,6 +526,16 @@ impl BlocklistAIController {
                         .token_usage()
                         .iter()
                         .filter_map(|u| u.to_proto_byok_usage())
+                        .collect(),
+                    custom_endpoint_token_usage: conversation
+                        .token_usage()
+                        .iter()
+                        .filter_map(|u| u.to_proto_custom_endpoint_usage())
+                        .collect(),
+                    context_window_segments: conversation
+                        .context_window_segments()
+                        .iter()
+                        .map(Into::into)
                         .collect(),
                 })
         });
@@ -741,9 +858,7 @@ impl BlocklistAIController {
                     })
                     .or_else(|| {
                         self.context_model.update(ctx, |context_model, ctx| {
-                            context_model
-                                .try_enter_agent_view_for_new_conversation(origin, ctx)
-                                .ok()
+                            context_model.try_start_new_conversation(origin, ctx).ok()
                         })
                     })
                 else {

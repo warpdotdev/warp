@@ -1,25 +1,17 @@
 use settings::Setting as _;
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{AssertionCallback, AssertionOutcome},
-    units::{IntoPixels, Lines},
-    AppContext, SingletonEntity, WindowId,
-};
+use warpui::integration::{AssertionCallback, AssertionOutcome};
+use warpui::units::{IntoPixels, Lines};
+use warpui::{async_assert, async_assert_eq, AppContext, SingletonEntity, WindowId};
 
-use crate::{
-    integration_testing::view_getters::single_terminal_view,
-    terminal::block_list_viewport::ViewportState,
+use crate::integration_testing::terminal::util::ExpectedOutput;
+use crate::integration_testing::view_getters::{
+    single_terminal_view, single_terminal_view_for_tab,
 };
-use crate::{
-    integration_testing::{
-        terminal::util::ExpectedOutput, view_getters::single_terminal_view_for_tab,
-    },
-    terminal::view::BlockVisibilityMode,
-};
-use crate::{
-    settings::InputModeSettings,
-    terminal::{heights_approx_eq, model::terminal_model::BlockIndex, TerminalModel, TerminalView},
-};
+use crate::settings::InputModeSettings;
+use crate::terminal::block_list_viewport::ViewportState;
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::view::BlockVisibilityMode;
+use crate::terminal::{heights_approx_eq, TerminalModel, TerminalView};
 
 /// Specifies a block position either directly by index, or by whether it's first or
 /// last

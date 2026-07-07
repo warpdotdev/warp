@@ -1,11 +1,12 @@
-use std::{collections::HashSet, os::unix::prelude::*, sync::Arc};
+use std::collections::HashSet;
+use std::os::unix::prelude::*;
+use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use parking_lot::Mutex;
 
-use crate::terminal::local_tty::{PtyOptions, PtySpawnResult};
-
 use super::{api, protocol};
+use crate::terminal::local_tty::{PtyOptions, PtySpawnResult};
 
 /// A client for communicating with the terminal server.
 ///

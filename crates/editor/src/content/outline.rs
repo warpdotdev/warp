@@ -1,12 +1,9 @@
+use string_offset::CharOffset;
 use sum_tree::{Cursor, SeekBias};
 
+use super::buffer::Buffer;
+use super::text::{BlockCount, BufferBlockStyle, BufferText};
 use crate::content::text::BlockType;
-use string_offset::CharOffset;
-
-use super::{
-    buffer::Buffer,
-    text::{BlockCount, BufferBlockStyle, BufferText},
-};
 
 #[cfg(test)]
 #[path = "outline_tests.rs"]

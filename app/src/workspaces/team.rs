@@ -1,11 +1,13 @@
-use crate::{auth::UserUid, server::ids::ServerId};
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+
+use serde::{Deserialize, Serialize};
 
 use super::workspace::{
     BillingMetadata, EmailInvite, InviteLinkDomainRestriction, WorkspaceInviteCode,
     WorkspaceSettings,
 };
+use crate::auth::UserUid;
+use crate::server::ids::ServerId;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum MembershipRole {

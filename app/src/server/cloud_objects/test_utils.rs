@@ -1,39 +1,27 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        mpsc::{sync_channel, Receiver},
-        Arc,
-    },
-};
+use std::collections::HashMap;
+use std::sync::mpsc::{sync_channel, Receiver};
+use std::sync::Arc;
 
+use cloud_object_client::{MockObjectClient, ObjectClient};
 use settings::manager::SettingsManager;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, ModelHandle, SingletonEntity};
 
-use crate::{
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    cloud_object::model::{
-        actions::ObjectActions,
-        persistence::{CloudModel, CloudModelEvent},
-    },
-    network::NetworkStatus,
-    persistence::ModelEvent,
-    server::{
-        server_api::{
-            object::{MockObjectClient, ObjectClient},
-            ServerApiProvider,
-        },
-        sync_queue::SyncQueue,
-        telemetry::context_provider::AppTelemetryContextProvider,
-    },
-    settings::{PrivacySettings, WarpDrivePrivacySettings},
-    workspaces::{
-        team_tester::TeamTesterStatus, update_manager::TeamUpdateManager,
-        user_profiles::UserProfiles, user_workspaces::UserWorkspaces,
-    },
-};
-
 use super::update_manager::UpdateManager;
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::actions::ObjectActions;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::network::NetworkStatus;
+use crate::persistence::ModelEvent;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::SyncQueue;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings::{PrivacySettings, WarpDrivePrivacySettings};
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// The size of the bounded channel that we use to queue persistence/sqlite-related events.
 const CHANNEL_SIZE: usize = 128;

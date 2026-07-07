@@ -1,3 +1,20 @@
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Border, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, ScrollbarWidth,
+};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
+use super::{is_delete_allowed, style, AIFact, CloudAIFact, CloudAIFactModel};
+use crate::ai::facts::AIMemory;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, Revision};
@@ -8,25 +25,8 @@ use crate::editor::{
 use crate::network::NetworkStatus;
 use crate::server::ids::SyncId;
 use crate::ui_components::buttons::icon_button;
-use crate::view_components::action_button::{ActionButton, DangerSecondaryTheme, PrimaryTheme};
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors};
-use warp_editor::editor::NavigationKey;
-use warpui::elements::{Clipped, ConstrainedBox};
-use warpui::{
-    elements::{
-        Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, Container, CornerRadius,
-        CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-        Radius, ScrollbarWidth,
-    },
-    platform::Cursor,
-    ui_components::components::UiComponent,
-    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
-};
-
-use super::{is_delete_allowed, style, AIFact, CloudAIFact, CloudAIFactModel};
-use crate::ai::facts::AIMemory;
 use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, DangerSecondaryTheme, PrimaryTheme};
 
 const RULE_NAME_PLACEHOLDER_TEXT: &str = "e.g. Rust rules";
 const RULE_DESCRIPTION_PLACEHOLDER_TEXT: &str = "e.g. Never use unwrap in Rust";

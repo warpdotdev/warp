@@ -19,7 +19,6 @@
 //! ```
 
 pub(super) mod common;
-pub(crate) use common::user_query_mode_prefix_highlight_len;
 pub use common::FindContext;
 mod comments;
 mod header;
@@ -30,70 +29,65 @@ pub mod output;
 pub mod query;
 mod todos;
 
+use std::collections::{HashMap, HashSet};
+
 use common::get_highlight_ranges_for_find_matches;
+use itertools::Itertools;
 use pathfinder_color::ColorU;
 use settings::Setting as _;
-use std::collections::{HashMap, HashSet};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
-use warpui::elements::{
-    Align, ConstrainedBox, CornerRadius, CrossAxisAlignment, Empty, Expanded, FormattedTextElement,
-    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, Radius, SavePosition,
-    SelectableArea,
-};
-use warpui::{
-    elements::{Border, Container, Flex, ParentElement},
-    AppContext, Element, SingletonEntity,
-};
-use warpui::{View, ViewContext};
-
-use crate::ai::agent::AIAgentCitation;
-use crate::ai::agent::AIAgentInput;
-use crate::ai::blocklist::block::view_impl::header::{
-    render_overflow_menu_button, OVERFLOW_BUTTON_SIZE,
-};
-use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
-use crate::ai::blocklist::model::AIBlockModelHelper;
-use crate::appearance::Appearance;
-use crate::settings::{AISettings, InputModeSettings, InputSettings};
-use crate::terminal::model::blocks::{BlockHeightItem, RemovableBlocklistItem, RichContentItem};
-use crate::terminal::model::rich_content::RichContentType;
-use crate::terminal::TerminalView;
-use crate::util::truncation::truncate_from_end;
-
-use super::secret_redaction::SecretRedactionState;
-use super::{
-    attachment_names, AIBlock, AIBlockAction, DISPATCHED_REQUESTED_EDIT_KEYMAP_CONTEXT,
-    HAS_PENDING_ACTION, RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID,
-};
-
-use super::TextLocation;
-use crate::ai::blocklist::block::view_impl::comments::address_comment_chips;
-use crate::ai::blocklist::block::{DetectedLinksState, RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID};
-use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
-use crate::cloud_object::model::persistence::CloudModel;
-
-use crate::settings_view::SettingsSection;
-use crate::terminal::block_list_element::BlockListMenuSource;
-use crate::terminal::grid_renderer::URL_COLOR;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::terminal::view::TerminalAction;
-use crate::ui_components::blended_colors;
-use crate::ui_components::icons::Icon;
-use crate::util::link_detection::DetectedLinkType;
-use crate::workspace::WorkspaceAction;
-use itertools::Itertools;
 use warp_core::ui::color::contrast::{
     foreground_color_with_minimum_contrast, MinimumAllowedContrast,
 };
 use warp_core::ui::color::Rgb;
 use warp_core::ui::theme::{Fill, WarpTheme};
-use warpui::elements::{Highlight, HighlightedRange, Text};
+use warpui::elements::{
+    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
+    SelectableArea, Text,
+};
 use warpui::fonts::Properties;
 use warpui::platform::Cursor;
 use warpui::text_layout::TextStyle;
 use warpui::ui_components::components::UiComponent;
+use warpui::{AppContext, Element, SingletonEntity, View, ViewContext};
+
+use super::secret_redaction::SecretRedactionState;
+use super::{
+    attachment_names, AIBlock, AIBlockAction, TextLocation,
+    DISPATCHED_REQUESTED_EDIT_KEYMAP_CONTEXT, HAS_PENDING_ACTION,
+    RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID,
+};
+use crate::ai::agent::{AIAgentCitation, AIAgentInput};
+use crate::ai::blocklist::block::view_impl::comments::address_comment_chips;
+use crate::ai::blocklist::block::view_impl::header::{
+    render_overflow_menu_button, OVERFLOW_BUTTON_SIZE,
+};
+use crate::ai::blocklist::block::DetectedLinksState;
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
+use crate::ai::blocklist::model::AIBlockModelHelper;
+use crate::appearance::Appearance;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::settings::{AISettings, InputModeSettings, InputSettings};
+use crate::settings_view::SettingsSection;
+use crate::terminal::block_list_element::BlockListMenuSource;
+use crate::terminal::grid_renderer::URL_COLOR;
+use crate::terminal::model::blocks::{BlockHeightItem, RemovableBlocklistItem, RichContentItem};
+use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
+use crate::terminal::view::TerminalAction;
+use crate::terminal::TerminalView;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
+use crate::util::link_detection::DetectedLinkType;
+use crate::util::truncation::truncate_from_end;
+use crate::view_components::dropdown::DropdownItemAction;
+use crate::workspace::WorkspaceAction;
 
 /// Helper function to create gray strikethrough highlight for secrets
 fn create_secret_gray_highlight() -> Highlight {
@@ -153,27 +147,6 @@ fn add_slash_command_highlight(
             .with_foreground_color(slash_command_foreground_color)
             .with_properties(default_properties)
     }
-}
-
-/// In shared ambient sessions, the first prompt is already shown by
-/// `InitialUserQuery` during live startup/streaming.
-///
-/// To avoid duplicate UI, we suppress the first AI block's header/query only while the viewer is
-/// live (not replaying historical conversation events).
-///
-/// That first prompt is rendered in the ambient-agent query block UI, so this helper only gates
-/// duplicate rendering in the AI block path when that optimistic block was actually inserted.
-fn should_hide_first_ai_block_query_and_header(
-    has_inserted_cloud_mode_user_query_block: bool,
-    is_shared_ambient_agent_session: bool,
-    is_first_exchange: bool,
-    is_receiving_agent_conversation_replay: bool,
-) -> bool {
-    FeatureFlag::CloudModeSetupV2.is_enabled()
-        && has_inserted_cloud_mode_user_query_block
-        && is_shared_ambient_agent_session
-        && is_first_exchange
-        && !is_receiving_agent_conversation_replay
 }
 
 /// Adds the appropriate highlighting for secrets and links to the given text element.
@@ -285,7 +258,7 @@ fn add_highlights_to_text(
                 }
                 text_element = text_element.with_saved_char_position(
                     open_link_tooltip.link_range.start,
-                    RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+                    detected_links_state.resolved_tooltip_position_id(),
                 );
             }
         }
@@ -538,7 +511,7 @@ pub(crate) fn add_highlights_to_rich_text(
                     formatted_text_element = formatted_text_element.with_saved_glyph_position(
                         open_link_tooltip.link_range.start,
                         i,
-                        RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+                        detected_links_state.resolved_tooltip_position_id(),
                     );
                 }
             }
@@ -705,6 +678,15 @@ pub fn render_citation(
             let name = url.clone();
             (Some(icon), name)
         }
+        AIAgentCitation::AgentMemory { content, .. } => {
+            let icon = Icon::Cognition.to_warpui_icon(theme.foreground()).finish();
+            let name = if content.is_empty() {
+                String::from("Memory")
+            } else {
+                content.clone()
+            };
+            (Some(icon), name)
+        }
     };
 
     // Shorten the name to 30 chars.
@@ -746,6 +728,76 @@ pub fn render_citation(
             .with_cursor(Cursor::PointingHand)
             .finish(),
     )
+}
+
+/// Renders the Ask-User-Question speedbump footer: a short description label, a
+/// dropdown for the `ask_user_question` permission, and a right-aligned
+/// "Manage AI Autonomy permissions" link. Matches the visual rhythm of
+/// [`render_autonomy_checkbox_setting_speedbump_footer`].
+pub fn render_autonomy_dropdown_setting_speedbump_footer<A>(
+    description: &'static str,
+    dropdown: &warpui::ViewHandle<crate::view_components::dropdown::Dropdown<A>>,
+    settings_link_handle: MouseStateHandle,
+    app: &AppContext,
+) -> Box<dyn Element>
+where
+    A: DropdownItemAction,
+{
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    Clipped::new(
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Container::new(
+                    Text::new(
+                        description,
+                        appearance.ui_font_family(),
+                        appearance.monospace_font_size() - 1.,
+                    )
+                    .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+                    .with_selectable(false)
+                    .finish(),
+                )
+                .with_margin_right(8.)
+                .finish(),
+            )
+            .with_child(
+                Container::new(warpui::elements::ChildView::new(dropdown).finish())
+                    .with_margin_right(8.)
+                    .finish(),
+            )
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Align::new(
+                        appearance
+                            .ui_builder()
+                            .link(
+                                "Manage AI Autonomy permissions".into(),
+                                None,
+                                Some(Box::new(move |ctx| {
+                                    ctx.dispatch_typed_action(
+                                        WorkspaceAction::ShowSettingsPageWithSearch {
+                                            search_query: "Autonomy".to_string(),
+                                            section: Some(SettingsSection::AI),
+                                        },
+                                    );
+                                })),
+                                settings_link_handle,
+                            )
+                            .build()
+                            .finish(),
+                    )
+                    .right()
+                    .finish(),
+                )
+                .finish(),
+            )
+            .finish(),
+    )
+    .finish()
 }
 
 /// TODO: All AIBlock footer-related rendering logic should probably be put into its own View.
@@ -846,26 +898,6 @@ impl View for AIBlock {
         };
         let addressed_comment_ids = conversation.addressed_comment_ids();
         let mut contents = Flex::column();
-        let (is_shared_ambient_agent_session, is_receiving_agent_conversation_replay) = {
-            let terminal_model = self.terminal_model.lock();
-            (
-                terminal_model.is_shared_ambient_agent_session(),
-                terminal_model.is_receiving_agent_conversation_replay(),
-            )
-        };
-        let is_first_exchange = conversation
-            .first_exchange()
-            .is_some_and(|exchange| exchange.id == self.client_ids.client_exchange_id);
-        let has_inserted_cloud_mode_user_query_block = self
-            .ambient_agent_view_model
-            .as_ref()
-            .is_some_and(|model| model.as_ref(app).has_inserted_cloud_mode_user_query_block());
-        let should_hide_first_block_query_and_header = should_hide_first_ai_block_query_and_header(
-            has_inserted_cloud_mode_user_query_block,
-            is_shared_ambient_agent_session,
-            is_first_exchange,
-            is_receiving_agent_conversation_replay,
-        );
 
         let input_props = input::Props {
             comments: &self.comment_states,
@@ -893,143 +925,135 @@ impl View for AIBlock {
                     element_below_user_query,
                 ))
             });
-        let query_and_index_is_some =
-            query_and_index.is_some() && !should_hide_first_block_query_and_header;
+        let query_and_index_is_some = query_and_index.is_some();
         let attachment_name_list = if FeatureFlag::ImageAsContext.is_enabled() {
             attachment_names(self.model.inputs_to_render(app))
         } else {
             vec![]
         };
-
-        if !should_hide_first_block_query_and_header {
-            if let Some((
-                query_for_display,
-                input_index,
-                query_prefix_highlight_len,
-                elements_below_query,
-            )) = query_and_index
-            {
-                let mut did_render_header = false;
-                if let Some(header) = header::render(
-                    header::Props {
-                        attached_blocks_chip_mouse_state: &self
-                            .state_handles
-                            .attached_blocks_chip_state_handle,
-                        overflow_menu_mouse_state: &self.state_handles.overflow_menu_handle,
-                        rewind_button: &self.rewind_button,
-                        num_attached_context_blocks: self.num_attached_context_blocks,
-                        has_attached_context_selected_text: self.has_attached_context_selected_text,
-                        directory_context: &self.directory_context,
-                        view_id: &self.view_id,
-                        exchange_id: &self.client_ids.client_exchange_id,
-                        conversation_id: &self.client_ids.conversation_id,
-                        is_selected_text_attached_as_context: self
-                            .context_model
-                            .as_ref(app)
-                            .pending_context_selected_text()
-                            .is_some(),
-                        is_restored: self.is_restored(),
-                    },
-                    app,
-                ) {
-                    // Only render the prompt "header" for blocks containing a user query (as opposed to a
-                    // requested command result).
-                    contents.add_child(header.with_content_item_spacing().finish());
-                    did_render_header = true;
-                }
-                // Derive the display info for the participant who initiated this exchange.
-                // For non-shared sessions, this is just the current user.
-                // For shared sessions, this is the user who initiated the request.
-                let (avatar_display_name, profile_image_path, avatar_color) = self
-                    .model
-                    .response_initiator(app)
-                    .and_then(|participant_id| {
-                        app.view_with_id::<TerminalView>(self.window_id, self.terminal_view_id)
-                            .and_then(|terminal_view| {
-                                terminal_view.read(app, |view, app| {
-                                    view.shared_session_presence_manager().and_then(move |pm| {
-                                        pm.as_ref(app).get_participant(&participant_id).map(
-                                            |participant| {
-                                                // Get the display info from the participant
-                                                // who sent this query.
-                                                (
-                                                    participant
-                                                        .info
-                                                        .profile_data
-                                                        .display_name
-                                                        .clone(),
-                                                    participant.info.profile_data.photo_url.clone(),
-                                                    Some(participant.color),
-                                                )
-                                            },
-                                        )
-                                    })
+        if let Some((
+            query_for_display,
+            input_index,
+            query_prefix_highlight_len,
+            elements_below_query,
+        )) = query_and_index
+        {
+            let mut did_render_header = false;
+            if let Some(header) = header::render(
+                header::Props {
+                    attached_blocks_chip_mouse_state: &self
+                        .state_handles
+                        .attached_blocks_chip_state_handle,
+                    overflow_menu_mouse_state: &self.state_handles.overflow_menu_handle,
+                    rewind_button: &self.rewind_button,
+                    num_attached_context_blocks: self.num_attached_context_blocks,
+                    has_attached_context_selected_text: self.has_attached_context_selected_text,
+                    directory_context: &self.directory_context,
+                    view_id: &self.view_id,
+                    exchange_id: &self.client_ids.client_exchange_id,
+                    conversation_id: &self.client_ids.conversation_id,
+                    is_selected_text_attached_as_context: self
+                        .context_model
+                        .as_ref(app)
+                        .pending_context_selected_text()
+                        .is_some(),
+                    is_restored: self.is_restored(),
+                },
+                app,
+            ) {
+                // Only render the prompt "header" for blocks containing a user query (as opposed to a
+                // requested command result).
+                contents.add_child(header.with_content_item_spacing().finish());
+                did_render_header = true;
+            }
+            // Derive the display info for the participant who initiated this exchange.
+            // For non-shared sessions, this is just the current user.
+            // For shared sessions, this is the user who initiated the request.
+            let (avatar_display_name, profile_image_path, avatar_color) = self
+                .model
+                .response_initiator(app)
+                .and_then(|participant_id| {
+                    app.view_with_id::<TerminalView>(self.window_id, self.terminal_view_id)
+                        .and_then(|terminal_view| {
+                            terminal_view.read(app, |view, app| {
+                                view.shared_session_presence_manager().and_then(move |pm| {
+                                    pm.as_ref(app).get_participant(&participant_id).map(
+                                        |participant| {
+                                            // Get the display info from the participant
+                                            // who sent this query.
+                                            (
+                                                participant.info.profile_data.display_name.clone(),
+                                                participant.info.profile_data.photo_url.clone(),
+                                                Some(participant.color),
+                                            )
+                                        },
+                                    )
                                 })
                             })
-                    })
-                    // Fallback to the current user's info if this is not a shared session
-                    // or the participant is not found.
-                    .unwrap_or((
-                        self.user_display_name.clone(),
-                        self.profile_image_path.clone(),
-                        None,
-                    ));
-                if let Some(rendered_query) = query::maybe_render(
-                    query::Props {
-                        user_display_name: &avatar_display_name,
-                        profile_image_path: profile_image_path.as_ref(),
-                        avatar_color,
-                        query_and_index: Some((&query_for_display, input_index)),
-                        query_prefix_highlight_len,
-                        detected_links_state: &self.detected_links_state,
-                        secret_redaction_state: &self.secret_redaction_state,
-                        is_selecting_text: self.state_handles.selection_handle.is_selecting(),
-                        is_ai_input_enabled: self
-                            .context_model
-                            .as_ref(app)
-                            .pending_context_selected_text()
-                            .is_some(),
-                        attachments: &attachment_name_list,
-                        find_context: self.find_model.as_ref(app).is_find_bar_open().then_some(
-                            FindContext {
-                                model: self.find_model.as_ref(app),
-                                state: &self.find_state,
-                            },
-                        ),
-                    },
-                    app,
-                ) {
-                    if did_render_header {
-                        contents.add_child(rendered_query.with_content_item_spacing().finish());
-                    } else {
-                        // The query element is designed to be exactly icon_size() height.
-                        let rendered_query_height = icon_size(app);
-                        let margin_bottom = (CONTENT_ITEM_VERTICAL_MARGIN
-                            - (OVERFLOW_BUTTON_SIZE - rendered_query_height).max(0.))
-                        .max(0.);
-                        contents.add_child(
-                            Flex::row()
-                                .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                                .with_child(Expanded::new(1., rendered_query).finish())
-                                .with_child(render_overflow_menu_button(
-                                    self.state_handles.overflow_menu_handle.clone(),
-                                    self.view_id,
-                                    self.client_ids.client_exchange_id,
-                                    self.client_ids.conversation_id,
-                                    self.is_restored(),
-                                    app,
-                                ))
-                                .finish()
-                                .with_content_item_spacing()
-                                .with_margin_bottom(margin_bottom)
-                                .finish(),
-                        );
-                    }
+                        })
+                })
+                // Fallback to the current user's info if this is not a shared session
+                // or the participant is not found.
+                .unwrap_or((
+                    self.user_display_name.clone(),
+                    self.profile_image_path.clone(),
+                    None,
+                ));
+            if let Some(rendered_query) = query::maybe_render(
+                query::Props {
+                    user_display_name: &avatar_display_name,
+                    profile_image_path: profile_image_path.as_ref(),
+                    avatar_color,
+                    query_and_index: Some((&query_for_display, input_index)),
+                    query_prefix_highlight_len,
+                    detected_links_state: &self.detected_links_state,
+                    secret_redaction_state: &self.secret_redaction_state,
+                    is_selecting_text: self.state_handles.selection_handle.is_selecting(),
+                    is_ai_input_enabled: self
+                        .context_model
+                        .as_ref(app)
+                        .pending_context_selected_text()
+                        .is_some(),
+                    attachments: &attachment_name_list,
+                    find_context: self.find_model.as_ref(app).is_find_bar_open().then_some(
+                        FindContext {
+                            model: self.find_model.as_ref(app),
+                            state: &self.find_state,
+                        },
+                    ),
+                },
+                app,
+            ) {
+                if did_render_header {
+                    contents.add_child(rendered_query.with_content_item_spacing().finish());
+                } else {
+                    // The query element is designed to be exactly icon_size() height.
+                    let rendered_query_height = icon_size(app);
+                    let margin_bottom = (CONTENT_ITEM_VERTICAL_MARGIN
+                        - (OVERFLOW_BUTTON_SIZE - rendered_query_height).max(0.))
+                    .max(0.);
+                    contents.add_child(
+                        Flex::row()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                            .with_child(Expanded::new(1., rendered_query).finish())
+                            .with_child(render_overflow_menu_button(
+                                self.state_handles.overflow_menu_handle.clone(),
+                                self.view_id,
+                                self.client_ids.client_exchange_id,
+                                self.client_ids.conversation_id,
+                                self.is_restored(),
+                                app,
+                            ))
+                            .finish()
+                            .with_content_item_spacing()
+                            .with_margin_bottom(margin_bottom)
+                            .finish(),
+                    );
                 }
+            }
 
-                if let Some(element) = elements_below_query {
-                    contents.add_child(element.with_agent_output_item_spacing(app).finish());
-                }
+            if let Some(element) = elements_below_query {
+                contents.add_child(element.with_agent_output_item_spacing(app).finish());
             }
         }
 
@@ -1037,7 +1061,21 @@ impl View for AIBlock {
         let terminal_model = self.terminal_model.lock();
         let shared_session_status = terminal_model.shared_session_status().clone();
         let is_conversation_transcript_viewer = terminal_model.is_conversation_transcript_viewer();
+
+        let is_cloud_agent_pre_first_exchange = is_cloud_agent_pre_first_exchange(
+            self.ambient_agent_view_model.as_ref(),
+            &self.agent_view_controller,
+            &terminal_model,
+            app,
+        );
         drop(terminal_model);
+
+        #[cfg(not(target_family = "wasm"))]
+        let is_cloud_agent_context = FeatureFlag::CloudMode.is_enabled()
+            && self
+                .ambient_agent_view_model
+                .as_ref()
+                .is_some_and(|model| model.as_ref(app).is_ambient_agent());
 
         contents.add_child(output::render(
             output::Props {
@@ -1046,6 +1084,7 @@ impl View for AIBlock {
                 action_buttons: &self.action_buttons,
                 view_screenshot_buttons: &self.view_screenshot_buttons,
                 action_model: &self.action_model,
+                active_session: &self.active_session,
                 editor_views: &self.code_editor_views,
                 current_working_directory: self.current_working_directory.as_ref(),
                 shell_launch_data: self.shell_launch_data.as_ref(),
@@ -1091,10 +1130,13 @@ impl View for AIBlock {
                 shared_session_status: &shared_session_status,
                 terminal_view_id: self.terminal_view_id,
                 is_conversation_transcript_viewer,
+                #[cfg(not(target_family = "wasm"))]
+                is_cloud_agent_context,
                 aws_bedrock_credentials_error_view: self
                     .aws_bedrock_credentials_error_view
                     .as_ref(),
                 imported_comments: &self.imported_comments,
+                run_agents_card_views: &self.run_agents_card_views,
                 #[cfg(feature = "local_fs")]
                 resolved_code_block_paths: &self.resolved_code_block_paths,
                 #[cfg(feature = "local_fs")]
@@ -1102,9 +1144,10 @@ impl View for AIBlock {
                 thinking_display_mode: AISettings::as_ref(app).thinking_display_mode,
                 conversation_has_imported_comments: self
                     .model
-                    .is_latest_non_passive_exchange_in_root_task(app)
+                    .is_latest_visible_exchange_in_root_task(app)
                     && self.has_imported_comments_in_current_thread(app),
                 ask_user_question_view: self.ask_user_question_view.as_ref(),
+                is_cloud_agent_pre_first_exchange,
             },
             app,
         ));
@@ -1182,10 +1225,9 @@ impl View for AIBlock {
                     false
                 }
             });
-        let should_add_top_padding = !should_hide_first_block_query_and_header
-            && (contains_user_query_and_is_not_pin_to_top
-                || renders_below_requested_command_view
-                || (!is_previous_blocklist_item_ai_block && !self.is_passive_conversation(app)));
+        let should_add_top_padding = contains_user_query_and_is_not_pin_to_top
+            || renders_below_requested_command_view
+            || (!is_previous_blocklist_item_ai_block && !self.is_passive_conversation(app));
 
         if should_add_top_padding {
             content = content.with_padding_top(CONTENT_VERTICAL_PADDING);
@@ -1197,8 +1239,11 @@ impl View for AIBlock {
 
         let mut selectable = SelectableArea::new(
             self.state_handles.selection_handle.clone(),
-            move |selection_args, _, _| {
-                *selected_text.write() = selection_args.selection;
+            move |selection_args, ctx, _| {
+                *selected_text.write() = selection_args
+                    .selection
+                    .filter(|selection| !selection.is_empty());
+                ctx.dispatch_typed_action(AIBlockAction::SelectText);
             },
             SavePosition::new(content.finish(), self.saved_position_id().as_str()).finish(),
         )
@@ -1343,7 +1388,8 @@ impl AIAgentInput {
             | AIAgentInput::ActionResult { .. }
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
-            | AIAgentInput::PassiveSuggestionResult { .. } => None,
+            | AIAgentInput::PassiveSuggestionResult { .. }
+            | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
         }
     }
 }

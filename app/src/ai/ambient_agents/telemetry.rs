@@ -1,9 +1,10 @@
-use crate::server::ids::ServerId;
 use serde::Serialize;
 use serde_json::{json, Value};
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::features::FeatureFlag;
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
+
+use crate::server::ids::ServerId;
 
 /// The entry point through which Cloud Mode was entered.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -17,6 +18,41 @@ pub enum CloudModeEntryPoint {
     OzLaunchModal,
     /// User re-entered Cloud Mode by clicking on an ambient agent entry block.
     EntryBlock,
+}
+
+/// The entry point through which a local-to-cloud handoff was initiated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffEntryPoint {
+    /// User typed `&` in the input to enter handoff compose mode.
+    #[default]
+    Ampersand,
+    /// User used the `/handoff` slash command.
+    SlashCommand,
+    /// User clicked the "Hand off to cloud" chip in the footer toolbar.
+    FooterChip,
+    /// The client automatically initiated handoff for an eligible local agent.
+    Automatic,
+}
+
+/// Describes which synthetic-input path drives an empty-prompt handoff.
+/// Captured at handoff initiation so telemetry reflects the intended path
+/// regardless of whether the snapshot derivation later produces content.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffInjectionPath {
+    /// The handoff carried a non-empty user prompt; no client-side injection.
+    #[default]
+    None,
+    /// Empty prompt + in-progress source. The client substituted `"Continue"`
+    /// on the wire so the cloud agent picks up where the local agent left off.
+    Continue,
+    /// Empty prompt + idle source. The client substituted
+    /// `"Apply the workspace changes from my previous session."` on the wire
+    /// alongside the snapshot token; the cloud agent's first user-role turn
+    /// carries an intent for the rehydrated workspace state.
+    SnapshotRehydration,
 }
 
 /// Telemetry events for client interactions with cloud agents.
@@ -69,6 +105,41 @@ pub enum CloudAgentTelemetryEvent {
         /// Error message describing the failure.
         error: String,
     },
+    /// User initiated a local-to-cloud handoff.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    HandoffInitiated {
+        /// How the handoff was triggered.
+        entry_point: HandoffEntryPoint,
+        /// Whether the handoff forked an existing conversation.
+        forked_existing_conversation: bool,
+        /// Whether the user submitted with an empty prompt buffer.
+        empty_prompt: bool,
+        /// Which synthetic-input path drives this submission (relevant only
+        /// when `empty_prompt` is true; always `None` otherwise). Captured at
+        /// handoff initiation, before snapshot derivation has settled — the
+        /// `HandoffSnapshotPrepared` event reports the actual snapshot result.
+        injection_path: HandoffInjectionPath,
+    },
+    /// The async snapshot-upload pipeline that backs a handoff has settled.
+    /// Fires once per handoff after `derive_touched_workspace` completes.
+    /// Pair with `HandoffInitiated` on the same run to learn whether the
+    /// `SnapshotRehydration` injection path actually carried snapshot content.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    HandoffSnapshotPrepared {
+        /// True when the derived `TouchedWorkspace` had at least one repo or
+        /// orphan file. Reports what the snapshot pipeline produced; the upload
+        /// itself may still fail downstream, so the wire prompt is not implied.
+        derived_workspace_had_content: bool,
+    },
+    /// The auto-handoff sleep discoverability prompt was surfaced on wake.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    SleepPromptShown,
+    /// User clicked "Enable" on the auto-handoff sleep prompt.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    SleepPromptEnabled,
+    /// User clicked "Dismiss" on the auto-handoff sleep prompt.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    SleepPromptDismissed,
 }
 
 impl TelemetryEvent for CloudAgentTelemetryEvent {
@@ -108,6 +179,25 @@ impl TelemetryEvent for CloudAgentTelemetryEvent {
             CloudAgentTelemetryEvent::DispatchFailed { error } => Some(json!({
                 "error": error,
             })),
+            CloudAgentTelemetryEvent::HandoffInitiated {
+                entry_point,
+                forked_existing_conversation,
+                empty_prompt,
+                injection_path,
+            } => Some(json!({
+                "entry_point": entry_point,
+                "forked_existing_conversation": forked_existing_conversation,
+                "empty_prompt": empty_prompt,
+                "injection_path": injection_path,
+            })),
+            CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
+                derived_workspace_had_content,
+            } => Some(json!({
+                "derived_workspace_had_content": derived_workspace_had_content,
+            })),
+            CloudAgentTelemetryEvent::SleepPromptShown
+            | CloudAgentTelemetryEvent::SleepPromptEnabled
+            | CloudAgentTelemetryEvent::SleepPromptDismissed => None,
         }
     }
 
@@ -149,6 +239,11 @@ impl TelemetryEventDesc for CloudAgentTelemetryEventDiscriminants {
                 "AmbientAgent.CloudMode.EnvironmentSettings.GitHubAuth"
             }
             Self::DispatchFailed => "AmbientAgent.DispatchFailed",
+            Self::HandoffInitiated => "AmbientAgent.Handoff.Initiated",
+            Self::HandoffSnapshotPrepared => "AmbientAgent.Handoff.SnapshotPrepared",
+            Self::SleepPromptShown => "AmbientAgent.Handoff.SleepPrompt.Shown",
+            Self::SleepPromptEnabled => "AmbientAgent.Handoff.SleepPrompt.Enabled",
+            Self::SleepPromptDismissed => "AmbientAgent.Handoff.SleepPrompt.Dismissed",
         }
     }
 
@@ -170,6 +265,19 @@ impl TelemetryEventDesc for CloudAgentTelemetryEventDiscriminants {
                 "User started GitHub authentication from the environment form"
             }
             Self::DispatchFailed => "Ambient agent failed to dispatch or encountered an error",
+            Self::HandoffInitiated => "User initiated a local-to-cloud handoff",
+            Self::HandoffSnapshotPrepared => {
+                "Handoff snapshot upload settled; reports whether it carried content"
+            }
+            Self::SleepPromptShown => {
+                "The auto-handoff sleep discoverability prompt was shown on wake"
+            }
+            Self::SleepPromptEnabled => {
+                "User enabled auto-handoff on sleep from the discoverability prompt"
+            }
+            Self::SleepPromptDismissed => {
+                "User dismissed the auto-handoff sleep discoverability prompt"
+            }
         }
     }
 

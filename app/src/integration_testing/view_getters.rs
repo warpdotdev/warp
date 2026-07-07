@@ -5,27 +5,24 @@
 //! how many panes are in each tab.
 //! See https://github.com/warpdotdev/warp-internal/pull/4785#issue-1634862270
 
-use crate::view_components::find::FindEvent;
-use crate::view_components::find::FindModel;
-use crate::{
-    ai_assistant::panel::AIAssistantPanelView,
-    input_suggestions::InputSuggestions,
-    notebooks::notebook::NotebookView,
-    pane_group::{PaneGroup, PaneView},
-    root_view::RootView,
-    search::{
-        command_palette::{self},
-        command_search::view::CommandSearchView,
-    },
-    settings_view::keybindings::KeybindingsView,
-    terminal::{input::Input, TerminalView},
-    themes::theme_chooser::ThemeChooser,
-    view_components::find::Find,
-    workflows::{workflow_view::WorkflowView, CategoriesView},
-    workspace::Workspace,
-};
-use warpui::Entity;
-use warpui::{async_assert, integration::AssertionCallback, App, View, ViewHandle, WindowId};
+use warpui::integration::AssertionCallback;
+use warpui::{async_assert, App, Entity, View, ViewHandle, WindowId};
+
+use crate::ai_assistant::panel::AIAssistantPanelView;
+use crate::input_suggestions::InputSuggestions;
+use crate::notebooks::notebook::NotebookView;
+use crate::pane_group::{PaneGroup, PaneView};
+use crate::root_view::RootView;
+use crate::search::command_palette::{self};
+use crate::search::command_search::view::CommandSearchView;
+use crate::settings_view::keybindings::KeybindingsView;
+use crate::terminal::input::Input;
+use crate::terminal::TerminalView;
+use crate::themes::theme_chooser::ThemeChooser;
+use crate::view_components::find::{Find, FindEvent, FindModel};
+use crate::workflows::workflow_view::WorkflowView;
+use crate::workflows::CategoriesView;
+use crate::workspace::Workspace;
 
 /// This identifier is useful when you'd like to weakly identify a terminal view
 /// without actually grabbing a handle to it. Often useful when writing reusable assertions.
