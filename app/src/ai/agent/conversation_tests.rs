@@ -180,6 +180,15 @@ fn stop_recording_success_result(artifact_uid: &str) -> api::message::tool_call_
     })
 }
 
+fn stop_recording_error_result(message: &str) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::StopRecording(api::StopRecordingResult {
+        result: Some(api::stop_recording_result::Result::Error(
+            api::stop_recording_result::Error {
+                message: message.to_string(),
+            },
+        )),
+    })
+}
 fn restored_conversation_with_messages(messages: Vec<api::Message>) -> AIConversation {
     AIConversation::new_restored(
         AIConversationId::new(),
@@ -440,6 +449,41 @@ fn recording_span_ignores_mismatched_stop_id() {
     assert_eq!(span.recording_id, "rec-1");
     assert!(span.is_open());
     assert_eq!(span.artifact_uid, None);
+}
+
+#[test]
+fn recording_span_clears_when_stop_errors() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_message(
+            "stop-call",
+            "req-1",
+            "stop",
+            stop_recording_tool_call("rec-1"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_success_result("rec-1"),
+        ),
+        tool_call_result_message(
+            "stop-result",
+            "req-2",
+            "stop",
+            stop_recording_error_result("upload failed"),
+        ),
+    ]);
+
+    assert!(conversation
+        .recording_span_for_action(&"use".to_string().into(), None)
+        .is_none());
 }
 
 #[test]

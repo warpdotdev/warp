@@ -3,7 +3,6 @@
 #[cfg_attr(windows, path = "windows/mod.rs")]
 #[cfg(not(noop))]
 mod imp;
-mod mock_recorder;
 mod noop;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
@@ -53,8 +52,6 @@ pub enum RecordingError {
     #[error("Recording failed to finalize: {reason}")]
     Finalize { reason: String },
 }
-
-pub(crate) const MOCK_RECORDER_ENV_VAR: &str = "WARP_COMPUTER_USE_MOCK_RECORDER";
 
 /// Returns an actor that can perform actions on the computer.
 pub fn create_actor() -> Box<dyn Actor> {
@@ -190,14 +187,12 @@ pub trait Actor: Send + Sync + 'static {
 
 /// Returns a recorder that can capture a video of the computer-use display.
 ///
-/// A real recorder is only available on Linux (X11). Test builds and debug
-/// builds with `WARP_COMPUTER_USE_MOCK_RECORDER` use a synthetic recorder;
-/// every other unsupported platform gets a no-op recorder.
+/// A real recorder is only available on Linux (X11); every other platform, and
+/// any `test-util` build, gets a no-op recorder that reports recording as
+/// unsupported.
 pub fn create_recorder() -> Box<dyn Recorder> {
-    if cfg!(feature = "test-util")
-        || (cfg!(debug_assertions) && std::env::var_os(MOCK_RECORDER_ENV_VAR).is_some())
-    {
-        Box::new(mock_recorder::Recorder::new())
+    if cfg!(feature = "test-util") {
+        Box::new(noop::Recorder::new())
     } else {
         Box::new(imp::Recorder::new())
     }
@@ -249,53 +244,18 @@ impl Default for RecordingConfig {
 pub struct RecordingHandle {
     width: u32,
     height: u32,
-    pub(crate) mock_path: Option<PathBuf>,
-    pub(crate) mock_started_at: Option<instant::Instant>,
     // The live capture process plus the fields used to finalize it are only
     // populated by the real Linux recorder; the no-op recorders never construct
     // a handle.
     #[cfg(linux)]
-    path: Option<PathBuf>,
+    path: PathBuf,
     #[cfg(linux)]
-    started_at: Option<instant::Instant>,
+    started_at: instant::Instant,
     #[cfg(linux)]
-    process: Option<tokio::process::Child>,
+    process: tokio::process::Child,
 }
 
 impl RecordingHandle {
-    pub(crate) fn new_mock(width: u32, height: u32, path: PathBuf) -> Self {
-        Self {
-            width,
-            height,
-            mock_path: Some(path),
-            mock_started_at: Some(instant::Instant::now()),
-            #[cfg(linux)]
-            path: None,
-            #[cfg(linux)]
-            started_at: None,
-            #[cfg(linux)]
-            process: None,
-        }
-    }
-
-    #[cfg(linux)]
-    pub(crate) fn new_linux(
-        width: u32,
-        height: u32,
-        path: PathBuf,
-        started_at: instant::Instant,
-        process: tokio::process::Child,
-    ) -> Self {
-        Self {
-            width,
-            height,
-            mock_path: None,
-            mock_started_at: None,
-            path: Some(path),
-            started_at: Some(started_at),
-            process: Some(process),
-        }
-    }
     /// The applied capture width in pixels.
     pub fn width(&self) -> u32 {
         self.width

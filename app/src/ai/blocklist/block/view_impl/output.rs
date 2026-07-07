@@ -53,6 +53,7 @@ use super::{
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
+use crate::ai::agent::conversation::RecordingSpanInfo;
 use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -242,6 +243,14 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
         | AIBlockOutputStatus::Failed { .. } => {
             if let Some(output) = status.output_to_render() {
                 let output = output.get();
+                let recording_spans_by_action_id = props
+                    .model
+                    .conversation(app)
+                    .map(|conversation| {
+                        conversation
+                            .recording_spans_by_action_id(Some(props.action_model.as_ref(app)))
+                    })
+                    .unwrap_or_default();
                 let is_complete = matches!(status, AIBlockOutputStatus::Complete { .. });
                 let is_output_for_static_prompt_suggestions =
                     props.model.contains_static_prompt_suggestion_input(app);
@@ -746,7 +755,13 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             ..
                         }) => {
                             should_render_footer = false;
-                            output_items.add_child(render_use_computer(props, id, request, app));
+                            output_items.add_child(render_use_computer(
+                                props,
+                                id,
+                                request,
+                                recording_spans_by_action_id.get(id),
+                                app,
+                            ));
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
                             action: AIAgentActionType::StartRecording { .. },
@@ -1852,6 +1867,26 @@ fn render_read_skill(
     renderable_action.render(app).finish()
 }
 
+fn render_small_secondary_action_button(
+    appearance: &Appearance,
+    button: &ui_components::button::Button,
+    label: &'static str,
+    on_click: ui_components::MouseEventHandler,
+) -> Box<dyn Element> {
+    button.render(
+        appearance,
+        button::Params {
+            content: button::Content::Label(label.into()),
+            theme: &button::themes::Secondary,
+            options: button::Options {
+                size: button::Size::Small,
+                on_click: Some(on_click),
+                ..button::Options::default(appearance)
+            },
+        },
+    )
+}
+
 fn render_read_files(
     props: Props,
     id: &AIAgentActionId,
@@ -2881,7 +2916,7 @@ fn render_upload_artifact(
 
     renderable_action.render(app).finish()
 }
-fn recording_description(props: Props, app: &AppContext) -> String {
+fn recording_summary(props: Props, app: &AppContext) -> String {
     // TODO: Replace conversation.title() with StartRecording's agent-supplied description once available.
     props
         .model
@@ -3015,7 +3050,7 @@ fn render_start_recording(
             AIAgentActionResultType::StartRecording(result) => Some(result),
             _ => None,
         });
-    let text = start_recording_card_text(&recording_description(props, app), result);
+    let text = start_recording_card_text(&recording_summary(props, app), result);
     recording_card(text, None, app)
 }
 
@@ -3061,21 +3096,15 @@ fn render_stop_recording(
         if !stopped.artifact_uid.trim().is_empty() {
             let artifact_uid = stopped.artifact_uid.clone();
             action_button = props.open_recording_buttons.get(action_id).map(|btn| {
-                btn.render(
+                render_small_secondary_action_button(
                     appearance,
-                    button::Params {
-                        content: button::Content::Label("Open recording".into()),
-                        theme: &button::themes::Secondary,
-                        options: button::Options {
-                            size: button::Size::Small,
-                            on_click: Some(Box::new(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(AIBlockAction::OpenRecordingArtifact {
-                                    artifact_uid: artifact_uid.clone(),
-                                });
-                            })),
-                            ..button::Options::default(appearance)
-                        },
-                    },
+                    btn,
+                    "Open recording",
+                    Box::new(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(AIBlockAction::OpenRecordingArtifact {
+                            artifact_uid: artifact_uid.clone(),
+                        });
+                    }),
                 )
             });
         }
@@ -3088,6 +3117,7 @@ fn render_use_computer(
     props: Props,
     action_id: &AIAgentActionId,
     request: &UseComputerRequest,
+    recording_span: Option<&RecordingSpanInfo>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::handle(app).as_ref(app);
@@ -3095,9 +3125,6 @@ fn render_use_computer(
     let mut renderable_action = RenderableAction::new(&request.action_summary, app)
         .with_icon(action_icon(action_id, props.action_model, props.model, app).finish());
 
-    let recording_span = props.model.conversation(app).and_then(|conversation| {
-        conversation.recording_span_for_action(action_id, Some(props.action_model.as_ref(app)))
-    });
     if should_decorate_recorded_use_computer(request) {
         if let Some(recording_span) = recording_span {
             renderable_action = renderable_action
@@ -3122,21 +3149,15 @@ fn render_use_computer(
     if has_screenshot {
         let action_id_clone = action_id.clone();
         let view_screenshot_button = props.view_screenshot_buttons.get(action_id).map(|btn| {
-            btn.render(
+            render_small_secondary_action_button(
                 appearance,
-                button::Params {
-                    content: button::Content::Label("View screenshot".into()),
-                    theme: &button::themes::Secondary,
-                    options: button::Options {
-                        size: button::Size::Small,
-                        on_click: Some(Box::new(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(AIBlockAction::ViewScreenshot {
-                                action_id: action_id_clone.clone(),
-                            });
-                        })),
-                        ..button::Options::default(appearance)
-                    },
-                },
+                btn,
+                "View screenshot",
+                Box::new(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AIBlockAction::ViewScreenshot {
+                        action_id: action_id_clone.clone(),
+                    });
+                }),
             )
         });
 

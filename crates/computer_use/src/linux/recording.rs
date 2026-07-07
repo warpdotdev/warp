@@ -99,13 +99,13 @@ impl crate::Recorder for Recorder {
         }
         let _ = std::fs::remove_file(&log_path);
 
-        Ok(RecordingHandle::new_linux(
+        Ok(RecordingHandle {
             width,
             height,
             path,
-            Instant::now(),
+            started_at: Instant::now(),
             process,
-        ))
+        })
     }
 
     async fn stop(&self, handle: RecordingHandle) -> Result<RecordingOutput, RecordingError> {
@@ -114,18 +114,8 @@ impl crate::Recorder for Recorder {
             height,
             path,
             started_at,
-            process,
-            ..
+            mut process,
         } = handle;
-        let path = path.ok_or_else(|| RecordingError::Finalize {
-            reason: "missing recording output path".to_string(),
-        })?;
-        let started_at = started_at.ok_or_else(|| RecordingError::Finalize {
-            reason: "missing recording start time".to_string(),
-        })?;
-        let mut process = process.ok_or_else(|| RecordingError::Finalize {
-            reason: "missing recording process".to_string(),
-        })?;
 
         let duration = started_at.elapsed();
 

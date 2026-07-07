@@ -1723,8 +1723,18 @@ impl AIConversation {
         action_id: &AIAgentActionId,
         action_model: Option<&crate::ai::blocklist::BlocklistAIActionModel>,
     ) -> Option<RecordingSpanInfo> {
+        self.recording_spans_by_action_id(action_model)
+            .get(action_id)
+            .cloned()
+    }
+
+    pub fn recording_spans_by_action_id(
+        &self,
+        action_model: Option<&crate::ai::blocklist::BlocklistAIActionModel>,
+    ) -> HashMap<AIAgentActionId, RecordingSpanInfo> {
         let mut active_span: Option<RecordingSpanInfo> = None;
-        let mut matched_span: Option<RecordingSpanInfo> = None;
+        let mut active_action_ids: Vec<AIAgentActionId> = Vec::new();
+        let mut spans_by_action_id = HashMap::new();
 
         for exchange in self.all_exchanges() {
             let Some(output) = exchange.output_status.output() else {
@@ -1747,14 +1757,16 @@ impl AIConversation {
                                 stop_action_id: None,
                                 artifact_uid: None,
                             });
-                            if &action.id == action_id {
-                                matched_span = active_span.clone();
+                            active_action_ids = vec![action.id.clone()];
+                            if let Some(span) = active_span.as_ref() {
+                                spans_by_action_id.insert(action.id.clone(), span.clone());
                             }
                         }
                     }
                     AIAgentActionType::UseComputer(_) => {
-                        if &action.id == action_id {
-                            matched_span = active_span.clone();
+                        if let Some(span) = active_span.as_ref() {
+                            active_action_ids.push(action.id.clone());
+                            spans_by_action_id.insert(action.id.clone(), span.clone());
                         }
                     }
                     AIAgentActionType::StopRecording { recording_id } => {
@@ -1765,37 +1777,33 @@ impl AIConversation {
                             continue;
                         }
 
-                        let mut stopped_span = span.clone();
-                        let should_close =
-                            match self.action_result_type_for_action(&action.id, action_model) {
-                                Some(AIAgentActionResultType::StopRecording(
-                                    StopRecordingResult::Success(stopped),
-                                )) => {
-                                    stopped_span.stop_action_id = Some(action.id.clone());
-                                    stopped_span.artifact_uid = Some(stopped.artifact_uid.clone());
-                                    true
+                        match self.action_result_type_for_action(&action.id, action_model) {
+                            Some(AIAgentActionResultType::StopRecording(
+                                StopRecordingResult::Success(stopped),
+                            )) => {
+                                let mut stopped_span = span.clone();
+                                stopped_span.stop_action_id = Some(action.id.clone());
+                                stopped_span.artifact_uid = Some(stopped.artifact_uid.clone());
+                                for action_id in active_action_ids.drain(..) {
+                                    spans_by_action_id.insert(action_id, stopped_span.clone());
                                 }
-                                Some(AIAgentActionResultType::StopRecording(
-                                    StopRecordingResult::Error(_),
-                                ))
-                                | Some(AIAgentActionResultType::StopRecording(
-                                    StopRecordingResult::Cancelled,
-                                )) => {
-                                    stopped_span.stop_action_id = Some(action.id.clone());
-                                    true
+                                spans_by_action_id.insert(action.id.clone(), stopped_span);
+                                active_span = None;
+                            }
+                            Some(AIAgentActionResultType::StopRecording(
+                                StopRecordingResult::Error(_),
+                            ))
+                            | Some(AIAgentActionResultType::StopRecording(
+                                StopRecordingResult::Cancelled,
+                            )) => {
+                                // Failed or cancelled stops did not save a recording, so remove the
+                                // provisional open-span attribution from captured action rows.
+                                for action_id in active_action_ids.drain(..) {
+                                    spans_by_action_id.remove(&action_id);
                                 }
-                                _ => false,
-                            };
-                        if should_close
-                            && (matched_span.as_ref().is_some_and(|matched| {
-                                matched.recording_id == stopped_span.recording_id
-                            }) || &action.id == action_id)
-                        {
-                            matched_span = Some(stopped_span.clone());
-                        }
-
-                        if should_close {
-                            active_span = None;
+                                active_span = None;
+                            }
+                            _ => {}
                         }
                     }
                     _ => {}
@@ -1803,7 +1811,7 @@ impl AIConversation {
             }
         }
 
-        matched_span
+        spans_by_action_id
     }
 
     fn action_result_type_for_action<'a>(
