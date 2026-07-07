@@ -59,10 +59,6 @@ struct ActiveCommandsContext {
     active_conversation_is_cloud_oz: bool,
     has_default_host: bool,
     is_cli_agent_input: bool,
-    /// True when this pane is a disconnected cloud follow-up composer: commands that would
-    /// continue the conversation on the local agent are hidden so a follow-up starts a new cloud
-    /// VM instead.
-    is_disconnected_cloud_followup: bool,
 }
 
 pub struct SlashCommandDataSource {
@@ -87,8 +83,8 @@ impl SlashCommandDataSource {
 
     /// Attaches an ambient agent view model after construction. Used on the shared-session viewer
     /// path where the model is created lazily at `SessionJoined`, after the data source was built
-    /// with `None`. Keeps cloud-follow-up command gating (e.g. `is_disconnected_cloud_followup`)
-    /// correct for a link-join viewer. Idempotent: a no-op when a model is already set.
+    /// with `None`. Keeps cloud-mode command and skill gating correct for a link-join viewer.
+    /// Idempotent: a no-op when a model is already set.
     pub fn set_ambient_agent_view_model(
         &mut self,
         ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
@@ -240,15 +236,6 @@ impl SlashCommandDataSource {
                     .is_some_and(|model| model.as_ref(ctx).is_ambient_agent()))
     }
 
-    /// True when this pane is a disconnected cloud follow-up composer (an existing cloud run with
-    /// no live session, ready to accept a follow-up prompt). Used to hide slash commands and
-    /// skills that would otherwise continue the conversation on the local agent.
-    fn is_disconnected_cloud_followup(&self, ctx: &AppContext) -> bool {
-        self.ambient_agent_view_model
-            .as_ref()
-            .is_some_and(|model| model.as_ref(ctx).is_ready_for_cloud_followup_prompt())
-    }
-
     fn recompute_active_commands(&mut self, ctx: &mut ModelContext<Self>) {
         let active_commands_context = self.active_commands_context(ctx);
 
@@ -355,7 +342,6 @@ impl SlashCommandDataSource {
             active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
             has_default_host,
             is_cli_agent_input,
-            is_disconnected_cloud_followup: self.is_disconnected_cloud_followup(ctx),
         }
     }
 
@@ -365,13 +351,6 @@ impl SlashCommandDataSource {
         context: &ActiveCommandsContext,
     ) -> bool {
         if !command.is_active(context.session_context) {
-            return false;
-        }
-        // On a disconnected cloud follow-up composer, hide commands that would continue the
-        // conversation on the local agent; a follow-up must start a new cloud VM instead.
-        if context.is_disconnected_cloud_followup
-            && super::slash_command_continues_conversation_locally(command)
-        {
             return false;
         }
         if command.name == commands::ORCHESTRATE_NAME && !context.is_orchestration_enabled {
@@ -561,12 +540,12 @@ impl SyncDataSource for SlashCommandDataSource {
         }
 
         // Also search skills — when CLI agent input is open, filter to natively supported providers.
-        // Skills are invoked by the agent, so they're hidden entirely when AI is globally off, and
-        // on a disconnected cloud follow-up composer (a skill would run locally; a follow-up must
-        // start a new cloud VM instead).
+        // Skills invoke locally, so they're hidden when AI is globally off or on any cloud pane
+        // (live viewer, disconnected follow-up, or read-only tombstone): running a skill locally
+        // is disconnected from the remote session in all of those cases.
         if FeatureFlag::ListSkills.is_enabled()
             && AISettings::as_ref(app).is_any_ai_enabled(app)
-            && !self.is_disconnected_cloud_followup(app)
+            && !self.is_cloud_mode(app)
         {
             let cli_agent_providers = self.active_cli_agent_providers(app);
             let active_session = self.active_session.as_ref(app);

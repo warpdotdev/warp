@@ -393,20 +393,6 @@ impl Input {
             return true;
         }
 
-        // Never continue a remote cloud conversation on the local agent. Commands that send a new
-        // turn to the local controller are blocked when this pane is a disconnected cloud
-        // follow-up composer or a read-only cloud transcript (they are also hidden from the slash
-        // menu in that state); this no-op covers typed/keybinding execution.
-        if slash_command_continues_conversation_locally(command)
-            && self.ai_query_routing(ctx).blocks_local_continuation()
-        {
-            show_error_toast(
-                "This cloud conversation can't continue on your local machine.".to_owned(),
-                ctx,
-            );
-            return true;
-        }
-
         // Handle the slash command action based on its kind
         match command.name {
             add_mcp if command.name == commands::ADD_MCP.name => {
@@ -1479,16 +1465,6 @@ pub(crate) fn slash_command_is_submitted_as_prompt(command: &StaticCommand) -> b
     command.name == commands::COMPACT.name
         || command.name == commands::PLAN.name
         || command.name == commands::ORCHESTRATE.name
-}
-
-/// Whether executing this static slash command continues the active conversation by sending a new
-/// turn to the local agent controller (so it must be blocked on a disconnected/read-only remote
-/// cloud pane, where a follow-up should start a new cloud VM instead of running locally).
-///
-/// Commands that merely open menus, dispatch UI actions, or explicitly fork to a new local pane
-/// (`/fork`, `/continue-locally`) are intentionally excluded.
-fn slash_command_continues_conversation_locally(command: &StaticCommand) -> bool {
-    command.name == commands::PR_COMMENTS.name || command.name == commands::QUEUE.name
 }
 
 /// Returns true when the conversation with `conversation_id` is associated with an Oz

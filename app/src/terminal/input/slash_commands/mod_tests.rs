@@ -1,4 +1,4 @@
-use super::{slash_command_continues_conversation_locally, slash_command_is_submitted_as_prompt};
+use super::slash_command_is_submitted_as_prompt;
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::{commands, Availability};
 const BASELINE_AVAILABILITY: Availability = Availability::AGENT_VIEW
@@ -33,35 +33,6 @@ fn slash_command_is_submitted_as_prompt_only_for_prompt_commands() {
         &commands::CONVERSATIONS
     ));
     assert!(!slash_command_is_submitted_as_prompt(&commands::QUEUE));
-}
-
-/// On a disconnected cloud follow-up pane we block (and hide) only the commands that would send a
-/// new turn to the local agent controller. Menu/navigation commands and the explicit local-fork
-/// affordances must stay runnable so they are never swept up by the guard.
-#[test]
-fn continues_conversation_locally_only_for_local_turn_commands() {
-    assert!(slash_command_continues_conversation_locally(
-        &commands::PR_COMMENTS
-    ));
-    assert!(slash_command_continues_conversation_locally(
-        &commands::QUEUE
-    ));
-
-    assert!(!slash_command_continues_conversation_locally(
-        &commands::FORK
-    ));
-    assert!(!slash_command_continues_conversation_locally(
-        &commands::CONTINUE_LOCALLY
-    ));
-    assert!(!slash_command_continues_conversation_locally(
-        &commands::CONVERSATIONS
-    ));
-    assert!(!slash_command_continues_conversation_locally(
-        &commands::MODEL
-    ));
-    assert!(!slash_command_continues_conversation_locally(
-        &commands::COMPACT
-    ));
 }
 
 #[test]
