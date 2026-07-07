@@ -1233,7 +1233,10 @@ fn test_continue_in_cloud_tombstone_routes_third_party_followup_to_new_cloud_vm(
             ));
 
             // Before clicking Continue, the finished viewer is read-only and follow-ups are blocked.
-            assert_eq!(query_routing(view, ctx), AIQueryRouting::UnconnectedReadOnly);
+            assert_eq!(
+                query_routing(view, ctx),
+                AIQueryRouting::UnconnectedReadOnly
+            );
 
             // Click "Continue" on the tombstone (the real handler for that button).
             view.start_cloud_followup_from_tombstone(task_id, ctx);
