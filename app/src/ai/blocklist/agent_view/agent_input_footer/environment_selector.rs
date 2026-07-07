@@ -1,41 +1,39 @@
+use std::sync::Arc;
+
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill;
+use warpui::elements::{
+    ChildAnchor, ChildView, ConstrainedBox, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Stack,
+};
 use warpui::{
-    elements::{
-        ChildAnchor, ChildView, ConstrainedBox, OffsetPositioning, ParentAnchor, ParentElement,
-        ParentOffsetBounds, Stack,
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use std::sync::Arc;
-
-use crate::{
-    ai::ambient_agents::telemetry::CloudAgentTelemetryEvent,
-    ai::{
-        cloud_agent_settings::CloudAgentSettings, cloud_environments::CloudAmbientAgentEnvironment,
-    },
-    appearance::Appearance,
-    cloud_object::model::{generic_string_model::StringModel, persistence::CloudModel},
-    context_chips::display_menu::{
-        ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
-    },
-    report_if_error,
-    server::ids::SyncId,
-    terminal::input::{
-        HandoffComposeState, HandoffComposeStateEvent, MenuPositioning, MenuPositioningProvider,
-    },
-    terminal::view::ambient_agent::AmbientAgentViewModelEvent,
-    ui_components::icons::Icon,
-    view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize},
-};
-
 use super::{AgentInputButtonTheme, AmbientAgentViewModel};
+use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::appearance::Appearance;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::CloudObjectLookup as _;
+use crate::context_chips::display_menu::{
+    ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
+};
+use crate::report_if_error;
+use crate::server::ids::SyncId;
+use crate::terminal::input::{
+    HandoffComposeState, HandoffComposeStateEvent, MenuPositioning, MenuPositioningProvider,
+};
+use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 
 /// Normalizes ambient-agent and handoff environment selection state behind one API.
 #[derive(Clone)]
@@ -79,13 +77,6 @@ impl EnvironmentSelectorTarget {
     ) {
         match self {
             Self::CloudPane(model) => {
-                // During local-to-cloud handoff with an explicit env, skip
-                // default selection so the user's `&` choice is preserved.
-                #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-                if model.as_ref(ctx).pending_handoff_has_explicit_environment() {
-                    return;
-                }
-
                 model.update(ctx, |model, ctx| {
                     model.set_environment_id(Some(environment_id), ctx);
                 });

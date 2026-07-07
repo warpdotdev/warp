@@ -2,9 +2,10 @@
 #[cfg_attr(windows, path = "windows.rs")]
 mod imp;
 
+pub use imp::TempBootstrapFile;
+
 use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
 use crate::terminal::shell::ShellType;
-pub use imp::TempBootstrapFile;
 
 /// Creates a `NamedTempFile` with the given bootstrap contents
 ///

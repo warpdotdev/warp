@@ -1,52 +1,25 @@
 use std::sync::Arc;
 
-use super::items::folder::WarpDriveFolder;
-use super::items::WarpDriveItem;
-use super::CloudObjectTypeAndId;
-use crate::server::cloud_objects::update_manager::InitiatedBy;
-use crate::{
-    appearance::Appearance,
-    cloud_object::{
-        CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-        GenericCloudObject, GenericServerObject, ObjectType, Revision, ServerCloudObject, Space,
-        UpdateCloudObjectResult,
-    },
-    persistence::ModelEvent,
-    server::{
-        ids::{ServerId, SyncId},
-        server_api::object::ObjectClient,
-        sync_queue::{QueueItem, SerializedModel},
-    },
-};
 use anyhow::Result;
 use async_trait::async_trait;
-
+pub use cloud_object_models::{CloudFolder, CloudFolderModel};
 // Re-exported from warp_server_client.
 pub use warp_server_client::ids::FolderId;
 
-/// The model for a `CloudFolder`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CloudFolderModel {
-    pub name: String,
-    // TODO: since this is local only state, we should consider only surfacing it as part of the
-    // CloudViewModel. Right now, every server folder uses CloudFolderModel, which means it
-    // hardcodes a value of `false` for this property since it can't know what the local state is.
-    pub is_open: bool,
-    pub is_warp_pack: bool,
-}
-
-impl CloudFolderModel {
-    pub fn new(name: &str, is_warp_pack: bool) -> Self {
-        Self {
-            name: name.to_owned(),
-            is_open: false,
-            is_warp_pack,
-        }
-    }
-}
-
-/// `CloudFolder` is a folder retrieved from the server.
-pub type CloudFolder = GenericCloudObject<FolderId, CloudFolderModel>;
+// Re-exported from warp_server_client.
+use super::items::folder::WarpDriveFolder;
+use super::items::WarpDriveItem;
+use super::CloudObjectTypeAndId;
+use crate::appearance::Appearance;
+use crate::cloud_object::{
+    CloudModelType, CloudObjectEventEntrypoint, CloudObjectUpsertParams, CreateCloudObjectResult,
+    CreateObjectRequest, GenericServerObject, ObjectType, Revision, Space, UpdateCloudObjectResult,
+};
+use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::update_manager::InitiatedBy;
+use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::object::ObjectClient;
+use crate::server::sync_queue::{QueueItem, SerializedModel};
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -70,14 +43,14 @@ impl CloudModelType for CloudFolderModel {
         self.name.clone()
     }
 
-    fn upsert_event(&self, folder: &CloudFolder) -> ModelEvent {
+    fn upsert_event(params: CloudObjectUpsertParams<Self>) -> ModelEvent {
         ModelEvent::UpsertFolder {
-            folder: folder.clone(),
+            folder: CloudFolder::from(params),
         }
     }
 
-    fn bulk_upsert_event(objects: &[CloudFolder]) -> ModelEvent {
-        ModelEvent::UpsertFolders(objects.to_vec())
+    fn bulk_upsert_event(objects: Vec<CloudObjectUpsertParams<Self>>) -> ModelEvent {
+        ModelEvent::UpsertFolders(objects.into_iter().map(CloudFolder::from).collect())
     }
 
     fn create_object_queue_item(
@@ -118,17 +91,6 @@ impl CloudModelType for CloudFolderModel {
 
     fn serialized(&self) -> SerializedModel {
         SerializedModel::new(self.name.to_owned())
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::Folder(server_folder) = server_cloud_object {
-            return Some(CloudFolderModel {
-                name: server_folder.model.name.clone(),
-                is_open: self.is_open,
-                is_warp_pack: server_folder.model.is_warp_pack,
-            });
-        }
-        None
     }
 
     fn can_move_to_space(&self, current_space: Space, new_space: Space) -> bool {

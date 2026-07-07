@@ -1,10 +1,12 @@
-use super::{time, Buffer};
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::ops::Range;
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use string_offset::CharOffset;
 use time::Lamport;
+
+use super::{time, Buffer};
 
 #[derive(Clone, Eq, PartialEq, Debug, Hash, Serialize, Deserialize)]
 pub enum Anchor {

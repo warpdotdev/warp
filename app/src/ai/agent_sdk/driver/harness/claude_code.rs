@@ -12,9 +12,25 @@ use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
+use super::super::terminal::{CommandHandle, TerminalDriver};
+use super::super::{AgentDriver, AgentDriverError};
+use super::claude_transcript::{
+    claude_config_dir, home_dir_for_claude_config, read_envelope, rehydrate_claude_transcript,
+    ClaudeResumeInfo, ClaudeTranscriptEnvelope,
+};
+use super::json_utils::{read_json_file_or_default, write_json_file};
+use super::{
+    cli_agent_session_status, write_temp_file, HarnessCleanupDisposition, HarnessRunner,
+    JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
+};
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::mcp::JSONTransportType;
 use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
@@ -22,38 +38,28 @@ use crate::server::server_api::ServerApi;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::ExecuteCommandOptions;
 use crate::terminal::CLIAgent;
-
-use super::super::terminal::{CommandHandle, TerminalDriver};
-use super::super::{AgentDriver, AgentDriverError};
-use super::claude_transcript::{
-    claude_config_dir, read_envelope, write_envelope, write_session_index_entry, ClaudeResumeInfo,
-    ClaudeTranscriptEnvelope,
-};
-use super::json_utils::{read_json_file_or_default, write_json_file};
-use super::{
-    cli_agent_session_status, write_temp_file, HarnessCleanupDisposition, HarnessRunner,
-    JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
-};
 mod parent_bridge;
 mod wake_driver;
 
-#[cfg(test)]
-use super::super::OZ_MESSAGE_LISTENER_STATE_ROOT_ENV;
 #[cfg(test)]
 use parent_bridge::{
     acknowledge_parent_bridge_hook_output, ensure_parent_bridge_state_dir,
     parent_bridge_char_count, parent_bridge_event_cursor_file, parent_bridge_hook_output_ack_file,
     parent_bridge_hook_output_file, parent_bridge_root, parent_bridge_staged_message_path,
     parent_bridge_surfaced_message_path, prepare_parent_bridge_hook_output,
-    read_parent_bridge_event_cursor, render_parent_bridge_message_block,
-    stage_parent_bridge_message, write_parent_bridge_event_cursor, MessageBridgeHookOutput,
-    MessageBridgeMessageRecord, MESSAGE_BRIDGE_CONTEXT_PREAMBLE,
+    prime_parent_bridge_staged_for_self_managed_wake, read_parent_bridge_event_cursor,
+    render_parent_bridge_message_block, stage_parent_bridge_message,
+    write_parent_bridge_event_cursor, MessageBridgeHookOutput, MessageBridgeMessageRecord,
+    MESSAGE_BRIDGE_CONTEXT_PREAMBLE,
 };
 use parent_bridge::{MessageBridge, MessageBridgeCleanupDisposition};
 #[cfg(test)]
 use shell_words::quote as shell_quote;
 #[cfg(test)]
 use wake_driver::{ClaudeWakeRemoteContext, CLAUDE_WAKE_PROMPT_FILE_NAME};
+
+#[cfg(test)]
+use super::super::OZ_MESSAGE_LISTENER_STATE_ROOT_ENV;
 
 pub(crate) struct ClaudeHarness;
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -69,6 +75,35 @@ impl ThirdPartyHarness for ClaudeHarness {
 
     fn install_docs_url(&self) -> Option<&'static str> {
         Some("https://code.claude.com/docs/en/quickstart")
+    }
+
+    fn auth_check_command(&self) -> Option<String> {
+        let cli = self.cli_agent().command_prefix();
+        Some(format!("{cli} auth status --json"))
+    }
+
+    fn runtime_error_patterns(&self) -> &'static [&'static str] {
+        &[
+            // Out-of-credits / billing.
+            "Credit balance too low",
+            // Plan/usage limits emitted as `You've hit your <kind> limit`.
+            // We match on the common prefix so the variants (session,
+            // weekly, Opus, etc.) all hit.
+            "You've hit your",
+            // Invalid or malformed API key.
+            "Invalid API key",
+            "This organization has been disabled",
+            "belongs to a disabled organization",
+            // OAuth / login state.
+            "Not logged in",
+            "OAuth token revoked",
+            "OAuth token has expired",
+            // Routines disabled by org policy.
+            "Routines are disabled by your organization's policy",
+            // Generic upstream API failures Claude Code surfaces verbatim.
+            "API Error: Request rejected (429)",
+            "authentication_error",
+        ]
     }
 
     /// Fetch the Claude Code transcript for the current task's conversation and wrap it
@@ -103,8 +138,9 @@ impl ThirdPartyHarness for ClaudeHarness {
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
+        _resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
-        _third_party_harness_model_id: Option<&str>,
+        _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
         prepare_claude_environment_config(working_dir, resolved_env_vars).map_err(|error| {
@@ -143,6 +179,10 @@ impl ThirdPartyHarness for ClaudeHarness {
             claude_resume,
             resolved_mcp_servers,
         )?))
+    }
+
+    fn requires_verified_platform_plugin(&self) -> bool {
+        true
     }
 }
 
@@ -237,26 +277,8 @@ impl ClaudeHarnessRunner {
                 session_id,
                 mut envelope,
             }) => {
-                // Rehydrate the stored envelope under the current working directory so
-                // `claude --resume <uuid>` finds the jsonl under ~/.claude/projects/<encoded_cwd>/.
-                // The original envelope's cwd usually points at the cloud sandbox path, which
-                // doesn't exist locally.
-                envelope.cwd = working_dir.to_path_buf();
-                let config_root = claude_config_dir().map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to resolve Claude config dir"),
-                    )
-                })?;
-                write_envelope(&envelope, &config_root).map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to rehydrate Claude transcript"),
-                    )
-                })?;
-                // Index write is best-effort: upstream Claude versions vary in how they use
-                // `sessions-index.json`, so losing the index entry shouldn't abort the run.
-                if let Err(e) = write_session_index_entry(session_id, working_dir, &config_root) {
-                    log::warn!("Failed to update Claude sessions-index.json: {e:#}");
-                }
+                rehydrate_claude_transcript(&mut envelope, working_dir)
+                    .map_err(AgentDriverError::ConfigBuildFailed)?;
                 (session_id, Some(conversation_id))
             }
             None => (Uuid::new_v4(), None),
@@ -412,9 +434,14 @@ impl ClaudeHarnessRunner {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl HarnessRunner for ClaudeHarnessRunner {
+    fn harness_name(&self) -> &str {
+        &self.cli_name
+    }
+
     async fn start(
         &self,
         foreground: &ModelSpawner<AgentDriver>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
         // When resuming, we already have a server conversation id from the prior run.
         // Otherwise create a fresh external conversation record for this run.
@@ -426,14 +453,17 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 id
             }
             None => {
-                let id = self
-                    .client
-                    .create_external_conversation(CLAUDE_CODE_FORMAT)
-                    .await
-                    .map_err(|e| {
-                        log::error!("Failed to create external conversation: {e}");
-                        AgentDriverError::ConfigBuildFailed(e)
-                    })?;
+                let id = setup_events
+                    .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
+                        self.client
+                            .create_external_conversation(CLAUDE_CODE_FORMAT)
+                            .await
+                            .map_err(|e| {
+                                log::error!("Failed to create external conversation: {e}");
+                                AgentDriverError::ConfigBuildFailed(e)
+                            })
+                    })
+                    .await?;
                 log::info!("Created external conversation {id}");
                 id
             }
@@ -464,6 +494,10 @@ impl HarnessRunner for ClaudeHarnessRunner {
             conversation_id,
             block_id: command_handle.block_id().clone(),
         };
+
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
 
         Ok(command_handle)
     }
@@ -576,8 +610,7 @@ pub(crate) fn prepare_claude_environment_config(
     working_dir: &Path,
     resolved_env_vars: &HashMap<OsString, OsString>,
 ) -> Result<()> {
-    let home_dir = claude_home_dir()?;
-    let claude_json_path = home_dir.join(CLAUDE_JSON_FILE_NAME);
+    let claude_json_path = claude_global_config_path()?;
     let claude_settings_path = claude_config_dir()?.join(CLAUDE_SETTINGS_FILE_NAME);
     let api_key_suffix = resolve_anthropic_api_key_suffix(resolved_env_vars);
     prepare_claude_config(&claude_json_path, working_dir, api_key_suffix.as_deref())?;
@@ -585,15 +618,17 @@ pub(crate) fn prepare_claude_environment_config(
     Ok(())
 }
 
-fn claude_home_dir() -> Result<PathBuf> {
-    #[cfg(test)]
-    if let Some(home_dir) = std::env::var_os("HOME") {
-        if !home_dir.as_os_str().is_empty() {
-            return Ok(PathBuf::from(home_dir));
+// This function is used specifically for determining where to land `.claude.json`.
+fn claude_global_config_path() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return Ok(PathBuf::from(dir).join(CLAUDE_JSON_FILE_NAME));
         }
     }
 
-    dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
+    home_dir_for_claude_config()
+        .map(|home| home.join(CLAUDE_JSON_FILE_NAME))
+        .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
 }
 
 fn prepare_claude_config(

@@ -4,10 +4,9 @@ mod data_source;
 mod search_item;
 mod view;
 
-pub use view::{InlineReposMenuEvent, InlineReposMenuView};
-
 use std::path::PathBuf;
 
+pub use view::{InlineReposMenuEvent, InlineReposMenuView};
 use warpui::keymap::Keystroke;
 
 use crate::terminal::input::inline_menu::{

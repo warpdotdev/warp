@@ -1,22 +1,18 @@
-use std::{
-    marker::PhantomData,
-    pin::Pin,
-    rc::Rc,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
-};
+use std::marker::PhantomData;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use async_executor::LocalExecutor;
-use futures::{
-    future::{BoxFuture, LocalBoxFuture},
-    Future, FutureExt,
-};
+use futures::future::{BoxFuture, LocalBoxFuture};
+use futures::{Future, FutureExt};
 use futures_util::future::{AbortHandle, Abortable};
+use tracing::Instrument as _;
 
-use crate::{platform, r#async::executor::Error};
+use crate::platform;
+use crate::r#async::executor::Error;
 
 pub type ForegroundTask = async_task::Task<()>;
 
@@ -90,6 +86,7 @@ impl Foreground {
     /// less code than a generic implementation, with no noticeable performance
     /// impact.
     pub fn spawn_boxed(&self, future: LocalBoxFuture<'static, ()>) -> ForegroundTask {
+        let future = future.instrument(tracing::Span::current());
         match self {
             Foreground::Platform {
                 not_send_or_sync: _,
@@ -196,6 +193,7 @@ impl Background {
     /// less code than a generic implementation, with no noticeable performance
     /// impact.
     pub fn spawn_boxed(&self, future: BoxFuture<'static, ()>) -> BackgroundTask {
+        let future = future.instrument(tracing::Span::current());
         let inner = match &self.runtime {
             Some(runtime) => Some(runtime.spawn(future)),
             None => {

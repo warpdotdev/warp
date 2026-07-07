@@ -1,25 +1,22 @@
 use float_cmp::{approx_eq, assert_approx_eq};
 use warp_core::features::FeatureFlag;
+use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
 use warpui::units::IntoLines;
-use warpui::{elements::DEFAULT_UI_LINE_HEIGHT_RATIO, App};
+use warpui::App;
 
 use super::*;
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::blocklist::agent_view::{
     AgentViewDisplayMode, AgentViewEntryOrigin, AgentViewState,
 };
+use crate::settings::TerminalSpacing;
+use crate::terminal::event::Event;
+use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::model::test_utils;
+use crate::terminal::model::test_utils::TestBlockListBuilder;
 use crate::terminal::view::{InlineBannerItem, InlineBannerType};
-use crate::terminal::BlockListSettings;
-use crate::{
-    settings::TerminalSpacing,
-    terminal::{
-        event::Event,
-        model::{ansi::Handler, test_utils::TestBlockListBuilder},
-        SizeUpdateReason,
-    },
-};
+use crate::terminal::{BlockListSettings, SizeUpdateReason};
 
 pub fn input_string(block_list: &mut BlockList, input: &str) {
     for c in input.chars() {
@@ -94,7 +91,7 @@ pub fn insert_block_with_prompt(
     command: &str,
     output: &str,
 ) -> BlockIndex {
-    block_list.precmd(PrecmdValue {
+    block_list.prompt_only_precmd(PromptMetadata {
         ps1: Some(hex::encode(prompt)),
         honor_ps1: Some(true),
         ..Default::default()
@@ -123,10 +120,55 @@ pub fn insert_block_with_prompt(
 /// Calling `command_finished` is all that's necessary for tests that only
 /// advance the block list and check the state (e.g. like the length of the
 /// block list, the bootstrapped state). Tests that check for messages sent to the
-/// view need to also call `precmd`.
+/// view need to also call `precmd_with_completion_metadata`.
 pub fn command_finished_and_precmd(block_list: &mut BlockList) {
-    block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    let completion_metadata = ansi::CompletionMetadata::default();
+    block_list.command_finished(CommandFinishedValue {
+        completion_metadata: completion_metadata.clone(),
+        ..Default::default()
+    });
+    block_list.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata,
+        prompt_metadata: PromptMetadata::default(),
+    });
+}
+
+#[test]
+fn classifies_next_block_ids_relative_to_the_active_block() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let previous_active_id = block_list.active_block_id().clone();
+    let next_block_id = BlockId::new();
+
+    assert_eq!(
+        block_list.classify_next_block_id(&previous_active_id),
+        NextBlockIdDisposition::ActiveDuplicate
+    );
+    assert_eq!(
+        block_list.classify_next_block_id(&next_block_id),
+        NextBlockIdDisposition::Novel
+    );
+
+    block_list.complete_active_block_and_advance(ansi::CompletionMetadata {
+        exit_code: 0.into(),
+        next_block_id: next_block_id.clone(),
+    });
+
+    assert_eq!(
+        block_list.classify_next_block_id(&previous_active_id),
+        NextBlockIdDisposition::ExistingCollision
+    );
+    assert_eq!(
+        block_list.classify_next_block_id(&next_block_id),
+        NextBlockIdDisposition::ActiveDuplicate
+    );
+}
+fn drain_terminal_events(events_rx: &async_channel::Receiver<Event>) -> Vec<Event> {
+    let mut events = Vec::new();
+    while let Ok(event) = events_rx.try_recv() {
+        events.push(event);
+    }
+    events
 }
 
 /// Advances the block list to the ScriptExecution stage.
@@ -158,6 +200,176 @@ fn advance_to_bootstrapped(block_list: &mut BlockList, data: BootstrappedValue) 
         block_list.bootstrap_stage,
         BootstrapStage::PostBootstrapPrecmd
     );
+}
+
+#[test]
+fn test_iterm_image_renders_in_script_execution_block() {
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    let mut block_list = TestBlockListBuilder::new().build();
+    advance_to_script_execution(&mut block_list);
+
+    assert_eq!(block_list.bootstrap_stage, BootstrapStage::ScriptExecution);
+    assert!(block_list.active_block().started());
+
+    block_list.handle_completed_iterm_image(test_utils::test_iterm_image(1));
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    assert!(block_list.active_block().started());
+    assert!(!block_list.active_block().output_grid().is_empty());
+    assert!(block_list
+        .active_block()
+        .is_visible(&AgentViewState::Inactive));
+}
+
+#[test]
+fn test_invalid_iterm_image_does_not_render_in_script_execution_block() {
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    let mut block_list = TestBlockListBuilder::new().build();
+    let mut image = test_utils::test_iterm_image(1);
+    image.metadata.desired_width = Some((
+        0,
+        crate::terminal::model::iterm_image::ITermImageDimensionUnit::Cell,
+    ));
+    advance_to_script_execution(&mut block_list);
+
+    assert_eq!(block_list.bootstrap_stage, BootstrapStage::ScriptExecution);
+    assert!(block_list.active_block().started());
+
+    block_list.handle_completed_iterm_image(image);
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+    assert!(block_list.active_block().started());
+    assert!(block_list.active_block().output_grid().is_empty());
+}
+
+#[test]
+fn test_kitty_image_renders_in_script_execution_block() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut block_list = TestBlockListBuilder::new().build();
+    let mut metadata = test_utils::test_kitty_image_metadata_map(1);
+    advance_to_script_execution(&mut block_list);
+
+    assert_eq!(block_list.bootstrap_stage, BootstrapStage::ScriptExecution);
+    assert!(block_list.active_block().started());
+
+    block_list
+        .handle_completed_kitty_action(
+            test_utils::test_kitty_store_and_display_action(1, 1),
+            &mut metadata,
+        )
+        .expect("kitty action should be handled")
+        .expect("kitty action should render");
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    assert!(block_list.active_block().started());
+    assert!(!block_list.active_block().output_grid().is_empty());
+    assert!(block_list
+        .active_block()
+        .is_visible(&AgentViewState::Inactive));
+}
+
+#[test]
+fn test_kitty_store_only_does_not_render_in_script_execution_block() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut block_list = TestBlockListBuilder::new().build();
+    let mut metadata = test_utils::test_kitty_image_metadata_map(1);
+    advance_to_script_execution(&mut block_list);
+
+    assert_eq!(block_list.bootstrap_stage, BootstrapStage::ScriptExecution);
+    assert!(block_list.active_block().started());
+
+    block_list
+        .handle_completed_kitty_action(test_utils::test_kitty_store_only_action(1), &mut metadata)
+        .expect("kitty action should be handled")
+        .expect("kitty action should store");
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+    assert!(block_list.active_block().started());
+    assert!(block_list.active_block().output_grid().is_empty());
+}
+
+#[test]
+fn test_iterm_image_early_output_routes_to_background_block() {
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let blocks_before = block_list.blocks.len();
+
+    assert!(block_list.is_early_output());
+
+    block_list.handle_completed_iterm_image(test_utils::test_iterm_image(2));
+
+    assert_eq!(block_list.blocks.len(), blocks_before + 1);
+    let background_block = &block_list.blocks[block_list.blocks.len() - 2];
+    assert!(background_block.is_background());
+    assert!(!background_block.output_grid().is_empty());
+    assert!(!block_list.active_block().started());
+}
+
+#[test]
+fn test_kitty_image_early_output_routes_to_background_block() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let mut metadata = test_utils::test_kitty_image_metadata_map(2);
+    let blocks_before = block_list.blocks.len();
+
+    assert!(block_list.is_early_output());
+
+    block_list
+        .handle_completed_kitty_action(
+            test_utils::test_kitty_store_and_display_action(2, 1),
+            &mut metadata,
+        )
+        .expect("kitty action should be handled")
+        .expect("kitty action should render");
+
+    assert_eq!(block_list.blocks.len(), blocks_before + 1);
+    let background_block = &block_list.blocks[block_list.blocks.len() - 2];
+    assert!(background_block.is_background());
+    assert!(!background_block.output_grid().is_empty());
+    assert!(!block_list.active_block().started());
+}
+
+#[test]
+fn test_kitty_store_only_early_output_does_not_create_background_block() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let mut metadata = test_utils::test_kitty_image_metadata_map(2);
+    let blocks_before = block_list.blocks.len();
+
+    assert!(block_list.is_early_output());
+
+    block_list
+        .handle_completed_kitty_action(test_utils::test_kitty_store_only_action(2), &mut metadata)
+        .expect("kitty action should be handled")
+        .expect("kitty action should store");
+
+    assert_eq!(block_list.blocks.len(), blocks_before);
+    assert!(!block_list.active_block().started());
+}
+
+#[test]
+fn test_zero_sized_kitty_early_output_does_not_create_background_block() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let mut metadata = test_utils::test_kitty_image_metadata_map(2);
+    let mut action = test_utils::test_kitty_store_and_display_action(2, 1);
+    let blocks_before = block_list.blocks.len();
+
+    if let KittyAction::StoreAndDisplay(action) = &mut action {
+        action.placement_data.cols = Some(0);
+    }
+
+    assert!(block_list.is_early_output());
+
+    block_list
+        .handle_completed_kitty_action(action, &mut metadata)
+        .expect("kitty action should be handled")
+        .expect("kitty action should be ignored");
+
+    assert_eq!(block_list.blocks.len(), blocks_before);
+    assert!(!block_list.active_block().started());
 }
 
 // This test covers the case where sometimes sumtree could have inconsistency
@@ -336,6 +548,7 @@ pub fn test_script_execution_block() {
 
     // We have the `WarpInput` block and the current script execution block.
     assert_eq!(block_list.blocks.len(), 2);
+    assert!(block_list.active_block().started());
     // Ensure that script execution block has a height of 0 if nothing was added to it.
     assert!(block_list
         .active_block()
@@ -352,12 +565,14 @@ pub fn test_script_execution_block() {
     advance_to_script_execution(&mut block_list);
 
     assert_eq!(block_list.blocks.len(), 2);
+    assert!(block_list.active_block().started());
     assert!(block_list
         .active_block()
         .is_empty(&AgentViewState::Inactive));
 
     // Add characters to script execution block.
     block_list.input('c');
+    block_list.update_active_block_height();
 
     assert_eq!(block_list.blocks.len(), 2);
     assert!(!block_list
@@ -392,6 +607,49 @@ pub fn test_script_execution_block() {
         block_completed_events[3].block_type,
         BlockType::BootstrapVisible(_)
     ));
+}
+#[test]
+pub fn visible_bootstrap_block_event_fires_when_script_execution_becomes_visible() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let channel_event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+
+    let mut block_list = TestBlockListBuilder::new()
+        .with_channel_event_proxy(channel_event_proxy)
+        .build();
+    advance_to_script_execution(&mut block_list);
+
+    assert!(block_list.active_block().started());
+    assert!(block_list
+        .active_block()
+        .is_empty(&AgentViewState::Inactive));
+
+    let events = drain_terminal_events(&events_rx);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Event::VisibleBootstrapBlock)));
+
+    block_list.input('c');
+    let events = drain_terminal_events(&events_rx);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Event::VisibleBootstrapBlock)));
+
+    block_list.update_active_block_height();
+    let visible_events = drain_terminal_events(&events_rx)
+        .into_iter()
+        .filter(|event| matches!(event, Event::VisibleBootstrapBlock))
+        .count();
+    assert_eq!(visible_events, 1);
+
+    block_list.input('d');
+    block_list.update_active_block_height();
+    let visible_events = drain_terminal_events(&events_rx)
+        .into_iter()
+        .filter(|event| matches!(event, Event::VisibleBootstrapBlock))
+        .count();
+    assert_eq!(visible_events, 0);
 }
 
 // Add a few restored blocks and ensure they show up appropriately.
@@ -578,7 +836,6 @@ pub fn test_basic_bootstrapping() {
         .build();
 
     // Simulate entering the bootstrap script for WarpInput mode.
-    block_list.start_active_block();
     input_string(&mut block_list, "i am the warp input");
     block_list.linefeed();
     block_list.preexec(Default::default());
@@ -649,11 +906,11 @@ pub fn test_session_restoration_separator() {
                 .as_f64()
     );
 
-    // With the active block not started during initialize,
-    // the gap is inserted before the active block in clear_visible_screen.
-    // Total items: 2 restored blocks + 1 separator + 1 gap + 1 active block = 5
+    // With the active block still hidden during initialize, the gap is inserted before the active
+    // block in clear_visible_screen.
+    // Total items: 2 restored blocks + 1 separator + 1 gap + 1 active block = 5.
     assert_eq!(block_list.block_heights.summary().total_count, 5);
-    // Gap is at index 3 (before the active block at index 4)
+    // Gap is at index 3 (before the active block at index 4).
     assert_eq!(block_list.active_gap.as_ref().unwrap().index, 3);
     assert_approx_eq!(
         Lines,
@@ -1888,12 +2145,14 @@ pub fn test_emits_after_block_completed_event() {
     block_list.start_active_block_for_in_band_command();
     block_list.preexec(PreexecValue {
         command: "warp_run_generator_command 1234 foo".to_owned(),
+        session_id: None,
     });
     command_finished_and_precmd(&mut block_list);
 
     block_list.start_active_block();
     block_list.preexec(PreexecValue {
         command: "some user command".to_owned(),
+        session_id: None,
     });
     command_finished_and_precmd(&mut block_list);
 
@@ -1959,6 +2218,7 @@ fn test_background_blocks_finished() {
     block_list.start_active_block_for_in_band_command();
     block_list.preexec(PreexecValue {
         command: "warp_run_generator_command abc".to_owned(),
+        session_id: None,
     });
     command_finished_and_precmd(&mut block_list);
 

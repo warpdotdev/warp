@@ -5,7 +5,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
 
 use ai::skills::SkillProvider;
 use enum_iterator::Sequence;
@@ -14,8 +13,10 @@ use pathfinder_color::ColorU;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use warp_cli::agent::Harness;
-use warp_editor::content::{buffer::Buffer, markdown::MarkdownStyle};
-
+use warp_completer::parsers::simple::top_level_command;
+use warp_editor::content::buffer::Buffer;
+use warp_editor::content::markdown::MarkdownStyle;
+use warp_util::path::EscapeChar;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
@@ -25,8 +26,6 @@ use crate::code_review::comments::AttachedReviewCommentTarget;
 use crate::server::telemetry::CLIAgentType;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_completer::parsers::simple::top_level_command;
-use warp_util::path::EscapeChar;
 
 /// UID for the Uber team.
 /// See https://warp.metabaseapp.com/dashboard/1454?team_id=46347
@@ -82,6 +81,14 @@ const COPILOT_COLOR: ColorU = ColorU {
 
 /// Pi brand color (white, monochrome logo)
 const PI_COLOR: ColorU = ColorU {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 255,
+};
+
+/// Antigravity brand color (white, monochrome logo)
+const ANTIGRAVITY_COLOR: ColorU = ColorU {
     r: 255,
     g: 255,
     b: 255,
@@ -144,6 +151,7 @@ pub enum CLIAgent {
     Goose,
     Hermes,
     Vibe,
+    Antigravity,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
     Unknown,
 }
@@ -165,6 +173,7 @@ impl CLIAgent {
             CLIAgent::Goose => "goose",
             CLIAgent::Hermes => "hermes",
             CLIAgent::Vibe => "vibe",
+            CLIAgent::Antigravity => "agy",
             CLIAgent::Unknown => "",
         }
     }
@@ -212,6 +221,7 @@ impl CLIAgent {
             CLIAgent::Goose => "Goose",
             CLIAgent::Hermes => "Hermes",
             CLIAgent::Vibe => "Mistral Vibe",
+            CLIAgent::Antigravity => "Antigravity",
             CLIAgent::Unknown => "CLI Agent",
         }
     }
@@ -235,6 +245,7 @@ impl CLIAgent {
             // still drives the toolbar tile; an `Icon::MistralLogo` can be wired
             // up in a follow-up once an officially licensed SVG is available.
             CLIAgent::Vibe => None,
+            CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
             CLIAgent::Unknown => None,
         }
     }
@@ -265,6 +276,7 @@ impl CLIAgent {
             CLIAgent::Goose => &[SkillProvider::Agents],
             CLIAgent::Hermes => &[SkillProvider::Agents],
             CLIAgent::Vibe => &[SkillProvider::Agents],
+            CLIAgent::Antigravity => &[],
             CLIAgent::Unknown => &[],
         }
     }
@@ -307,6 +319,7 @@ impl CLIAgent {
             CLIAgent::Goose => Some(GOOSE_COLOR),
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
+            CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
             CLIAgent::Unknown => None,
         }
     }
@@ -315,7 +328,9 @@ impl CLIAgent {
     /// Agents with light brand colors use a dark icon for contrast.
     pub fn brand_icon_color(&self) -> ColorU {
         match self {
-            CLIAgent::Pi | CLIAgent::Auggie | CLIAgent::Droid => ColorU::new(0, 0, 0, 255),
+            CLIAgent::Pi | CLIAgent::Auggie | CLIAgent::Droid | CLIAgent::Antigravity => {
+                ColorU::new(0, 0, 0, 255)
+            }
             _ => ColorU::white(),
         }
     }
@@ -424,7 +439,7 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
                 line,
                 ..
             } => {
-                let path = absolute_file_path.display();
+                let path = absolute_file_path.display_path();
                 match line {
                     EditorLineLocation::Current { line_number, .. } => {
                         let n = line_number.as_usize() + 1;
@@ -444,10 +459,9 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
                 }
             }
             AttachedReviewCommentTarget::File { absolute_file_path } => {
-                let path = absolute_file_path.display();
-                let abs_str = absolute_file_path.to_string_lossy();
+                let path = absolute_file_path.display_path();
                 let is_deleted = review.diff_set.iter().any(|(file_key, hunks)| {
-                    abs_str.ends_with(file_key.as_str())
+                    path.ends_with(file_key.as_str())
                         && !hunks.is_empty()
                         && hunks
                             .iter()
@@ -456,7 +470,7 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
                 if is_deleted {
                     format!("{path} (deleted file — see `git diff`)")
                 } else {
-                    format!("{path}")
+                    path
                 }
             }
             AttachedReviewCommentTarget::General => "General".to_string(),
@@ -492,15 +506,14 @@ fn export_review_comment_for_cli_prompt(comment: &str) -> String {
 /// `<path> L<start>-L<end>` where `start` and `end` are 1-indexed and both
 /// ends are **inclusive**.
 pub fn build_diff_hunk_prompt(
-    file_path: &Path,
+    file_path: &str,
     start_line: usize,
     end_line: usize,
     lines_added: u32,
     lines_removed: u32,
 ) -> String {
-    let path = file_path.display();
     format!(
-        "{path} L{start_line}-L{end_line} (+{lines_added} -{lines_removed}) \
+        "{file_path} L{start_line}-L{end_line} (+{lines_added} -{lines_removed}) \
          -- run `git diff` to see the full context."
     )
 }
@@ -572,6 +585,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Goose => CLIAgentType::Goose,
             CLIAgent::Hermes => CLIAgentType::Hermes,
             CLIAgent::Vibe => CLIAgentType::Vibe,
+            CLIAgent::Antigravity => CLIAgentType::Antigravity,
             CLIAgent::Unknown => CLIAgentType::Unknown,
         }
     }

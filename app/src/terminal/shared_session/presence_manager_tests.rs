@@ -1,9 +1,3 @@
-use crate::auth::UserUid;
-use crate::terminal::model::ansi::{CommandFinishedValue, Handler};
-use crate::terminal::model::blocks::BlockList;
-use crate::terminal::model::test_utils::TestBlockListBuilder;
-use crate::terminal::shared_session::presence_manager::{PresenceManager, PRESET_COLORS};
-
 use std::collections::{HashMap, HashSet};
 use std::iter;
 
@@ -13,6 +7,56 @@ use session_sharing_protocol::common::{
 };
 use warp_core::command::ExitCode;
 use warpui::App;
+
+use crate::auth::UserUid;
+use crate::terminal::model::ansi::{
+    CommandFinishedValue, CompletionMetadata, Handler, PrecmdValue, PromptMetadata,
+};
+use crate::terminal::model::blocks::BlockList;
+use crate::terminal::model::test_utils::TestBlockListBuilder;
+use crate::terminal::shared_session::presence_manager::{PresenceManager, PRESET_COLORS};
+
+fn viewer_with_uid(uid: &str, is_present: bool) -> Viewer {
+    Viewer {
+        info: ParticipantInfo {
+            profile_data: ProfileData {
+                firebase_uid: uid.to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        role: Role::Reader,
+        is_present,
+    }
+}
+
+#[test]
+fn single_distinct_present_viewer_uid_filters_absent_duplicates() {
+    let viewers = [
+        viewer_with_uid("same", true),
+        viewer_with_uid("same", true),
+        viewer_with_uid("other", false),
+    ];
+
+    assert_eq!(
+        PresenceManager::single_distinct_present_viewer_uid_from_viewers(viewers.iter()),
+        Some("same")
+    );
+}
+
+#[test]
+fn single_distinct_present_viewer_uid_returns_none_for_zero_or_multiple_uids() {
+    assert_eq!(
+        PresenceManager::single_distinct_present_viewer_uid_from_viewers([].iter()),
+        None
+    );
+
+    let viewers = [viewer_with_uid("one", true), viewer_with_uid("two", true)];
+    assert_eq!(
+        PresenceManager::single_distinct_present_viewer_uid_from_viewers(viewers.iter()),
+        None
+    );
+}
 
 #[test]
 fn test_choosing_preset_colors() {
@@ -267,11 +311,18 @@ fn block_list_for_test(max_block_index: usize) -> BlockList {
 
     // Block 0 already exists as part of creating the blocklist
     for i in 1..max_block_index {
-        block_list.command_finished(CommandFinishedValue {
+        let completion_metadata = CompletionMetadata {
             exit_code: ExitCode::from(0),
             next_block_id: i.to_string().into(),
+        };
+        block_list.command_finished(CommandFinishedValue {
+            completion_metadata: completion_metadata.clone(),
+            session_id: None,
         });
-        block_list.precmd(Default::default());
+        block_list.precmd_with_completion_metadata(PrecmdValue {
+            completion_metadata,
+            prompt_metadata: PromptMetadata::default(),
+        });
     }
     block_list
 }

@@ -124,10 +124,11 @@ struct FileDeclaration<'a> {
 /// from `task_id`. The script appends to the file if it already exists, so
 /// repeated invocations within a single run accumulate repos instead of clobbering.
 ///
-/// A missing env var, a missing script, a non-zero exit status, a spawn failure, or a runtime
-/// exceeding `script_timeout` are each logged at `log::error!` and returned without aborting the
-/// caller — if a previous invocation already produced a declarations file on disk it remains
-/// usable; otherwise the upload pipeline becomes a no-op.
+/// A missing env var is expected in some paths and is logged at `log::info!`. A missing script,
+/// a non-zero exit status, a spawn failure, or a runtime exceeding `script_timeout` are each
+/// logged at `log::error!` and returned without aborting the caller — if a previous invocation
+/// already produced a declarations file on disk it remains usable; otherwise the upload pipeline
+/// becomes a no-op.
 ///
 /// Exposed as a standalone helper so future call sites can trigger declarations generation at
 /// other points in the run lifecycle (e.g. periodic mid-run snapshots).
@@ -137,7 +138,7 @@ pub(super) async fn run_declarations_script(
     script_timeout: Duration,
 ) {
     let Some(script_path) = std::env::var_os(DECLARATIONS_SCRIPT_PATH_ENV_VAR) else {
-        log::error!(
+        log::info!(
             "{DECLARATIONS_SCRIPT_PATH_ENV_VAR} is not set; skipping snapshot declarations script (task {task_id})"
         );
         return;
@@ -1388,6 +1389,7 @@ fn merge_content_type(target: &UploadTarget, mime_type: &str) -> UploadTarget {
         url: target.url.clone(),
         method: target.method.clone(),
         headers,
+        fields: target.fields.clone(),
     }
 }
 

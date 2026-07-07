@@ -1,16 +1,11 @@
-use crate::ai::blocklist::agent_view::AgentViewState;
-use crate::terminal::{
-    event_listener::ChannelEventListener,
-    model::{
-        ansi::{self, Handler},
-        blocks::BlockList,
-        session::SessionInfo,
-        test_utils::TestBlockListBuilder,
-    },
-    shell::ShellType,
-};
-
 use super::TypeaheadMode;
+use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{self, Handler};
+use crate::terminal::model::blocks::BlockList;
+use crate::terminal::model::session::SessionInfo;
+use crate::terminal::model::test_utils::TestBlockListBuilder;
+use crate::terminal::shell::ShellType;
 
 /// Create a new bootstrapped block list that will use the set typeahead mode.
 fn new_block_list(event_proxy: ChannelEventListener, mode: TypeaheadMode) -> BlockList {
@@ -38,17 +33,16 @@ fn new_block_list(event_proxy: ChannelEventListener, mode: TypeaheadMode) -> Blo
         None,
         None,
         None,
-        false,
         None,
     )
-    .merge_from_bootstrapped_value(bootstrapped_value.clone(), false);
+    .merge_from_bootstrapped_value(bootstrapped_value.clone());
 
     block_list.bootstrapped(bootstrapped_value);
     block_list.early_output_mut().init_session(&session_info);
     assert_eq!(block_list.early_output_mut().mode, mode);
 
     block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    block_list.prompt_only_precmd(Default::default());
     assert!(block_list.is_bootstrapping_precmd_done());
     block_list
 }
@@ -130,10 +124,11 @@ fn test_queued_typeahead_input_matching() {
     // it from typeahead.
     block_list.preexec(ansi::PreexecValue {
         command: "first".into(),
+        session_id: None,
     });
     assert_eq!(block_list.active_block().command_to_string(), "first");
     block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    block_list.prompt_only_precmd(Default::default());
 
     // Once the second line of typeahead is echoed, it should be recognized as typeahead.
     block_list.input('s');
@@ -173,12 +168,13 @@ fn test_queued_typeahead_shell_reported() {
     // it from background output, removing the background block in the process.
     block_list.preexec(ansi::PreexecValue {
         command: "first".into(),
+        session_id: None,
     });
     assert_eq!(block_list.active_block().command_to_string(), "first");
     assert!(block_list.background_block_mut().is_none());
 
     block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    block_list.prompt_only_precmd(Default::default());
 
     // Now, when the second line is echoed, it should be recognized as typeahead.
     block_list.input('s');
@@ -190,6 +186,7 @@ fn test_queued_typeahead_shell_reported() {
     // Mimic the ESC-i keybinding, which clears the input buffer.
     block_list.input_buffer(ansi::InputBufferValue {
         buffer: "second".into(),
+        session_id: None,
     });
     // zsh appears to use `\r\e[J` (carriage return and clear from cursor to end of screen)
     // to clear the line. There are lots of ways of doing this, and it doesn't

@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
-use schemars::JsonSchema;
-use schemars::SchemaGenerator;
+use schemars::{JsonSchema, SchemaGenerator};
 
 use crate::schema::SettingSchemaEntry;
 

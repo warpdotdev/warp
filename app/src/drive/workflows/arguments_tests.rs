@@ -1,9 +1,10 @@
-use std::{fmt::Debug, iter::zip};
+use std::fmt::Debug;
+use std::iter::zip;
 
-use crate::workflows::workflow::Argument;
 use warpui::App;
 
 use super::ArgumentsState;
+use crate::workflows::workflow::Argument;
 
 fn assert_vector_eq<T>(vector: Vec<T>, expected_vector: &Vec<T>)
 where

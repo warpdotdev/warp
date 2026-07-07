@@ -1,20 +1,19 @@
 use uuid::Uuid;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::{
-    r#async::SpawnedFutureHandle, AppContext, ClosedWindowData, Entity, EntityId, ModelContext,
-    ModelHandle, SingletonEntity, ViewHandle, WeakViewHandle, WindowId,
+    AppContext, ClosedWindowData, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
+    ViewHandle, WeakViewHandle, WindowId,
 };
 
-use crate::{
-    ai::active_agent_views_model::ActiveAgentViewsModel,
-    ai::blocklist::BlocklistAIHistoryModel,
-    pane_group::{PaneGroup, PaneId},
-    send_telemetry_from_app_ctx,
-    server::telemetry::{TelemetryEvent, UndoCloseItemType},
-    tab::TabData,
-    workspace::Workspace,
-};
-
-use super::{settings::UndoCloseSettingsChangedEvent, UndoCloseSettings};
+use super::settings::UndoCloseSettingsChangedEvent;
+use super::UndoCloseSettings;
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::send_telemetry_from_app_ctx;
+use crate::server::telemetry::{TelemetryEvent, UndoCloseItemType};
+use crate::tab::TabData;
+use crate::workspace::Workspace;
 
 /// A unique identifier for an item in the undo close stack.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -130,7 +129,8 @@ impl ClosedItem {
 
             for terminal_view_id in terminal_view_ids {
                 history_model.update(ctx, |history_model, _| {
-                    history_model.mark_conversations_historical_for_terminal_view(terminal_view_id);
+                    history_model
+                        .mark_conversations_historical_for_terminal_surface(terminal_view_id);
                 });
             }
         }
@@ -161,7 +161,7 @@ pub struct UndoCloseStack {
 impl UndoCloseStack {
     /// Constructs a new undo close stack.
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&UndoCloseSettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&UndoCloseSettings::handle(ctx), |me, _, event, ctx| {
             me.handle_settings_event(event, ctx);
         });
 

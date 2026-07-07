@@ -1,7 +1,8 @@
-use crate::{
-    error::UserFacingError, request_context::RequestContext, response_context::ResponseContext,
-    schema, workspace::MembershipRole,
-};
+use crate::error::UserFacingError;
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
+use crate::schema;
+use crate::workspace::MembershipRole;
 
 /*
 mutation SetTeamMemberRole($input: SetTeamMemberRoleInput!, $requestContext: RequestContext!) {

@@ -1,4 +1,19 @@
+use warpui::App;
+
 use super::*;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::network::NetworkStatus;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::SyncQueue;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::LaunchMode;
 
 // -- DisableReason::should_clear_preference tests --
 
@@ -121,4 +136,541 @@ fn llm_info_round_trip_serializes_and_deserializes() {
         serde_json::from_str(&serialized).expect("should deserialize after round trip");
 
     assert_eq!(info, round_tripped);
+}
+
+// -- build_custom_llm_infos / display label tests --
+
+fn endpoint(
+    name: &str,
+    url: &str,
+    api_key: &str,
+    models: Vec<CustomEndpointModel>,
+) -> CustomEndpoint {
+    CustomEndpoint {
+        name: name.into(),
+        url: url.into(),
+        api_key: api_key.into(),
+        models,
+    }
+}
+
+fn model(name: &str, alias: Option<&str>, config_key: &str) -> CustomEndpointModel {
+    CustomEndpointModel {
+        name: name.into(),
+        alias: alias.map(|s| s.into()),
+        config_key: config_key.into(),
+    }
+}
+
+#[test]
+fn custom_llm_infos_built_from_endpoints() {
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "My Endpoint",
+            "https://x.io",
+            "k",
+            vec![
+                model("gpt-4", Some("fast"), "uuid-1"),
+                model("llama", None, "uuid-2"),
+            ],
+        )],
+        ..Default::default()
+    };
+    let infos = build_custom_llm_infos(&keys);
+    assert_eq!(infos.len(), 2);
+    assert_eq!(infos[0].display_name, "fast");
+    assert_eq!(infos[0].id.as_str(), "uuid-1");
+    assert_eq!(
+        infos[0].description.as_deref(),
+        Some("Custom · My Endpoint")
+    );
+    assert_eq!(infos[1].display_name, "llama");
+    assert_eq!(infos[1].id.as_str(), "uuid-2");
+}
+
+#[test]
+fn custom_llm_display_name_uses_alias_when_present() {
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![model("raw-name", Some("My Alias"), "uuid-a")],
+        )],
+        ..Default::default()
+    };
+    let infos = build_custom_llm_infos(&keys);
+    assert_eq!(infos[0].display_name, "My Alias");
+}
+
+#[test]
+fn custom_llm_display_name_falls_back_to_name_when_alias_missing() {
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![model("raw-name", None, "uuid-a")],
+        )],
+        ..Default::default()
+    };
+    let infos = build_custom_llm_infos(&keys);
+    assert_eq!(infos[0].display_name, "raw-name");
+}
+
+#[test]
+fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback() {
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![
+                model("raw-alias", Some("Alias"), "uuid-alias"),
+                model("raw-name", None, "uuid-name"),
+                model("raw~name", None, "uuid-tilde-name"),
+            ],
+        )],
+        ..Default::default()
+    };
+    let preferences = LLMPreferences {
+        models_by_feature: ModelsByFeature::default(),
+        last_update: None,
+        base_llm_for_terminal_view: HashMap::new(),
+        custom_llms: build_custom_llm_infos(&keys),
+        custom_model_routers: Vec::new(),
+    };
+
+    assert_eq!(
+        preferences.custom_endpoint_usage_display_label("uuid-alias"),
+        "Alias"
+    );
+    assert_eq!(
+        preferences.custom_endpoint_usage_display_label("uuid-name"),
+        "raw-name"
+    );
+    assert_eq!(
+        preferences.custom_endpoint_usage_display_label("uuid-tilde-name"),
+        "raw~name"
+    );
+    assert_eq!(
+        preferences.custom_endpoint_usage_display_label("unknown"),
+        CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL
+    );
+}
+
+#[test]
+fn custom_llm_infos_skip_endpoints_with_empty_api_key() {
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![
+            endpoint("bad", "https://a.io", "", vec![model("m", None, "uuid-x")]),
+            endpoint(
+                "good",
+                "https://b.io",
+                "k",
+                vec![model("m", None, "uuid-y")],
+            ),
+        ],
+        ..Default::default()
+    };
+    let infos = build_custom_llm_infos(&keys);
+    assert_eq!(infos.len(), 1);
+    assert_eq!(infos[0].id.as_str(), "uuid-y");
+}
+
+#[test]
+fn custom_llm_infos_skip_models_without_config_key() {
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![
+                model("unconfigured", None, ""),
+                model("ready", None, "uuid-a"),
+            ],
+        )],
+        ..Default::default()
+    };
+    let infos = build_custom_llm_infos(&keys);
+    assert_eq!(infos.len(), 1);
+    assert_eq!(infos[0].display_name, "ready");
+}
+
+#[test]
+fn removing_model_row_purges_from_custom_llms() {
+    let before = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![model("a", None, "uuid-a"), model("b", None, "uuid-b")],
+        )],
+        ..Default::default()
+    };
+    assert_eq!(build_custom_llm_infos(&before).len(), 2);
+
+    let after = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![model("b", None, "uuid-b")],
+        )],
+        ..Default::default()
+    };
+    let infos = build_custom_llm_infos(&after);
+    assert_eq!(infos.len(), 1);
+    assert_eq!(infos[0].id.as_str(), "uuid-b");
+    assert!(infos.iter().all(|i| i.id.as_str() != "uuid-a"));
+}
+
+#[test]
+fn removing_endpoint_purges_all_its_models_from_custom_llms() {
+    let before = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![
+            endpoint(
+                "keep",
+                "https://a.io",
+                "k",
+                vec![model("k1", None, "uuid-k1")],
+            ),
+            endpoint(
+                "goner",
+                "https://b.io",
+                "k",
+                vec![model("g1", None, "uuid-g1"), model("g2", None, "uuid-g2")],
+            ),
+        ],
+        ..Default::default()
+    };
+    assert_eq!(build_custom_llm_infos(&before).len(), 3);
+
+    let after = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "keep",
+            "https://a.io",
+            "k",
+            vec![model("k1", None, "uuid-k1")],
+        )],
+        ..Default::default()
+    };
+    let infos = build_custom_llm_infos(&after);
+    assert_eq!(infos.len(), 1);
+    assert_eq!(infos[0].id.as_str(), "uuid-k1");
+}
+
+// -- Disable-aware default fallback tests --
+
+fn server_llm(id: &str, disable_reason: Option<DisableReason>) -> LLMInfo {
+    LLMInfo {
+        display_name: id.to_string(),
+        base_model_name: id.to_string(),
+        id: id.into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
+        disable_reason,
+        vision_supported: false,
+        spec: None,
+        provider: LLMProvider::Unknown,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
+fn available(default_id: &str, choices: Vec<LLMInfo>) -> AvailableLLMs {
+    AvailableLLMs {
+        default_id: default_id.into(),
+        choices,
+        preferred_codex_model_id: None,
+    }
+}
+
+#[test]
+fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disabled() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let custom_model_id = LLMId::from("custom-config-key");
+        ApiKeyManager::handle(&app).update(&mut app, |api_key_manager, ctx| {
+            api_key_manager.add_custom_endpoint(
+                "local".to_string(),
+                "https://example.com/v1".to_string(),
+                "test-key".to_string(),
+                vec![(
+                    "custom-model".to_string(),
+                    None,
+                    Some(custom_model_id.to_string()),
+                )],
+                ctx,
+            );
+        });
+
+        // The base/coding default is admin-disabled but another hosted choice
+        // is usable; every hosted CLI agent choice is admin-disabled.
+        let models = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![
+                    server_llm("auto", Some(DisableReason::AdminDisabled)),
+                    server_llm("gpt-x", None),
+                ],
+            ),
+            coding: available(
+                "auto",
+                vec![
+                    server_llm("auto", Some(DisableReason::AdminDisabled)),
+                    server_llm("gpt-x", None),
+                ],
+            ),
+            cli_agent: Some(available(
+                "cli-agent-auto",
+                vec![server_llm(
+                    "cli-agent-auto",
+                    Some(DisableReason::AdminDisabled),
+                )],
+            )),
+            computer_use: None,
+        };
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        llm_preferences.read(&app, |preferences, app| {
+            // Falls back to the first usable hosted choice.
+            assert_eq!(
+                preferences.get_active_base_model(app, None).id.as_str(),
+                "gpt-x"
+            );
+            assert_eq!(
+                preferences.get_active_coding_model(app, None).id.as_str(),
+                "gpt-x"
+            );
+            // No usable hosted CLI choice → falls back to the custom endpoint.
+            assert_eq!(
+                preferences.get_active_cli_agent_model(app, None).id,
+                custom_model_id
+            );
+        });
+    });
+}
+
+#[test]
+fn active_models_use_default_when_usable() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let models = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![server_llm("auto", None), server_llm("gpt-x", None)],
+            ),
+            coding: available("auto", vec![server_llm("auto", None)]),
+            cli_agent: Some(available(
+                "cli-agent-auto",
+                vec![server_llm("cli-agent-auto", None)],
+            )),
+            computer_use: None,
+        };
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        llm_preferences.read(&app, |preferences, app| {
+            assert_eq!(
+                preferences.get_active_base_model(app, None).id.as_str(),
+                "auto"
+            );
+            assert_eq!(
+                preferences
+                    .get_active_cli_agent_model(app, None)
+                    .id
+                    .as_str(),
+                "cli-agent-auto"
+            );
+        });
+    });
+}
+
+#[test]
+fn reconcile_preserves_custom_models_saved_on_execution_profile() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let custom_model_id = LLMId::from("custom-model-config-key");
+        ApiKeyManager::handle(&app).update(&mut app, |api_key_manager, ctx| {
+            api_key_manager.add_custom_endpoint(
+                "local".to_string(),
+                "https://example.com/v1".to_string(),
+                "test-key".to_string(),
+                vec![(
+                    "custom-model".to_string(),
+                    Some("Custom Model".to_string()),
+                    Some(custom_model_id.to_string()),
+                )],
+                ctx,
+            );
+        });
+
+        let default_profile_id =
+            profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(default_profile_id, Some(custom_model_id.clone()), ctx);
+            profiles.set_coding_model(default_profile_id, Some(custom_model_id.clone()), ctx);
+            profiles.set_cli_agent_model(default_profile_id, Some(custom_model_id.clone()), ctx);
+        });
+
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(ModelsByFeature::default()), ctx);
+        });
+
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(profile.data().base_model.as_ref(), Some(&custom_model_id));
+            assert_eq!(profile.data().coding_model.as_ref(), Some(&custom_model_id));
+            assert_eq!(
+                profile.data().cli_agent_model.as_ref(),
+                Some(&custom_model_id)
+            );
+        });
+    });
+}
+
+// -- tui_agent_model_info tests --
+
+fn agent_llm(id: &str, display_name: &str) -> LLMInfo {
+    LLMInfo {
+        display_name: display_name.to_owned(),
+        base_model_name: display_name.to_owned(),
+        id: id.into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
+        disable_reason: None,
+        vision_supported: false,
+        spec: None,
+        provider: LLMProvider::Unknown,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
+/// Preferences whose agent-mode models are a server-style list with an
+/// `"auto"` default plus one concrete model.
+fn preferences_for_tui_tests() -> LLMPreferences {
+    let agent_mode = AvailableLLMs::new(
+        "auto".into(),
+        vec![
+            agent_llm("auto", "auto (cost-efficient)"),
+            agent_llm("claude-opus", "Opus"),
+        ],
+        None,
+    )
+    .expect("choices are non-empty");
+    LLMPreferences {
+        models_by_feature: ModelsByFeature {
+            agent_mode,
+            ..Default::default()
+        },
+        last_update: None,
+        base_llm_for_terminal_view: HashMap::new(),
+        custom_llms: Vec::new(),
+        custom_model_routers: Vec::new(),
+    }
+}
+
+/// Runs `f` against a test app with the singletons the shared model
+/// resolution path (`model_info_for_id`) consults for custom-endpoint gating.
+fn tui_agent_model_test(f: impl FnOnce(&LLMPreferences, &AppContext) + 'static) {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.read(|app_ctx| f(&preferences_for_tui_tests(), app_ctx));
+    });
+}
+
+#[test]
+fn tui_agent_model_auto_resolves_to_the_default_model() {
+    tui_agent_model_test(|preferences, app| {
+        assert_eq!(
+            preferences.tui_agent_model_info("auto", app).id.as_str(),
+            "auto"
+        );
+    });
+}
+
+#[test]
+fn tui_agent_model_known_id_resolves_to_that_model() {
+    tui_agent_model_test(|preferences, app| {
+        let info = preferences.tui_agent_model_info("claude-opus", app);
+        assert_eq!(info.id.as_str(), "claude-opus");
+        assert_eq!(info.display_name, "Opus");
+    });
+}
+
+#[test]
+fn tui_agent_model_unknown_id_falls_back_to_the_default_model() {
+    tui_agent_model_test(|preferences, app| {
+        assert_eq!(
+            preferences
+                .tui_agent_model_info("not-a-model", app)
+                .id
+                .as_str(),
+            "auto"
+        );
+    });
 }

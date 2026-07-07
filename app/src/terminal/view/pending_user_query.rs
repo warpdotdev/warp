@@ -1,16 +1,16 @@
 use warp_core::features::FeatureFlag;
 use warpui::{SingletonEntity, ViewContext};
 
-use crate::{
-    ai::{
-        agent::{conversation::AIConversationId, CancellationReason},
-        blocklist::block::{FinishReason, PendingUserQueryBlock, PendingUserQueryBlockEvent},
-    },
-    auth::AuthStateProvider,
-    terminal::{view::PendingUserQueryKind, TerminalView},
-};
-
 use super::rich_content::RichContentMetadata;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::CancellationReason;
+use crate::ai::blocklist::block::{
+    FinishReason, PendingUserQueryBlock, PendingUserQueryBlockEvent,
+};
+use crate::ai::blocklist::QueuedQueryModel;
+use crate::auth::AuthStateProvider;
+use crate::terminal::view::PendingUserQueryKind;
+use crate::terminal::TerminalView;
 
 impl TerminalView {
     pub(super) fn pending_user_query_conversation_id(&self) -> Option<AIConversationId> {
@@ -53,22 +53,30 @@ impl TerminalView {
                 ctx,
             )
         });
-        if show_close_button || show_send_now_button {
-            ctx.subscribe_to_view(&handle, move |me, _, event, ctx| match event {
-                PendingUserQueryBlockEvent::Dismissed => {
+        ctx.subscribe_to_view(&handle, move |me, block, event, ctx| match event {
+            PendingUserQueryBlockEvent::Dismissed => {
+                if show_close_button {
                     me.remove_pending_user_query_block(ctx);
                 }
-                PendingUserQueryBlockEvent::SendNow => {
+            }
+            PendingUserQueryBlockEvent::SendNow => {
+                if show_send_now_button {
                     me.send_queued_prompt_now(prompt_for_send_now.clone(), ctx);
                 }
-            });
-        }
+            }
+            PendingUserQueryBlockEvent::TextSelected => {
+                // Ensure only one active text selection across the entire terminal view.
+                me.clear_selected_text_except(Some(block.id()), ctx);
+            }
+        });
         let view_id = handle.id();
 
         self.insert_rich_content(
             None,
-            handle,
-            Some(RichContentMetadata::PendingUserQuery),
+            handle.clone(),
+            Some(RichContentMetadata::PendingUserQuery {
+                pending_user_query_block_handle: handle,
+            }),
             super::rich_content::RichContentInsertionPosition::PinToBottom,
             ctx,
         );
@@ -92,6 +100,25 @@ impl TerminalView {
             PendingUserQueryKind::CloudMode,
             ctx,
         );
+    }
+
+    pub(in crate::terminal::view) fn remove_cloud_mode_queue_row(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::QueuedPromptsV2.is_enabled() {
+            return;
+        }
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            return;
+        };
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_initial_cloud_mode_row(conversation_id, ctx);
+        });
     }
 
     /// Removes the pending user query block, if one exists. No-op if none is present.
@@ -140,7 +167,7 @@ impl TerminalView {
         }
 
         self.input.update(ctx, |input, ctx| {
-            input.submit_queued_prompt(prompt, ctx);
+            input.submit_user_query_now(prompt, ctx);
         });
     }
 
@@ -178,7 +205,7 @@ impl TerminalView {
             match reason {
                 FinishReason::Complete => {
                     terminal_view.input.update(ctx, |input, ctx| {
-                        input.submit_queued_prompt(prompt, ctx);
+                        input.submit_user_query_now(prompt, ctx);
                     });
                 }
                 FinishReason::Error

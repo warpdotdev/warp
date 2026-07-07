@@ -1,10 +1,10 @@
 use string_offset::{ByteOffset, CharOffset};
-use warpui::{text_layout::TextStyle, App};
-
-use crate::editor::{EditorSnapshot, PlainTextEditorViewAction, TextRun, ValidInputType};
+use vec1::vec1;
+use warpui::text_layout::TextStyle;
+use warpui::App;
 
 use super::{EditOrigin, EditorModel, Edits, InteractionState, UpdateBufferOption};
-use vec1::vec1;
+use crate::editor::{EditorSnapshot, PlainTextEditorViewAction, TextRun, ValidInputType};
 
 #[test]
 #[should_panic]
@@ -635,7 +635,7 @@ fn test_restoring_invalid_selections() {
                                 ByteOffset::from(0)..ByteOffset::from(3),
                             )],
                         };
-                        model.restore_from_snapshot(snapshot, ctx);
+                        model.restore_from_snapshot(snapshot, Vec::new(), ctx);
                     },
                 ),
             )

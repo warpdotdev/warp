@@ -1,20 +1,21 @@
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::icons::Icon;
+use warpui::elements::{
+    ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Fill, Flex,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement as _, Radius, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity as _, TypedActionView, View,
+    ViewContext, ViewHandle,
+};
+
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::appearance::Appearance;
 use crate::coding_entrypoints::glowing_editor::{GlowingEditor, GlowingEditorEvent};
 use crate::settings::PrivacySettings;
 use crate::TelemetryEvent;
-use warp_core::{send_telemetry_from_ctx, ui::icons::Icon};
-use warpui::elements::{ChildView, Expanded, Fill, MainAxisAlignment, MainAxisSize};
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-        MouseStateHandle, ParentElement as _, Radius, Text,
-    },
-    fonts::{Properties, Weight},
-    platform::Cursor,
-    AppContext, Element, Entity, FocusContext, SingletonEntity as _, TypedActionView, View,
-    ViewContext, ViewHandle,
-};
 
 const ICON_MARGIN_LEFT: f32 = 12.;
 const ICON_MARGIN_RIGHT: f32 = 8.;

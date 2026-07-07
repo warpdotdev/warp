@@ -1,83 +1,66 @@
 use core::slice;
-use std::{
-    any::Any,
-    cell::{Cell, Ref, RefCell},
-    collections::{HashMap, HashSet},
-    fmt, mem,
-    ops::{Add, AddAssign, Range, Sub, SubAssign},
-    sync::Arc,
-};
-
-use parking_lot::Mutex;
-use rangemap::RangeSet;
+use std::any::Any;
+use std::cell::{Cell, Ref, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::ops::{Add, AddAssign, Range, Sub, SubAssign};
+use std::sync::Arc;
+use std::{fmt, mem};
 
 use float_cmp::ApproxEq;
 use itertools::Itertools;
 use markdown_parser::TableAlignment;
 use num_traits::SaturatingSub;
 use ordered_float::OrderedFloat;
+use parking_lot::Mutex;
+use rangemap::RangeSet;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
+use string_offset::{CharOffset, impl_offset};
 use sum_tree::{SeekBias, SumTree};
 use vec1::Vec1;
 use vim::vim::{MotionType, VimMode};
-use warp_core::{
-    channel::ChannelState,
-    ui::{Icon, theme::Fill as ThemeFill},
+use warp_core::channel::ChannelState;
+use warp_core::ui::Icon;
+use warp_core::ui::theme::Fill as ThemeFill;
+use warpui_core::assets::asset_cache::AssetSource;
+use warpui_core::color::ColorU;
+use warpui_core::elements::{
+    Border, Fill, ListIndentLevel, ListNumbering, Margin, MouseStateHandle, Padding, ScrollData,
 };
-use warpui::{
-    AppContext, Entity, EntityId, ModelContext, ModelHandle,
-    assets::asset_cache::AssetSource,
-    color::ColorU,
-    elements::{Border, Fill, ListNumbering, Margin, MouseStateHandle, Padding, ScrollData},
-    fonts::{FamilyId, Properties, Weight},
-    geometry::{
-        rect::RectF,
-        vector::{Vector2F, vec2f},
-    },
-    platform::LineStyle,
-    text_layout::CaretPosition,
-    text_layout::{LayoutCache, Line, TextFrame},
-    text_selection_utils::{
-        NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
-        selection_crosses_newline_offset_based,
-    },
-    units::{IntoPixels, Pixels},
+use warpui_core::fonts::{FamilyId, Properties, Weight};
+use warpui_core::geometry::rect::RectF;
+use warpui_core::geometry::vector::{Vector2F, vec2f};
+use warpui_core::platform::LineStyle;
+use warpui_core::text_layout::{CaretPosition, LayoutCache, Line, TextFrame};
+use warpui_core::text_selection_utils::{
+    NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
+    selection_crosses_newline_offset_based,
 };
+use warpui_core::units::{IntoPixels, Pixels};
+use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
+use self::location::WrapDirection;
 pub use self::location::{HitTestOptions, Location};
 pub use self::offset_map::{OffsetMap, SelectableTextRun};
 pub use self::positioned::Positioned;
-use self::{
-    location::WrapDirection,
-    saved_positions::SavedPositions,
-    viewport::{ScrollPositionSnapshot, SizeInfo},
+use self::positioned::PositionedCursor;
+use self::saved_positions::SavedPositions;
+use self::viewport::{
+    ScrollPositionSnapshot, SizeInfo, ViewportItem, ViewportIterator, ViewportState,
 };
-use self::{
-    positioned::PositionedCursor,
-    viewport::{ViewportItem, ViewportIterator, ViewportState},
+use super::BLOCK_FOOTER_HEIGHT;
+use super::element::broken_embedding::RenderableBrokenEmbedding;
+use super::element::{CursorData, RenderContext, RenderableBlock};
+use super::layout::{TextLayout, line_height};
+use crate::content::edit::{
+    EditDelta, LaidOutRenderDelta, ParsedUrl, TemporaryBlock, layout_temporary_blocks,
 };
-use crate::{
-    content::{
-        edit::{EditDelta, LaidOutRenderDelta, ParsedUrl, TemporaryBlock, layout_temporary_blocks},
-        hidden_lines_model::HiddenLinesModel,
-        markdown::MarkdownStyle,
-        text::{BlockHeaderSize, BufferBlockStyle, CodeBlockType, FormattedTable},
-        version::BufferVersion,
-    },
-    editor::EmbeddedItemModel,
-    render::model::debug::Describe,
-};
-use string_offset::{CharOffset, impl_offset};
-use warpui::elements::ListIndentLevel;
-
-use super::{
-    BLOCK_FOOTER_HEIGHT,
-    element::{RenderableBlock, broken_embedding::RenderableBrokenEmbedding},
-    layout::{TextLayout, line_height},
-};
-
-use super::element::{CursorData, RenderContext};
+use crate::content::hidden_lines_model::HiddenLinesModel;
+use crate::content::markdown::MarkdownStyle;
+use crate::content::text::{BlockHeaderSize, BufferBlockStyle, CodeBlockType, FormattedTable};
+use crate::content::version::BufferVersion;
+use crate::editor::EmbeddedItemModel;
+use crate::render::model::debug::Describe;
 
 pub mod bounds;
 pub(crate) mod debug;
@@ -107,7 +90,7 @@ const TABLE_SCROLL_REVEAL_MARGIN: Pixels = Pixels::new(8.);
 pub const EMBEDDED_ITEM_FIRST_LINE_HEIGHT: f32 = 24.;
 
 pub const TEXT_SPACING: BlockSpacing = BlockSpacing {
-    margin: Margin::uniform(4.).with_right(16.),
+    margin: Margin::uniform(0.).with_right(16.),
     padding: Padding::uniform(0.),
 };
 
@@ -138,9 +121,9 @@ pub const BROKEN_LINK_SPACING: BlockSpacing = BlockSpacing {
 };
 
 pub const HEADER_SPACING: BlockSpacing = BlockSpacing {
-    margin: Margin::uniform(4.)
-        .with_top(12.)
-        .with_bottom(12.)
+    margin: Margin::uniform(0.)
+        .with_top(4.)
+        .with_bottom(4.)
         .with_right(16.),
     padding: Padding::uniform(0.),
 };
@@ -398,6 +381,119 @@ impl<'a> RenderContentTreeRef<'a> {
     }
 }
 
+/// All state specific to the TUI char-cell rendering path.
+///
+/// Bundled into a single struct so the [`LayoutMode`] enum cleanly separates
+/// mode-specific data; fields that are only meaningful in one mode are never
+/// scattered across the parent [`RenderState`].
+pub struct CharCellState {
+    /// Terminal width in character columns. Pushed from the element's layout
+    /// pass; interior-mutable so it can be set through a shared `&CharCellState`
+    /// (mirroring how the GUI submits viewport state during layout).
+    pub(crate) terminal_width: Cell<u16>,
+    /// The 0-indexed char offset of the start of each logical line (`\n`-split).
+    /// Rebuilt synchronously via [`CharCellState::update_text`]. Invariant:
+    /// never empty — it always holds at least `[0]` (logical line 0 starts at char
+    /// 0), even before the first edit, so the soft-wrap helpers can index it safely.
+    pub(crate) line_starts: RefCell<Vec<usize>>,
+    /// The terminal display width (in cells) of each character of the buffer
+    /// text, indexed in parallel with char offsets. This is **derived layout
+    /// metadata, not a copy of the text**: char-cell wrapping only needs each
+    /// char's width, and the render-state query methods are `&self` with no
+    /// `AppContext`, so they can't read the `Buffer` model at query time. One
+    /// byte per char (0 for zero-width/combining marks, 2 for wide CJK/emoji, 1
+    /// otherwise). Rebuilt via [`CharCellState::update_text`].
+    pub(crate) char_widths: RefCell<Vec<u8>>,
+}
+
+impl CharCellState {
+    fn new(terminal_width: u16) -> Self {
+        Self {
+            terminal_width: Cell::new(terminal_width),
+            // Seed with logical line 0 so `line_starts` is never empty, matching
+            // the post-`update_text` state for an empty buffer. The soft-wrap
+            // helpers index `line_starts[0]` and must not panic if a navigation/
+            // scroll happens before the first edit.
+            line_starts: RefCell::new(vec![0]),
+            char_widths: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// The terminal width (in cells) used for char-cell wrapping.
+    pub fn terminal_width(&self) -> u16 {
+        self.terminal_width.get()
+    }
+
+    /// Update the terminal width used for char-cell wrapping. Interior-mutable so
+    /// it can be set through a shared `&CharCellState` during the element's layout
+    /// pass (which only has a shared `&AppContext`). `line_starts`/`char_widths`
+    /// don't depend on the width, so nothing else is rebuilt here.
+    pub fn set_terminal_width(&self, terminal_width: u16) {
+        self.terminal_width.set(terminal_width);
+    }
+
+    /// Rebuild the char-cell layout index — `line_starts` and the per-char display
+    /// `char_widths` — from the current buffer `text` (O(n) char scan).
+    ///
+    /// ## Why TUI needs this explicit call but GUI doesn't
+    ///
+    /// The GUI keeps layout in sync via an async font-shaping pipeline
+    /// (`update_content` → `ContentChanged` → `layout_tx` → `handle_layout_action`),
+    /// which `offset_to_softwrap_point` then reads. `LayoutMode::CharCell` skips that
+    /// channel (no font engine): the channel only carries an `EditDelta` (not the
+    /// full text this rebuild needs) and is async, whereas TUI cursor queries need
+    /// fresh `line_starts` synchronously within the same frame as the edit.
+    /// [`on_buffer_version_updated`](warp_editor::model::CoreEditorModel::on_buffer_version_updated)
+    /// is the guaranteed-synchronous post-edit hook that calls this.
+    ///
+    /// `text` should be the buffer's current plain text (without any trailing
+    /// sentinel newline injected by the buffer layer).
+    pub fn update_text(&self, text: &str) {
+        let mut starts = self.line_starts.borrow_mut();
+        let mut char_widths = self.char_widths.borrow_mut();
+        starts.clear();
+        char_widths.clear();
+        // Logical line 0 starts at char index 0.
+        starts.push(0_usize);
+        for ch in text.chars() {
+            // Store only the derived display width, never the character itself.
+            char_widths.push(char_cell_display_width(ch) as u8);
+            if ch == '\n' {
+                // The next logical line starts at the char index after this '\n'.
+                starts.push(char_widths.len());
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for CharCellState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CharCellState")
+            .field("terminal_width", &self.terminal_width.get())
+            .field("line_starts_len", &self.line_starts.borrow().len())
+            .field("total_chars", &self.char_widths.borrow().len())
+            .finish()
+    }
+}
+
+/// Determines which soft-wrap layout pipeline `RenderState` uses.
+///
+/// - [`LayoutMode::Pixels`]: font-aware pixel layout for the GPU-rendered GUI. Uses the
+///   `SumTree<BlockItem>` content tree and the async font-shaping channel.
+/// - [`LayoutMode::CharCell`]: monospace char-cell layout for the TUI. Skips font shaping;
+///   computes positions from [`CharCellState`] using character-count arithmetic.
+///
+/// This is always set explicitly at construction — there is no sensible default since
+/// the rendering path is determined by whether the client is a GUI or TUI.
+#[derive(Debug)]
+pub enum LayoutMode {
+    /// GPU-rendered GUI path: font-aware, pixel-based soft-wrap.
+    Pixels,
+    /// TUI path: monospace char-cell layout, no font engine required.
+    /// All TUI-specific state lives in [`CharCellState`].
+    CharCell(CharCellState),
+}
+
 /// Model for rendering rich text.
 pub struct RenderState {
     /// Content is wrapped in a RefCell so we could mutate it when we are laying out the editor element.
@@ -449,6 +545,10 @@ pub struct RenderState {
     /// Optional path to the document being rendered, used for resolving relative paths
     /// (e.g. relative image paths in markdown).
     document_path: Option<std::path::PathBuf>,
+
+    /// The active layout mode for soft-wrap computation.
+    /// For the TUI path (`CharCell`), this also carries all char-cell-specific state.
+    layout_mode: LayoutMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -664,8 +764,84 @@ impl LineCount {
     }
 }
 
+/// The unit used for the horizontal column component of a [`SoftWrapPoint`].
+///
+/// - [`ColumnUnit::Pixels`] is used by the GUI (font-aware, proportional) rendering path.
+/// - [`ColumnUnit::Chars`] is used by the TUI (monospace, char-cell) rendering path.
+///
+/// The two variants must never be mixed in a single comparison or arithmetic expression.
+/// Call sites that work in only one coordinate space should pattern-match and unwrap the
+/// expected variant; cross-variant operations panic.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum ColumnUnit {
+    /// Horizontal offset in pixels, used by the GPU-rendered GUI path.
+    Pixels(Pixels),
+    /// Horizontal offset in terminal character columns, used by the TUI path.
+    Chars(u16),
+}
+
+impl ColumnUnit {
+    /// Zero column in pixel units (GUI path).
+    pub fn pixels_zero() -> Self {
+        ColumnUnit::Pixels(Pixels::zero())
+    }
+
+    /// Zero column in char units (TUI path).
+    pub fn chars_zero() -> Self {
+        ColumnUnit::Chars(0)
+    }
+
+    /// Returns the element-wise max of two same-variant values.
+    /// Variants must match; mixing Pixels and Chars is always a bug.
+    pub fn col_max(self, other: ColumnUnit) -> ColumnUnit {
+        match (self, other) {
+            (ColumnUnit::Pixels(a), ColumnUnit::Pixels(b)) => ColumnUnit::Pixels(a.max(b)),
+            (ColumnUnit::Chars(a), ColumnUnit::Chars(b)) => ColumnUnit::Chars(a.max(b)),
+            _ => {
+                debug_assert!(
+                    false,
+                    "ColumnUnit::col_max: mixed Pixels and Chars variants — this is a bug"
+                );
+                self // graceful fallback: keep self unchanged
+            }
+        }
+    }
+
+    /// Unwraps the pixel value.
+    /// Calling this on a `Chars` variant is always a bug; in debug builds it asserts,
+    /// in release builds it returns [`Pixels::zero()`] as a safe fallback.
+    pub fn as_pixels(self) -> Pixels {
+        match self {
+            ColumnUnit::Pixels(p) => p,
+            ColumnUnit::Chars(_) => {
+                debug_assert!(
+                    false,
+                    "ColumnUnit::as_pixels called on a Chars variant — this is a bug"
+                );
+                Pixels::zero()
+            }
+        }
+    }
+
+    /// Unwraps the char-column value.
+    /// Calling this on a `Pixels` variant is always a bug; in debug builds it asserts,
+    /// in release builds it returns `0` as a safe fallback.
+    pub fn as_chars(self) -> u16 {
+        match self {
+            ColumnUnit::Chars(c) => c,
+            ColumnUnit::Pixels(_) => {
+                debug_assert!(
+                    false,
+                    "ColumnUnit::as_chars called on a Pixels variant — this is a bug"
+                );
+                0
+            }
+        }
+    }
+}
+
 /// A character offset within a [`TextFrame`]. These offsets count characters in the Rust string
-/// passed to [`warpui::text_layout::LayoutCache::layout_text()`].
+/// passed to [`warpui_core::text_layout::LayoutCache::layout_text()`].
 ///
 /// Frame offsets often, but not always, correspond to glyph indices and caret positions. However,
 /// they do not line up 1:1 if a glyph or grapheme contains multiple characters
@@ -703,34 +879,20 @@ impl RenderLineLocation {
 ///
 /// Because soft-wrapping depends on the fonts and viewport size, `SoftWrapPoint` is not stable
 /// across resizes or style changes.
+///
+/// The `column` field uses [`ColumnUnit`] to distinguish GUI (pixel) and TUI (char-cell)
+/// coordinate spaces. Callers must use the same variant consistently within a rendering path.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct SoftWrapPoint {
     /// A soft-wrapped line index within the laid-out document.
     row: u32,
-    /// The point's x-offset in pixels. We use pixels here, rather than an integer count, to
-    /// support visual navigation. When navigating up or down, we want to move to the point
-    /// visually above or below the starting point. That point has the same pixel x-offset,
-    /// but, due to variable padding and character widths, not necessarily the same character
-    /// offset.
-    ///
-    /// For example, imagine the given text laid out with a non-monospace font, where the
-    /// middle line is a list item:
-    ///
-    /// ```text
-    /// aaaaaaa
-    /// * mmmmmm
-    /// iiiiiii
-    /// ```
-    ///
-    /// If the cursor is at the start of the middle line, the characters above and below it are
-    /// in the **middle** of their respective lines. Furthermore, the `a` and `i` glyphs are
-    /// different widths, so the character offsets on all 3 lines are different. However, they
-    /// have the same pixel x-offset.
-    column: Pixels,
+    /// The point's horizontal position, in either pixels (GUI) or character columns (TUI).
+    /// See [`ColumnUnit`] for details.
+    column: ColumnUnit,
 }
 
 impl SoftWrapPoint {
-    pub fn new(row: u32, column: Pixels) -> Self {
+    pub fn new(row: u32, column: ColumnUnit) -> Self {
         Self { row, column }
     }
 
@@ -755,7 +917,7 @@ impl SoftWrapPoint {
         self.row
     }
 
-    pub fn column(&self) -> Pixels {
+    pub fn column(&self) -> ColumnUnit {
         self.column
     }
 }
@@ -1700,7 +1862,7 @@ impl Cursor {
 }
 
 impl RenderState {
-    /// Create a new `RenderState` model.
+    /// Create a new `RenderState` model (Pixels/GUI mode).
     /// The initial content will be a single **trailing newline**.
     pub fn new(
         styles: RichTextStyles,
@@ -1723,7 +1885,57 @@ impl RenderState {
             Pixels::zero(),
             Pixels::zero(),
             hidden_lines,
+            LayoutMode::Pixels,
         )
+    }
+
+    /// Create a new `RenderState` in TUI char-cell mode.
+    ///
+    /// In this mode, soft-wrap layout uses character-count arithmetic instead of font shaping.
+    /// The async font pipeline is still wired up (so `LayoutAction` messages sent by other code
+    /// don't cause panics), but `BufferEdit` actions are no-ops — the caller must drive layout
+    /// updates via [`Self::update_char_cell_text`].
+    ///
+    /// `styles` is stored on the struct for API compatibility but is **not used** for rendering
+    /// in CharCell mode. Callers (e.g. `warp_tui`) should supply a minimal stub.
+    pub fn new_tui(
+        terminal_width: u16,
+        styles: RichTextStyles,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        let (element_tx, element_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(element_rx, Self::apply_element_update, |_, _| {});
+
+        let (layout_tx, layout_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(layout_rx, Self::handle_layout_action, |_, _| {});
+
+        // In CharCell mode the SumTree<BlockItem> is never queried for layout, so
+        // we create an empty tree rather than the usual style-dependent trailing newline.
+        let entity_id = ctx.model_id();
+        let (viewport_width, viewport_height) = (Pixels::zero(), Pixels::zero());
+        Self {
+            styles,
+            show_final_trailing_newline_when_non_empty: false,
+            has_final_trailing_newline: Cell::new(false),
+            viewport: ViewportState::new(viewport_width, viewport_height),
+            selections: Default::default(),
+            decorations: Default::default(),
+            content: RefCell::new(SumTree::new()),
+            element_tx,
+            layout_tx,
+            width_setting: Default::default(),
+            saved_positions: SavedPositions::new(entity_id),
+            buffer_version: RefCell::new(Default::default()),
+            lazy_layout: false,
+            pending_edits: Mutex::new(Vec::new()),
+            #[cfg(any(test, feature = "test-util"))]
+            outstanding_layouts: Default::default(),
+            pending_selection_change: Mutex::new(None),
+            layout_options: Default::default(),
+            document_path: None,
+            hidden_lines: None,
+            layout_mode: LayoutMode::CharCell(CharCellState::new(terminal_width)),
+        }
     }
 
     /// Create a new `RenderState` with the given configuration.
@@ -1745,6 +1957,7 @@ impl RenderState {
             viewport_width,
             viewport_height,
             None,
+            LayoutMode::Pixels,
         )
     }
 
@@ -1760,6 +1973,7 @@ impl RenderState {
         viewport_width: Pixels,
         viewport_height: Pixels,
         hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
+        layout_mode: LayoutMode,
     ) -> Self {
         let content = SumTree::from_item(Self::final_trailing_newline_cursor(&styles));
         Self {
@@ -1783,6 +1997,23 @@ impl RenderState {
             layout_options: Default::default(),
             document_path: None,
             hidden_lines,
+            layout_mode,
+        }
+    }
+
+    /// Returns the char-cell layout state, or `None` in pixel (GUI) mode.
+    ///
+    /// All char-cell queries and mutations go through this accessor and the
+    /// methods on [`CharCellState`], so they are only reachable when the model is
+    /// actually in char-cell mode — there is no implicit "CharCell-only" contract
+    /// on `RenderState` for callers to violate. The width stored there is the
+    /// single source of truth for the TUI input's width: navigation and scroll
+    /// read it at event time, so callers should read it via
+    /// [`CharCellState::terminal_width`] rather than caching a copy.
+    pub fn char_cell(&self) -> Option<&CharCellState> {
+        match &self.layout_mode {
+            LayoutMode::CharCell(cc) => Some(cc),
+            LayoutMode::Pixels => None,
         }
     }
 
@@ -1899,6 +2130,13 @@ impl RenderState {
     }
 
     pub fn max_line(&self) -> LineCount {
+        if let LayoutMode::CharCell(ref cc) = self.layout_mode {
+            return char_cell_max_line(
+                &cc.line_starts.borrow(),
+                &cc.char_widths.borrow(),
+                cc.terminal_width.get(),
+            );
+        }
         self.content.borrow().summary().lines
     }
 
@@ -2401,6 +2639,26 @@ impl RenderState {
                 }
             }
             LayoutAction::LayoutTemporaryBlock(blocks) => {
+                // CharCell mode skips font layout for temporary blocks.
+                //
+                // Temporary blocks represent interleaved deleted/replaced lines in diff
+                // views (only created by `CodeEditorModel::refresh_diff_state` for code
+                // review). They are not needed for M1 (basic TUI text input).
+                //
+                // TODO(TUI-diff): When a TUI diff/code-review view is built, add:
+                //   `temporary_blocks: Vec<CharCellTemporaryBlock>` to `CharCellState`
+                //   with fields: `{ content: String, insert_before: LineCount,
+                //   line_decoration: Option<ColorU>, inline_decorations: Vec<(Range<usize>, ColorU)> }`.
+                //   Populate it here instead of no-op'ing. The `TuiInputView` render loop
+                //   then merges them as extra `TuiText` rows with `Style::bg(color)`,
+                //   interleaved at their `insert_before` line positions. No SumTree or
+                //   font-shaping changes needed — the GUI path is unaffected.
+                if matches!(self.layout_mode, LayoutMode::CharCell(_)) {
+                    ctx.emit(RenderEvent::LayoutUpdated);
+                    ctx.notify();
+                    return;
+                }
+
                 // If we are performing layout lazily, push the temporary blocks to the pending edits queue which is flushed
                 // at editor element layout time
                 if self.lazy_layout {
@@ -2412,6 +2670,16 @@ impl RenderState {
                     self.update_content_sizing();
                 }
 
+                ctx.emit(RenderEvent::LayoutUpdated);
+                ctx.notify();
+            }
+            LayoutAction::BufferEdit {
+                delta: _,
+                buffer_version,
+            } if matches!(self.layout_mode, LayoutMode::CharCell(_)) => {
+                // CharCell mode skips font shaping. CodeEditorModel drives char-cell layout
+                // synchronously via CharCellState::update_text after each buffer edit.
+                self.buffer_version.borrow_mut().next_render_version = Some(buffer_version);
                 ctx.emit(RenderEvent::LayoutUpdated);
                 ctx.notify();
             }
@@ -3068,17 +3336,39 @@ impl RenderState {
     }
 
     pub fn offset_to_softwrap_point(&self, offset: CharOffset) -> SoftWrapPoint {
+        // CharCell path: compute visual row/col from char-cell display-width arithmetic.
+        if let LayoutMode::CharCell(ref cc) = self.layout_mode {
+            return char_cell_offset_to_softwrap_point(
+                offset,
+                &cc.line_starts.borrow(),
+                &cc.char_widths.borrow(),
+                cc.terminal_width.get(),
+            );
+        }
+
+        // Pixels path: use the font-laid-out SumTree<BlockItem>.
         let content = self.content.borrow();
         let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
 
         cursor.seek(&offset, SeekBias::Right);
         match cursor.positioned_item() {
             Some(item) => item.offset_to_softwrap_point(offset),
-            None => SoftWrapPoint::new(self.max_line().as_u32(), Pixels::zero()),
+            None => SoftWrapPoint::new(self.max_line().as_u32(), ColumnUnit::pixels_zero()),
         }
     }
 
     pub fn softwrap_point_to_offset(&self, point: SoftWrapPoint) -> CharOffset {
+        // CharCell path.
+        if let LayoutMode::CharCell(ref cc) = self.layout_mode {
+            return char_cell_softwrap_point_to_offset(
+                point,
+                &cc.line_starts.borrow(),
+                &cc.char_widths.borrow(),
+                cc.terminal_width.get(),
+            );
+        }
+
+        // Pixels path.
         let content = self.content.borrow();
         let mut cursor = content.cursor::<LineCount, LayoutSummary>();
 
@@ -3098,9 +3388,9 @@ impl RenderState {
         let line_row = line_number.as_u32().saturating_sub(1);
 
         let start_offset =
-            self.softwrap_point_to_offset(SoftWrapPoint::new(line_row, Pixels::zero()));
-        let end_offset =
-            self.softwrap_point_to_offset(SoftWrapPoint::new(line_row + 1, Pixels::zero()));
+            self.softwrap_point_to_offset(SoftWrapPoint::new(line_row, ColumnUnit::pixels_zero()));
+        let end_offset = self
+            .softwrap_point_to_offset(SoftWrapPoint::new(line_row + 1, ColumnUnit::pixels_zero()));
 
         (start_offset, end_offset)
     }
@@ -3749,7 +4039,7 @@ impl Positioned<'_, BlockItem> {
                 paragraphs
                     .find(|paragraph| paragraph.end_char_offset() > offset)
                     .map_or(
-                        SoftWrapPoint::new(self.end_line().as_u32(), Pixels::zero()),
+                        SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
                         |paragraph| paragraph.offset_to_softwrap_point(offset),
                     )
             }
@@ -3774,12 +4064,12 @@ impl Positioned<'_, BlockItem> {
                 paragraphs
                     .find(|paragraph| paragraph.end_char_offset() > offset)
                     .map_or(
-                        SoftWrapPoint::new(self.end_line().as_u32(), Pixels::zero()),
+                        SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
                         |paragraph| paragraph.offset_to_softwrap_point(offset),
                     )
             }
             BlockItem::MermaidDiagram { .. } => {
-                SoftWrapPoint::new(self.start_line.as_u32(), Pixels::zero())
+                SoftWrapPoint::new(self.start_line.as_u32(), ColumnUnit::pixels_zero())
             }
             BlockItem::TrailingNewLine(_)
             | BlockItem::Embedded(_)
@@ -3787,7 +4077,7 @@ impl Positioned<'_, BlockItem> {
             | BlockItem::Image { .. }
             | BlockItem::TemporaryBlock { .. }
             | BlockItem::Hidden { .. } => {
-                SoftWrapPoint::new(self.start_line.as_u32(), Pixels::zero())
+                SoftWrapPoint::new(self.start_line.as_u32(), ColumnUnit::pixels_zero())
             }
             BlockItem::Table(laid_out_table) => {
                 let relative_offset = offset.saturating_sub(&self.start_char_offset);
@@ -3796,7 +4086,10 @@ impl Positioned<'_, BlockItem> {
                     .cell_at_offset(relative_offset)
                     .map(|c| c.row)
                     .unwrap_or(0);
-                SoftWrapPoint::new(self.start_line.as_u32() + row as u32, Pixels::zero())
+                SoftWrapPoint::new(
+                    self.start_line.as_u32() + row as u32,
+                    ColumnUnit::pixels_zero(),
+                )
             }
         }
     }
@@ -3999,9 +4292,9 @@ impl<'a> Positioned<'a, Paragraph> {
         match self.lines().last() {
             Some(line) => SoftWrapPoint::new(
                 line.start_line.as_u32(),
-                line.item.width.into_pixels() + self.style.left_offset(),
+                ColumnUnit::Pixels(line.item.width.into_pixels() + self.style.left_offset()),
             ),
-            None => SoftWrapPoint::new(self.start_line.as_u32(), Pixels::zero()),
+            None => SoftWrapPoint::new(self.start_line.as_u32(), ColumnUnit::pixels_zero()),
         }
     }
 
@@ -4319,7 +4612,7 @@ impl<'a> Positioned<'a, Paragraph> {
                 vec2f(underline_width, UNDERLINE_THICKNESS),
             );
 
-            let dash = warpui::scene::Dash {
+            let dash = warpui_core::scene::Dash {
                 dash_length: DASHED_UNDERLINE_DASH_LENGTH,
                 gap_length: DASHED_UNDERLINE_GAP_LENGTH,
                 force_consistent_gap_length: true,
@@ -4328,7 +4621,7 @@ impl<'a> Positioned<'a, Paragraph> {
                 .scene
                 .draw_rect_without_hit_recording(underline_rect)
                 .with_border(
-                    warpui::scene::Border::bottom(UNDERLINE_THICKNESS)
+                    warpui_core::scene::Border::bottom(UNDERLINE_THICKNESS)
                         .with_dashed_border(dash)
                         .with_border_color(color),
                 );
@@ -4395,10 +4688,12 @@ impl<'a> Positioned<'a, Paragraph> {
 
         SoftWrapPoint::new(
             line.start_line.as_u32(),
-            line.item
-                .caret_position_for_index(self.frame_index(offset).as_usize())
-                .into_pixels()
-                + self.style.left_offset(),
+            ColumnUnit::Pixels(
+                line.item
+                    .caret_position_for_index(self.frame_index(offset).as_usize())
+                    .into_pixels()
+                    + self.style.left_offset(),
+            ),
         )
     }
 
@@ -4414,7 +4709,7 @@ impl<'a> Positioned<'a, Paragraph> {
         let line_end = self.buffer_index(line.end_index().into());
         let paragraph_last_char = self.end_char_offset().saturating_sub(&1.into());
 
-        let adjusted_x = point.column() - self.style.left_offset();
+        let adjusted_x = point.column().as_pixels() - self.style.left_offset();
         let frame_index = match line.caret_index_for_x(adjusted_x.as_f32()) {
             Some(caret) => FrameOffset::from(caret),
             None => {
@@ -4425,6 +4720,8 @@ impl<'a> Positioned<'a, Paragraph> {
                 } else {
                     FrameOffset::from(line.end_index())
                 }
+                // Note: adjusted_x is always Pixels here because softwrap_point_to_offset
+                // on Positioned<Paragraph> is only called from the Pixels layout path.
             }
         };
 
@@ -4827,4 +5124,220 @@ impl LaidOutEmbeddedItem for BrokenBlockEmbedding {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Char-cell (TUI) layout helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// The terminal display width of a character, in cells: 0 for zero-width /
+/// combining marks, 2 for wide CJK/emoji, 1 otherwise. Control characters have
+/// no defined width and are treated as 0.
+pub fn char_cell_display_width(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
+
+/// For one logical line, given the display width (in cells) of each of its
+/// characters, returns the 0-based char index at which each visual row begins.
+/// Always returns at least `[0]`.
+///
+/// Width-aware: a character is placed on the current row if it fits within
+/// `terminal_width` display columns; otherwise it starts a new row. Wide
+/// characters that don't fit in the remaining columns wrap (leaving a blank
+/// trailing cell); zero-width characters never force a wrap. With
+/// `terminal_width == 0`, wrapping is disabled (a single row).
+pub fn char_cell_line_row_starts(char_widths: &[u8], terminal_width: u16) -> Vec<usize> {
+    let w = terminal_width as usize;
+    let mut starts = vec![0usize];
+    if w == 0 {
+        return starts;
+    }
+    let mut col = 0usize;
+    for (i, &cw) in char_widths.iter().enumerate() {
+        let cw = cw as usize;
+        if col > 0 && col + cw > w {
+            starts.push(i);
+            col = 0;
+        }
+        col += cw;
+    }
+    starts
+}
+
+/// The `(row_within_line, display_col)` of the gap before char `char_in_line`
+/// (or the end of the line when `char_in_line == char_widths.len()`), using the
+/// same width-aware wrapping as [`char_cell_line_row_starts`]. A cursor at the
+/// end of a row that exactly fills the width wraps to the start of the next row.
+pub fn char_cell_line_gap_position(
+    char_widths: &[u8],
+    terminal_width: u16,
+    char_in_line: usize,
+) -> (u32, u16) {
+    let w = terminal_width as usize;
+    let n = char_in_line.min(char_widths.len());
+    let mut row: u32 = 0;
+    let mut col: usize = 0;
+    for &cw in char_widths.iter().take(n) {
+        let cw = cw as usize;
+        if w > 0 && col > 0 && col + cw > w {
+            row += 1;
+            col = 0;
+        }
+        col += cw;
+    }
+    if char_in_line < char_widths.len() {
+        // The cursor sits before char `char_in_line`; if that char would wrap,
+        // the cursor is at the start of the next row.
+        let cw = char_widths[char_in_line] as usize;
+        if w > 0 && col > 0 && col + cw > w {
+            row += 1;
+            col = 0;
+        }
+    } else if w > 0 && col == w {
+        // End-of-line cursor on a row that exactly fills the width wraps to the
+        // next row's start (matches plain monospace terminal behavior).
+        row += 1;
+        col = 0;
+    }
+    (row, col as u16)
+}
+
+/// The number of visual rows occupied by a single logical line (always >= 1).
+fn char_cell_line_rows(char_widths: &[u8], terminal_width: u16) -> u32 {
+    char_cell_line_row_starts(char_widths, terminal_width).len() as u32
+}
+
+/// The `\n`-free slice of per-char display widths for logical line `i`, given
+/// the line-start indices and the full per-char width buffer.
+fn char_cell_logical_line<'a>(line_starts: &[usize], char_widths: &'a [u8], i: usize) -> &'a [u8] {
+    let start = line_starts[i].min(char_widths.len());
+    // The next line starts just after this line's '\n'; exclude that newline.
+    let end = line_starts
+        .get(i + 1)
+        .map(|&next| next.saturating_sub(1))
+        .unwrap_or(char_widths.len())
+        .min(char_widths.len());
+    &char_widths[start..end.max(start)]
+}
+
+/// Returns the total number of visual rows across all logical lines.
+/// Used by [`RenderState::max_line`] in `CharCell` mode.
+pub(crate) fn char_cell_max_line(
+    line_starts: &[usize],
+    char_widths: &[u8],
+    terminal_width: u16,
+) -> LineCount {
+    if line_starts.is_empty() {
+        return LineCount(1);
+    }
+    let mut total: usize = 0;
+    for i in 0..line_starts.len() {
+        let line = char_cell_logical_line(line_starts, char_widths, i);
+        total += char_cell_line_rows(line, terminal_width) as usize;
+    }
+    LineCount(total)
+}
+
+/// Converts a 0-based character index to a [`SoftWrapPoint`] in char-cell coordinates.
+///
+/// This softwrap API is 0-based — index 0 is the first character — matching the
+/// convention the navigation callers already use for both layout modes: they pass
+/// `cursor_offset - 1` here and re-add 1 to [`char_cell_softwrap_point_to_offset`]
+/// results to convert back to the buffer's 1-based [`CharOffset`]. Keeping both modes
+/// on the same contract is what lets `navigate_line` stay layout-mode-agnostic.
+pub(crate) fn char_cell_offset_to_softwrap_point(
+    offset: CharOffset,
+    line_starts: &[usize],
+    char_widths: &[u8],
+    terminal_width: u16,
+) -> SoftWrapPoint {
+    let char_idx = offset.as_usize();
+
+    // Find the logical line by binary-searching line_starts.
+    let logical_line = line_starts
+        .partition_point(|&s| s <= char_idx)
+        .saturating_sub(1);
+    let line_start_char = line_starts.get(logical_line).copied().unwrap_or(0);
+    let char_in_line = char_idx.saturating_sub(line_start_char);
+
+    // Count visual rows from all preceding logical lines.
+    let mut preceding_rows: u32 = 0;
+    for i in 0..logical_line {
+        let line = char_cell_logical_line(line_starts, char_widths, i);
+        preceding_rows += char_cell_line_rows(line, terminal_width);
+    }
+
+    let line = char_cell_logical_line(line_starts, char_widths, logical_line);
+    let (row_within_line, col) = char_cell_line_gap_position(line, terminal_width, char_in_line);
+    SoftWrapPoint::new(preceding_rows + row_within_line, ColumnUnit::Chars(col))
+}
+
+/// Converts a [`SoftWrapPoint`] in char-cell coordinates back to a 0-based character
+/// index — the inverse of [`char_cell_offset_to_softwrap_point`]. Callers re-add 1 to
+/// recover the buffer's 1-based [`CharOffset`].
+///
+/// The result is always clamped to the end of the logical line it lands in (the
+/// final line is bounded by the buffer length), so it never returns an offset
+/// past the end of the buffer even when the target column is beyond a shorter
+/// final line.
+pub(crate) fn char_cell_softwrap_point_to_offset(
+    point: SoftWrapPoint,
+    line_starts: &[usize],
+    char_widths: &[u8],
+    terminal_width: u16,
+) -> CharOffset {
+    let target_row = point.row();
+    // Accept either variant: Chars is the normal CharCell column; Pixels is produced
+    // by GUI-path navigation helpers (e.g. navigate_line_boundary) that hard-code
+    // ColumnUnit::pixels_zero() to mean "start of row". Treat any Pixels value as 0.
+    let target_col = match point.column() {
+        ColumnUnit::Chars(c) => c as usize,
+        ColumnUnit::Pixels(_) => 0,
+    };
+
+    if line_starts.is_empty() {
+        return CharOffset::from(0);
+    }
+
+    let mut acc_rows: u32 = 0;
+    for i in 0..line_starts.len() {
+        let line_start = line_starts[i];
+        let line = char_cell_logical_line(line_starts, char_widths, i);
+        let row_starts = char_cell_line_row_starts(line, terminal_width);
+        let line_rows = row_starts.len() as u32;
+        let is_last = i + 1 == line_starts.len();
+
+        // The target row falls in this line, or this is the last line (which
+        // absorbs any overshoot so the result never exceeds the buffer).
+        if acc_rows + line_rows > target_row || is_last {
+            let row_within =
+                (target_row.saturating_sub(acc_rows) as usize).min(row_starts.len() - 1);
+            let row_start_char = row_starts[row_within];
+            let row_end_char = row_starts
+                .get(row_within + 1)
+                .copied()
+                .unwrap_or(line.len());
+
+            // Walk the row's per-char widths to find the gap at or just before
+            // `target_col`, clamped to the row's end (which never spills past
+            // the logical line, and for the final line, past the buffer).
+            let mut col = 0usize;
+            let mut idx = row_start_char;
+            while idx < row_end_char {
+                let cw = line[idx] as usize;
+                if col + cw > target_col {
+                    break;
+                }
+                col += cw;
+                idx += 1;
+            }
+            return CharOffset::from(line_start + idx);
+        }
+
+        acc_rows += line_rows;
+    }
+
+    // Unreachable given the `is_last` branch always returns; fall back to the
+    // start of the last logical line.
+    CharOffset::from(*line_starts.last().unwrap_or(&0))
 }

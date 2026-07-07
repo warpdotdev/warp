@@ -5,22 +5,19 @@ pub mod block;
 pub mod code_block;
 mod context_model;
 mod controller;
-#[cfg(feature = "local_fs")]
+pub(crate) mod conversation_selection;
 pub(crate) mod handoff;
 
-pub(crate) fn is_local_to_cloud_handoff_available() -> bool {
-    use crate::features::FeatureFlag;
-    FeatureFlag::OzHandoff.is_enabled()
-        && FeatureFlag::HandoffLocalCloud.is_enabled()
-        && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
-}
+pub(crate) mod local_agent_task_sync_model;
 pub(crate) mod orchestration_event_streamer;
 pub(crate) mod orchestration_events;
+pub(crate) mod orchestration_topology;
 mod passive_suggestions;
-pub(crate) mod task_status_sync_model;
+pub(crate) mod queued_query;
 pub(super) use controller::RequestInput;
 pub mod history_model;
 pub mod inline_action;
+mod input_mode_policy;
 mod input_model;
 mod permissions;
 mod persistence;
@@ -36,55 +33,68 @@ pub(crate) mod codebase_index_speedbump_banner;
 pub(crate) mod telemetry_banner;
 pub(super) mod view_util;
 
+pub(crate) use action_model::recording_controller::RecordingController;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
-    apply_edits, read_local_file_context, BlocklistAIActionEvent, BlocklistAIActionModel,
-    FileReadResult, ReadFileContextResult, RequestFileEditsFormatKind, ShellCommandExecutor,
-    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    StartAgentRequestId,
+    apply_edits, read_local_file_context, BlocklistAIActionEvent, FileReadResult,
+    ReadFileContextResult, RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent,
+    StartAgentRequest, StartAgentRequestId,
 };
-
+pub use action_model::{BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent};
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};
-
+pub use block::{keyboard_navigable_buttons, toggleable_items};
+pub use context_model::BlocklistAIContextModel;
 pub(crate) use context_model::{
-    block_context_from_terminal_model, AttachmentType, BlocklistAIContextEvent,
-    BlocklistAIContextModel, PendingAttachment, PendingFile, PendingQueryState,
+    block_context_from_terminal_model, AttachmentType, BlocklistAIContextEvent, PendingAttachment,
+    PendingFile,
 };
+pub use controller::input_context::{
+    BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
+};
+#[cfg(test)]
+pub(crate) use controller::response_stream::ResponseStream;
+pub(crate) use controller::response_stream::ResponseStreamId;
+pub use controller::BlocklistAIController;
 pub(crate) use controller::{
-    response_stream::ResponseStreamId, BlocklistAIController, BlocklistAIControllerEvent,
-    ClientIdentifiers, SessionContext, SlashCommandRequest,
+    BlocklistAIControllerEvent, ClientIdentifiers, SessionContext, SlashCommandRequest,
+};
+pub(crate) use conversation_selection::{
+    ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,
+    PendingQueryState,
 };
 pub(crate) use history_model::{
-    AIQueryHistory, AIQueryHistoryOutputStatus, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    ConversationStatusUpdate, FORK_PREFIX, PRE_REWIND_PREFIX,
+    AIQueryHistory, AIQueryHistoryOutputStatus, BeginConversationRenameError,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FORK_PREFIX,
+    PRE_REWIND_PREFIX,
 };
-pub(crate) use input_model::{
-    BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
+// The policy types are re-exported for the TUI frontend via `tui_export`.
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use input_mode_policy::{InputModePolicy, InputModePolicyHandle, PolicyConfigUpdate};
+pub(crate) use input_model::BlocklistAIInputEvent;
+pub use input_model::{
+    BlocklistAIInputModel, InputConfig, InputType, InputTypeAutoDetectionSource,
 };
 pub(crate) use passive_suggestions::{
     LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
     MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
 };
+pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedReason};
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub(crate) use persistence::PersistedAIInputType;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
-pub(crate) use view_util::{
-    ai_brand_color, ai_indicator_height, get_ai_block_overflow_menu_element_position_id,
-    get_attached_blocks_chip_element_position_id, render_ai_agent_mode_icon,
-    render_ai_follow_up_icon, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, CLAUDE_ORANGE,
-    NEW_AGENT_PANE_LABEL,
+pub(crate) use queued_query::{
+    is_lrc_auto_queue_active, AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId,
+    QueuedQueryModel, QueuedQueryOrigin,
 };
-
-pub(crate) use view_util::format_credits;
-
-pub use crate::ai::blocklist::block::{secret_redaction, AIBlockResponseRating, TextLocation};
-pub use block::keyboard_navigable_buttons;
-pub use block::toggleable_items;
-pub use controller::input_context::{
-    BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
-};
-pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedReason};
 pub use suggestion_chip_view::*;
 pub use view_util::error_color;
+pub(crate) use view_util::{
+    ai_brand_color, ai_indicator_height, format_credits,
+    get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
+    render_ai_agent_mode_icon, render_ai_follow_up_icon, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
+    CLAUDE_ORANGE, NEW_AGENT_PANE_LABEL,
+};
+
+pub use crate::ai::blocklist::block::{secret_redaction, AIBlockResponseRating, TextLocation};

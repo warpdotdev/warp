@@ -1,13 +1,11 @@
 use std::collections::HashSet;
 
-use crate::completer::{
-    matchers::MatchStrategy,
-    suggest::{MatchedSuggestion, Priority, Suggestion, SuggestionType},
-};
-
-use crate::parsers::ParsedToken;
 use itertools::Itertools;
 use smol_str::SmolStr;
+
+use crate::completer::matchers::MatchStrategy;
+use crate::completer::suggest::{MatchedSuggestion, Priority, Suggestion, SuggestionType};
+use crate::parsers::ParsedToken;
 
 pub fn suggestions(
     matcher: MatchStrategy,

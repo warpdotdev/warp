@@ -435,8 +435,9 @@ fn test_binding_description_eq_ignores_dynamic_override() {
 
 #[cfg(feature = "settings_value")]
 mod settings_value_tests {
-    use super::*;
     use settings_value::SettingsValue;
+
+    use super::*;
 
     #[test]
     fn test_keystroke_to_file_value_is_normalized_string() {

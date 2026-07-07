@@ -1,6 +1,5 @@
-use crate::render::model::RenderedSelection;
-
 use super::*;
+use crate::render::model::RenderedSelection;
 
 #[test]
 fn test_version_match_initial() {

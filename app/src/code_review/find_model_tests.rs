@@ -1,13 +1,29 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use repo_metadata::repositories::DetectedRepositories;
+use string_offset::CharOffset;
+use warp_core::ui::appearance::Appearance;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::element::VerticalExpansionBehavior;
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{App, Element as _, ModelHandle, SingletonEntity, ViewHandle};
+
 use super::*;
+use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::code_review_view::CodeReviewView;
 use crate::code_review::diff_state::DiffStateModel;
 use crate::code_review::GlobalCodeReviewModel;
 use crate::pane_group::WorkingDirectoriesModel;
-use crate::server::server_api::{team::MockTeamClient, workspace::MockWorkspaceClient};
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -16,16 +32,6 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ActiveSession;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::NotebookKeybindings;
-use repo_metadata::repositories::DetectedRepositories;
-use std::path::PathBuf;
-use std::sync::Arc;
-use string_offset::CharOffset;
-use warp_core::ui::appearance::Appearance;
-use warp_editor::content::buffer::InitialBufferState;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warpui::elements::Empty;
-use warpui::platform::WindowStyle;
-use warpui::{App, Element as _, ModelHandle, ViewHandle};
 
 #[derive(Default)]
 struct TestView;
@@ -166,6 +172,14 @@ fn initialize_test_app(app: &mut App) {
     app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(|_| ActiveSession::default());
     app.add_singleton_model(NotebookKeybindings::new);
+
+    // CodeReviewView reads AI usage/availability when comments are populated
+    // (e.g. to compute the comment tray's "Send to Agent" button state), so
+    // register the same AI singletons the other code_review tests use.
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|ctx| {
+        AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
+    });
 }
 
 fn create_find_model_with_query(
@@ -179,14 +193,15 @@ fn create_find_model_with_query(
     let diff_state_model = app.add_model(DiffStateModel::new_for_test);
     let repo_path = PathBuf::from("/tmp/test");
     let working_directories_model = app.add_model(|_| WorkingDirectoriesModel::new());
+    let repo_key = LocalOrRemotePath::Local(repo_path);
     let code_review_comment_batch =
         working_directories_model.update(app, |working_directories, ctx| {
-            working_directories.get_or_create_code_review_comments(repo_path.as_path(), ctx)
+            working_directories.get_or_create_code_review_comments(&repo_key, ctx)
         });
 
     let code_review_view = app.add_view(window_id, |ctx| {
         CodeReviewView::new(
-            Some(repo_path),
+            Some(repo_key),
             diff_state_model,
             code_review_comment_batch,
             None,

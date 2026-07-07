@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
-use warp_core::{features::FeatureFlag, settings::Setting};
+use warp_core::features::FeatureFlag;
+use warp_core::settings::Setting;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::settings::{AISettings, FontSettings, ThinkingDisplayMode};
-use crate::{
-    auth::auth_state::AuthState,
-    report_if_error,
-    settings::input::InputBoxType,
-    settings::{InputSettings, PrivacySettings, ThemeSettings},
-    terminal::session_settings::SessionSettings,
-    themes::theme::ThemeKind,
+use crate::auth::auth_state::AuthState;
+use crate::report_if_error;
+use crate::settings::input::InputBoxType;
+use crate::settings::{
+    AISettings, FontSettings, InputSettings, PrivacySettings, ThemeSettings, ThinkingDisplayMode,
 };
+use crate::terminal::session_settings::SessionSettings;
+use crate::themes::theme::ThemeKind;
 
 pub struct SettingsInitializer;
 

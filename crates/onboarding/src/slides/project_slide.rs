@@ -1,28 +1,29 @@
-use crate::model::OnboardingStateModel;
-use crate::slides::{bottom_nav, layout, slide_content};
-use crate::telemetry::OnboardingEvent;
-use crate::visuals::project_visual;
 use ui_components::{button, keyboard_shortcut, Component as _, Options as _};
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::{
-    appearance::Appearance, color::coloru_with_opacity, theme::color::internal_colors, Icon,
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::coloru_with_opacity;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::Icon;
+use warpui_core::elements::{
+    Align, ClippedScrollStateHandle, ConstrainedBox, Container, CrossAxisAlignment, Flex,
+    MouseStateHandle, ParentElement, Shrinkable,
 };
-use warpui::prelude::{MainAxisAlignment, MainAxisSize, Vector2F};
-use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
-use warpui::{
-    elements::{
-        Align, ClippedScrollStateHandle, ConstrainedBox, Container, CrossAxisAlignment, Flex,
-        MouseStateHandle, ParentElement, Shrinkable,
-    },
-    fonts::Weight,
-    keymap::Keystroke,
-    platform::file_picker::{FilePickerConfiguration, FilePickerError},
-    ui_components::components::{UiComponent as _, UiComponentStyles},
+use warpui_core::fonts::Weight;
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::file_picker::{FilePickerConfiguration, FilePickerError};
+use warpui_core::prelude::{MainAxisAlignment, MainAxisSize, Vector2F};
+use warpui_core::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui_core::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext,
 };
 
 use super::OnboardingSlide;
+use crate::model::OnboardingStateModel;
+use crate::slides::{bottom_nav, layout, slide_content};
+use crate::telemetry::OnboardingEvent;
+use crate::visuals::project_visual;
 
 const LEFT_COLUMN_W: f32 = 428.;
 

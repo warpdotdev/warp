@@ -13,10 +13,14 @@
 
 pub(super) mod proxy;
 
-use super::server_model::{ConnectionId, ServerModel};
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
+
 use warpui::r#async::executor;
+use warpui::SingletonEntity;
+
+use super::server_model::{ConnectionId, ServerModel};
+use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
 
 /// Run the `remote-server-daemon` subcommand.
 ///
@@ -66,6 +70,27 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
     let _ = std::fs::set_permissions(&socket_path, Permissions::from_mode(0o600));
     listener.set_nonblocking(true).ok();
     log::info!("Daemon bound to {}", socket_path.display());
+
+    // Flush the accumulated IntervalTimer data as telemetry now that the
+    // daemon is ready to accept connections. The timer was created in
+    // `run_internal` and carries intervals from the full startup path
+    // (logging, SQLite, singleton models, etc.).
+    //
+    // All telemetry dependencies are ready at this point:
+    // `AppTelemetryContextProvider` and `AuthStateProvider` are
+    // registered during `initialize_app` (before `launch` calls us),
+    // and `TelemetryCollector` is already running its periodic flush.
+    // The flush sends directly to Rudderstack using a baked-in write
+    // key — no user auth token is required.
+    let timing_data =
+        warp_core::interval_timer::IntervalTimer::handle(ctx).update(ctx, |timer, _| {
+            timer.mark_interval_end("DAEMON_SOCKET_BOUND");
+            timer.compute_stats()
+        });
+    send_telemetry_from_app_ctx!(
+        TelemetryEvent::RemoteServerDaemonStartup { timing_data },
+        ctx
+    );
 
     let _ = std::fs::write(&pid_path, std::process::id().to_string());
 
@@ -173,7 +198,13 @@ pub(super) async fn handle_daemon_connection(
                     log::warn!("Daemon: skipping malformed message from conn {conn_id}: {e}");
                 }
                 Err(e) => {
-                    log::error!("Daemon: fatal read error from conn {conn_id}: {e}");
+                    if is_disconnect_error(&e) {
+                        log::warn!(
+                            "Daemon: read error from conn {conn_id} (client disconnected): {e}"
+                        );
+                    } else {
+                        log::error!("Daemon: fatal read error from conn {conn_id}: {e}");
+                    }
                     break;
                 }
             }
@@ -193,13 +224,53 @@ pub(super) async fn handle_daemon_connection(
     // deregister_connection) or a fatal write error occurs.
     while let Ok(msg) = conn_rx.recv().await {
         if let Err(e) = remote_server::protocol::write_server_message(&mut writer, &msg).await {
-            log::error!("Daemon: write error on conn {conn_id}: {e}");
-            break;
+            if !e.is_write_recoverable() {
+                if is_disconnect_protocol_error(&e) {
+                    log::warn!("Daemon: write error on conn {conn_id} (client disconnected): {e}");
+                } else {
+                    log::error!("Daemon: write error on conn {conn_id}: {e}");
+                }
+                break;
+            }
+            // Recoverable write error (e.g. MessageTooLarge): nothing was
+            // written to the stream, so it remains aligned. Log and skip
+            // rather than tearing down the entire connection.
+            log::warn!("Daemon: skipping undeliverable message on conn {conn_id}: {e}");
+
+            // Send an ErrorResponse so the client doesn't hang waiting
+            // for a response that will never arrive.
+            if msg.request_id.is_empty() {
+                continue;
+            }
+            let error_msg = remote_server::proto::ServerMessage {
+                request_id: msg.request_id.clone(),
+                message: Some(remote_server::proto::server_message::Message::Error(
+                    remote_server::proto::ErrorResponse {
+                        code: remote_server::proto::ErrorCode::Internal.into(),
+                        message: format!("Response could not be delivered: {e}"),
+                    },
+                )),
+            };
+            if let Err(e2) =
+                remote_server::protocol::write_server_message(&mut writer, &error_msg).await
+            {
+                if !e2.is_write_recoverable() {
+                    log::error!("Daemon: failed to send error response on conn {conn_id}: {e2}");
+                    break;
+                }
+                log::warn!("Daemon: failed to send error response on conn {conn_id}: {e2}");
+                continue;
+            }
+            // Fall through to flush the error response.
         }
         // Flush after every message so responses reach the proxy without
         // waiting for the BufWriter's internal buffer to fill up.
         if let Err(e) = writer.flush().await {
-            log::error!("Daemon: flush error on conn {conn_id}: {e}");
+            if is_disconnect_io_error(&e) {
+                log::warn!("Daemon: flush error on conn {conn_id} (client disconnected): {e}");
+            } else {
+                log::error!("Daemon: flush error on conn {conn_id}: {e}");
+            }
             break;
         }
     }
@@ -213,4 +284,27 @@ pub(super) async fn handle_daemon_connection(
             me.deregister_connection(conn_id, ctx);
         })
         .await;
+}
+
+/// Returns `true` if the IO error represents a normal client disconnect.
+fn is_disconnect_io_error(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+    )
+}
+
+/// Returns `true` if the `ProtocolError` wraps a disconnect IO error.
+fn is_disconnect_error(e: &remote_server::protocol::ProtocolError) -> bool {
+    match e {
+        remote_server::protocol::ProtocolError::Io(io_err) => is_disconnect_io_error(io_err),
+        _ => false,
+    }
+}
+
+/// Alias for [`is_disconnect_error`] — used in the write path for clarity.
+fn is_disconnect_protocol_error(e: &remote_server::protocol::ProtocolError) -> bool {
+    is_disconnect_error(e)
 }

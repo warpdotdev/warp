@@ -1,40 +1,37 @@
-use super::{
-    settings_page::{
-        render_page_title, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
-        SettingsWidget, HEADER_FONT_SIZE, PAGE_PADDING,
-    },
-    SettingsSection,
-};
-use crate::auth::AuthStateProvider;
-use crate::{
-    appearance::Appearance,
-    channel::{Channel, ChannelState},
-    menu::{Event as MenuEvent, Event, Menu, MenuItem, MenuItemFields},
-    server::{block::Block, server_api::block::BlockClient},
-    view_components::ToastFlavor,
-};
+use std::sync::Arc;
+
 use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Local};
 use pathfinder_geometry::vector::vec2f;
-use std::sync::Arc;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::clipboard::ClipboardContent;
+use warpui::color::ColorU;
+use warpui::elements::{
+    Align, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Dismiss, Expanded, Fill, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, SavePosition, ScrollStateHandle, Scrollable,
+    ScrollableElement, ScrollbarWidth, Shrinkable, Stack, UniformList, UniformListState,
+};
+use warpui::fonts::Weight;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        Align, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Dismiss, Expanded, Fill, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
-        PositionedElementOffsetBounds, SavePosition, ScrollStateHandle, Scrollable,
-        ScrollableElement, Shrinkable, Stack, UniformList, UniformListState,
-    },
-};
-use warpui::{color::ColorU, elements::Radius};
-use warpui::{elements::ScrollbarWidth, fonts::Weight};
-use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
+
+use super::settings_page::{
+    render_page_title, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
+    SettingsWidget, HEADER_FONT_SIZE, PAGE_PADDING,
+};
+use super::SettingsSection;
+use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
+use crate::channel::{Channel, ChannelState};
+use crate::menu::{Event as MenuEvent, Event, Menu, MenuItem, MenuItemFields};
+use crate::server::block::Block;
+use crate::server::server_api::block::BlockClient;
+use crate::view_components::ToastFlavor;
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 

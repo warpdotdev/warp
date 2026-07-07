@@ -1,15 +1,17 @@
 mod fold_map;
 
-use super::buffer::{self, Anchor, Buffer, Edit, StylizedChar, ToCharOffset, ToPoint};
-use crate::editor::soft_wrap::{self, DisplayPointAndClampDirection, SoftWrapPoint, SoftWrapState};
+use std::cmp;
+use std::ops::Range;
+
 use anyhow::{Context, Result};
 pub use fold_map::BufferRows;
 use fold_map::FoldMap;
-use std::cmp;
-use std::ops::Range;
 use string_offset::CharOffset;
 use warpui::text::point::Point;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+
+use super::buffer::{self, Anchor, Buffer, Edit, StylizedChar, ToCharOffset, ToPoint};
+use crate::editor::soft_wrap::{self, DisplayPointAndClampDirection, SoftWrapPoint, SoftWrapState};
 
 #[derive(Copy, Clone)]
 pub enum Bias {
@@ -221,6 +223,22 @@ impl DisplayMap {
         })
     }
 
+    /// Returns the `[start, end)` display columns of the visual (soft-wrapped)
+    /// row that `point` lies on, or `None` if the soft-wrap layout is
+    /// unavailable (e.g. before the first frame of the editor has been laid
+    /// out). Callers should fall back to logical-line behavior in that case.
+    pub fn soft_wrapped_row_bounds(
+        &self,
+        point: DisplayPoint,
+        clamp_direction: soft_wrap::ClampDirection,
+    ) -> Option<Range<u32>> {
+        self.soft_wrap_state.read(|frame_layouts| {
+            frame_layouts
+                .ok()?
+                .soft_wrapped_row_bounds(point, clamp_direction)
+        })
+    }
+
     pub fn to_soft_wrap_point(
         &self,
         point: DisplayPoint,
@@ -327,7 +345,12 @@ impl DisplayMap {
         self.fold_map.apply_edits(edits, ctx)
     }
 
-    fn handle_buffer_event(&mut self, event: &buffer::Event, ctx: &mut ModelContext<Self>) {
+    fn handle_buffer_event(
+        &mut self,
+        _: ModelHandle<Buffer>,
+        event: &buffer::Event,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             buffer::Event::Edited { edits, .. } => self.apply_edits(edits, ctx).unwrap(),
             buffer::Event::StylesUpdated

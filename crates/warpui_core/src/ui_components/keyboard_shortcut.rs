@@ -3,20 +3,15 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 
-use crate::elements::{Icon, DEFAULT_UI_LINE_HEIGHT_RATIO};
-use crate::{
-    elements::{
-        Align, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, MinSize, ParentElement,
-    },
-    keymap::Keystroke,
-    platform::OperatingSystem,
-    scene::Border,
+use super::components::{UiComponent, UiComponentStyles};
+use super::text::Span;
+use crate::elements::{
+    Align, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Icon, MinSize,
+    ParentElement, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
-
-use super::{
-    components::{UiComponent, UiComponentStyles},
-    text::Span,
-};
+use crate::keymap::Keystroke;
+use crate::platform::OperatingSystem;
+use crate::scene::Border;
 
 type IconForKeystrokeFn = Arc<dyn Fn(&str) -> Option<Icon>>;
 

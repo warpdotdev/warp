@@ -19,8 +19,9 @@ fn test_trim_newline() {
 #[cfg(not(windows))]
 #[test]
 fn test_resolve_command() {
-    use crate::util::path::resolve_executable;
     use std::path::Path;
+
+    use crate::util::path::resolve_executable;
 
     assert_eq!(
         &resolve_executable("/bin/sh").unwrap(),

@@ -1,29 +1,28 @@
-use async_channel::Sender;
-use futures::Future;
-use regex::Regex;
-use repo_metadata::{
-    repositories::{DetectedRepositories, DetectedRepositoriesEvent, RepoDetectionSource},
-    repository::{Repository, RepositorySubscriber, SubscriberId},
-    watcher::{DirectoryWatcher, RepositoryUpdate},
-};
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::LazyLock;
+
+use async_channel::Sender;
+use futures::Future;
+use regex::Regex;
+use repo_metadata::repositories::{
+    DetectedRepositories, DetectedRepositoriesEvent, RepoDetectionSource,
+};
+use repo_metadata::repository::{Repository, RepositorySubscriber, SubscriberId};
+use repo_metadata::watcher::{DirectoryWatcher, RepositoryUpdate};
+use strum::IntoEnumIterator;
 use warp_core::safe_warn;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::HomeDirectoryWatcherEvent;
 
-use crate::ai::mcp::{
-    home_config_file_path, parsing::normalize_codex_toml_to_json, MCPProvider,
-    ParsedTemplatableMCPServerResult,
-};
+use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
+use crate::ai::mcp::{home_config_file_path, MCPProvider, ParsedTemplatableMCPServerResult};
 use crate::warp_managed_paths_watcher::{
     warp_managed_mcp_config_path, WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent,
 };
 use crate::HomeDirectoryWatcher;
-use strum::IntoEnumIterator;
 
 static ENV_VAR_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("Regex is valid"));
@@ -148,7 +147,7 @@ impl FileMCPWatcher {
         // Subscribe to changes to detected repositories.
         ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), {
             let file_mcp_tx = file_mcp_tx.clone();
-            move |me, event, ctx| {
+            move |me, _, event, ctx| {
                 let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
                 // Register MCP servers for repos the user actively navigated to, and for
                 // repos cloned during cloud agent environment preparation.
@@ -170,12 +169,15 @@ impl FileMCPWatcher {
         });
 
         // Subscribe to changes to top-level files in the home directory.
-        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
             me.handle_home_directory_watcher_event(event, ctx);
         });
-        ctx.subscribe_to_model(&WarpManagedPathsWatcher::handle(ctx), |me, event, ctx| {
-            me.handle_warp_managed_paths_event(event, ctx);
-        });
+        ctx.subscribe_to_model(
+            &WarpManagedPathsWatcher::handle(ctx),
+            |me, _, event, ctx| {
+                me.handle_warp_managed_paths_event(event, ctx);
+            },
+        );
 
         let mut home_provider_watchers = HashMap::new();
         if let Some(mcp_config_path) = warp_managed_mcp_config_path() {
@@ -239,7 +241,7 @@ impl FileMCPWatcher {
         }
 
         let Some(repo_handle) =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(&repo_path, ctx)
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(&repo_path, ctx)
         else {
             return;
         };

@@ -7,10 +7,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use lazy_static::lazy_static;
 use memo_map::MemoMap;
+use overrides::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-
-use overrides::*;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ChannelVersions {

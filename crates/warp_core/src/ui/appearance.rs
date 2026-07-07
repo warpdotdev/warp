@@ -1,9 +1,8 @@
-use warpui::{
-    fonts::{FamilyId, Weight},
-    Entity, ModelContext, SingletonEntity,
-};
+use warpui_core::fonts::{FamilyId, Weight};
+use warpui_core::{Entity, ModelContext, SingletonEntity};
 
-use super::{builder::UiBuilder, theme::WarpTheme};
+use super::builder::UiBuilder;
+use super::theme::WarpTheme;
 
 /// The standard font size to use for headers (e.g.: in dialogs).
 const HEADER_FONT_SIZE: f32 = 18.;
@@ -101,7 +100,7 @@ impl Appearance {
 
     #[cfg(feature = "test-util")]
     pub fn mock() -> Self {
-        use warpui::color::ColorU;
+        use warpui_core::color::ColorU;
 
         use crate::ui::theme::{mock_terminal_colors, Details, Fill};
 

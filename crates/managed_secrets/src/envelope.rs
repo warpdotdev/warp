@@ -1,4 +1,5 @@
-use std::{io, sync::Once};
+use std::io;
+use std::sync::Once;
 
 use base64::Engine;
 use warp_graphql::managed_secrets::ManagedSecretType;
@@ -14,8 +15,9 @@ pub fn init() {
     INIT.call_once(|| {
         tink_hybrid::init();
 
-        use hpke_impl::{HpkePrivateKeyManager, HpkePublicKeyManager};
         use std::sync::Arc;
+
+        use hpke_impl::{HpkePrivateKeyManager, HpkePublicKeyManager};
         tink_core::registry::register_key_manager(Arc::new(HpkePublicKeyManager::new()))
             .expect("unable to register HPKE public key manager");
         tink_core::registry::register_key_manager(Arc::new(HpkePrivateKeyManager::new()))
@@ -76,6 +78,29 @@ impl UploadKey {
         let encrypted = self
             .encrypt
             .encrypt(&secret_plaintext, context.encode().as_bytes())?;
+        Ok(base64::prelude::BASE64_STANDARD.encode(encrypted))
+    }
+
+    /// Seal an arbitrary `plaintext` under caller-provided `context_info` bytes
+    /// using this upload key's hybrid-encrypt primitive.
+    ///
+    /// This is the exact same Tink/HPKE primitive used by
+    /// [`UploadKey::encrypt_secret`], so the on-the-wire format is identical and
+    /// round-trips with the server's `tink-go` hybrid decryptor. The difference
+    /// is that the caller owns the full `context_info` and `plaintext`: unlike
+    /// [`UploadKey::encrypt_secret`] (whose context is the managed-secret
+    /// `1:<actor>:<name>:<type>` binding), this seam lets BYO credential sealing
+    /// supply its own `byo:1:TEAM:<owner>:<cred_type>:<slot>` context, which must
+    /// match the server-side `byo.UnsealCredential` contract byte-for-byte.
+    ///
+    /// Used by `managed_secrets_wasm::encrypt_byo_first_party` /
+    /// `encrypt_byo_endpoint`, which construct the BYO context and JSON payload.
+    pub fn seal_with_context(
+        &self,
+        context_info: &[u8],
+        plaintext: &[u8],
+    ) -> Result<String, EnvelopeError> {
+        let encrypted = self.encrypt.encrypt(plaintext, context_info)?;
         Ok(base64::prelude::BASE64_STANDARD.encode(encrypted))
     }
 }

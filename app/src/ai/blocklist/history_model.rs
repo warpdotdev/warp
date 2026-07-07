@@ -1,58 +1,52 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "local_fs")]
+use std::sync::{Arc, Mutex};
 
+use ai::skills::SkillPathOrigin;
 use anyhow::anyhow;
 use chrono::{DateTime, Local, NaiveDateTime};
+#[cfg(feature = "local_fs")]
+use diesel::SqliteConnection;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
-use warp_multi_agent_api::response_event::stream_finished::ConversationUsageMetadata;
-use warp_multi_agent_api::{
-    client_action::{Action, StartNewConversation},
-    response_event::stream_finished::TokenUsage,
+use warp_multi_agent_api::client_action::{Action, StartNewConversation};
+use warp_multi_agent_api::message::tool_call::Tool;
+use warp_multi_agent_api::response_event::stream_finished::{
+    ConversationUsageMetadata, TokenUsage,
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
-
-#[cfg(feature = "local_fs")]
-use std::sync::{Arc, Mutex};
-
-#[cfg(feature = "local_fs")]
-use diesel::SqliteConnection;
-
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::agent::conversation::{ServerAIConversationMetadata, UpdateConversationError};
-use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
-use crate::ai::agent::task::TaskId;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::ai::agent::CancellationReason;
-use crate::ai::artifacts::Artifact;
-use crate::ai::document::ai_document_model::AIDocumentModel;
-use crate::input_suggestions::HistoryOrder;
-use crate::persistence::model::AgentConversationData;
-use crate::persistence::ModelEvent;
-use crate::server::server_api::ServerApiProvider;
-use crate::terminal::model::block::BlockId;
-use crate::terminal::view::blocklist_filter;
-use crate::GlobalResourceHandlesProvider;
-use crate::{
-    ai::agent::{
-        conversation::{AIConversation, AIConversationId},
-        AIAgentActionId, AIAgentExchange, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
-        MessageId, RenderableAIError, RequestCost, Suggestions,
-    },
-    persistence::model::AgentConversation,
-    ui_components::icons::Icon,
-};
-
-#[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
 
 use super::controller::response_stream::ResponseStreamId;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use super::RequestInput;
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata,
+    UpdateConversationError,
+};
+use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
+    CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError, RequestCost,
+    Suggestions,
+};
+use crate::ai::artifacts::Artifact;
+use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::input_suggestions::HistoryOrder;
+use crate::persistence::model::{AgentConversation, AgentConversationData};
+use crate::persistence::ModelEvent;
+#[cfg(feature = "local_fs")]
+use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::server::server_api::ServerApiProvider;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::view::blocklist_filter;
+use crate::ui_components::icons::Icon;
+use crate::GlobalResourceHandlesProvider;
 
 mod conversation_loader;
 pub use conversation_loader::{
@@ -60,7 +54,11 @@ pub use conversation_loader::{
     CLIAgentConversation, CloudConversationData,
 };
 
-pub(super) const MAX_HISTORICAL_CONVERSATIONS: usize = 100;
+/// Mirrors [`crate::persistence::agent::MAX_PERSISTED_CONVERSATION_COUNT`].
+/// Moot at steady state because the disk-side prune already keeps the
+/// persisted set within this window; kept as defense-in-depth if rows ever
+/// arrive from another source (cross-machine import, prune bypass).
+pub(super) const MAX_HISTORICAL_CONVERSATIONS: usize = 200;
 
 /// Metadata for conversations
 /// When created from local DB, has_local_data=true and server_metadata=None.
@@ -102,6 +100,9 @@ impl From<&AIConversation> for AIConversationMetadata {
     fn from(conversation: &AIConversation) -> Self {
         let title = conversation.title().unwrap_or_default().to_string();
         let initial_query: String = conversation.initial_query().unwrap_or_default();
+        let server_conversation_token = conversation.server_conversation_token().cloned();
+        let has_cloud_data =
+            conversation.server_metadata().is_some() || server_conversation_token.is_some();
 
         let last_modified_at = conversation
             .latest_exchange()
@@ -115,9 +116,9 @@ impl From<&AIConversation> for AIConversationMetadata {
             last_modified_at,
             initial_working_directory: conversation.initial_working_directory(),
             credits_spent: Some(conversation.credits_spent()),
-            server_conversation_token: conversation.server_conversation_token().cloned(),
+            server_conversation_token,
             has_local_data: true,
-            has_cloud_data: conversation.server_metadata().is_some(),
+            has_cloud_data,
             artifacts: conversation.artifacts().to_vec(),
             server_conversation_metadata: conversation.server_metadata().cloned(),
         }
@@ -137,7 +138,10 @@ impl AIConversationMetadata {
             .metadata_last_updated_ts
             .utc()
             .naive_utc();
-        let credits_spent = Some(server_conversation_metadata.usage.credits_spent);
+        let credits_spent = Some(
+            server_conversation_metadata.usage.credits_spent
+                + server_conversation_metadata.usage.platform_credits_spent,
+        );
         let server_conversation_token = Some(
             server_conversation_metadata
                 .server_conversation_token
@@ -180,46 +184,64 @@ pub enum UpdateHistoryError {
     ConversationNotFound(AIConversationId),
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub(crate) enum BeginConversationRenameError {
+    #[error("conversation not found")]
+    ConversationNotFound,
+    #[error("conversation has no server token")]
+    MissingServerConversationToken,
+    #[error("conversation is not ready to rename")]
+    ConversationNotReady,
+    #[error("conversation rename already in progress")]
+    RenameInProgress,
+}
+
+#[derive(Debug, Clone)]
+struct InFlightConversationRename {
+    attempted_title: String,
+    previous_root_task_description: String,
+    previous_server_metadata_title: Option<String>,
+    previous_cached_metadata_title: Option<String>,
+}
+
 /// Responsible for managing the history of user and AI exchanges.
 #[derive(Default)]
 pub struct BlocklistAIHistoryModel {
-    /// A [`HashMap`] mapping [`crate::terminal::TerminalView`] [`EntityId`]s to a [`Vec`] of
-    /// live [`AIConversationId`] in that `TerminalView`.
+    /// Live conversations for each terminal surface.
     ///
-    /// "Live" conversations are still visible and in the terminal view and selectable in the session, so
-    /// clearing the blocklist removes the conversation from here.
-    ///
-    /// Note that when a terminal view is closed, we do not remove it from this map, so that it can be restored.
-    live_conversation_ids_for_terminal_view: HashMap<EntityId, Vec<AIConversationId>>,
+    /// "Live" conversations are still visible/selectable for that terminal surface. Clearing
+    /// a terminal surface moves those IDs out of this map, but closing a GUI view does not
+    /// immediately remove its entry so the conversations can be restored.
+    live_conversation_ids_for_terminal_surface: HashMap<EntityId, Vec<AIConversationId>>,
 
-    /// A [`HashMap`] mapping [`crate::terminal::TerminalView`] [`EntityId`]s to a [`Vec`] of
-    /// [`AIConversationId`] that were once live in that session, but were cleared from the blocklist.
+    /// Conversations that were once live for a terminal surface, but were cleared from the blocklist.
     ///
     /// This is used to preserve queries for up-arrow history after clearing the blocklist.
-    cleared_conversation_ids_for_terminal_view: HashMap<EntityId, Vec<AIConversationId>>,
+    cleared_conversation_ids_for_terminal_surface: HashMap<EntityId, Vec<AIConversationId>>,
 
     /// A [`HashMap`] mapping a [`AIConversationId`] to the [`AIConversation`] itself.
     /// Conversations may or may not be live in any open session. They will exist in this map if they
     /// have ever been loaded into memory.
     conversations_by_id: HashMap<AIConversationId, AIConversation>,
 
-    /// The active conversation ID for a given terminal view.
-    /// The active conversation is the one we're currently or have most recently streamed outputs for.
-    /// If you want to get the conversation the next query will follow up in / what is selected in the input selector,
-    /// use `context_model.selected_conversation_id` instead.
-    active_conversation_for_terminal_view: HashMap<EntityId, AIConversationId>,
+    /// The active conversation ID for a given terminal surface.
+    ///
+    /// The active conversation is the terminal surface's current or most recent progress
+    /// target, such as a response stream or follow-up action flow. Selection
+    /// lives in the surface's context/controller models.
+    active_conversation_for_terminal_surface: HashMap<EntityId, AIConversationId>,
 
-    /// The time at which each [`TerminalView`] was created. Note that this has no bearing on when
-    /// any [`AIConversation`]s take place in the terminal view.
-    terminal_view_created_at: HashMap<EntityId, DateTime<Local>>,
+    /// The time at which each terminal surface was created. Note that this
+    /// has no bearing on when any [`AIConversation`]s take place for that terminal surface.
+    terminal_surface_created_at: HashMap<EntityId, DateTime<Local>>,
 
-    /// A set of terminal views that are shared ambient agent sessions.
-    ambient_agent_terminal_view_ids: HashSet<EntityId>,
+    /// A set of terminal surfaces that are shared ambient agent sessions.
+    ambient_agent_terminal_surface_ids: HashSet<EntityId>,
 
-    /// A set of terminal views that are read-only conversation transcript viewers.
+    /// A set of terminal surfaces that are read-only conversation transcript viewers.
     /// This is view/UI state (not conversation state) and is used to filter transcript viewer
     /// conversations out of local history and navigation.
-    conversation_transcript_viewer_terminal_view_ids: HashSet<EntityId>,
+    conversation_transcript_viewer_terminal_surface_ids: HashSet<EntityId>,
 
     /// AI queries that were read from the SQLite DB. These exchanges do not contain as much
     /// information as the other exchanges we store because they are only used for display in
@@ -232,9 +254,9 @@ pub struct BlocklistAIHistoryModel {
 
     /// Reverse index from server-side agent identifier to local conversation ID.
     ///
-    /// Keyed by `run_id` when OrchestrationV2 is enabled, otherwise by
-    /// `server_conversation_token`. Only the identifier relevant to the
-    /// active orchestration version is stored.
+    /// Keyed by `run_id` for current orchestration. Older conversation data may
+    /// still contain `server_conversation_token`-backed identifiers, but new
+    /// runtime lookups use run IDs.
     agent_id_to_conversation_id: HashMap<String, AIConversationId>,
 
     /// Reverse index from [`ServerConversationToken`] to local [`AIConversationId`].
@@ -249,6 +271,12 @@ pub struct BlocklistAIHistoryModel {
     /// Populated at startup from the local DB and kept in sync at runtime
     /// via `set_parent_for_conversation` and `restore_conversations`.
     children_by_parent: HashMap<AIConversationId, Vec<AIConversationId>>,
+
+    /// Conversations that have had at least one AIBlock receive imported review comments.
+    conversations_with_imported_comments: HashSet<AIConversationId>,
+
+    /// In-flight optimistic conversation rename state keyed by conversation.
+    in_flight_conversation_renames: HashMap<AIConversationId, InFlightConversationRename>,
 
     #[cfg(feature = "local_fs")]
     db_connection: Option<Arc<Mutex<SqliteConnection>>>,
@@ -286,14 +314,14 @@ impl BlocklistAIHistoryModel {
         Self::default()
     }
 
-    /// Returns a flattened and ordered (oldest first) list of live conversations (not cleared) for the given terminal view ID.
-    /// This works for terminal views that have been closed.
-    pub fn all_live_conversations_for_terminal_view(
+    /// Returns a flattened and ordered (oldest first) list of live conversations for a terminal surface.
+    /// This works for terminal surfaces that have been closed.
+    pub fn all_live_conversations_for_terminal_surface(
         &self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) -> impl Iterator<Item = &AIConversation> {
-        self.live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)
+        self.live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)
             .into_iter()
             .flat_map(|conversation_ids| {
                 conversation_ids
@@ -302,15 +330,14 @@ impl BlocklistAIHistoryModel {
             })
     }
 
-    /// Returns a flattened and ordered (oldest first) list of exchanges from live conversations (not cleared)
-    /// in the given terminal view ID.
-    /// This works for terminal views that have been closed.
-    pub fn all_live_root_task_exchanges_for_terminal_view(
+    /// Returns a flattened and ordered (oldest first) list of exchanges from a terminal surface's live conversations.
+    /// This works for terminal surfaces that have been closed.
+    pub fn all_live_root_task_exchanges_for_terminal_surface(
         &self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) -> impl Iterator<Item = &AIAgentExchange> {
-        self.live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)
+        self.live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)
             .into_iter()
             .flat_map(|conversation_ids| {
                 conversation_ids.iter().flat_map(|conversation_id| {
@@ -323,13 +350,13 @@ impl BlocklistAIHistoryModel {
     }
 
     /// Returns a flattened and ordered (oldest first) list of exchanges from conversations
-    /// that were cleared in the given terminal view ID, but are no longer live/visible.
-    pub fn all_cleared_root_task_exchanges_for_terminal_view(
+    /// that were cleared for a terminal surface, but are no longer live/visible.
+    pub fn all_cleared_root_task_exchanges_for_terminal_surface(
         &self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) -> impl Iterator<Item = &AIAgentExchange> {
-        self.cleared_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)
+        self.cleared_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)
             .into_iter()
             .flat_map(|conversation_ids| {
                 conversation_ids.iter().flat_map(|conversation_id| {
@@ -341,31 +368,30 @@ impl BlocklistAIHistoryModel {
             .flatten()
     }
 
-    /// Returns a list of all conversations that have been cleared across all terminal views.
+    /// Returns a list of all conversations that have been cleared across all terminal surfaces.
     pub fn all_cleared_conversations(&self) -> Vec<(EntityId, &AIConversation)> {
-        self.cleared_conversation_ids_for_terminal_view
+        self.cleared_conversation_ids_for_terminal_surface
             .iter()
-            .flat_map(|(terminal_view_id, conversation_ids)| {
+            .flat_map(|(terminal_surface_id, conversation_ids)| {
                 conversation_ids.iter().filter_map(|conversation_id| {
                     self.conversations_by_id
                         .get(conversation_id)
-                        .map(|conversation| (*terminal_view_id, conversation))
+                        .map(|conversation| (*terminal_surface_id, conversation))
                 })
             })
             .collect::<Vec<_>>()
     }
 
-    /// Returns a list of all live (not cleared) conversations across all terminal views,
-    /// paired with the terminal view ID they belong to.
-    /// This includes terminal views that have been closed.
+    /// Returns all live conversations paired with their terminal surface IDs.
+    /// This includes terminal surfaces that have been closed.
     pub fn all_live_conversations(&self) -> Vec<(EntityId, &AIConversation)> {
-        self.live_conversation_ids_for_terminal_view
+        self.live_conversation_ids_for_terminal_surface
             .iter()
-            .flat_map(|(terminal_view_id, conversation_ids)| {
+            .flat_map(|(terminal_surface_id, conversation_ids)| {
                 conversation_ids.iter().filter_map(|conversation_id| {
                     self.conversations_by_id
                         .get(conversation_id)
-                        .map(|conversation| (*terminal_view_id, conversation))
+                        .map(|conversation| (*terminal_surface_id, conversation))
                 })
             })
             .collect::<Vec<_>>()
@@ -376,6 +402,14 @@ impl BlocklistAIHistoryModel {
     /// * The conversation has never been read into memory from db. Use load_conversation_from_db to handle reading from db.
     pub fn conversation(&self, conversation_id: &AIConversationId) -> Option<&AIConversation> {
         self.conversations_by_id.get(conversation_id)
+    }
+
+    pub fn mark_conversation_has_imported_comments(&mut self, id: AIConversationId) {
+        self.conversations_with_imported_comments.insert(id);
+    }
+
+    pub fn conversation_has_imported_comments(&self, id: &AIConversationId) -> bool {
+        self.conversations_with_imported_comments.contains(id)
     }
 
     pub fn conversation_mut(
@@ -394,10 +428,55 @@ impl BlocklistAIHistoryModel {
             .collect()
     }
 
+    fn resolved_parent_conversation_id_from_refs(
+        &self,
+        parent_conversation_id: Option<AIConversationId>,
+        parent_agent_id: Option<&str>,
+    ) -> Option<AIConversationId> {
+        parent_conversation_id.or_else(|| {
+            parent_agent_id.and_then(|agent_id| self.conversation_id_for_agent_id(agent_id))
+        })
+    }
+
+    fn resolved_parent_conversation_id_from_persisted_data(
+        &self,
+        conversation_data: &AgentConversationData,
+    ) -> Option<AIConversationId> {
+        let parent_conversation_id = conversation_data
+            .parent_conversation_id
+            .as_deref()
+            .and_then(|id| AIConversationId::try_from(id.to_owned()).ok());
+        self.resolved_parent_conversation_id_from_refs(
+            parent_conversation_id,
+            conversation_data.parent_agent_id.as_deref(),
+        )
+    }
+
+    pub fn resolved_parent_conversation_id_for_conversation(
+        &self,
+        conversation: &AIConversation,
+    ) -> Option<AIConversationId> {
+        self.resolved_parent_conversation_id_from_refs(
+            conversation.parent_conversation_id(),
+            conversation.parent_agent_id(),
+        )
+    }
+
+    fn index_child_conversation(
+        &mut self,
+        child_id: AIConversationId,
+        parent_id: AIConversationId,
+    ) {
+        let children = self.children_by_parent.entry(parent_id).or_default();
+        if !children.contains(&child_id) {
+            children.push(child_id);
+        }
+    }
+
     /// Creates a new child agent conversation.
     pub fn start_new_child_conversation(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         name: String,
         parent_conversation_id: AIConversationId,
         orchestration_harness: Option<Harness>,
@@ -415,7 +494,7 @@ impl BlocklistAIHistoryModel {
 
         let auto_execute = true; // Child auto-executes by default.
         let conversation_id =
-            self.start_new_conversation(terminal_view_id, auto_execute, false, ctx);
+            self.start_new_conversation(terminal_surface_id, auto_execute, false, false, ctx);
         {
             let conversation = self
                 .conversation_mut(&conversation_id)
@@ -429,6 +508,7 @@ impl BlocklistAIHistoryModel {
             }
         }
         self.set_parent_for_conversation(conversation_id, parent_conversation_id);
+        self.persist_conversation_state(conversation_id, ctx);
         conversation_id
     }
 
@@ -443,10 +523,7 @@ impl BlocklistAIHistoryModel {
         if let Some(conversation) = self.conversations_by_id.get_mut(&child_id) {
             conversation.set_parent_conversation_id(parent_id);
         }
-        let children = self.children_by_parent.entry(parent_id).or_default();
-        if !children.contains(&child_id) {
-            children.push(child_id);
-        }
+        self.index_child_conversation(child_id, parent_id);
     }
 
     /// Returns the child conversation IDs for a parent from the startup index.
@@ -459,6 +536,212 @@ impl BlocklistAIHistoryModel {
             .unwrap_or_default()
     }
 
+    fn persist_conversation_state(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            return;
+        };
+        conversation.write_updated_conversation_state(ctx);
+    }
+
+    fn update_cached_metadata_for_conversation(&mut self, conversation_id: AIConversationId) {
+        let Some(conversation) = self.conversations_by_id.get(&conversation_id) else {
+            return;
+        };
+        let Some(metadata) = self.all_conversations_metadata.get_mut(&conversation_id) else {
+            return;
+        };
+
+        metadata.server_conversation_token = conversation.server_conversation_token().cloned();
+        if metadata.server_conversation_token.is_some() {
+            metadata.has_cloud_data = true;
+        }
+        if let Some(server_metadata) = conversation.server_metadata() {
+            metadata.server_conversation_metadata = Some(server_metadata.clone());
+            metadata.has_cloud_data = true;
+        }
+    }
+
+    /// Starts an optimistic local rename and records rollback state.
+    pub(crate) fn begin_conversation_rename(
+        &mut self,
+        conversation_id: AIConversationId,
+        title: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<String, BeginConversationRenameError> {
+        if self
+            .in_flight_conversation_renames
+            .contains_key(&conversation_id)
+        {
+            return Err(BeginConversationRenameError::RenameInProgress);
+        }
+
+        let conversation = self
+            .conversations_by_id
+            .get(&conversation_id)
+            .ok_or(BeginConversationRenameError::ConversationNotFound)?;
+        let server_conversation_token = conversation
+            .server_conversation_token()
+            .ok_or(BeginConversationRenameError::MissingServerConversationToken)?
+            .as_str()
+            .to_owned();
+        let root_task = conversation
+            .get_root_task()
+            .ok_or(BeginConversationRenameError::ConversationNotReady)?;
+        if root_task.source().is_none() {
+            return Err(BeginConversationRenameError::ConversationNotReady);
+        }
+        let previous_root_task_description = root_task.description().to_owned();
+        let previous_server_metadata_title = conversation
+            .server_metadata()
+            .map(|metadata| metadata.title.clone());
+        let previous_cached_metadata_title = self
+            .all_conversations_metadata
+            .get(&conversation_id)
+            .map(|metadata| metadata.title.clone());
+
+        self.in_flight_conversation_renames.insert(
+            conversation_id,
+            InFlightConversationRename {
+                attempted_title: title.clone(),
+                previous_root_task_description,
+                previous_server_metadata_title,
+                previous_cached_metadata_title,
+            },
+        );
+        self.apply_conversation_title(conversation_id, title, ctx);
+        Ok(server_conversation_token)
+    }
+
+    /// Completes an in-flight rename and applies any server-normalized title.
+    pub(crate) fn complete_conversation_rename(
+        &mut self,
+        conversation_id: AIConversationId,
+        title: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(rename) = self.in_flight_conversation_renames.remove(&conversation_id) else {
+            log::warn!(
+                "complete_conversation_rename called for conversation {conversation_id:?} with no in-flight rename"
+            );
+            return;
+        };
+
+        if rename.attempted_title != title {
+            self.apply_conversation_title(conversation_id, title, ctx);
+        }
+    }
+
+    /// Reverts an in-flight rename to the captured previous title snapshot.
+    pub(crate) fn fail_conversation_rename(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(rename) = self.in_flight_conversation_renames.remove(&conversation_id) else {
+            log::warn!(
+                "fail_conversation_rename called for conversation {conversation_id:?} with no in-flight rename"
+            );
+            return;
+        };
+
+        let terminal_surface_id = self.terminal_surface_id_for_conversation(&conversation_id);
+
+        let mut updated = false;
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            conversation.restore_conversation_title(
+                rename.previous_root_task_description,
+                rename.previous_server_metadata_title,
+                ctx,
+            );
+            updated = true;
+        } else {
+            log::warn!(
+                "fail_conversation_rename called for missing conversation {conversation_id:?}"
+            );
+        }
+
+        let title = if let Some(previous_title) = rename.previous_cached_metadata_title {
+            if let Some(metadata) = self.all_conversations_metadata.get_mut(&conversation_id) {
+                metadata.title = previous_title.clone();
+                if let Some(server_metadata) = metadata.server_conversation_metadata.as_mut() {
+                    server_metadata.title = previous_title.clone();
+                }
+                updated = true;
+            }
+            previous_title
+        } else {
+            self.conversations_by_id
+                .get(&conversation_id)
+                .and_then(AIConversation::title)
+                .unwrap_or_default()
+        };
+
+        if !updated {
+            return;
+        }
+
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationTitle {
+            terminal_surface_id,
+            conversation_id,
+            title,
+        });
+    }
+
+    /// Applies a conversation title locally and notifies title observers.
+    pub(crate) fn apply_conversation_title(
+        &mut self,
+        conversation_id: AIConversationId,
+        title: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_surface_id = self.terminal_surface_id_for_conversation(&conversation_id);
+
+        let mut updated = false;
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            conversation.update_conversation_title(title.clone(), ctx);
+            updated = true;
+        } else {
+            log::warn!(
+                "apply_conversation_title called for missing conversation {conversation_id:?}"
+            );
+        }
+
+        if let Some(metadata) = self.all_conversations_metadata.get_mut(&conversation_id) {
+            metadata.title = title.clone();
+            if let Some(server_metadata) = metadata.server_conversation_metadata.as_mut() {
+                server_metadata.title = title.clone();
+            }
+            updated = true;
+        }
+
+        if !updated {
+            return;
+        }
+
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationTitle {
+            terminal_surface_id,
+            conversation_id,
+            title,
+        });
+    }
+    pub fn mark_conversation_as_remote_child(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        {
+            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+                return;
+            };
+            conversation.mark_as_remote_child();
+        }
+        self.persist_conversation_state(conversation_id, ctx);
+    }
+
     /// Updates the persisted `last_event_sequence` for a conversation and
     /// writes the updated conversation state to SQLite. Used by the
     /// orchestration event poller after draining an event batch to keep the
@@ -469,37 +752,104 @@ impl BlocklistAIHistoryModel {
         sequence: i64,
         ctx: &mut ModelContext<Self>,
     ) {
+        {
+            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+                return;
+            };
+            conversation.set_last_event_sequence(sequence);
+        }
+        self.persist_conversation_state(conversation_id, ctx);
+    }
+
+    /// Updates the persisted `pinned` state for a conversation and writes
+    /// the change to SQLite. Used by the orchestration pin singleton to
+    /// keep the per-conversation source of truth in sync with toggles.
+    pub fn set_conversation_pinned(
+        &mut self,
+        conversation_id: AIConversationId,
+        pinned: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            log::warn!(
+                "set_conversation_pinned called for conversation {conversation_id:?} that is \
+                 not loaded; pin state change to {pinned} will not be persisted."
+            );
             return;
         };
-        conversation.set_last_event_sequence(sequence);
+        if conversation.is_pinned() == pinned {
+            return;
+        }
+        conversation.set_pinned(pinned);
         conversation.write_updated_conversation_state(ctx);
     }
 
-    /// Sets a live conversation's server token, and updates the mapping in the history
-    /// model.
+    /// Sets a live conversation's server token, updates the reverse index, and
+    /// synchronizes any cached metadata entry for the same conversation.
+    ///
+    /// Returns whether the token changed.
     pub fn set_server_conversation_token_for_conversation(
         &mut self,
         conversation_id: AIConversationId,
         token: String,
-    ) {
-        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
-            return;
-        };
+    ) -> bool {
+        let new_token = ServerConversationToken::new(token.clone());
+        {
+            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+                return false;
+            };
 
-        // Drop the old entry only if it still points at the given conversation_id,
-        // so we don't wrongly remove an entry that's been remapped.
-        if let Some(old_token) = conversation.server_conversation_token().cloned() {
-            if let Entry::Occupied(entry) = self.server_token_to_conversation_id.entry(old_token) {
-                if *entry.get() == conversation_id {
-                    entry.remove();
+            let old_token = conversation.server_conversation_token().cloned();
+            if old_token.as_ref() == Some(&new_token) {
+                return false;
+            }
+
+            // Drop the old entry only if it still points at the given
+            // conversation_id, so we don't wrongly remove an entry that's
+            // been remapped.
+            if let Some(old_token) = old_token {
+                if let Entry::Occupied(entry) =
+                    self.server_token_to_conversation_id.entry(old_token)
+                {
+                    if *entry.get() == conversation_id {
+                        entry.remove();
+                    }
                 }
             }
+
+            conversation.set_server_conversation_token(token);
         }
 
-        conversation.set_server_conversation_token(token.clone());
         self.server_token_to_conversation_id
-            .insert(ServerConversationToken::new(token), conversation_id);
+            .insert(new_token, conversation_id);
+        self.update_cached_metadata_for_conversation(conversation_id);
+        true
+    }
+
+    /// Sets a live conversation's server token, updates the reverse index,
+    /// synchronizes cached metadata, persists the rebound token to SQLite,
+    /// and emits refresh events for live consumers.
+    pub fn set_server_conversation_token_for_conversation_and_persist(
+        &mut self,
+        conversation_id: AIConversationId,
+        token: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.set_server_conversation_token_for_conversation(conversation_id, token) {
+            return;
+        }
+        self.persist_conversation_state(conversation_id, ctx);
+        let terminal_surface_id = self.terminal_surface_id_for_conversation(&conversation_id);
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+            terminal_surface_id,
+            conversation_id,
+        });
+        if let Some(terminal_surface_id) = terminal_surface_id {
+            ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                conversation_id,
+                terminal_surface_id,
+            });
+        }
     }
 
     /// Sets server metadata for a conversation and emits the ConversationMetadataUpdated event.
@@ -511,12 +861,12 @@ impl BlocklistAIHistoryModel {
         metadata: ServerAIConversationMetadata,
         ctx: &mut ModelContext<Self>,
     ) {
-        let terminal_view_id;
+        let terminal_surface_id;
 
         // Update in-memory conversation if it exists
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             conversation.set_server_metadata(metadata);
-            terminal_view_id = self.terminal_view_id_for_conversation(&conversation_id);
+            terminal_surface_id = self.terminal_surface_id_for_conversation(&conversation_id);
         } else if let Some(conversation_metadata) =
             self.all_conversations_metadata.get_mut(&conversation_id)
         {
@@ -524,7 +874,7 @@ impl BlocklistAIHistoryModel {
             // This is needed because we might update permissions from share dialog in
             // conversation list view when we only have metadata.
             conversation_metadata.server_conversation_metadata = Some(metadata);
-            terminal_view_id = None;
+            terminal_surface_id = None;
         } else {
             // Conversation not found anywhere
             return;
@@ -532,7 +882,7 @@ impl BlocklistAIHistoryModel {
 
         // Emit event so sharing dialog and other listeners can refresh.
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
-            terminal_view_id,
+            terminal_surface_id,
             conversation_id,
         });
     }
@@ -566,26 +916,25 @@ impl BlocklistAIHistoryModel {
             .map(|conversation| conversation.status())
     }
 
-    /// Returns the terminal view ID that owns the given conversation, if any.
-    pub fn terminal_view_id_for_conversation(
+    /// Returns the terminal surface ID for the given conversation, if any.
+    pub fn terminal_surface_id_for_conversation(
         &self,
         conversation_id: &AIConversationId,
     ) -> Option<EntityId> {
-        self.live_conversation_ids_for_terminal_view
+        self.live_conversation_ids_for_terminal_surface
             .iter()
             .find(|(_, conversation_ids)| conversation_ids.contains(conversation_id))
-            .map(|(terminal_view_id, _)| *terminal_view_id)
+            .map(|(terminal_surface_id, _)| *terminal_surface_id)
     }
 
-    /// Returns the conversation ID from the terminal view's history corresponding to the action,
-    /// if any.
+    /// Returns the conversation ID from the terminal surface's history corresponding to the action, if any.
     pub fn conversation_id_for_action(
         &self,
         action_id: &AIAgentActionId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) -> Option<AIConversationId> {
-        self.live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)?
+        self.live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)?
             .iter()
             .rev()
             .find(|conversation_id| {
@@ -608,8 +957,8 @@ impl BlocklistAIHistoryModel {
     /// The active conversation is the one we're currently or have most recently streamed outputs for.
     /// If you want to get the conversation the next query will follow up in / what is selected in the input selector,
     /// use `context_model.selected_conversation` instead.
-    pub fn active_conversation(&self, terminal_view_id: EntityId) -> Option<&AIConversation> {
-        self.active_conversation_id(terminal_view_id)
+    pub fn active_conversation(&self, terminal_surface_id: EntityId) -> Option<&AIConversation> {
+        self.active_conversation_id(terminal_surface_id)
             .and_then(|id| self.conversation(&id))
     }
 
@@ -635,7 +984,7 @@ impl BlocklistAIHistoryModel {
         &mut self,
         request_input: RequestInput,
         stream_id: ResponseStreamId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), UpdateHistoryError> {
         let conversation = self
@@ -647,7 +996,7 @@ impl BlocklistAIHistoryModel {
         conversation.update_for_new_request_input(
             request_input,
             stream_id,
-            terminal_view_id,
+            terminal_surface_id,
             ctx,
         )?;
         Ok(())
@@ -655,21 +1004,24 @@ impl BlocklistAIHistoryModel {
 
     pub fn restore_conversations(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversations: Vec<AIConversation>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.terminal_view_created_at
-            .insert(terminal_view_id, Local::now());
+        self.terminal_surface_created_at
+            .insert(terminal_surface_id, Local::now());
 
         let mut conversation_ids = Vec::new();
         for conversation in conversations.into_iter() {
             let conversation_id = conversation.id();
             conversation_ids.push(conversation_id);
-            self.live_conversation_ids_for_terminal_view
-                .entry(terminal_view_id)
-                .or_default()
-                .push(conversation_id);
+            let live_conversation_ids = self
+                .live_conversation_ids_for_terminal_surface
+                .entry(terminal_surface_id)
+                .or_default();
+            if !live_conversation_ids.contains(&conversation_id) {
+                live_conversation_ids.push(conversation_id);
+            }
 
             if let Some(key) = agent_id_key(&conversation) {
                 self.agent_id_to_conversation_id
@@ -682,11 +1034,10 @@ impl BlocklistAIHistoryModel {
             }
 
             // Maintain the parent→child index for child agent conversations.
-            if let Some(parent_id) = conversation.parent_conversation_id() {
-                let children = self.children_by_parent.entry(parent_id).or_default();
-                if !children.contains(&conversation_id) {
-                    children.push(conversation_id);
-                }
+            if let Some(parent_id) =
+                self.resolved_parent_conversation_id_for_conversation(&conversation)
+            {
+                self.index_child_conversation(conversation_id, parent_id);
             }
 
             let new_status = conversation.status().clone();
@@ -697,128 +1048,127 @@ impl BlocklistAIHistoryModel {
             // the workspace can set tab indicators appropriately
             ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id,
                 update: ConversationStatusUpdate::Restored,
                 new_status,
             });
         }
 
-        // Emit event so AI document views can populate their terminal view references
+        // Emit event so consumers can populate their associated view references.
         ctx.emit(BlocklistAIHistoryEvent::RestoredConversations {
-            terminal_view_id,
+            terminal_surface_id,
             conversation_ids,
         });
     }
 
-    /// Sets the active conversation ID, transferring ownership from any other
-    /// terminal view that currently holds it.
+    /// Sets the active conversation ID for a terminal surface and moves the conversation
+    /// from any other terminal surface that currently contains it.
     ///
-    /// Use this when the user **explicitly navigates** to a conversation in a
-    /// different view (e.g. from the conversation history or command palette).
-    /// For automatic follow-ups during tool-call cycles, use [`Self::mark_active_conversation_id`]
-    /// instead — it updates the active pointer without touching other views.
+    /// For automatic follow-ups and request-stream bookkeeping, use
+    /// [`Self::mark_active_conversation_id`] instead.
     pub fn set_active_conversation_id(
         &mut self,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
         if !self
-            .live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)
+            .live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)
             .is_some_and(|conversation_ids| conversation_ids.contains(&conversation_id))
         {
             log::error!(
-                "Attempted to set active conversation ID for terminal view ID that does not own that conversation."
+                "Attempted to set active conversation ID for a terminal surface that does not contain that conversation."
             );
             return;
         }
 
-        // Track previous owners we removed the conversation from so we can
-        // emit ownership-transfer events outside of the borrow of
-        // `live_conversation_ids_for_terminal_view`. The conversation rendering
-        // model assumes a single canonical owner per conversation, so each
-        // previous owner needs a chance to drop its now-stale rendered AI
+        // Track previous terminal surfaces we removed the conversation from so we can
+        // emit terminal-surface-transfer events outside of the borrow of
+        // `live_conversation_ids_for_terminal_surface`. The conversation rendering
+        // model assumes a single canonical terminal surface per conversation, so each
+        // previous terminal surface needs a chance to drop its now-stale rendered AI
         // blocks.
-        let mut previous_owners: Vec<EntityId> = Vec::new();
-        for (other_terminal_view, other_terminal_view_live_conversation_ids) in self
-            .live_conversation_ids_for_terminal_view
+        let mut previous_terminal_surfaces: Vec<EntityId> = Vec::new();
+        for (other_terminal_surface, other_terminal_surface_live_conversation_ids) in self
+            .live_conversation_ids_for_terminal_surface
             .iter_mut()
-            .filter(|(other_terminal_view_id, _)| **other_terminal_view_id != terminal_view_id)
+            .filter(|(other_terminal_surface_id, _)| {
+                **other_terminal_surface_id != terminal_surface_id
+            })
         {
-            if let Some(pos) = other_terminal_view_live_conversation_ids
-                .iter()
-                .position(|id| *id == conversation_id)
-            {
-                other_terminal_view_live_conversation_ids.remove(pos);
-                previous_owners.push(*other_terminal_view);
+            let previous_len = other_terminal_surface_live_conversation_ids.len();
+            other_terminal_surface_live_conversation_ids.retain(|id| *id != conversation_id);
+            if other_terminal_surface_live_conversation_ids.len() != previous_len {
+                previous_terminal_surfaces.push(*other_terminal_surface);
             }
 
             if self
-                .active_conversation_for_terminal_view
-                .get(other_terminal_view)
+                .active_conversation_for_terminal_surface
+                .get(other_terminal_surface)
                 .is_some_and(|id| *id == conversation_id)
             {
-                self.active_conversation_for_terminal_view
-                    .remove(other_terminal_view);
+                self.active_conversation_for_terminal_surface
+                    .remove(other_terminal_surface);
                 ctx.emit(BlocklistAIHistoryEvent::ClearedActiveConversation {
                     conversation_id,
-                    terminal_view_id: *other_terminal_view,
+                    terminal_surface_id: *other_terminal_surface,
                 });
             }
         }
-        for previous_terminal_view_id in previous_owners {
-            ctx.emit(BlocklistAIHistoryEvent::ConversationOwnershipTransferred {
-                conversation_id,
-                previous_terminal_view_id,
-                new_terminal_view_id: terminal_view_id,
-            });
+        for previous_terminal_surface_id in previous_terminal_surfaces {
+            ctx.emit(
+                BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces {
+                    conversation_id,
+                    previous_terminal_surface_id,
+                    new_terminal_surface_id: terminal_surface_id,
+                },
+            );
         }
 
-        self.active_conversation_for_terminal_view
-            .insert(terminal_view_id, conversation_id);
+        self.active_conversation_for_terminal_surface
+            .insert(terminal_surface_id, conversation_id);
 
         ctx.emit(BlocklistAIHistoryEvent::SetActiveConversation {
             conversation_id,
-            terminal_view_id,
+            terminal_surface_id,
         });
     }
 
-    /// Marks a conversation as the active conversation for a terminal view
-    /// **without** removing it from other views.
+    /// Marks a conversation as active for a terminal surface without removing it from other terminal surfaces.
     ///
     /// This is the non-transferring counterpart to [`Self::set_active_conversation_id`].
     /// Use this during automatic follow-ups and request sending where the
-    /// conversation already belongs to this view and we only need to update
+    /// conversation already belongs to this terminal surface and we only need to update
     /// the "most recently streamed" pointer.
     pub fn mark_active_conversation_id(
         &mut self,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
         if !self
-            .live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)
+            .live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)
             .is_some_and(|conversation_ids| conversation_ids.contains(&conversation_id))
         {
             log::warn!(
                 "mark_active_conversation_id: conversation {conversation_id:?} is not in \
-                 terminal view {terminal_view_id:?} live list, skipping"
+                 terminal surface {terminal_surface_id:?} live list, skipping"
             );
             return;
         }
 
-        self.active_conversation_for_terminal_view
-            .insert(terminal_view_id, conversation_id);
+        self.active_conversation_for_terminal_surface
+            .insert(terminal_surface_id, conversation_id);
 
         ctx.emit(BlocklistAIHistoryEvent::SetActiveConversation {
             conversation_id,
-            terminal_view_id,
+            terminal_surface_id,
         });
     }
 
-    /// Starts a new conversation in the given terminal view's history, effectively marking the
+    /// Starts a new conversation in the given terminal surface's history, effectively marking the
     /// existing conversation (if any) as completed.
     ///
     /// Returns the ID of the created conversation.
@@ -827,18 +1177,20 @@ impl BlocklistAIHistoryModel {
     /// element in the `conversations` vector.
     pub fn start_new_conversation(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         is_autoexecute_override: bool,
         is_viewing_shared_session: bool,
+        is_cli_agent_transcript: bool,
         ctx: &mut ModelContext<Self>,
     ) -> AIConversationId {
-        let mut new_conversation = AIConversation::new(is_viewing_shared_session);
+        let mut new_conversation =
+            AIConversation::new(is_viewing_shared_session, is_cli_agent_transcript);
         if is_autoexecute_override {
             new_conversation.toggle_autoexecute_override();
         }
         let new_conversation_id = new_conversation.id();
-        self.live_conversation_ids_for_terminal_view
-            .entry(terminal_view_id)
+        self.live_conversation_ids_for_terminal_surface
+            .entry(terminal_surface_id)
             .or_default()
             .push(new_conversation_id);
         self.conversations_by_id
@@ -846,7 +1198,7 @@ impl BlocklistAIHistoryModel {
 
         ctx.emit(BlocklistAIHistoryEvent::StartedNewConversation {
             new_conversation_id,
-            terminal_view_id,
+            terminal_surface_id,
         });
 
         new_conversation_id
@@ -856,25 +1208,25 @@ impl BlocklistAIHistoryModel {
         &mut self,
         block_id: BlockId,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<TaskId, UpdateHistoryError> {
         let conversation = self
             .conversations_by_id
             .get_mut(&conversation_id)
             .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
-        Ok(conversation.create_optimistic_cli_subagent_task(&block_id, terminal_view_id, ctx))
+        Ok(conversation.create_optimistic_cli_subagent_task(&block_id, terminal_surface_id, ctx))
     }
 
     pub fn update_conversation_status(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
         status: ConversationStatus,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.update_conversation_status_with_error_message(
-            terminal_view_id,
+        self.update_conversation_status_with_error(
+            terminal_surface_id,
             conversation_id,
             status,
             None,
@@ -882,31 +1234,26 @@ impl BlocklistAIHistoryModel {
         );
     }
 
-    pub fn update_conversation_status_with_error_message(
+    pub fn update_conversation_status_with_error(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
         status: ConversationStatus,
-        error_message: Option<String>,
+        error: Option<RenderableAIError>,
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
-            conversation.update_status_with_error_message(
-                status,
-                error_message,
-                terminal_view_id,
-                ctx,
-            );
+            conversation.update_status_with_error(status, error, terminal_surface_id, ctx);
         }
     }
 
     pub fn on_forked_conversation(
         &mut self,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        // When a conversation is forked and restored into a new terminal view,
+        // When a conversation is forked and restored for a new terminal surface,
         // we want to emit UpdatedStreamingExchange events for every exchange
         // to ensure that all of the existing exchanges are persisted correctly.
         if let Some(conversation) = self.conversations_by_id.get(&conversation_id) {
@@ -914,7 +1261,7 @@ impl BlocklistAIHistoryModel {
                 let is_hidden = conversation.is_exchange_hidden(exchange.id);
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                     exchange_id: exchange.id,
-                    terminal_view_id,
+                    terminal_surface_id,
                     conversation_id,
                     is_hidden,
                 });
@@ -926,17 +1273,19 @@ impl BlocklistAIHistoryModel {
         &mut self,
         stream_id: &ResponseStreamId,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         init_event: warp_multi_agent_api::response_event::StreamInit,
         ctx: &mut ModelContext<Self>,
     ) {
+        let mut should_emit_server_token_assigned = false;
+        let mut should_persist = false;
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             let had_token_before = conversation.server_conversation_token().is_some();
 
             if let Err(e) = conversation.initialize_output_for_response_stream(
                 stream_id,
                 init_event,
-                terminal_view_id,
+                terminal_surface_id,
                 ctx,
             ) {
                 log::warn!("Failed to update conversation with updated streamed output: {e}");
@@ -951,14 +1300,20 @@ impl BlocklistAIHistoryModel {
                 self.server_token_to_conversation_id
                     .insert(token.clone(), conversation_id);
             }
+            should_emit_server_token_assigned =
+                !had_token_before && conversation.server_conversation_token().is_some();
+            should_persist = true;
+        }
 
-            // Notify observers when a conversation first receives its server token.
-            if !had_token_before && conversation.server_conversation_token().is_some() {
-                ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
-                    conversation_id,
-                    terminal_view_id,
-                });
-            }
+        if should_persist {
+            self.persist_conversation_state(conversation_id, ctx);
+        }
+
+        if should_emit_server_token_assigned {
+            ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                conversation_id,
+                terminal_surface_id,
+            });
         }
     }
 
@@ -971,40 +1326,53 @@ impl BlocklistAIHistoryModel {
         conversation_id: AIConversationId,
         run_id: String,
         task_id: Option<crate::ai::ambient_agents::AmbientAgentTaskId>,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
-            log::warn!(
-                "assign_run_id_for_conversation: conversation {conversation_id:?} not found"
-            );
-            return;
+        let (agent_key, server_token) = {
+            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+                log::warn!(
+                    "assign_run_id_for_conversation: conversation {conversation_id:?} not found"
+                );
+                return;
+            };
+            conversation.set_run_id(run_id);
+            if let Some(task_id) = task_id {
+                conversation.set_task_id(task_id);
+            }
+            (
+                agent_id_key(conversation),
+                conversation.server_conversation_token().cloned(),
+            )
         };
-        conversation.set_run_id(run_id);
-        if let Some(task_id) = task_id {
-            conversation.set_task_id(task_id);
-        }
 
-        if let Some(key) = agent_id_key(conversation) {
+        if let Some(key) = agent_key {
             self.agent_id_to_conversation_id
                 .insert(key, conversation_id);
         }
-
-        if let Some(token) = conversation.server_conversation_token() {
+        if let Some(token) = server_token {
             self.server_token_to_conversation_id
-                .insert(token.clone(), conversation_id);
+                .insert(token, conversation_id);
         }
 
+        self.persist_conversation_state(conversation_id, ctx);
         ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
             conversation_id,
-            terminal_view_id,
+            terminal_surface_id,
         });
     }
 
     /// Resolves a server-side agent identifier to a local conversation ID.
     /// The identifier may be a server conversation token (v1) or a run_id (v2).
     pub fn conversation_id_for_agent_id(&self, agent_id: &str) -> Option<AIConversationId> {
-        self.agent_id_to_conversation_id.get(agent_id).copied()
+        self.agent_id_to_conversation_id
+            .get(agent_id)
+            .copied()
+            .or_else(|| {
+                self.server_token_to_conversation_id
+                    .get(&ServerConversationToken::new(agent_id.to_owned()))
+                    .copied()
+            })
     }
 
     /// Creates a new conversation and transfers relevant exchanges from
@@ -1014,7 +1382,7 @@ impl BlocklistAIHistoryModel {
         old_conversation_id: AIConversationId,
         response_stream_id: &ResponseStreamId,
         start_from_message_id: MessageId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<AIConversationId, UpdateHistoryError> {
         let exchange_ids_to_transfer: Vec<AIAgentExchangeId> = self
@@ -1039,7 +1407,8 @@ impl BlocklistAIHistoryModel {
             exchange_ids_to_transfer.len()
         );
 
-        let new_conversation_id = self.start_new_conversation(terminal_view_id, false, false, ctx);
+        let new_conversation_id =
+            self.start_new_conversation(terminal_surface_id, false, false, false, ctx);
         for exchange_id in exchange_ids_to_transfer {
             let old_conversation = self
                 .conversations_by_id
@@ -1058,7 +1427,7 @@ impl BlocklistAIHistoryModel {
             new_conversation.append_reassigned_exchange(
                 response_stream_id,
                 exchange,
-                terminal_view_id,
+                terminal_surface_id,
                 ctx,
             )?;
         }
@@ -1072,14 +1441,14 @@ impl BlocklistAIHistoryModel {
             ))?;
         old_conversation.mark_completed_after_successful_split(
             response_stream_id,
-            terminal_view_id,
+            terminal_surface_id,
             ctx,
         )?;
 
-        self.set_active_conversation_id(new_conversation_id, terminal_view_id, ctx);
+        self.set_active_conversation_id(new_conversation_id, terminal_surface_id, ctx);
 
         ctx.emit(BlocklistAIHistoryEvent::SplitConversation {
-            terminal_view_id,
+            terminal_surface_id,
             old_conversation_id,
             new_conversation_id,
         });
@@ -1163,9 +1532,11 @@ impl BlocklistAIHistoryModel {
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            root_task_is_optimistic: None,
             run_id: None,
             autoexecute_override: Some(source_conversation.autoexecute_override().into()),
             last_event_sequence: None,
+            pinned: false,
         };
         let forked_conversation_id = AIConversationId::new();
         if let Err(e) = sqlite_sender.send(ModelEvent::UpdateMultiAgentConversation {
@@ -1211,6 +1582,10 @@ impl BlocklistAIHistoryModel {
         let root_task_id = conversation.get_root_task_id().clone();
 
         let mut message_ids_to_retain_by_task: HashMap<TaskId, HashSet<MessageId>> = HashMap::new();
+        // Each task's last retained exchange. Retention keeps a prefix of each
+        // task's exchanges, so only tool calls in this exchange can have been
+        // severed from their results (which land in the next, dropped exchange).
+        let mut fork_point_exchange_by_task: HashMap<TaskId, &AIAgentExchange> = HashMap::new();
         let mut found_from_exchange_id = false;
         'outer: for (task_id, task_exchanges) in exchanges_by_task.into_iter() {
             for exchange in task_exchanges {
@@ -1224,6 +1599,7 @@ impl BlocklistAIHistoryModel {
                     .entry(task_id.clone())
                     .or_default();
                 message_ids_to_retain.extend(exchange.added_message_ids.iter().cloned());
+                fork_point_exchange_by_task.insert(task_id.clone(), exchange);
                 if exchange.id == from_exchange_id {
                     if fork_from_exact_exchange {
                         break 'outer;
@@ -1242,16 +1618,30 @@ impl BlocklistAIHistoryModel {
 
         // Build truncated tasks by retaining only messages whose IDs are in
         // `allowed_message_ids`. Tasks whose message list becomes empty and
-        // which are non-root tasks are dropped.
+        // which are non-root tasks are dropped. Client `tool_call`s in the
+        // fork-point exchange whose `tool_call_result` was truncated away are
+        // reconciled so every `tool_use` stays paired (see
+        // `reconcile_dangling_tool_calls_in_forked_task`).
         let truncated_tasks: Vec<warp_multi_agent_api::Task> = conversation
             .all_tasks()
             .filter_map(|t| {
                 if let Some(message_ids_to_retain) = message_ids_to_retain_by_task.get(t.id()) {
-                    let mut truncated_task = t.source().cloned()?;
+                    let source_task = t.source()?;
+                    let mut truncated_task = source_task.clone();
                     truncated_task
                         .messages
                         .retain(|m| message_ids_to_retain.contains(&MessageId::new(m.id.clone())));
-                    (!truncated_task.messages.is_empty()).then_some(truncated_task)
+                    if truncated_task.messages.is_empty() {
+                        return None;
+                    }
+                    if let Some(fork_point_exchange) = fork_point_exchange_by_task.get(t.id()) {
+                        reconcile_dangling_tool_calls_in_forked_task(
+                            &mut truncated_task,
+                            &source_task.messages,
+                            &fork_point_exchange.added_message_ids,
+                        );
+                    }
+                    Some(truncated_task)
                 } else {
                     None
                 }
@@ -1320,9 +1710,11 @@ impl BlocklistAIHistoryModel {
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            root_task_is_optimistic: None,
             run_id: None,
             autoexecute_override: Some(conversation.autoexecute_override().into()),
             last_event_sequence: None,
+            pinned: false,
         };
 
         let forked_conversation_id = AIConversationId::new();
@@ -1350,7 +1742,8 @@ impl BlocklistAIHistoryModel {
         response_stream_id: &ResponseStreamId,
         client_actions: Vec<warp_multi_agent_api::ClientAction>,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
+        skill_path_origin: &SkillPathOrigin,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), UpdateHistoryError> {
         let mut current_conversation_id = conversation_id;
@@ -1363,7 +1756,7 @@ impl BlocklistAIHistoryModel {
                         current_conversation_id,
                         response_stream_id,
                         MessageId::new(start_from_message_id),
-                        terminal_view_id,
+                        terminal_surface_id,
                         ctx,
                     )?;
                     current_conversation_id = new_conversation_id;
@@ -1377,8 +1770,9 @@ impl BlocklistAIHistoryModel {
                     ))?;
                     conversation.apply_client_action(
                         response_stream_id,
-                        terminal_view_id,
+                        terminal_surface_id,
                         action,
+                        skill_path_origin,
                         ctx,
                     )?;
                 }
@@ -1397,17 +1791,29 @@ impl BlocklistAIHistoryModel {
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<ConversationUsageMetadata>,
         was_user_initiated_request: bool,
+        ctx: &mut ModelContext<Self>,
     ) {
+        // Track whether this update changes any state derived by
+        // `BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated`
+        // subscribers (e.g. the orchestration credit rollup). We emit the
+        // event only when there's actual data to react to.
+        let emits_usage_event = request_cost.is_some() || usage_metadata.is_some();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
                 request_cost,
                 token_usage,
                 usage_metadata,
                 was_user_initiated_request,
+                ctx,
             ) {
                 log::warn!(
                     "Failed to update request cost for conversation {conversation_id}: {e:#}"
                 );
+            }
+            if emits_usage_event {
+                ctx.emit(BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                    conversation_id,
+                });
             }
         } else {
             log::warn!(
@@ -1420,13 +1826,13 @@ impl BlocklistAIHistoryModel {
         &mut self,
         stream_id: &ResponseStreamId,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
             return;
         };
-        if let Err(e) = conversation.mark_request_completed(stream_id, terminal_view_id, ctx) {
+        if let Err(e) = conversation.mark_request_completed(stream_id, terminal_surface_id, ctx) {
             log::warn!("Failed to mark exchange as completed: {e}");
         }
 
@@ -1491,19 +1897,19 @@ impl BlocklistAIHistoryModel {
         &mut self,
         stream_id: &ResponseStreamId,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         reason: CancellationReason,
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if reason.is_reverted() {
                 if let Err(e) =
-                    conversation.mark_request_cancelled_due_to_revert(terminal_view_id, ctx)
+                    conversation.mark_request_cancelled_due_to_revert(terminal_surface_id, ctx)
                 {
                     log::warn!("Failed to mark exchange as cancelled: {e}");
                 }
             } else if let Err(e) =
-                conversation.mark_request_cancelled(stream_id, terminal_view_id, reason, ctx)
+                conversation.mark_request_cancelled(stream_id, terminal_surface_id, reason, ctx)
             {
                 log::warn!("Failed to mark exchange as cancelled: {e}");
             }
@@ -1513,19 +1919,22 @@ impl BlocklistAIHistoryModel {
         });
     }
 
+    /// Marks the stream's exchanges as finished with `error`.
     pub fn mark_response_stream_completed_with_error(
         &mut self,
         error: RenderableAIError,
+        recovery_pending: bool,
         stream_id: &ResponseStreamId,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.mark_request_completed_with_error(
                 stream_id,
                 error.clone(),
-                terminal_view_id,
+                recovery_pending,
+                terminal_surface_id,
                 ctx,
             ) {
                 log::warn!("Failed to mark exchange as completed with error: {e}");
@@ -1533,39 +1942,33 @@ impl BlocklistAIHistoryModel {
         }
     }
 
-    /// Handle clearing the blocklist for the terminal view.
-    /// The terminal view will also cancel the active stream on processing the event emitted here.
-    pub(crate) fn clear_conversations_in_terminal_view(
+    /// Handle clearing the blocklist for a terminal surface.
+    /// The terminal surface will also cancel the active stream on processing the event emitted here.
+    pub(crate) fn clear_conversations_for_terminal_surface(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Cancel the active stream when we clear conversations in this terminal view.
+        // Cancel the active stream when we clear conversations for this terminal surface.
         let active_conversation_id = self
-            .active_conversation_for_terminal_view
-            .remove(&terminal_view_id);
-        if let Some(cleared_conversation_ids) = self
-            .live_conversation_ids_for_terminal_view
-            .remove(&terminal_view_id)
+            .active_conversation_for_terminal_surface
+            .remove(&terminal_surface_id);
+        let mut cleared_conversation_ids: Vec<AIConversationId> = Vec::new();
+        if let Some(ids) = self
+            .live_conversation_ids_for_terminal_surface
+            .remove(&terminal_surface_id)
         {
-            self.cleared_conversation_ids_for_terminal_view
-                .entry(terminal_view_id)
-                .and_modify(|existing| existing.extend(cleared_conversation_ids.clone()))
-                .or_insert(cleared_conversation_ids);
-        }
-        let cleared_conversation_ids = self
-            .live_conversation_ids_for_terminal_view
-            .remove(&terminal_view_id);
-        if let Some(cleared_conversation_ids) = cleared_conversation_ids {
-            self.cleared_conversation_ids_for_terminal_view
-                .entry(terminal_view_id)
-                .and_modify(|existing| existing.extend(cleared_conversation_ids.clone()))
-                .or_insert(cleared_conversation_ids);
+            cleared_conversation_ids.extend(ids.iter().copied());
+            self.cleared_conversation_ids_for_terminal_surface
+                .entry(terminal_surface_id)
+                .and_modify(|existing| existing.extend(ids.clone()))
+                .or_insert(ids);
         }
         ctx.emit(
-            BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
-                terminal_view_id,
+            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                terminal_surface_id,
                 active_conversation_id,
+                cleared_conversation_ids,
             },
         );
     }
@@ -1574,17 +1977,17 @@ impl BlocklistAIHistoryModel {
     pub fn remove_conversation(
         &mut self,
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.remove_conversation_from_memory(conversation_id, Some(terminal_view_id), ctx);
+        self.remove_conversation_from_memory(conversation_id, Some(terminal_surface_id), ctx);
     }
 
     /// Permanently delete a conversation.
     pub fn delete_conversation(
         &mut self,
         conversation_id: AIConversationId,
-        terminal_view_id: Option<EntityId>,
+        terminal_surface_id: Option<EntityId>,
         ctx: &mut ModelContext<Self>,
     ) {
         let conversation_title = self
@@ -1598,7 +2001,7 @@ impl BlocklistAIHistoryModel {
             .get(&conversation_id)
             .and_then(|c| c.run_id());
 
-        self.remove_conversation_from_memory(conversation_id, terminal_view_id, ctx);
+        self.remove_conversation_from_memory(conversation_id, terminal_surface_id, ctx);
 
         // Delete persisted conversation from sqlite.
         let model_event_sender = GlobalResourceHandlesProvider::as_ref(ctx)
@@ -1624,11 +2027,11 @@ impl BlocklistAIHistoryModel {
             |_, _, _| {},
         );
 
-        // Only emit the event if we have a terminal_view_id, since the event is
-        // filtered by terminal_view_id in handlers.
-        if let Some(terminal_view_id) = terminal_view_id {
+        // Only emit the event if we have a terminal_surface_id, since the event is
+        // filtered by terminal_surface_id in handlers.
+        if let Some(terminal_surface_id) = terminal_surface_id {
             ctx.emit(BlocklistAIHistoryEvent::DeletedConversation {
-                terminal_view_id,
+                terminal_surface_id,
                 conversation_id,
                 conversation_title,
                 run_id,
@@ -1640,7 +2043,7 @@ impl BlocklistAIHistoryModel {
     fn remove_conversation_from_memory(
         &mut self,
         conversation_id: AIConversationId,
-        terminal_view_id: Option<EntityId>,
+        terminal_surface_id: Option<EntityId>,
         ctx: &mut ModelContext<Self>,
     ) {
         // Capture the run_id BEFORE the in-memory record is dropped so the
@@ -1678,93 +2081,102 @@ impl BlocklistAIHistoryModel {
         self.all_conversations_metadata.remove(&conversation_id);
         self.conversations_by_id.remove(&conversation_id);
 
-        if let Some(terminal_view_id) = terminal_view_id {
+        if let Some(terminal_surface_id) = terminal_surface_id {
             if self
-                .active_conversation_for_terminal_view
-                .get(&terminal_view_id)
+                .active_conversation_for_terminal_surface
+                .get(&terminal_surface_id)
                 .is_some_and(|id| *id == conversation_id)
             {
-                self.active_conversation_for_terminal_view
-                    .remove(&terminal_view_id);
+                self.active_conversation_for_terminal_surface
+                    .remove(&terminal_surface_id);
             }
             if let Some(vec) = self
-                .live_conversation_ids_for_terminal_view
-                .get_mut(&terminal_view_id)
+                .live_conversation_ids_for_terminal_surface
+                .get_mut(&terminal_surface_id)
             {
                 vec.retain(|&id| id != conversation_id);
             }
             if let Some(vec) = self
-                .cleared_conversation_ids_for_terminal_view
-                .get_mut(&terminal_view_id)
+                .cleared_conversation_ids_for_terminal_surface
+                .get_mut(&terminal_surface_id)
             {
                 vec.retain(|&id| id != conversation_id);
             }
             ctx.emit(BlocklistAIHistoryEvent::RemoveConversation {
-                terminal_view_id,
+                terminal_surface_id,
                 conversation_id,
                 run_id,
             });
         }
     }
 
-    /// Returns true if the conversation is live in any terminal view.
+    /// Returns true if the conversation is live for any terminal surface.
     pub fn is_conversation_live(&self, conversation_id: AIConversationId) -> bool {
-        self.live_conversation_ids_for_terminal_view
+        self.live_conversation_ids_for_terminal_surface
             .values()
             .any(|conversation_ids| conversation_ids.contains(&conversation_id))
     }
 
-    pub fn mark_terminal_view_as_ambient_agent_session_view(&mut self, terminal_view_id: EntityId) {
-        self.ambient_agent_terminal_view_ids
-            .insert(terminal_view_id);
-    }
-
-    pub fn mark_terminal_view_as_conversation_transcript_viewer(
+    pub fn mark_terminal_surface_as_ambient_agent_session_view(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) {
-        self.conversation_transcript_viewer_terminal_view_ids
-            .insert(terminal_view_id);
+        self.ambient_agent_terminal_surface_ids
+            .insert(terminal_surface_id);
     }
 
-    pub fn is_terminal_view_conversation_transcript_viewer(
+    pub fn mark_terminal_surface_as_conversation_transcript_viewer(
+        &mut self,
+        terminal_surface_id: EntityId,
+    ) {
+        self.conversation_transcript_viewer_terminal_surface_ids
+            .insert(terminal_surface_id);
+    }
+
+    pub fn is_terminal_surface_conversation_transcript_viewer(
         &self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) -> bool {
-        self.conversation_transcript_viewer_terminal_view_ids
-            .contains(&terminal_view_id)
+        self.conversation_transcript_viewer_terminal_surface_ids
+            .contains(&terminal_surface_id)
     }
 
     /// Returns [`AIQueryHistory`]s from all sources: live conversations, cleared conversations,
     /// and persisted queries from conversations not loaded in memory.
     ///
-    /// When `terminal_view_id` is provided, queries from that terminal view are categorized as
+    /// When `terminal_surface_id` is provided, queries from that terminal surface are categorized as
     /// `CurrentSession` and all others as `DifferentSession`. When `None`, all queries are
     /// categorized as `DifferentSession`.
     ///
     /// Ambient agent sessions are always excluded.
     pub(crate) fn all_ai_queries(
         &self,
-        terminal_view_id: Option<EntityId>,
+        terminal_surface_id: Option<EntityId>,
     ) -> impl Iterator<Item = AIQueryHistory> + '_ {
         // Collect all conversation IDs that are already in memory (live or cleared)
         // and build query vectors in the same loops
         let mut loaded_conversation_ids: HashSet<AIConversationId> = HashSet::new();
 
         let mut live_queries_vec = Vec::new();
-        for (tv_id, conversation_ids) in self.live_conversation_ids_for_terminal_view.iter() {
+        for (conversation_terminal_surface_id, conversation_ids) in
+            self.live_conversation_ids_for_terminal_surface.iter()
+        {
             loaded_conversation_ids.extend(conversation_ids);
 
             // Skip shared ambient agent sessions
-            if self.ambient_agent_terminal_view_ids.contains(tv_id) {
+            if self
+                .ambient_agent_terminal_surface_ids
+                .contains(conversation_terminal_surface_id)
+            {
                 continue;
             }
 
-            let history_order = if terminal_view_id.is_some_and(|id| id == *tv_id) {
-                HistoryOrder::CurrentSession
-            } else {
-                HistoryOrder::DifferentSession
-            };
+            let history_order =
+                if terminal_surface_id.is_some_and(|id| id == *conversation_terminal_surface_id) {
+                    HistoryOrder::CurrentSession
+                } else {
+                    HistoryOrder::DifferentSession
+                };
 
             for conversation_id in conversation_ids {
                 if let Some(conversation) = self.conversations_by_id.get(conversation_id) {
@@ -1788,14 +2200,17 @@ impl BlocklistAIHistoryModel {
         }
 
         let mut cleared_queries_vec = Vec::new();
-        for (tv_id, conversation_ids) in self.cleared_conversation_ids_for_terminal_view.iter() {
+        for (conversation_terminal_surface_id, conversation_ids) in
+            self.cleared_conversation_ids_for_terminal_surface.iter()
+        {
             loaded_conversation_ids.extend(conversation_ids);
 
-            let history_order = if terminal_view_id.is_some_and(|id| id == *tv_id) {
-                HistoryOrder::CurrentSession
-            } else {
-                HistoryOrder::DifferentSession
-            };
+            let history_order =
+                if terminal_surface_id.is_some_and(|id| id == *conversation_terminal_surface_id) {
+                    HistoryOrder::CurrentSession
+                } else {
+                    HistoryOrder::DifferentSession
+                };
 
             for conversation_id in conversation_ids {
                 if let Some(conversation) = self.conversations_by_id.get(conversation_id) {
@@ -1829,28 +2244,26 @@ impl BlocklistAIHistoryModel {
             .chain(live_queries_vec)
     }
 
-    /// Returns `Some` with the [`AIConversationId`] of the active conversation inside the
-    /// [`crate::terminal::TerminalView`] with the given [`EntityId`] if there is one. Returns
-    /// `None` otherwise.
+    /// Returns the active conversation ID for a terminal surface, if one exists.
     /// The active conversation is the one we're currently or have most recently streamed outputs for.
     /// If you want to check what conversation the next query will follow up in / what is selected in the input selector,
     /// use `context_model.selected_conversation_id` instead.
     pub(crate) fn active_conversation_id(
         &self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) -> Option<AIConversationId> {
         let active_conversation_id = self
-            .active_conversation_for_terminal_view
-            .get(&terminal_view_id)
+            .active_conversation_for_terminal_surface
+            .get(&terminal_surface_id)
             .copied()?;
 
-        let conversation_ids_for_terminal_view = self
-            .live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)?;
+        let conversation_ids_for_terminal_surface = self
+            .live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)?;
 
-        if !conversation_ids_for_terminal_view.contains(&active_conversation_id) {
+        if !conversation_ids_for_terminal_surface.contains(&active_conversation_id) {
             log::warn!(
-                "The active conversation ID {active_conversation_id:?} was not found in the list of conversation IDs for terminal view {terminal_view_id:?}. Conversation IDs: {conversation_ids_for_terminal_view:?}"
+                "The active conversation ID {active_conversation_id:?} was not found in the list of conversation IDs for terminal surface {terminal_surface_id:?}. Conversation IDs: {conversation_ids_for_terminal_surface:?}"
             );
             return None;
         }
@@ -1858,16 +2271,14 @@ impl BlocklistAIHistoryModel {
         Some(active_conversation_id)
     }
 
-    /// Returns `Some` with the [`AIConversationId`] of the last conversation created for a given
-    /// [`crate::terminal::TerminalView`] with the given [`EntityId`] if there is one. Returns
-    /// `None` otherwise.
+    /// Returns the last conversation ID created for a terminal surface, if one exists.
     #[cfg_attr(target_family = "wasm", allow(unused))]
     pub(crate) fn last_conversation_id(
         &self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) -> Option<AIConversationId> {
-        self.live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)?
+        self.live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)?
             .last()
             .copied()
     }
@@ -1875,7 +2286,7 @@ impl BlocklistAIHistoryModel {
     /// Set the hidden status of the exchange with the given ID.
     pub fn set_exchange_hidden_status(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
         is_hidden: bool,
@@ -1884,7 +2295,7 @@ impl BlocklistAIHistoryModel {
         let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
             return;
         };
-        conversation.set_is_exchange_hidden(exchange_id, is_hidden, terminal_view_id, ctx);
+        conversation.set_is_exchange_hidden(exchange_id, is_hidden, terminal_surface_id, ctx);
     }
 
     pub fn set_viewing_shared_session_for_conversation(
@@ -1906,7 +2317,7 @@ impl BlocklistAIHistoryModel {
     pub fn toggle_autoexecute_override(
         &mut self,
         conversation_id: &AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(conversation) = self.conversations_by_id.get_mut(conversation_id) else {
@@ -1915,7 +2326,9 @@ impl BlocklistAIHistoryModel {
 
         conversation.toggle_autoexecute_override();
         conversation.write_updated_conversation_state(ctx);
-        ctx.emit(BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { terminal_view_id });
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride {
+            terminal_surface_id,
+        });
     }
 
     /// Truncates a conversation from the given exchange ID, removing all exchanges
@@ -1938,27 +2351,27 @@ impl BlocklistAIHistoryModel {
         Ok(removed_exchange_ids)
     }
 
-    /// Returns the latest exchange across all conversations in the terminal view.
+    /// Returns the latest exchange across all conversations for a terminal surface.
     /// This is useful for determining if a specific exchange is the most recent one.
     /// Excludes passive code generation exchanges from consideration.
     pub fn latest_exchange_across_all_conversations(
         &self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) -> Option<&AIAgentExchange> {
-        self.all_live_root_task_exchanges_for_terminal_view(terminal_view_id)
+        self.all_live_root_task_exchanges_for_terminal_surface(terminal_surface_id)
             .filter(|exchange| !exchange.has_passive_request())
             .max_by_key(|exchange| exchange.start_time)
     }
 
     /// Returns the conversation ID that contains the given exchange ID, if any.
-    /// Searches through all conversations for a given terminal view.
+    /// Searches through all conversations for a terminal surface.
     pub fn conversation_id_for_exchange(
         &self,
         exchange_id: AIAgentExchangeId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     ) -> Option<AIConversationId> {
-        self.live_conversation_ids_for_terminal_view
-            .get(&terminal_view_id)?
+        self.live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)?
             .iter()
             .find(|conversation_id| {
                 self.conversations_by_id
@@ -2021,6 +2434,22 @@ impl BlocklistAIHistoryModel {
         None
     }
 
+    pub fn get_server_conversation_metadata_by_server_token(
+        &self,
+        server_token: &ServerConversationToken,
+    ) -> Option<&ServerAIConversationMetadata> {
+        self.find_conversation_id_by_server_token(server_token)
+            .and_then(|conversation_id| self.get_server_conversation_metadata(&conversation_id))
+            .or_else(|| {
+                self.all_conversations_metadata
+                    .values()
+                    .find(|metadata| {
+                        metadata.server_conversation_token.as_ref() == Some(server_token)
+                    })
+                    .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
+            })
+    }
+
     /// Finds an AIConversationId by its server conversation token.
     ///
     /// O(1) lookup via `server_token_to_conversation_id`, which is maintained
@@ -2046,11 +2475,46 @@ impl BlocklistAIHistoryModel {
         None
     }
 
+    /// Returns the canonical local conversation ID for a server token, creating
+    /// and caching one if this client has not seen the token before.
+    pub fn get_or_set_canonical_conversation_id_for_server_token(
+        &mut self,
+        server_token: &ServerConversationToken,
+    ) -> AIConversationId {
+        if let Some(conversation_id) = self.server_token_to_conversation_id.get(server_token) {
+            return *conversation_id;
+        }
+
+        let conversation_id = self
+            .conversations_by_id
+            .iter()
+            .find_map(|(conversation_id, conversation)| {
+                (conversation.server_conversation_token() == Some(server_token))
+                    .then_some(*conversation_id)
+            })
+            .or_else(|| {
+                self.all_conversations_metadata
+                    .iter()
+                    .find_map(|(conversation_id, metadata)| {
+                        (metadata.server_conversation_token.as_ref() == Some(server_token))
+                            .then_some(*conversation_id)
+                    })
+            })
+            .unwrap_or_else(AIConversationId::new);
+
+        self.server_token_to_conversation_id
+            .insert(server_token.clone(), conversation_id);
+        conversation_id
+    }
+
     /// Mark conversations as historical
     /// Historical conversations consist of non-live conversations that were read from the disk or server on startup,
     /// and conversations (recorded here) that were live this session but have now been cleared.
-    pub fn mark_conversations_historical_for_terminal_view(&mut self, terminal_view_id: EntityId) {
-        if self.is_terminal_view_conversation_transcript_viewer(terminal_view_id) {
+    pub fn mark_conversations_historical_for_terminal_surface(
+        &mut self,
+        terminal_surface_id: EntityId,
+    ) {
+        if self.is_terminal_surface_conversation_transcript_viewer(terminal_surface_id) {
             // We don't mark conversation transcript viewer conversations as historical,
             // as they are stored separately and should not be persisted/displayed as regular user conversations.
             return;
@@ -2061,7 +2525,7 @@ impl BlocklistAIHistoryModel {
         // In the future it might be worthwhile to check that these conversations exist in the database before marking them as historical,
         // but for now this is an edge case that we don't need to worry about too much.
         let conversations_to_mark_historical: Vec<AIConversationMetadata> = self
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_surface_id)
             .filter_map(|conversation| {
                 let conversation_id = conversation.id();
                 if !self.conversations_by_id.contains_key(&conversation_id)
@@ -2120,15 +2584,72 @@ impl BlocklistAIHistoryModel {
         Ok(conversation)
     }
 
+    /// Rebuilds a remote-child placeholder conversation identified by
+    /// `local_placeholder_id` from the cloud `tasks` + `cloud_conversation`,
+    /// keeping the placeholder's local id and orchestration linkage
+    /// (parent ids, agent_name, run_id, is_remote_child, pinned)
+    /// authoritative. Cloud supplies the transcript and server-side metadata.
+    ///
+    /// Narrowly scoped to the remote-child placeholder hydration path
+    /// (`pane_group::hydrate_remote_child_transcript_in_place`). Returns
+    /// `Err` when the placeholder isn't loaded so the caller can fall back
+    /// instead of silently producing a detached conversation.
+    pub fn hydrate_remote_child_placeholder_with_cloud_transcript(
+        &mut self,
+        local_placeholder_id: AIConversationId,
+        tasks: Vec<warp_multi_agent_api::Task>,
+        cloud_conversation: AIConversation,
+    ) -> anyhow::Result<AIConversation> {
+        let placeholder = self
+            .conversations_by_id
+            .get(&local_placeholder_id)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "hydrate_remote_child_placeholder_with_cloud_transcript: \
+                     local placeholder {local_placeholder_id} not found in conversations_by_id; \
+                     refusing to construct a detached merged conversation"
+                )
+            })?;
+
+        let merged_conversation_data =
+            merged_remote_child_placeholder_conversation_data(&placeholder, &cloud_conversation);
+
+        let mut merged = AIConversation::new_restored(
+            local_placeholder_id,
+            tasks,
+            Some(merged_conversation_data),
+        )?;
+        merged.reassign_exchange_ids();
+
+        if let Some(metadata) = cloud_conversation.server_metadata() {
+            merged.set_server_metadata(metadata.clone());
+        }
+
+        if let Some(token) = merged.server_conversation_token() {
+            self.server_token_to_conversation_id
+                .insert(token.clone(), local_placeholder_id);
+        }
+
+        self.conversations_by_id
+            .insert(local_placeholder_id, merged.clone());
+
+        if let Some(parent_id) = self.resolved_parent_conversation_id_for_conversation(&merged) {
+            self.index_child_conversation(local_placeholder_id, parent_id);
+        }
+
+        Ok(merged)
+    }
+
     /// Clears all stored conversation-related data in memory.
     /// This is used when logging out to ensure no AI history persists across users.
     pub(crate) fn reset(&mut self) {
-        self.live_conversation_ids_for_terminal_view.clear();
-        self.cleared_conversation_ids_for_terminal_view.clear();
+        self.live_conversation_ids_for_terminal_surface.clear();
+        self.cleared_conversation_ids_for_terminal_surface.clear();
         self.conversations_by_id.clear();
-        self.active_conversation_for_terminal_view.clear();
-        self.ambient_agent_terminal_view_ids.clear();
-        self.conversation_transcript_viewer_terminal_view_ids
+        self.active_conversation_for_terminal_surface.clear();
+        self.ambient_agent_terminal_surface_ids.clear();
+        self.conversation_transcript_viewer_terminal_surface_ids
             .clear();
         self.persisted_queries.clear();
         self.all_conversations_metadata.clear();
@@ -2138,14 +2659,91 @@ impl BlocklistAIHistoryModel {
     }
 }
 
+/// Builds the `AgentConversationData` for a remote-child placeholder
+/// hydrated from a cloud transcript.
+///
+/// **Placeholder authoritative** (local orchestration linkage that the cloud
+/// transcript cannot reconstruct):
+/// - `parent_conversation_id`, `is_remote_child`, `pinned`
+///
+/// **Placeholder-preferred, cloud fallback** (local value wins when present,
+/// cloud's value is used otherwise so we don't lose data on a stale
+/// placeholder):
+/// - `parent_agent_id`, `agent_name`, `orchestration_harness_type`, `run_id`
+///
+/// **Cloud authoritative** (server-side state the placeholder doesn't know):
+/// - `server_conversation_token`, `conversation_usage_metadata`,
+///   `forked_from_server_conversation_token`, `artifacts_json`,
+///   `last_event_sequence`
+///
+/// **Reset on merge** (rebuild-from-cloud invariants):
+/// - `reverted_action_ids = None`, `root_task_is_optimistic = None`,
+///   `autoexecute_override = None`
+fn merged_remote_child_placeholder_conversation_data(
+    placeholder: &AIConversation,
+    cloud_conversation: &AIConversation,
+) -> AgentConversationData {
+    AgentConversationData {
+        // Cloud authoritative.
+        server_conversation_token: cloud_conversation
+            .server_conversation_token()
+            .map(|t| t.as_str().to_string()),
+        conversation_usage_metadata: Some(cloud_conversation.usage_metadata()),
+        forked_from_server_conversation_token: cloud_conversation
+            .forked_from_server_conversation_token()
+            .map(|t| t.as_str().to_string()),
+        artifacts_json: serde_json::to_string(cloud_conversation.artifacts()).ok(),
+        last_event_sequence: cloud_conversation.last_event_sequence(),
+
+        // Placeholder-preferred, cloud fallback.
+        parent_agent_id: placeholder
+            .parent_agent_id()
+            .map(ToString::to_string)
+            .or_else(|| {
+                cloud_conversation
+                    .parent_agent_id()
+                    .map(ToString::to_string)
+            }),
+        agent_name: placeholder
+            .agent_name()
+            .map(ToString::to_string)
+            .or_else(|| cloud_conversation.agent_name().map(ToString::to_string)),
+        orchestration_harness_type: placeholder
+            .orchestration_harness_type()
+            .map(ToString::to_string)
+            .or_else(|| {
+                cloud_conversation
+                    .orchestration_harness_type()
+                    .map(ToString::to_string)
+            }),
+        run_id: placeholder.run_id().or_else(|| cloud_conversation.run_id()),
+
+        // Placeholder authoritative.
+        parent_conversation_id: placeholder
+            .parent_conversation_id()
+            .map(|id| id.to_string()),
+        is_remote_child: placeholder.is_remote_child(),
+        pinned: placeholder.is_pinned(),
+
+        // Reset on merge.
+        reverted_action_ids: None,
+        root_task_is_optimistic: None,
+        autoexecute_override: None,
+    }
+}
+
 /// Returns the key to use in `agent_id_to_conversation_id` for the given
 /// conversation.
 fn agent_id_key(conversation: &AIConversation) -> Option<String> {
     conversation.orchestration_agent_id()
 }
 
+fn agent_id_key_from_persisted_data(conversation_data: &AgentConversationData) -> Option<&str> {
+    conversation_data.run_id.as_deref()
+}
+
 /// Whether an `UpdatedConversationStatus` event represents a restoration
-/// (the conversation was re-loaded into a terminal view; the underlying
+/// (the conversation was re-loaded for a terminal surface; the underlying
 /// `ConversationStatus` did not change) or a real status set, in which case
 /// the previous status is included.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2159,12 +2757,12 @@ pub enum BlocklistAIHistoryEvent {
     /// A new conversation was started.
     StartedNewConversation {
         new_conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     },
 
     CreatedSubtask {
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         task_id: TaskId,
     },
 
@@ -2173,13 +2771,13 @@ pub enum BlocklistAIHistoryEvent {
     UpgradedTask {
         optimistic_id: TaskId,
         server_id: TaskId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     },
 
     AppendedExchange {
         exchange_id: AIAgentExchangeId,
         task_id: TaskId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
         is_hidden: bool,
 
@@ -2189,24 +2787,24 @@ pub enum BlocklistAIHistoryEvent {
 
     ReassignedExchange {
         exchange_id: AIAgentExchangeId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         new_task_id: TaskId,
         new_conversation_id: AIConversationId,
     },
 
-    /// Includes the terminal view's [`EntityId`] so we can disambiguate the source of the event
+    /// Includes the terminal surface's [`EntityId`] so we can disambiguate the source of the event
     /// because this [`BlocklistAIHistoryModel`] is global.
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     UpdatedStreamingExchange {
         exchange_id: AIAgentExchangeId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
         is_hidden: bool,
     },
 
     UpdatedConversationStatus {
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         /// Distinguishes a restoration from a real status set.
         update: ConversationStatusUpdate,
         /// The conversation's status after this update.
@@ -2216,31 +2814,34 @@ pub enum BlocklistAIHistoryEvent {
     /// The active conversation was set to another conversation in the history.
     SetActiveConversation {
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     },
 
-    /// `conversation_id` is no longer marked as active for the given terminal view.
+    /// `conversation_id` is no longer marked as active for the given terminal surface.
     ClearedActiveConversation {
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     },
 
-    ClearedConversationsInTerminalView {
-        terminal_view_id: EntityId,
+    ClearedConversationsForTerminalSurface {
+        terminal_surface_id: EntityId,
         active_conversation_id: Option<AIConversationId>,
+        /// All conversation ids that were live in `terminal_surface_id` before the clear.
+        /// Subscribers (e.g. `QueuedQueryModel`) use this to drop per-conversation state.
+        cleared_conversation_ids: Vec<AIConversationId>,
     },
 
     UpdatedTodoList {
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     },
 
     UpdatedAutoexecuteOverride {
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     },
 
     /// Emitted when a conversation is split into two (on suggest starting new conversation)
     SplitConversation {
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         old_conversation_id: AIConversationId,
         new_conversation_id: AIConversationId,
     },
@@ -2251,7 +2852,7 @@ pub enum BlocklistAIHistoryEvent {
     /// (captured before the in-memory record was dropped) so subscribers can
     /// still act on it without a history-model lookup.
     RemoveConversation {
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
         run_id: Option<String>,
     },
@@ -2260,28 +2861,35 @@ pub enum BlocklistAIHistoryEvent {
     /// `run_id` is captured before the in-memory record was dropped — see
     /// the note on [`Self::RemoveConversation`].
     DeletedConversation {
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
         conversation_title: Option<String>,
         run_id: Option<String>,
     },
 
-    /// Emitted when conversations are restored in a terminal view.
+    /// Emitted when conversations are restored for a terminal surface.
     RestoredConversations {
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversation_ids: Vec<AIConversationId>,
     },
 
     /// Emitted when conversation metadata is updated.
-    /// `terminal_view_id` is None when updating historical-only conversations.
+    /// `terminal_surface_id` is None when updating historical-only conversations.
     UpdatedConversationMetadata {
-        terminal_view_id: Option<EntityId>,
+        terminal_surface_id: Option<EntityId>,
         conversation_id: AIConversationId,
+    },
+
+    /// Emitted when a conversation title changes.
+    UpdatedConversationTitle {
+        terminal_surface_id: Option<EntityId>,
+        conversation_id: AIConversationId,
+        title: String,
     },
 
     /// Emitted when conversation artifacts are updated (plans, PRs, etc.)
     UpdatedConversationArtifacts {
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
         artifact: Artifact,
     },
@@ -2291,21 +2899,21 @@ pub enum BlocklistAIHistoryEvent {
     /// actions for child agent conversations.
     ConversationServerTokenAssigned {
         conversation_id: AIConversationId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
     },
 
-    /// Emitted when a conversation moves between terminal views — i.e. when
+    /// Emitted when a conversation moves between terminal surfaces — i.e. when
     /// `set_active_conversation_id` removes the conversation from the live
-    /// list of one or more `previous_terminal_view_id`s. The previous owners
+    /// list of one or more `previous_terminal_surface_id`s. The previous terminal surfaces
     /// must drop any rendered AI blocks for this conversation so the new
-    /// owner is the sole renderer; otherwise we end up with a transcript
+    /// terminal surface is the sole renderer; otherwise we end up with a transcript
     /// split across panes (some blocks in the old view, new exchanges in the
-    /// new view). The `terminal_view_id()` accessor returns the previous
-    /// owner so existing per-view event filters do the right thing.
-    ConversationOwnershipTransferred {
+    /// new view). The `terminal_surface_id()` accessor returns the previous
+    /// terminal surface so existing per-view event filters do the right thing.
+    ConversationTransferredBetweenTerminalSurfaces {
         conversation_id: AIConversationId,
-        previous_terminal_view_id: EntityId,
-        new_terminal_view_id: EntityId,
+        previous_terminal_surface_id: EntityId,
+        new_terminal_surface_id: EntityId,
     },
 
     /// Links an executor-minted request to a freshly-created
@@ -2315,87 +2923,134 @@ pub enum BlocklistAIHistoryEvent {
         conversation_id: AIConversationId,
     },
 
-    /// Emitted when a conversation's orchestration config is updated reactively
-    /// from an incoming `OrchestrationConfigSnapshot` message.
+    /// Emitted when a conversation's orchestration config is updated
+    /// (live wire snapshot, user edit, or restore-hydration).
+    /// Consumers that perform UI side effects should gate on `!from_restore`.
     OrchestrationConfigUpdated {
         conversation_id: AIConversationId,
+        from_restore: bool,
+    },
+
+    /// Emitted when a conversation's `conversation_usage_metadata` is updated
+    /// (for example after a `StreamFinished` event). Subscribers that derive
+    /// data from cross-conversation usage — e.g. the orchestration credit
+    /// rollup in the agent-mode footer — can listen for this to re-render
+    /// when a descendant's credits change.
+    ConversationUsageMetadataUpdated {
+        conversation_id: AIConversationId,
+    },
+
+    /// Emitted when a sharer-owned conversation establishes a local
+    /// shared session.
+    LocalSharedSessionEstablished {
+        conversation_id: AIConversationId,
+        session_id: session_sharing_protocol::common::SessionId,
     },
 }
 
 impl BlocklistAIHistoryEvent {
-    /// Returns the terminal view ID associated with this event, if any.
+    /// Returns the terminal surface ID associated with this event, if any.
     /// Returns `None` for events that apply globally (e.g., historical conversation metadata updates).
-    pub fn terminal_view_id(&self) -> Option<EntityId> {
+    pub fn terminal_surface_id(&self) -> Option<EntityId> {
         match self {
             BlocklistAIHistoryEvent::StartedNewConversation {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::AppendedExchange {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::UpdatedStreamingExchange {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::SetActiveConversation {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::ClearedActiveConversation {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
-            | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
-                terminal_view_id,
+            | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                terminal_surface_id,
                 ..
             }
             | BlocklistAIHistoryEvent::ReassignedExchange {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::UpdatedTodoList {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::SplitConversation {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::RemoveConversation {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::DeletedConversation {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::CreatedSubtask {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::RestoredConversations {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::UpgradedTask {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
-            | BlocklistAIHistoryEvent::ConversationOwnershipTransferred {
-                previous_terminal_view_id: terminal_view_id,
+            | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces {
+                previous_terminal_surface_id: terminal_surface_id,
                 ..
             }
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
-                terminal_view_id, ..
-            } => Some(*terminal_view_id),
+                terminal_surface_id,
+                ..
+            } => Some(*terminal_surface_id),
             // UpdatedConversationMetadata can have None when updating historical-only conversations
             BlocklistAIHistoryEvent::UpdatedConversationMetadata {
-                terminal_view_id, ..
-            } => *terminal_view_id,
+                terminal_surface_id,
+                ..
+            }
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle {
+                terminal_surface_id,
+                ..
+            } => *terminal_surface_id,
             // NewConversationRequestComplete is executor-scoped and has no
-            // terminal_view_id.
+            // terminal_surface_id.
             BlocklistAIHistoryEvent::NewConversationRequestComplete { .. } => None,
             // OrchestrationConfigUpdated is conversation-scoped and has no
-            // terminal_view_id.
+            // terminal_surface_id.
             BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. } => None,
+            // ConversationUsageMetadataUpdated is conversation-scoped and
+            // has no terminal_surface_id. Cross-pane consumers (e.g. the
+            // orchestrator footer reading descendant credits) can't be
+            // disambiguated by a single terminal surface pane.
+            BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => None,
+            // Conversation-scoped; subscribers resolve the owning view via conversation_id.
+            BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => None,
         }
     }
 }
@@ -2463,7 +3118,7 @@ fn ai_exchange_to_query_history(
     value: &AIAgentExchange,
     history_order: HistoryOrder,
 ) -> Option<AIQueryHistory> {
-    let query = value.input.iter().find_map(AIAgentInput::user_query)?;
+    let query = value.input.iter().find_map(AIAgentInput::display_query)?;
 
     Some(AIQueryHistory {
         query_text: query,
@@ -2543,6 +3198,113 @@ impl From<&AIAgentOutputStatus> for AIQueryHistoryOutputStatus {
                 FinishedAIAgentOutput::Success { .. } => Self::Completed,
             },
         }
+    }
+}
+
+/// Mirrors the server's `isClientToolCall`: true for tool calls the client
+/// executes. Server and subagent tool calls are managed by the server's
+/// runtime and must not be reconciled — notably the `RunPrimaryAgent`
+/// bootstrap call at the start of every root task is unresolved by design (it
+/// anchors the primary agent on the server's run stack), and pairing it with a
+/// synthesized `Cancel` would pop the primary agent on the fork's next
+/// request, breaking the conversation.
+fn is_client_tool_call(tool_call: &warp_multi_agent_api::message::ToolCall) -> bool {
+    !matches!(
+        tool_call.tool,
+        None | Some(Tool::Server(_)) | Some(Tool::Subagent(_))
+    )
+}
+
+/// Reconciles client `tool_call`s in the fork-point exchange
+/// (`fork_point_message_ids`, the task's last retained exchange) whose
+/// `tool_call_result` was dropped by the truncation: a call and its result
+/// carry different `request_id`s, so they land in different exchanges and the
+/// fork point separates them. An unpaired `tool_use` fails the fork's next
+/// request with an Anthropic `400 invalid_request_error`.
+///
+/// Each severed call gets its real result pulled forward from
+/// `source_task_messages` (the task's pre-truncation history), or a
+/// synthesized `Cancel` when none exists (a genuinely in-flight call). The
+/// result is inserted immediately after its `tool_call`. Tool calls outside
+/// the fork-point exchange were dangling in the source too, and are left
+/// untouched so the fork reproduces the source history faithfully.
+fn reconcile_dangling_tool_calls_in_forked_task(
+    task: &mut warp_multi_agent_api::Task,
+    source_task_messages: &[warp_multi_agent_api::Message],
+    fork_point_message_ids: &HashSet<MessageId>,
+) {
+    let fork_point_message_ids: HashSet<&str> =
+        fork_point_message_ids.iter().map(|id| &**id).collect();
+    let resolved_tool_call_ids: HashSet<&str> = task
+        .messages
+        .iter()
+        .filter_map(|m| m.tool_call_result().map(|r| r.tool_call_id.as_str()))
+        .collect();
+
+    // Collect each dangling tool_call's position, id, and request_id up front so
+    // we don't mutate the message list while iterating it.
+    let dangling: Vec<(usize, String, String)> = task
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, message)| {
+            if !fork_point_message_ids.contains(message.id.as_str()) {
+                return None;
+            }
+            let tool_call = message.tool_call()?;
+            (is_client_tool_call(tool_call)
+                && !resolved_tool_call_ids.contains(tool_call.tool_call_id.as_str()))
+            .then(|| {
+                (
+                    idx,
+                    tool_call.tool_call_id.clone(),
+                    message.request_id.clone(),
+                )
+            })
+        })
+        .collect();
+
+    // Common case: nothing dangling, so skip scanning the source history.
+    if dangling.is_empty() {
+        return;
+    }
+
+    // Real results from the source history, keyed by tool_call_id, so a dropped
+    // result can be pulled forward.
+    let source_results_by_tool_call_id: HashMap<&str, &warp_multi_agent_api::Message> =
+        source_task_messages
+            .iter()
+            .filter_map(|m| m.tool_call_result().map(|r| (r.tool_call_id.as_str(), m)))
+            .collect();
+
+    // Insert from the back so earlier indices remain valid as we splice.
+    for (idx, tool_call_id, request_id) in dangling.into_iter().rev() {
+        let reconciled = source_results_by_tool_call_id
+            .get(tool_call_id.as_str())
+            .map(|real| (*real).clone())
+            .unwrap_or_else(|| {
+                // Synthesized `Cancel` carries the call's `request_id` so it
+                // groups into the same exchange as its `tool_call` on restore.
+                warp_multi_agent_api::Message {
+                    id: Uuid::new_v4().to_string(),
+                    task_id: task.id.clone(),
+                    server_message_data: String::new(),
+                    citations: vec![],
+                    fetched_memories: vec![],
+                    message: Some(warp_multi_agent_api::message::Message::ToolCallResult(
+                        warp_multi_agent_api::message::ToolCallResult {
+                            tool_call_id: tool_call_id.clone(),
+                            context: None,
+                            result: Some(
+                                warp_multi_agent_api::message::tool_call_result::Result::Cancel(()),
+                            ),
+                        },
+                    )),
+                    request_id: request_id.clone(),
+                    timestamp: None,
+                }
+            });
+        task.messages.insert(idx + 1, reconciled);
     }
 }
 

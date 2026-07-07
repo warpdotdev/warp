@@ -1,12 +1,10 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use super::*;
-use crate::{
-    elements::Empty, platform::WindowStyle, App, AppContext, Element, Entity, ModelHandle,
-    TypedActionView, View,
-};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use crate::elements::Empty;
+use crate::platform::WindowStyle;
+use crate::{App, AppContext, Element, Entity, ModelHandle, TypedActionView, View};
 
 #[derive(Default)]
 struct Model {

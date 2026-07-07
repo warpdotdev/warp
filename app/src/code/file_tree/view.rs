@@ -1,3 +1,8 @@
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use editing::sort_entries_for_file_tree;
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
@@ -7,70 +12,59 @@ use repo_metadata::file_tree_store::{
     FileTreeDirectoryEntryState, FileTreeEntryState, FileTreeFileMetadata,
 };
 use repo_metadata::local_model::IndexedRepoState;
-use repo_metadata::FileTreeEntry;
-use repo_metadata::RepoMetadataModel;
-use std::collections::{HashMap, HashSet};
-use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{FileTreeEntry, RepoMetadataModel};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warp_core::{send_telemetry_from_ctx, HostId};
 use warp_util::path::LineAndColumnArg;
 use warp_util::standardized_path::StandardizedPath;
-
-use repo_metadata::repositories::DetectedRepositories;
-use warp_core::send_telemetry_from_ctx;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    AcceptedByDropTarget, Align, Clipped, ConstrainedBox, Container, Dismiss, Draggable,
-    DraggableState, Empty, FormattedTextElement, MainAxisAlignment, Percentage, Rect, SavePosition,
-    Scrollable, Shrinkable,
+    AcceptedByDropTarget, Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
+    CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Flex, FormattedTextElement,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Percentage, Rect, SavePosition, ScrollStateHandle,
+    Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList,
+    UniformListState,
 };
-use warpui::fonts::Style;
+use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::text_layout::TextAlignment;
-use warpui::{clipboard::ClipboardContent, id, ViewContext, WeakViewHandle};
 use warpui::{
-    elements::{
-        ChildAnchor, ChildView, CrossAxisAlignment, Flex, Hoverable, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        ScrollStateHandle, ScrollableElement, ScrollbarWidth, Stack, Text, UniformList,
-        UniformListState,
-    },
-    fonts::{Properties, Weight},
-    AppContext, Element, Entity, EventContext, SingletonEntity as _, TypedActionView, View,
-    ViewHandle,
+    id, AppContext, BlurContext, Element, Entity, EventContext, ModelHandle, SingletonEntity as _,
+    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
 };
-use warpui::{BlurContext, ModelHandle};
 
+use crate::appearance::Appearance;
 use crate::code::active_file::{ActiveFileEvent, ActiveFileModel};
-use crate::code::buffer_location::FileLocation;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, TextOptions};
+use crate::menu::{Menu, MenuItem, MenuItemFields};
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
+use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::input::InputDropTargetData;
 use crate::terminal::view::{TerminalDropTargetData, TerminalView};
+use crate::ui_components::icons::Icon;
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
-use crate::util::openable_file_type::{is_file_content_binary, EditorLayout, FileTarget};
+use crate::util::openable_file_type::{
+    is_file_content_binary, is_jupyter_notebook_file, is_markdown_file, EditorLayout, FileTarget,
+};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{
     resolve_file_target_to_open_in_warp, resolve_file_target_with_editor_choice,
 };
-use crate::{
-    appearance::Appearance,
-    menu::{Menu, MenuItem, MenuItemFields},
-    server::telemetry::TelemetryEvent,
-    ui_components::icons::Icon,
-    view_components::DismissibleToast,
-    workspace::ToastStack,
-};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::{color::internal_colors, Fill};
-use warp_core::HostId;
 
 mod editing;
 mod render;
+
+use crate::settings::{CodeSettings, CodeSettingsChangedEvent};
 
 const REMOTE_TEXT: &str = "The Project Explorer requires access to your local workspace, which isn’t supported in remote sessions.";
 const DISABLED_TEXT: &str = "The Project Explorer requires access to your local workspace. Open a new session or navigate to an active session to view.";
@@ -294,6 +288,8 @@ pub struct FileTreeView {
     /// the target is selected by the user or when the target root stops
     /// being displayed.
     pending_focus_target: Option<PendingFocusTarget>,
+    /// Whether to show hidden files (dotfiles) in the file tree.
+    show_hidden_files: bool,
 }
 
 /// Directory the file tree wants to focus once its entry becomes available.
@@ -355,6 +351,8 @@ impl FileTreeView {
         if is_active {
             self.subscribe_to_repository_metadata(ctx);
             self.subscribe_to_active_file_model(ctx);
+            self.subscribe_to_code_settings(ctx);
+            self.show_hidden_files = *CodeSettings::as_ref(ctx).show_hidden_files;
 
             // Catch up on any repository/file changes that happened while inactive.
             // Skip remote-backed roots — their data comes from server pushes,
@@ -388,6 +386,7 @@ impl FileTreeView {
         } else {
             ctx.unsubscribe_to_model(&self.repository_metadata_model);
             self.unsubscribe_from_active_file_model(ctx);
+            self.unsubscribe_from_code_settings(ctx);
             let repository_metadata_model = self.repository_metadata_model.clone();
             let paths: Vec<_> = self.registered_lazy_loaded_paths.drain().collect();
             repository_metadata_model.update(ctx, move |model: &mut RepoMetadataModel, ctx| {
@@ -502,8 +501,7 @@ impl FileTreeView {
         event: &repo_metadata::RepoMetadataEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        use repo_metadata::RepoMetadataEvent;
-        use repo_metadata::RepositoryIdentifier;
+        use repo_metadata::{RepoMetadataEvent, RepositoryIdentifier};
         match event {
             RepoMetadataEvent::RepositoryUpdated {
                 id: RepositoryIdentifier::Local(std_path),
@@ -535,6 +533,7 @@ impl FileTreeView {
             }
             RepoMetadataEvent::FileTreeEntryUpdated {
                 id: RepositoryIdentifier::Local(std_path),
+                ..
             } => {
                 // Find root directories whose backing model entry matches this path.
                 let root_paths: Vec<StandardizedPath> = self
@@ -595,6 +594,7 @@ impl FileTreeView {
             }
             RepoMetadataEvent::FileTreeEntryUpdated {
                 id: RepositoryIdentifier::Remote(remote_id),
+                ..
             } => {
                 let repo_path = remote_id.path.clone();
                 let id = RepositoryIdentifier::Remote(remote_id.clone());
@@ -624,6 +624,7 @@ impl FileTreeView {
             }
             RepoMetadataEvent::FileTreeUpdated { .. }
             | RepoMetadataEvent::RepositoryRemoved { .. }
+            | RepoMetadataEvent::StandingQueryResultsUpdated { .. }
             | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
             | RepoMetadataEvent::IncrementalUpdateReady { .. } => {}
         }
@@ -647,6 +648,20 @@ impl FileTreeView {
         };
 
         ctx.unsubscribe_to_model(active_file_model);
+    }
+
+    fn subscribe_to_code_settings(&self, ctx: &mut ViewContext<Self>) {
+        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |me, _, event, ctx| {
+            if let CodeSettingsChangedEvent::ShowHiddenFiles { .. } = event {
+                me.show_hidden_files = *CodeSettings::as_ref(ctx).show_hidden_files;
+                me.rebuild_flattened_items();
+                ctx.notify();
+            }
+        });
+    }
+
+    fn unsubscribe_from_code_settings(&self, ctx: &mut ViewContext<Self>) {
+        ctx.unsubscribe_to_model(&CodeSettings::handle(ctx));
     }
 
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
@@ -710,6 +725,7 @@ impl FileTreeView {
             #[cfg(feature = "local_fs")]
             registered_lazy_loaded_paths: HashSet::new(),
             pending_focus_target: None,
+            show_hidden_files: *CodeSettings::as_ref(ctx).show_hidden_files,
         };
 
         picker
@@ -739,9 +755,17 @@ impl FileTreeView {
     fn handle_code_event(&mut self, event: &ActiveFileEvent, ctx: &mut ViewContext<Self>) {
         // When a file is focused, scroll to show it in the file tree
         match event {
-            ActiveFileEvent::ActiveFileChanged { file_info } => {
-                let Ok(file_std) = StandardizedPath::try_from_local(file_info) else {
-                    return;
+            ActiveFileEvent::ActiveFileChanged { location } => {
+                let file_std = match location {
+                    crate::code::buffer_location::LocalOrRemotePath::Local(path) => {
+                        match StandardizedPath::try_from_local(path) {
+                            Ok(std_path) => std_path,
+                            Err(_) => return,
+                        }
+                    }
+                    crate::code::buffer_location::LocalOrRemotePath::Remote(remote) => {
+                        remote.path.clone()
+                    }
                 };
                 // Prefer the currently-selected item's root if the file lives under it;
                 // otherwise fall back to the deepest matching root directory.
@@ -1282,8 +1306,9 @@ impl FileTreeView {
                     remote_host_id: None,
                 });
             let root_local = root_path.to_local_path_lossy();
-            if let Some(repo_root) =
-                DetectedRepositories::as_ref(ctx).get_root_for_path(&root_local)
+            if let Some(repo_root) = DetectedRepositories::as_ref(ctx)
+                .get_root_for_path(&LocalOrRemotePath::Local(root_local))
+                .and_then(|r| PathBuf::try_from(r).ok())
             {
                 let repo_entry = {
                     let repo_metadata = RepoMetadataModel::as_ref(ctx);
@@ -1412,14 +1437,6 @@ impl FileTreeView {
                 .update(ctx, |model: &mut RepoMetadataModel, ctx| {
                     model.load_directory(&backing_root, &dir_path, ctx)
                 });
-        if matches!(
-            load_result,
-            Err(repo_metadata::RepoMetadataError::BuildTree(
-                repo_metadata::BuildTreeError::ExceededMaxFileLimit,
-            ))
-        ) {
-            Self::show_exceeded_file_limit_toast(ctx);
-        }
         if let Err(error) = load_result {
             log::warn!("Failed to load directory {dir_path}: {error}");
         }
@@ -1553,14 +1570,6 @@ impl FileTreeView {
                 .update(ctx, |model: &mut RepoMetadataModel, ctx| {
                     model.index_lazy_loaded_path(path, ctx)
                 });
-            if matches!(
-                index_result,
-                Err(repo_metadata::RepoMetadataError::BuildTree(
-                    repo_metadata::BuildTreeError::ExceededMaxFileLimit,
-                ))
-            ) {
-                Self::show_exceeded_file_limit_toast(ctx);
-            }
             if let Err(error) = &index_result {
                 log::warn!("Failed to index lazy-loaded path {path}: {error}");
             }
@@ -1590,17 +1599,6 @@ impl FileTreeView {
 
     fn create_empty_entry(path: &StandardizedPath) -> FileTreeEntry {
         FileTreeEntry::new_for_directory(Arc::new(path.clone()))
-    }
-
-    fn show_exceeded_file_limit_toast(ctx: &mut ViewContext<Self>) {
-        let window_id = ctx.window_id();
-        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from(
-                "Folder has too many files to display in the file explorer.",
-            ))
-            .with_object_id("file_tree_exceeded_file_limit".to_string());
-            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
-        });
     }
 
     /// Rebuilds the flattened items list for a single root directory only,
@@ -1677,13 +1675,19 @@ impl FileTreeView {
                 root_dir.items = items;
             }
 
-            // If we found the selection in this root, update selected_item
-            if let (Some(index), Some(id)) = (new_index, id_to_preserve.as_ref()) {
+            // If we found the selection in this root, update selected_item.
+            // If the selection was expected but not found (e.g. filtered out as hidden),
+            // clear selected_item to avoid stale references.
+            if let Some(id) = id_to_preserve.as_ref() {
                 if id.root == root_path {
-                    self.selected_item = Some(FileTreeIdentifier {
-                        root: root_path,
-                        index,
-                    });
+                    if let Some(index) = new_index {
+                        self.selected_item = Some(FileTreeIdentifier {
+                            root: root_path,
+                            index,
+                        });
+                    } else if selected_item_path.is_some() {
+                        self.selected_item = None;
+                    }
                 }
             }
 
@@ -1710,6 +1714,17 @@ impl FileTreeView {
 
         if path_of_removed_item == Some(current_path) {
             return (None, true);
+        }
+
+        // Filter hidden files/directories when show_hidden_files is disabled.
+        // Only filter descendants (depth > 0), not the root entry itself,
+        // so that hidden workspace directories (e.g. ~/.config) are still shown.
+        if !self.show_hidden_files && depth > 0 {
+            if let Some(name) = current_path.file_name() {
+                if name.starts_with('.') {
+                    return (selected_item_index, removed_item);
+                }
+            }
         }
 
         if path_of_selected_item == Some(current_path) {
@@ -2225,7 +2240,7 @@ impl FileTreeView {
         );
 
         ctx.emit(FileTreeEvent::OpenFile {
-            path: FileLocation::Local(path.to_path_buf()),
+            path: LocalOrRemotePath::Local(path.to_path_buf()),
             target,
             line_col: None,
         });
@@ -2254,9 +2269,32 @@ impl FileTreeView {
                             host_id.clone(),
                             (*metadata.path).clone(),
                         );
+                        let path_str = metadata.path.as_str();
+                        let remote_file_path = Path::new(path_str);
+                        let target = if is_jupyter_notebook_file(remote_file_path)
+                            && FeatureFlag::JupyterNotebookRendering.is_enabled()
+                        {
+                            FileTarget::MarkdownViewer(EditorLayout::SplitPane)
+                        } else if is_markdown_file(remote_file_path) {
+                            #[cfg(feature = "local_fs")]
+                            {
+                                let prefer_md = *EditorSettings::as_ref(ctx).prefer_markdown_viewer;
+                                if prefer_md {
+                                    FileTarget::MarkdownViewer(EditorLayout::SplitPane)
+                                } else {
+                                    FileTarget::CodeEditor(EditorLayout::SplitPane)
+                                }
+                            }
+                            #[cfg(not(feature = "local_fs"))]
+                            {
+                                FileTarget::CodeEditor(EditorLayout::SplitPane)
+                            }
+                        } else {
+                            FileTarget::CodeEditor(EditorLayout::SplitPane)
+                        };
                         ctx.emit(FileTreeEvent::OpenFile {
-                            path: FileLocation::Remote(remote_path),
-                            target: FileTarget::CodeEditor(EditorLayout::SplitPane),
+                            path: LocalOrRemotePath::Remote(remote_path),
+                            target,
                             line_col: None,
                         });
                     }
@@ -2884,7 +2922,7 @@ pub enum FileTreeEvent {
     AttachAsContext { path: PathBuf },
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     OpenFile {
-        path: FileLocation,
+        path: LocalOrRemotePath,
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },

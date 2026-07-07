@@ -7,7 +7,8 @@ cfg_if::cfg_if! {
 }
 use std::marker::PhantomData;
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Struct to pass serialized function input and output, encapsulating the details of the actual

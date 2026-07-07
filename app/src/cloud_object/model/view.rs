@@ -1,27 +1,21 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use chrono::{Duration, Utc};
 use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
-
-use crate::{
-    auth::{AuthStateProvider, UserUid},
-    cloud_object::{CloudObject, CloudObjectLocation, Space},
-    drive::{
-        folders::CloudFolder,
-        sharing::{ContentEditability, SharingAccessLevel},
-    },
-    safe_info,
-    server::{
-        cloud_objects::update_manager::{
-            ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ObjectUid, SyncId},
-    },
-    workspaces::user_profiles::UserProfiles,
-};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::persistence::{CloudModel, CloudModelEvent};
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::cloud_object::{CloudObject, CloudObjectLocation, Space};
+use crate::drive::folders::CloudFolder;
+use crate::drive::sharing::{ContentEditability, SharingAccessLevel};
+use crate::safe_info;
+use crate::server::cloud_objects::update_manager::{
+    ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
+};
+use crate::server::ids::{ObjectUid, SyncId};
+use crate::workspaces::user_profiles::UserProfiles;
 
 pub const EDITOR_TIMEOUT_DURATION_MINUTES: i64 = 15;
 
@@ -309,7 +303,12 @@ impl CloudViewModel {
         }
     }
 
-    fn handle_cloud_model_event(&mut self, event: &CloudModelEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_cloud_model_event(
+        &mut self,
+        _: ModelHandle<CloudModel>,
+        event: &CloudModelEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             CloudModelEvent::ObjectUpdated { type_and_id, .. }
             | CloudModelEvent::ObjectTrashed { type_and_id, .. }
@@ -370,6 +369,7 @@ impl CloudViewModel {
 
     fn handle_update_manager_event(
         &mut self,
+        _: ModelHandle<UpdateManager>,
         event: &UpdateManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {

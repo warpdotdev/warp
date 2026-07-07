@@ -1,3 +1,8 @@
+use ordered_float::OrderedFloat;
+use warpui::elements::{ConstrainedBox, Container, Flex, ParentElement, Text};
+use warpui::fonts::{Properties, Weight};
+use warpui::{AppContext, Element, SingletonEntity};
+
 use crate::appearance::Appearance;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::render_util::render_search_item_icon;
@@ -5,10 +10,6 @@ use crate::search::item::{IconLocation, SearchItem as SearchItemTrait};
 use crate::search::result_renderer::ItemHighlightState;
 use crate::session_management::TabNavigationData;
 use crate::ui_components::icons::Icon;
-use ordered_float::OrderedFloat;
-use warpui::elements::{ConstrainedBox, Container, Flex, ParentElement, Text};
-use warpui::fonts::{Properties, Weight};
-use warpui::{AppContext, Element, SingletonEntity};
 
 /// These items appear in the ctrl-tab palette only, not the main command palette.
 /// Scoring matches against queries is not supported since only ranking by recency is needed.
@@ -35,7 +36,13 @@ impl SearchItemTrait for SearchItem {
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let color = highlight_state.icon_fill(appearance).into_solid();
+        let color = if let Some(tab_color) = self.tab.color {
+            tab_color
+                .to_ansi_color(&appearance.theme().terminal_colors().normal)
+                .into()
+        } else {
+            highlight_state.icon_fill(appearance).into_solid()
+        };
         render_search_item_icon(appearance, Icon::Navigation, color, highlight_state)
     }
 
@@ -53,7 +60,7 @@ impl SearchItemTrait for SearchItem {
         let appearance = Appearance::as_ref(app);
 
         let title_text = Text::new_inline(
-            format!("[Tab {}] {}", self.tab.tab_index, self.tab.title),
+            format!("{} · Tab {}", self.tab.title, self.tab.tab_index),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )

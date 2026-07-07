@@ -16,6 +16,7 @@ use base64::Engine as _;
 use bounded_vec_deque::BoundedVecDeque;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
+use tab_stops::TabStops;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -24,6 +25,7 @@ use warp_terminal::model::grid::cell;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::image_cache::{resize_dimensions, FitType};
 
+use super::{AbsolutePoint, FullGridClearBehavior, GridHandler, PerformResetGridChecks, TermMode};
 use crate::server::telemetry::ImageProtocol;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
@@ -43,10 +45,6 @@ use crate::terminal::model::kitty::{
 use crate::terminal::model::selection::ScrollDelta;
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::{ClipboardType, SizeInfo};
-
-use super::{AbsolutePoint, FullGridClearBehavior, GridHandler, PerformResetGridChecks, TermMode};
-
-use tab_stops::TabStops;
 
 const MAX_IMAGE_CELL_HEIGHT: u32 = 255;
 
@@ -177,9 +175,11 @@ impl ansi::Handler for GridHandler {
     }
 
     fn input(&mut self, c: char) {
-        // We disable Reset Grid checks in unit tests, as they are not designed to test
-        // PTY integration. `#[cfg(test)]` only applies to unit tests, not integration tests.
-        #[cfg(all(windows, not(test)))]
+        // We disable Reset Grid checks in tests, as they are not designed to test
+        // PTY integration. `not(test)` covers this crate's own unit tests, and
+        // `not(feature = "test-util")` covers other crates (e.g. `warp_tui`) that
+        // build real terminal models against `warp`'s test helpers.
+        #[cfg(all(windows, not(test), not(feature = "test-util")))]
         if let ResetGridChecks::Enabled { received_osc } = self.ansi_handler_state.reset_grid_checks
         {
             debug_assert!(
@@ -1213,7 +1213,7 @@ impl ansi::Handler for GridHandler {
         let _ = write!(writer, "\x1b[8;{};{}t", self.visible_rows(), self.columns());
     }
 
-    fn precmd(&mut self, _: PrecmdValue) {
+    fn precmd_with_completion_metadata(&mut self, _: PrecmdValue) {
         unreachable!("Precmd hook is handled at block layer")
     }
 

@@ -1,12 +1,12 @@
-use super::*;
-use crate::fonts::Properties;
-
-use crate::fonts::{collect_glyph_indices, collect_line_caret_position_starts, init_fonts};
-use crate::platform::FontDB as _;
-use crate::text_layout::DEFAULT_TOP_BOTTOM_RATIO;
-
 use anyhow::Result;
 use rand::random;
+
+use super::*;
+use crate::fonts::{
+    collect_glyph_indices, collect_line_caret_position_starts, init_fonts, Properties,
+};
+use crate::platform::FontDB as _;
+use crate::text_layout::DEFAULT_TOP_BOTTOM_RATIO;
 
 pub(crate) fn collect_line_caret_position_pairs(line: &Line) -> Vec<(usize, usize)> {
     line.caret_positions

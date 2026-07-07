@@ -1,10 +1,5 @@
-use std::path::{Path, PathBuf};
-
-use warpui::{
-    async_assert,
-    integration::{AssertionCallback, AssertionOutcome, TestStep},
-    App, ViewHandle, WindowId,
-};
+use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
+use warpui::{async_assert, App, ViewHandle, WindowId};
 
 use crate::code_review::code_review_view::{CodeReviewView, CodeReviewVisibleAnchorForTest};
 
@@ -52,7 +47,7 @@ pub fn assert_code_review_loaded() -> AssertionCallback {
 }
 
 pub fn assert_code_review_anchor(
-    expected_file_path: impl Into<PathBuf>,
+    expected_file_path: impl Into<String>,
     expected_text: impl Into<String>,
     expected_line_number: Option<usize>,
 ) -> AssertionCallback {
@@ -74,7 +69,7 @@ pub fn assert_code_review_anchor(
 
             assert_anchor(
                 &anchor,
-                expected_file_path.as_path(),
+                &expected_file_path,
                 &expected_text,
                 expected_line_number,
             )
@@ -82,7 +77,7 @@ pub fn assert_code_review_anchor(
     })
 }
 
-pub fn scroll_code_review_to_line(file_path: impl Into<PathBuf>, line_number: usize) -> TestStep {
+pub fn scroll_code_review_to_line(file_path: impl Into<String>, line_number: usize) -> TestStep {
     let file_path = file_path.into();
 
     TestStep::new("Scroll code review to a file line").with_action(move |app, window_id, _| {
@@ -94,7 +89,7 @@ pub fn scroll_code_review_to_line(file_path: impl Into<PathBuf>, line_number: us
 }
 
 pub fn assert_code_review_line_text(
-    expected_file_path: impl Into<PathBuf>,
+    expected_file_path: impl Into<String>,
     line_number: usize,
     expected_text: impl Into<String>,
 ) -> AssertionCallback {
@@ -109,18 +104,16 @@ pub fn assert_code_review_line_text(
         };
         code_review_view.read(app, |code_review_view, ctx| {
             let Some(line_text) =
-                code_review_view.line_text_for_test(expected_file_path.as_path(), line_number, ctx)
+                code_review_view.line_text_for_test(&expected_file_path, line_number, ctx)
             else {
                 return AssertionOutcome::failure(format!(
-                    "expected code review line {line_number} for {:?} to be available",
-                    expected_file_path
+                    "expected code review line {line_number} for {expected_file_path:?} to be available",
                 ));
             };
 
             if line_text != expected_text {
                 return AssertionOutcome::failure(format!(
-                    "expected line {line_number} in {:?} to be {expected_text:?}, got {line_text:?}",
-                    expected_file_path
+                    "expected line {line_number} in {expected_file_path:?} to be {expected_text:?}, got {line_text:?}",
                 ));
             }
 
@@ -131,14 +124,14 @@ pub fn assert_code_review_line_text(
 
 fn assert_anchor(
     anchor: &CodeReviewVisibleAnchorForTest,
-    expected_file_path: &Path,
+    expected_file_path: &str,
     expected_text: &str,
     expected_line_number: Option<usize>,
 ) -> AssertionOutcome {
     if anchor.file_path != expected_file_path {
         return AssertionOutcome::failure(format!(
-            "expected anchor file to be {:?}, got {:?}",
-            expected_file_path, anchor.file_path
+            "expected anchor file to be {expected_file_path:?}, got {:?}",
+            anchor.file_path
         ));
     }
     if anchor.line_text != expected_text {
@@ -159,7 +152,7 @@ fn assert_anchor(
     AssertionOutcome::Success
 }
 
-pub fn scroll_code_review_to_header(file_path: impl Into<PathBuf>) -> TestStep {
+pub fn scroll_code_review_to_header(file_path: impl Into<String>) -> TestStep {
     let file_path = file_path.into();
 
     TestStep::new("Scroll code review to header region").with_action(move |app, window_id, _| {
@@ -170,7 +163,7 @@ pub fn scroll_code_review_to_header(file_path: impl Into<PathBuf>) -> TestStep {
     })
 }
 
-pub fn scroll_code_review_to_footer(file_path: impl Into<PathBuf>) -> TestStep {
+pub fn scroll_code_review_to_footer(file_path: impl Into<String>) -> TestStep {
     let file_path = file_path.into();
 
     TestStep::new("Scroll code review to footer region").with_action(move |app, window_id, _| {
@@ -182,7 +175,7 @@ pub fn scroll_code_review_to_footer(file_path: impl Into<PathBuf>) -> TestStep {
 }
 
 pub fn scroll_code_review_to_deleted_range(
-    file_path: impl Into<PathBuf>,
+    file_path: impl Into<String>,
     near_line: usize,
 ) -> TestStep {
     let file_path = file_path.into();

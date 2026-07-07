@@ -1,10 +1,11 @@
-use crate::coding_entrypoints::glowing_editor::{GlowingEditor, GlowingEditorEvent};
-use crate::TelemetryEvent;
 use warp_core::send_telemetry_from_ctx;
+use warpui::elements::{ChildView, Flex, ParentElement as _};
 use warpui::{
-    elements::{ChildView, Flex, ParentElement as _},
     AppContext, Element, Entity, FocusContext, TypedActionView, View, ViewContext, ViewHandle,
 };
+
+use crate::coding_entrypoints::glowing_editor::{GlowingEditor, GlowingEditorEvent};
+use crate::TelemetryEvent;
 
 pub struct CloneRepoView {
     editor: ViewHandle<GlowingEditor>,

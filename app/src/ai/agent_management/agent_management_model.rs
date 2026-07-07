@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
 use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
-
-use crate::settings::AISettings;
 
 use crate::ai::active_agent_views_model::{ActiveAgentViewsEvent, ActiveAgentViewsModel};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -12,8 +11,9 @@ use crate::ai::agent_management::notifications::{
     NotificationSourceAgent,
 };
 use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, ConversationStatusUpdate};
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, ConversationStatusUpdate, QueuedQueryModel};
 use crate::server::telemetry::TelemetryEvent;
+use crate::settings::AISettings;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
@@ -21,7 +21,6 @@ use crate::terminal::{CLIAgent, TerminalView};
 use crate::workspace::util::is_terminal_view_in_same_tab;
 use crate::workspace::{Workspace, WorkspaceRegistry};
 use crate::BlocklistAIHistoryModel;
-use warp_core::send_telemetry_from_ctx;
 
 /// Singleton model responsible for triggering in-app notifications on blocking conversation
 /// status updates and tracking/storing these notifications for the notifications mailbox.
@@ -43,17 +42,17 @@ impl SingletonEntity for AgentNotificationsModel {}
 impl AgentNotificationsModel {
     pub(crate) fn new(ctx: &mut ModelContext<Self>) -> Self {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_model, move |me, event, ctx| {
+        ctx.subscribe_to_model(&history_model, move |me, _, event, ctx| {
             me.handle_history_event(event, ctx);
         });
 
         let cli_sessions_model = CLIAgentSessionsModel::handle(ctx);
-        ctx.subscribe_to_model(&cli_sessions_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&cli_sessions_model, |me, _, event, ctx| {
             me.handle_cli_agent_session_event(event, ctx);
         });
 
         let active_views_model = ActiveAgentViewsModel::handle(ctx);
-        ctx.subscribe_to_model(&active_views_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&active_views_model, |me, _, event, ctx| {
             me.handle_active_agent_views_changed(event, ctx);
         });
 
@@ -247,7 +246,7 @@ impl AgentNotificationsModel {
         }
 
         let BlocklistAIHistoryEvent::UpdatedConversationStatus {
-            terminal_view_id,
+            terminal_surface_id,
             conversation_id,
             // We shouldn't trigger toasts when restoring conversations on startup.
             update: ConversationStatusUpdate::Changed { .. },
@@ -262,9 +261,7 @@ impl AgentNotificationsModel {
             return;
         };
 
-        if updated_conversation.should_exclude_from_navigation()
-            && !updated_conversation.is_child_agent_conversation()
-        {
+        if updated_conversation.should_exclude_from_navigation() {
             return;
         }
 
@@ -275,7 +272,7 @@ impl AgentNotificationsModel {
                 &status,
                 *conversation_id,
                 latest_query,
-                *terminal_view_id,
+                *terminal_surface_id,
                 ctx,
             );
             // The new mailbox path handled the event — skip the legacy toast path below.
@@ -286,7 +283,7 @@ impl AgentNotificationsModel {
             return;
         }
 
-        if is_terminal_view_visible(*terminal_view_id, ctx) {
+        if is_terminal_view_visible(*terminal_surface_id, ctx) {
             return;
         }
 
@@ -299,7 +296,7 @@ impl AgentNotificationsModel {
         ctx.emit(AgentManagementEvent::ConversationNeedsAttention {
             window_id,
             tab_index,
-            terminal_view_id: *terminal_view_id,
+            terminal_view_id: *terminal_surface_id,
             conversation_id: *conversation_id,
         });
     }
@@ -314,80 +311,43 @@ impl AgentNotificationsModel {
     ) {
         let origin = NotificationOrigin::Conversation(conversation_id);
 
-        let ai_history_model = BlocklistAIHistoryModel::as_ref(ctx);
-        let conversation = ai_history_model.conversation(&conversation_id);
-        let is_child = conversation.is_some_and(|c| c.is_child_agent_conversation());
-
-        let active_views = ActiveAgentViewsModel::as_ref(ctx);
-
-        // For child conversations, check if the child's own conversation is
-        // open in an agent view (navigate directly) or if the parent
-        // conversation is open (the child is visible via the parent's
-        // ChildAgentStatusCard — navigate to the parent's pane). For non-child
-        // conversations, just check whether the conversation itself is open.
-        let (is_open, effective_terminal_view_id, title) = if is_child {
-            let child_open = active_views.is_conversation_open(conversation_id, ctx);
-            let parent_open = !child_open
-                && conversation
-                    .and_then(|c| c.parent_conversation_id())
-                    .is_some_and(|parent_id| active_views.is_conversation_open(parent_id, ctx));
-            let nav_terminal_view_id = if child_open {
-                terminal_view_id
-            } else {
-                conversation
-                    .and_then(|c| c.parent_conversation_id())
-                    .and_then(|parent_id| {
-                        ai_history_model.terminal_view_id_for_conversation(&parent_id)
-                    })
-                    .unwrap_or(terminal_view_id)
-            };
-            let child_name = conversation
-                .and_then(|c| c.agent_name())
-                .map(|name| name.to_owned())
-                .or(latest_query)
-                .unwrap_or_else(|| "Child agent".to_owned());
-            (child_open || parent_open, nav_terminal_view_id, child_name)
-        } else {
-            let title = latest_query.unwrap_or_else(|| "Agent task".to_owned());
-            (
-                active_views.is_conversation_open(conversation_id, ctx),
-                terminal_view_id,
-                title,
-            )
-        };
-
         // If the conversation view is no longer open, don't create notifications for it
         // (there's nothing to navigate to when clicking them).
-        if !is_open {
+        if !ActiveAgentViewsModel::as_ref(ctx).is_conversation_open(conversation_id, ctx) {
             self.pending_artifacts.remove(&conversation_id);
             self.remove_notification_by_source(origin, ctx);
             return;
         }
 
-        let metadata = TerminalViewMetadata::lookup(effective_terminal_view_id, ctx);
+        let title = latest_query.unwrap_or_else(|| "Agent task".to_owned());
+        let metadata = TerminalViewMetadata::lookup(terminal_view_id, ctx);
         let oz_agent = NotificationSourceAgent::Oz {
             is_ambient: metadata.is_ambient,
         };
 
         match status {
-            // When the agent resumes its work, clear stale notifications.
-            ConversationStatus::InProgress => {
+            // When the agent resumes its work (or is automatically recovering from a
+            // transient failure), clear stale notifications.
+            ConversationStatus::InProgress | ConversationStatus::TransientError => {
                 self.remove_notification_by_source(origin, ctx);
             }
             ConversationStatus::Success => {
+                // Suppress the completion notification when a queued follow-up prompt will
+                // auto-send as soon as this conversation finishes. The conversation isn't
+                // really in a stopped state, so the notification would be noisy. Pending
+                // artifacts are left intact so they roll into the notification fired when the
+                // conversation eventually finishes with an empty queue.
+                if QueuedQueryModel::as_ref(ctx).has_autofireable_prompt(conversation_id) {
+                    return;
+                }
                 let artifacts = self.flush_pending_artifacts(conversation_id);
-                let message = if is_child {
-                    "Child agent completed."
-                } else {
-                    "Task completed."
-                };
                 self.add_notification(
                     title,
-                    message.to_owned(),
+                    "Task completed.".to_owned(),
                     NotificationCategory::Complete,
                     oz_agent,
                     origin,
-                    effective_terminal_view_id,
+                    terminal_view_id,
                     artifacts,
                     metadata.branch,
                     ctx,
@@ -395,18 +355,13 @@ impl AgentNotificationsModel {
             }
             ConversationStatus::Cancelled => {
                 let artifacts = self.flush_pending_artifacts(conversation_id);
-                let message = if is_child {
-                    "Child agent was cancelled."
-                } else {
-                    "Task was cancelled."
-                };
                 self.add_notification(
                     title,
-                    message.to_owned(),
+                    "Task was cancelled.".to_owned(),
                     NotificationCategory::Complete,
                     oz_agent,
                     origin,
-                    effective_terminal_view_id,
+                    terminal_view_id,
                     artifacts,
                     metadata.branch,
                     ctx,
@@ -419,7 +374,7 @@ impl AgentNotificationsModel {
                     NotificationCategory::Request,
                     oz_agent,
                     origin,
-                    effective_terminal_view_id,
+                    terminal_view_id,
                     vec![],
                     metadata.branch,
                     ctx,
@@ -427,22 +382,23 @@ impl AgentNotificationsModel {
             }
             ConversationStatus::Error => {
                 let artifacts = self.flush_pending_artifacts(conversation_id);
-                let message = if is_child {
-                    "Child agent encountered an error."
-                } else {
-                    "Something went wrong."
-                };
                 self.add_notification(
                     title,
-                    message.to_owned(),
+                    "Something went wrong.".to_owned(),
                     NotificationCategory::Error,
                     oz_agent,
                     origin,
-                    effective_terminal_view_id,
+                    terminal_view_id,
                     artifacts,
                     metadata.branch,
                     ctx,
                 );
+            }
+            // Yielded conversations are still active; mirror the
+            // InProgress arm and clear any stale notification for this
+            // origin.
+            ConversationStatus::WaitingForEvents => {
+                self.remove_notification_by_source(origin, ctx);
             }
         }
     }
@@ -481,9 +437,7 @@ impl AgentNotificationsModel {
         branch: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !*AISettings::as_ref(ctx).show_agent_notifications {
-            return;
-        }
+        let show_agent_notifications = *AISettings::as_ref(ctx).show_agent_notifications;
 
         let is_visible = is_terminal_view_visible(terminal_view_id, ctx);
         let item = NotificationItem::new(
@@ -497,12 +451,14 @@ impl AgentNotificationsModel {
             artifacts,
             branch,
         );
-        send_telemetry_from_ctx!(
-            TelemetryEvent::AgentNotificationShown {
-                agent_variant: agent.into(),
-            },
-            ctx
-        );
+        if show_agent_notifications {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::AgentNotificationShown {
+                    agent_variant: agent.into(),
+                },
+                ctx
+            );
+        }
 
         let id = item.id;
         self.notifications.push(item);
@@ -530,13 +486,22 @@ pub enum AgentManagementEvent {
 impl ConversationStatus {
     /// Returns true if the updating the conversation with this status should trigger some
     /// notification to the user.
+    ///
+    /// Exhaustive match so a new `ConversationStatus` variant forces a
+    /// deliberate decision about whether it should fire a notification.
     pub fn should_trigger_notification(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ConversationStatus::Success
-                | ConversationStatus::Blocked { .. }
-                | ConversationStatus::Error
-        )
+            | ConversationStatus::Blocked { .. }
+            | ConversationStatus::Error => true,
+            // Streaming hasn't reached a notable state; a recovering or
+            // yielded conversation is still active; user-cancellations are
+            // self-evident.
+            ConversationStatus::InProgress
+            | ConversationStatus::TransientError
+            | ConversationStatus::WaitingForEvents
+            | ConversationStatus::Cancelled => false,
+        }
     }
 }
 

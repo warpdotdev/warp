@@ -1,27 +1,21 @@
 use warp_editor::editor::NavigationKey;
-use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, Flex, ParentElement, SavePosition, Shrinkable, Stack,
-    },
-    fonts::FamilyId,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Element, ViewContext, ViewHandle,
+use warpui::elements::{
+    Align, ConstrainedBox, Container, Flex, ParentElement, SavePosition, Shrinkable, Stack,
 };
+use warpui::fonts::FamilyId;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, ViewContext, ViewHandle};
 
-use crate::{
-    editor::{
-        EditOrigin, EditorOptions, EditorView, Event as EditorEvent, InteractionState,
-        PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions,
-    },
-    env_vars::{
-        active_env_var_collection_data::SavingStatus,
-        view::env_var_collection::{
-            EditorType, EnvVarCollectionView, DESCRIPTION_EDITOR_POSITION, ROW_SPACING,
-        },
-        EnvVarValue,
-    },
-    Appearance,
+use crate::editor::{
+    EditOrigin, EditorOptions, EditorView, Event as EditorEvent, InteractionState,
+    PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions,
 };
+use crate::env_vars::active_env_var_collection_data::SavingStatus;
+use crate::env_vars::view::env_var_collection::{
+    EditorType, EnvVarCollectionView, DESCRIPTION_EDITOR_POSITION, ROW_SPACING,
+};
+use crate::env_vars::EnvVarValue;
+use crate::Appearance;
 
 // Metadata labels (name and description)
 const LABEL_FONT_SIZE: f32 = 12.;

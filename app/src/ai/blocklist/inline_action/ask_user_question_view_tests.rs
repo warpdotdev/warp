@@ -1,10 +1,9 @@
+use ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
+use ai::agent::action_result::AskUserQuestionAnswerItem;
+
 use super::{
     ask_user_question_view_state, AskUserQuestionAction, AskUserQuestionEffect,
     AskUserQuestionPhase, AskUserQuestionSession, AskUserQuestionViewState,
-};
-use ai::agent::{
-    action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType},
-    action_result::AskUserQuestionAnswerItem,
 };
 
 fn build_question(

@@ -1,27 +1,20 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
-    time::Duration,
-};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::time::Duration;
 
 use warp_core::{HostId, SessionId};
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{
-        AssertionCallback, AssertionOutcome, AssertionWithDataCallback, StepDataMap, TestStep,
-    },
-    App, SingletonEntity, WindowId,
+use warpui::integration::{
+    AssertionCallback, AssertionOutcome, AssertionWithDataCallback, StepDataMap, TestStep,
 };
+use warpui::{async_assert, async_assert_eq, App, SingletonEntity, WindowId};
 
-use crate::{
-    integration_testing::view_getters::single_terminal_view_for_tab,
-    remote_server::manager::{
-        RemoteServerErrorKind, RemoteServerManager, RemoteServerManagerEvent,
-        RemoteServerOperation, RemoteSessionState,
-    },
-    terminal::model::session::command_executor::remote_server_executor::RemoteServerCommandExecutor,
+use crate::integration_testing::view_getters::single_terminal_view_for_tab;
+use crate::remote_server::manager::{
+    RemoteServerErrorKind, RemoteServerManager, RemoteServerManagerEvent, RemoteServerOperation,
+    RemoteSessionState,
 };
+use crate::terminal::model::session::command_executor::remote_server_executor::RemoteServerCommandExecutor;
 pub type RemoteServerActionCallback = Box<dyn Fn(&mut App, WindowId, &mut StepDataMap) + 'static>;
 
 type RemoteServerNavigationPaths = Rc<RefCell<HashMap<SessionId, String>>>;
@@ -53,13 +46,13 @@ pub fn record_remote_server_navigation_events() -> TestStep {
                 ctx.subscribe_to_model(&mgr, move |_mgr, event, _ctx| {
                     if let RemoteServerManagerEvent::NavigatedToDirectory {
                         session_id,
-                        indexed_path,
+                        remote_path,
                         ..
                     } = event
                     {
                         navigated_paths
                             .borrow_mut()
-                            .insert(*session_id, indexed_path.clone());
+                            .insert(*session_id, remote_path.path.as_str().to_string());
                     }
                 });
             });
@@ -235,7 +228,7 @@ pub fn assert_command_executor_is_remote_server(tab_idx: usize) -> AssertionCall
 }
 
 /// Returns a `TestStep` action that writes a file on the remote host via
-/// the `RemoteServerClient::write_file` proto API. The write is dispatched
+/// the `HostRequestHandle::write_file` API. The write is dispatched
 /// on a background thread using `tokio::runtime::Runtime::block_on` since
 /// the action callback is synchronous.
 pub fn write_file_via_remote_server(
@@ -245,21 +238,22 @@ pub fn write_file_via_remote_server(
 ) -> RemoteServerActionCallback {
     Box::new(move |app, window_id, _| {
         let terminal_view = single_terminal_view_for_tab(app, window_id, tab_idx);
-        let maybe_client = terminal_view.read(app, |view, ctx| {
+        let maybe_handle = terminal_view.read(app, |view, ctx| {
             let session_id = view.active_block_session_id()?;
-            RemoteServerManager::as_ref(ctx)
-                .client_for_session(session_id)
-                .cloned()
+            let host_id = RemoteServerManager::as_ref(ctx)
+                .host_id_for_session(session_id)?
+                .clone();
+            Some(RemoteServerManager::as_ref(ctx).host_request_handle(&host_id))
         });
 
-        if let Some(client) = maybe_client {
+        if let Some(handle) = maybe_handle {
             let path = path.clone();
             let content = content.clone();
             // Spawn on a background thread because the action callback is sync
-            // but write_file is async.
+            // but send is async.
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-                let result = rt.block_on(client.write_file(path.clone(), content));
+                let result = rt.block_on(handle.write_file(path.clone(), content));
                 if let Err(e) = &result {
                     log::error!("write_file_via_remote_server failed for {path}: {e}");
                 }

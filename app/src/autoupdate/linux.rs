@@ -8,10 +8,8 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_terminal::shell::ShellType;
 use warpui::ViewContext;
 
+use super::{release_assets_directory_url, DownloadReady, ReadyForRelaunch};
 use crate::workspace::Workspace;
-
-use super::release_assets_directory_url;
-use super::{DownloadReady, ReadyForRelaunch};
 
 lazy_static::lazy_static! {
     /// Stores the path to the current executable.
@@ -164,14 +162,11 @@ mod package_manager {
     use markdown_parser::{
         FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextLine,
     };
-    use warpui::{
-        elements::{Container, FormattedTextElement, HighlightedHyperlink},
-        Element, SingletonEntity as _,
-    };
-
-    use crate::appearance::Appearance;
+    use warpui::elements::{Container, FormattedTextElement, HighlightedHyperlink};
+    use warpui::{Element, SingletonEntity as _};
 
     use super::*;
+    use crate::appearance::Appearance;
 
     pub struct AutoupdateContextBlock {
         package_manager: PackageManager,

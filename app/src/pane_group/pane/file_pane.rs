@@ -1,21 +1,20 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHandle};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
+use super::notebook_pane::subscribe_to_link_model;
+use super::view::PaneView;
+use super::{
+    DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
+    ShareableLinkError,
+};
+use crate::app_state::{LeafContents, NotebookPaneSnapshot};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
-use crate::{
-    app_state::{LeafContents, NotebookPaneSnapshot},
-    notebooks::file::{FileNotebookEvent, FileNotebookView},
-    terminal::model::session::Session,
-    workflows::WorkflowSelectionSource,
-    workspace::ActiveSession,
-};
-
-use super::{
-    notebook_pane::subscribe_to_link_model, view::PaneView, DetachType, PaneConfiguration,
-    PaneContent, PaneGroup, PaneId, ShareableLink, ShareableLinkError,
-};
+use crate::notebooks::file::{FileNotebookEvent, FileNotebookView};
+use crate::terminal::model::session::Session;
+use crate::workflows::WorkflowSelectionSource;
 
 pub struct FilePane {
     view: ViewHandle<PaneView<FileNotebookView>>,
@@ -38,11 +37,11 @@ impl FilePane {
     }
 
     /// Create a new file notebook pane for the given path and optional target session. If `path`
-    /// is `None` or the target session is remote, the pane is created but left empty. If `path` is
-    /// `Some`, but there's no target session, the pane is created using the next focused local
-    /// session.
+    /// is `None`, the pane is created but left empty. For local paths without a target session,
+    /// the pane waits for a local session to become active. Remote paths are loaded directly
+    /// via the remote server.
     pub fn new<V: View>(
-        path: Option<PathBuf>,
+        path: Option<LocalOrRemotePath>,
         target_session: Option<Arc<Session>>,
         #[cfg(feature = "local_fs")] code_source: Option<CodeSource>,
         ctx: &mut ViewContext<V>,
@@ -53,20 +52,7 @@ impl FilePane {
             view.set_code_source(code_source);
 
             if let Some(path) = path {
-                if let Some(target_session) = target_session {
-                    // If the target session is Some, but non-local, do not fall back - the path is
-                    // remote, so we can't reliably use the fallback behavior.
-                    if target_session.is_local() {
-                        view.open_local(path, Some(target_session), ctx);
-                    }
-                } else {
-                    // If the active session is None or remote, the pane will wait for a local
-                    // session to be activated.
-                    let session = ActiveSession::as_ref(ctx)
-                        .session(ctx.window_id())
-                        .filter(|session| session.is_local());
-                    view.open_local(path, session, ctx);
-                }
+                view.open(path, target_session, ctx);
             }
 
             view
@@ -150,6 +136,8 @@ impl PaneContent for FilePane {
     }
 
     fn snapshot(&self, app: &AppContext) -> LeafContents {
+        // Only persist local file paths in session snapshots; remote files
+        // are not restorable across sessions.
         let path = self.file_view(app).as_ref(app).local_path();
         LeafContents::Notebook(NotebookPaneSnapshot::LocalFileNotebook { path })
     }

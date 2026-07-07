@@ -1,28 +1,22 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
-use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement, Rect, Shrinkable, Stack,
-    },
-    fonts::Weight,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{UiComponent, UiComponentStyles},
-    },
-    Element, ViewContext,
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Rect, Shrinkable, Stack,
 };
+use warpui::fonts::Weight;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{Element, ViewContext};
 
-use crate::{
-    drive::sharing::{ContentEditability, SharingAccessLevel},
-    env_vars::{
-        active_env_var_collection_data::TrashStatus,
-        view::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView},
-    },
-    ui_components::{breadcrumb::BreadcrumbState, buttons::icon_button, icons::Icon},
-    AppContext, Appearance, SingletonEntity,
-};
+use crate::drive::sharing::{ContentEditability, SharingAccessLevel};
+use crate::env_vars::active_env_var_collection_data::TrashStatus;
+use crate::env_vars::view::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView};
+use crate::ui_components::breadcrumb::BreadcrumbState;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::{AppContext, Appearance, SingletonEntity};
 
 const VARIABLE_DIVIDER_HEIGHT: f32 = 2.;
 const SECTION_FONT_SIZE: f32 = 16.;

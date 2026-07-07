@@ -1,7 +1,8 @@
-use super::*;
 use futures_test_sink::SinkMock;
 use futures_util::SinkExt;
 use thiserror::Error;
+
+use super::*;
 
 #[derive(Error, PartialEq, Debug, Copy, Clone)]
 #[error("Unable to send to sink")]

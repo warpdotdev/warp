@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 /// A model for operating on files.
 ///
 /// Allows opening and saving files in a single, central model.  Subscribers can watch for content
@@ -6,34 +6,25 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::io;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
-
-use remote_server::client::RemoteServerClient;
-use remote_server::manager::RemoteServerManager;
-use warp_core::HostId;
-use warp_util::standardized_path::StandardizedPath;
-
-use futures::io::{AsyncBufReadExt, BufReader};
-use futures::StreamExt;
 
 use async_channel::Sender;
+use futures::io::{AsyncBufReadExt, BufReader};
+use futures::StreamExt;
 use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
-use repo_metadata::{
-    repositories::DetectedRepositories,
-    repository::{RepositorySubscriber, SubscriberId},
-    CanonicalizedPath, Repository, RepositoryUpdate,
-};
+use remote_server::manager::RemoteServerManager;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
+use repo_metadata::{CanonicalizedPath, Repository, RepositoryUpdate};
+use warp_core::HostId;
 use warp_util::content_version::ContentVersion;
-use warp_util::file::FileSaveError;
-use warp_util::file::{FileId, FileLoadError};
-use warpui::ModelHandle;
-use warpui::{r#async::SpawnedFutureHandle, AppContext, Entity, ModelContext, SingletonEntity};
+use warp_util::file::{FileId, FileLoadError, FileSaveError};
+use warp_util::standardized_path::StandardizedPath;
+use warpui_core::r#async::SpawnedFutureHandle;
+use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
 pub mod text_file_reader;
@@ -91,13 +82,14 @@ enum WatcherType {
 }
 
 /// Per-file backing store.
-/// Remote files dispatch through [`RemoteServerClient`] via [`RemoteServerManager`].
+/// Remote files dispatch host-scoped requests through a
+/// [`RemoteServerManager`] `HostRequestHandle`.
 enum FileBackend {
     Local(LocalFile),
     Remote {
-        /// Identifies the remote host. The actual client is looked up from
+        /// Identifies the remote host. A `HostRequestHandle` is resolved from
         /// [`RemoteServerManager`] at call time, which naturally handles
-        /// disconnect (lookup returns `Err`) without holding an `Arc` alive
+        /// disconnect (the request fails) without holding an `Arc` alive
         /// per file.
         host_id: HostId,
         /// Platform-aware path on the remote host.
@@ -309,7 +301,7 @@ impl FileModel {
         let watcher =
             ctx.add_model(|ctx| BulkFilesystemWatcher::new(Duration::from_millis(200), ctx));
 
-        ctx.subscribe_to_model(&watcher, |me, event, ctx| {
+        ctx.subscribe_to_model(&watcher, |me, _, event, ctx| {
             me.handle_watcher_event(event, ctx);
         });
 
@@ -345,7 +337,7 @@ impl FileModel {
     /// Register a remote file path and return a `FileId`.
     ///
     /// The returned `FileId` can be used with `save()` and `delete()` which
-    /// will dispatch to the remote backend via [`RemoteServerClient`].
+    /// will dispatch to the remote backend via `RemoteServerClient`.
     pub fn register_remote_file(&mut self, host_id: HostId, path: StandardizedPath) -> FileId {
         let file_id = FileId::new();
         self.file_state.insert_remote(file_id, host_id, path);
@@ -738,17 +730,11 @@ impl FileModel {
                 );
             }
             FileBackend::Remote { host_id, path } => {
-                let client = Self::resolve_remote_client(host_id, ctx)?;
+                let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
                 let path = path.as_str().to_string();
-                let future = async move {
-                    client
-                        .write_file(path, content)
-                        .await
-                        .map_err(|e| e.to_string())
-                };
                 ctx.spawn(
-                    future,
-                    move |me, result: Result<(), String>, ctx| match result {
+                    async move { handle.write_file(path, content).await },
+                    move |me, result, ctx| match result {
                         Ok(()) => {
                             me.set_version(file_id, version);
                             ctx.emit(FileModelEvent::FileSaved {
@@ -756,10 +742,10 @@ impl FileModel {
                                 version,
                             });
                         }
-                        Err(err) => {
+                        Err(e) => {
                             ctx.emit(FileModelEvent::FailedToSave {
                                 id: file_id,
-                                error: Rc::new(FileSaveError::RemoteError(err)),
+                                error: Rc::new(FileSaveError::RemoteError(e.to_string())),
                             });
                         }
                     },
@@ -889,13 +875,11 @@ impl FileModel {
                 );
             }
             FileBackend::Remote { host_id, path } => {
-                let client = Self::resolve_remote_client(host_id, ctx)?;
+                let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
                 let path = path.as_str().to_string();
-                let future =
-                    async move { client.delete_file(path).await.map_err(|e| e.to_string()) };
                 ctx.spawn(
-                    future,
-                    move |me, result: Result<(), String>, ctx| match result {
+                    async move { handle.delete_file(path).await },
+                    move |me, result, ctx| match result {
                         Ok(()) => {
                             me.set_version(file_id, version);
                             ctx.emit(FileModelEvent::FileSaved {
@@ -903,10 +887,10 @@ impl FileModel {
                                 version,
                             });
                         }
-                        Err(err) => {
+                        Err(e) => {
                             ctx.emit(FileModelEvent::FailedToSave {
                                 id: file_id,
-                                error: Rc::new(FileSaveError::RemoteError(err)),
+                                error: Rc::new(FileSaveError::RemoteError(e.to_string())),
                             });
                         }
                     },
@@ -915,19 +899,6 @@ impl FileModel {
         }
 
         Ok(())
-    }
-
-    /// Look up the `RemoteServerClient` for a given host at call time.
-    fn resolve_remote_client(
-        host_id: &HostId,
-        ctx: &AppContext,
-    ) -> Result<std::sync::Arc<RemoteServerClient>, FileSaveError> {
-        RemoteServerManager::as_ref(ctx)
-            .client_for_host(host_id)
-            .cloned()
-            .ok_or_else(|| {
-                FileSaveError::RemoteError(format!("Remote host {host_id} is not connected"))
-            })
     }
 
     pub fn set_version(&mut self, file_id: FileId, version: ContentVersion) {
@@ -956,7 +927,7 @@ impl FileModel {
 
         // Try to find a repository for this path
         let repository =
-            DetectedRepositories::as_ref(ctx).get_watched_repo_for_path(file_path, ctx)?;
+            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(file_path, ctx)?;
 
         let repo_root = repository.as_ref(ctx).root_dir().to_local_path_lossy();
 

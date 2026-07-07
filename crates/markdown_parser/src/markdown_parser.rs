@@ -1,32 +1,28 @@
-use anyhow::Result;
-use itertools::Itertools;
-use nom::{
-    FindToken, IResult, InputIter, InputLength, Parser, Slice,
-    branch::alt,
-    bytes::complete::{
-        is_a, tag, tag_no_case, take, take_till1, take_until, take_while, take_while_m_n,
-        take_while1,
-    },
-    character::{
-        complete::{char, one_of, satisfy, space0, space1},
-        is_digit,
-    },
-    combinator::{
-        all_consuming, consumed, eof, fail, flat_map, map, map_parser, recognize, value, verify,
-    },
-    error::{ContextError, ErrorKind, ParseError, context, make_error},
-    multi::{fold_many_m_n, fold_many1, many_m_n, many0},
-    sequence::{delimited, pair, preceded, terminated, tuple},
-};
-use serde_yaml::Value;
 use std::cell::RefCell;
 
-use crate::{
-    CodeBlockText, FormattedImage, FormattedIndentTextInline, FormattedTable, FormattedTaskList,
-    FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextInline,
-    FormattedTextLine, Hyperlink, OrderedFormattedIndentTextInline, TableAlignment,
+use anyhow::Result;
+use itertools::Itertools;
+use nom::branch::alt;
+use nom::bytes::complete::{
+    is_a, tag, tag_no_case, take, take_till1, take_until, take_while, take_while_m_n, take_while1,
 };
-use crate::{CustomWeight, FormattedTextStyles};
+use nom::character::complete::{char, one_of, satisfy, space0, space1};
+use nom::character::is_digit;
+use nom::combinator::{
+    all_consuming, consumed, eof, fail, flat_map, map, map_parser, recognize, value, verify,
+};
+use nom::error::{ContextError, ErrorKind, ParseError, context, make_error};
+use nom::multi::{fold_many_m_n, fold_many1, many_m_n, many0};
+use nom::sequence::{delimited, pair, preceded, terminated, tuple};
+use nom::{FindToken, IResult, InputIter, InputLength, Parser, Slice};
+use serde_yaml::Value;
+
+use crate::{
+    CodeBlockText, CustomWeight, FormattedImage, FormattedIndentTextInline, FormattedTable,
+    FormattedTaskList, FormattedText, FormattedTextFragment, FormattedTextHeader,
+    FormattedTextInline, FormattedTextLine, FormattedTextStyles, Hyperlink,
+    OrderedFormattedIndentTextInline, TableAlignment,
+};
 
 const HEADER_TAG_MIN_COUNT: usize = 1;
 const HEADER_TAG_MAX_COUNT: usize = 6;
@@ -1003,7 +999,7 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                         c.is_whitespace() || FORMATTING_DELIMITERS.contains(c) || c == '('
                     });
                 if can_autolink {
-                    state.push_closed_node(FormattedTextFragment::hyperlink(url, url));
+                    state.push_closed_node(FormattedTextFragment::hyperlink(url.clone(), url));
                 } else {
                     state.push_text(url);
                 }
@@ -1476,7 +1472,7 @@ fn process_emphasis(state: &mut InlineState, stack_bottom: Option<usize>) {
 /// Helper for [`process_emphasis`] that removes `count` delimiters of `kind` from `node`.
 ///
 /// In debug builds, this panics if `node` is not a run of `kind` delimiters.
-fn truncate_delimiters(node: &mut FormattedTextFragment, kind: DelimiterKind, count: u8) {
+fn truncate_delimiters(node: &mut FormattedTextFragment, kind: DelimiterKind, count: usize) {
     let delimiter = kind.as_str();
     if cfg!(debug_assertions) {
         let text = &node.text;
@@ -1488,7 +1484,7 @@ fn truncate_delimiters(node: &mut FormattedTextFragment, kind: DelimiterKind, co
     }
 
     node.text
-        .truncate(node.text.len() - count as usize * delimiter.len());
+        .truncate(node.text.len() - count * delimiter.len());
 }
 
 /// Helper to merge adjacent text fragments with the same styling. Such fragments might come from:
@@ -1678,7 +1674,7 @@ fn parse_code_span<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InlineToken<'a> {
     /// A run of `count` delimiter characters of `kind`.
-    Delimiter { kind: DelimiterKind, count: u8 },
+    Delimiter { kind: DelimiterKind, count: usize },
     /// A run of non-delimiter text.
     Text(&'a str),
     /// A backslash-escaped character.
@@ -1688,8 +1684,9 @@ enum InlineToken<'a> {
     /// An entire code span. Code spans have higher precedence than all other inline constructs,
     /// so we parse them into discrete tokens.
     CodeSpan(&'a str),
-    /// An autolink URL.
-    AutoLink(&'a str),
+    /// An autolink URL. Owned because backslash escapes are processed (e.g., `\.` → `.`),
+    /// so the result may differ from the input slice.
+    AutoLink(String),
     /// A closing `]` bracket, which triggers link parsing.
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
@@ -1703,9 +1700,9 @@ struct Delimiter {
     kind: DelimiterKind,
     /// The count of repeated delimiter units. This is modified during parsing as delimiters are
     /// consumed.
-    count: u8,
+    count: usize,
     /// The count at the time the delimiter was parsed.
-    original_count: u8,
+    original_count: usize,
     /// Whether or not this delimiter is active (only applies to link delimiters).
     active: bool,
     /// The index of the [`FormattedTextFragment`] corresponding to this delimiter.
@@ -1724,7 +1721,7 @@ impl Delimiter {
     fn new(
         node_index: usize,
         kind: DelimiterKind,
-        count: u8,
+        count: usize,
         preceding_char: Option<char>,
         following_char: Option<char>,
     ) -> Self {
@@ -1777,7 +1774,7 @@ impl Delimiter {
 
     /// Convert this delimiter to literal text.
     fn to_text(&self) -> String {
-        self.kind.as_str().repeat(self.count as usize)
+        self.kind.as_str().repeat(self.count)
     }
 
     /// Whether or not this delimiter can open for the given closing delimiter.
@@ -1817,7 +1814,7 @@ enum DelimiterKind {
 
 impl DelimiterKind {
     /// Whether or not `count` is a valid run length for this delimiter.
-    fn valid_count(self, count: u8) -> bool {
+    fn valid_count(self, count: usize) -> bool {
         match self {
             // Emphasis and strong emphasis may be repeated arbitrarily.
             DelimiterKind::Asterisk | DelimiterKind::Underscore => true,
@@ -1850,11 +1847,12 @@ fn parse_url_prefix<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 // - starts with "https://" or "http://" or "www."
 // - has at least one alphanumeric char after the prefix
 // - does not include trailing formatting characters (*, _, ~)
+// - backslash escapes are processed (e.g., `\.` → `.`)
 fn parse_url<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     i: &'a str,
-) -> IResult<&'a str, &'a str, E> {
+) -> IResult<&'a str, String, E> {
     // TODO: Look into other autolink rules here: https://github.github.com/gfm/#autolinks-extension-
-    let (_, url) = recognize(tuple((
+    let (_, raw_url) = recognize(tuple((
         parse_url_prefix,
         take_till1(|c: char| c.is_whitespace() || "[]<".find_token(c)),
     )))(i)?;
@@ -1862,12 +1860,12 @@ fn parse_url<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     // Strip trailing formatting characters (*, _, ~) from the URL.
     // Per GFM spec, autolinks should not include trailing punctuation that could be
     // markdown formatting delimiters.
-    let trimmed_len = url
+    let trimmed_len = raw_url
         .trim_end_matches(|c| FORMATTING_DELIMITERS.contains(c))
         .len();
 
     // If we trimmed everything after the prefix, the URL is invalid
-    let min_valid_len = match url.find("://") {
+    let min_valid_len = match raw_url.find("://") {
         Some(pos) => pos + "://".len(),
         None => "www.".len(),
     };
@@ -1875,9 +1873,22 @@ fn parse_url<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
         return Err(nom::Err::Error(make_error(i, ErrorKind::TakeWhile1)));
     }
 
-    // Return the trimmed URL and adjust remaining
-    let trimmed_url = &i[..trimmed_len];
+    let trimmed_raw_url = &i[..trimmed_len];
     let new_remaining = &i[trimmed_len..];
+
+    // Process backslash escapes within the URL using parse_escape (e.g., `\.` → `.`).
+    let mut trimmed_url = String::with_capacity(trimmed_len);
+    let mut remaining = trimmed_raw_url;
+    while !remaining.is_empty() {
+        if let Ok((rest, ch)) = parse_escape::<nom::error::Error<&str>>(remaining) {
+            trimmed_url.push(ch);
+            remaining = rest;
+        } else if let Some(ch) = remaining.chars().next() {
+            trimmed_url.push(ch);
+            remaining = &remaining[ch.len_utf8()..];
+        }
+    }
+
     Ok((new_remaining, trimmed_url))
 }
 

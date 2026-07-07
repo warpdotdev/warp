@@ -1,29 +1,26 @@
-use super::auth::AuthClient;
-use super::ServerApi;
-use crate::ai::generate_block_title::api::{GenerateBlockTitleRequest, GenerateBlockTitleResponse};
-use crate::server::{
-    block::{Block, DisplaySetting},
-    graphql::{get_request_context, get_user_facing_error_message},
-};
+use std::convert::TryFrom;
+
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::Utc;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
 use mockall::automock;
-use std::convert::TryFrom;
 use warp_core::channel::{Channel, ChannelState};
-use warp_graphql::{
-    mutations::{
-        share_block::{BlockInput, ShareBlock, ShareBlockResult, ShareBlockVariables},
-        unshare_block::{
-            UnshareBlock, UnshareBlockInput, UnshareBlockResult, UnshareBlockVariables,
-        },
-    },
-    queries::get_blocks_for_user::{
-        Block as GqlBlock, GetBlocksForUser, GetBlocksForUserVariables,
-    },
+use warp_graphql::mutations::share_block::{
+    BlockInput, ShareBlock, ShareBlockResult, ShareBlockVariables,
 };
+use warp_graphql::mutations::unshare_block::{
+    UnshareBlock, UnshareBlockInput, UnshareBlockResult, UnshareBlockVariables,
+};
+use warp_graphql::queries::get_blocks_for_user::{
+    Block as GqlBlock, GetBlocksForUser, GetBlocksForUserVariables,
+};
+
+use super::ServerApi;
+use crate::ai::generate_block_title::api::{GenerateBlockTitleRequest, GenerateBlockTitleResponse};
+use crate::server::block::{Block, DisplaySetting};
+use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -146,7 +143,7 @@ impl BlockClient for ServerApi {
         request: GenerateBlockTitleRequest,
     ) -> Result<GenerateBlockTitleResponse, anyhow::Error> {
         let auth_token = self.get_or_refresh_access_token().await?;
-        let request_builder = self.client.post(format!(
+        let request_builder = self.base_client.http_client().post(format!(
             "{}/ai/generate_block_title",
             ChannelState::server_root_url()
         ));

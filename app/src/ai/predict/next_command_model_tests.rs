@@ -1,14 +1,13 @@
-use crate::completer::SessionContext;
-use crate::terminal::model::session::Session;
-use crate::terminal::model::session::{
-    command_executor::testing::TestCommandExecutor, SessionInfo,
-};
 use typed_path::TypedPathBuf;
+use warp_completer::meta::SpannedItem;
+use warp_completer::parsers::ParsedToken;
 use warp_completer::signatures::CommandRegistry;
-use warp_completer::{meta::SpannedItem, parsers::ParsedToken};
 use warpui::App;
 
 use super::*;
+use crate::completer::SessionContext;
+use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+use crate::terminal::model::session::{Session, SessionInfo};
 
 #[test]
 fn test_find_autosuggestion_from_history_same_directory() {

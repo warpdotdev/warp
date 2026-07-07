@@ -1,18 +1,16 @@
-use crate::{appearance::Appearance, ui_components::blended_colors};
 use session_sharing_protocol::common::Role;
-use warpui::elements::{Container, Flex, MainAxisAlignment, MouseStateHandle, ParentElement, Text};
-use warpui::{
-    elements::CrossAxisAlignment,
-    fonts::Weight,
-    platform::Cursor,
-    ui_components::{
-        button::ButtonVariant,
-        components::{UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+use warpui::elements::{
+    Container, CrossAxisAlignment, Flex, MainAxisAlignment, MouseStateHandle, ParentElement, Text,
 };
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::{BODY_PADDING, HEADER_FONT_SIZE, MODAL_PADDING, TEXT_FONT_SIZE};
+use crate::appearance::Appearance;
+use crate::ui_components::blended_colors;
 
 pub const BUTTON_HEIGHT: f32 = 40.;
 pub const BUTTON_WIDTH: f32 = 352.;

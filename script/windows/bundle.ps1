@@ -92,31 +92,31 @@ if ("$CHANNEL" -eq 'local') {
     $WARP_BIN = 'warp'
     $BINARY_NAME = 'warp.exe'
     $APP_NAME = 'WarpLocal'
-    $FEATURES = "$FEATURES,nld_improvements"
 } elseif ("$CHANNEL" -eq 'dev') {
     $WARP_BIN = 'dev'
     $BINARY_NAME = 'dev.exe'
     $APP_NAME = 'WarpDev'
-    $FEATURES = "$FEATURES,agent_mode_debug,nld_improvements"
+    $FEATURES = "$FEATURES,agent_mode_debug"
 } elseif ("$CHANNEL" -eq 'preview') {
     $WARP_BIN = 'preview'
     $BINARY_NAME = 'preview.exe'
     $APP_NAME = 'WarpPreview'
-    $FEATURES = "$FEATURES,preview_channel,nld_improvements"
+    $FEATURES = "$FEATURES,preview_channel"
 } elseif ("$CHANNEL" -eq 'stable') {
     $WARP_BIN = 'stable'
     $BINARY_NAME = 'warp.exe'
     $APP_NAME = 'Warp'
-    # TODO(vorporeal): Remove this once we get tests passing with this default enabled.
-    $FEATURES = "$FEATURES,nld_improvements"
 } elseif ("$CHANNEL" -eq 'oss') {
     $WARP_BIN = 'warp-oss'
     $BINARY_NAME = 'warp-oss.exe'
     $APP_NAME = 'WarpOss'
     # The OSS channel does not ship Sentry, so drop the crash_reporting feature
     # (which would otherwise pull in the Sentry SDK as a dependency).
-    $FEATURES = 'release_bundle,gui,nld_improvements'
+    $FEATURES = 'release_bundle,gui'
 }
+
+# All channels ship the v3 classifier and v2 heuristic.
+$FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
 $BUNDLE_ID = "dev.warp.$APP_NAME"
@@ -179,10 +179,10 @@ Write-Output "Built for $ARCH with executable at $BINARY_PATH"
 
 # Prepare bundled resources
 $BUNDLED_RESOURCES_DIR = "$CARGO_TARGET_OUTPUT_DIR\resources"
-Write-Output "Preparing bundled resources..."
+Write-Output 'Preparing bundled resources...'
 & "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE"
 if (-Not $?) {
-    Write-Error "Failed to prepare bundled resources"
+    Write-Error 'Failed to prepare bundled resources'
     exit 1
 }
 

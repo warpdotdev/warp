@@ -1,18 +1,15 @@
 use serde::Serialize;
-use warpui::{elements::MouseStateHandle, notification::RequestPermissionsOutcome, Element};
-
-use crate::{
-    appearance::Appearance,
-    terminal::{
-        session_settings::NotificationsMode,
-        view::{InlineBannerId, NotificationsTrigger, TerminalAction},
-    },
-};
+use warpui::elements::MouseStateHandle;
+use warpui::notification::RequestPermissionsOutcome;
+use warpui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,
     InlineBannerContent, InlineBannerStyle, InlineBannerTextButton, InlineBannerTextButtonVariant,
 };
+use crate::appearance::Appearance;
+use crate::terminal::session_settings::NotificationsMode;
+use crate::terminal::view::{InlineBannerId, NotificationsTrigger, TerminalAction};
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub enum NotificationsDiscoveryBannerAction {

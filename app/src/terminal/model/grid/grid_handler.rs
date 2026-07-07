@@ -13,63 +13,76 @@ mod resize;
 mod secrets;
 
 use std::borrow::Cow;
-use std::cmp::max;
+use std::cmp::{max, min, Ordering};
 use std::collections::{HashMap, HashSet};
+use std::mem;
 use std::num::NonZeroUsize;
 use std::ops::{Range, RangeInclusive};
-use std::{
-    cmp::{min, Ordering},
-    mem,
-};
 
 use bounded_vec_deque::BoundedVecDeque;
+use filtering::FilterState;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use string_offset::ByteOffset;
 use unicode_general_category::{get_general_category, GeneralCategory};
 use unicode_width::UnicodeWidthChar;
 use urlocator::{UrlLocation, UrlLocator};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
 use warp_core::{safe_assert, safe_assert_eq};
-use warp_terminal::model::grid::CellType;
-use warp_terminal::model::grid::FlatStorage;
+use warp_terminal::model::grid::{CellType, FlatStorage};
 pub use warp_terminal::model::TermMode;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warp_util::path::CleanPathResult;
 use warpui::color::ColorU;
 
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
-use crate::terminal::model::cell::{Cell, Flags, LineLength, DEFAULT_CHAR};
-use crate::terminal::model::char_or_str::{CharOrStr, PushCharOrStr};
-use crate::terminal::model::grid::{Dimensions, GridStorage};
-use crate::terminal::model::image_map::ImageMap;
-use crate::terminal::model::index::{IndexRange, Point, VisibleRow};
-use crate::terminal::model::secrets::{ObfuscateSecrets, SecretMap};
-use crate::terminal::SizeInfo;
-use crate::util::extensions::TrimStringExt;
-
-use crate::terminal::model::grid::RespectDisplayedOutput;
-use crate::terminal::model::secrets::RespectObfuscatedSecrets;
-use crate::terminal::model::terminal_model::RangeInModel;
-use crate::terminal::model::{
-    find::{Match, RegexDFAs},
-    index::Direction,
-};
-use crate::terminal::model::{Secret, SecretHandle};
-
 use super::displayed_output::DisplayedOutput;
 use super::grapheme_cursor::{self, GraphemeCursor};
 use super::row::Row;
 use super::{ConvertToAbsolute as _, Cursor, SelectionCursor};
-use filtering::FilterState;
-use string_offset::ByteOffset;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
+use crate::terminal::model::cell::{Cell, Flags, LineLength, DEFAULT_CHAR};
+use crate::terminal::model::char_or_str::{CharOrStr, PushCharOrStr};
+use crate::terminal::model::find::{Match, RegexDFAs};
+use crate::terminal::model::grid::{Dimensions, GridStorage, RespectDisplayedOutput};
+use crate::terminal::model::image_map::ImageMap;
+use crate::terminal::model::index::{Direction, IndexRange, Point, VisibleRow};
+use crate::terminal::model::secrets::{ObfuscateSecrets, RespectObfuscatedSecrets, SecretMap};
+use crate::terminal::model::terminal_model::RangeInModel;
+use crate::terminal::model::{Secret, SecretHandle};
+use crate::terminal::SizeInfo;
+use crate::util::extensions::TrimStringExt;
 
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
 
-/// Number of characters to scan on a different line for a link.
-const LINK_NUM_CHARACTER_SCAN: usize = 50;
+/// Maximum number of characters the file-link scan walks across soft-wrapped
+/// rows when following a path that spans multiple visual lines. A soft-wrapped
+/// path is one logical line split over several rows, so this must be large
+/// enough to span a whole path; it is sized to filesystem `PATH_MAX` (typically
+/// 4096). With too small a budget a long wrapped path is only detected up to the
+/// first wrap boundary (see issue #9193).
+///
+/// This budget alone does NOT bound the per-hover cost: the candidate search
+/// below is O(prefix_fragments * suffix_fragments), so a separator-dense region
+/// could still be quadratic in the scanned length. That cost is bounded
+/// independently by [`MAX_LINK_PATH_FRAGMENTS`].
+const LINK_NUM_CHARACTER_SCAN: usize = 4096;
+
+/// Upper bound on how many separator-delimited fragments are kept on each side
+/// of the hover point when assembling candidate file paths.
+///
+/// The candidate search is O(prefix_fragments * suffix_fragments), and every
+/// candidate is string-built here and then checked against the filesystem by the
+/// caller (`compute_valid_paths`). Without a cap, hovering over separator-dense
+/// wrapped text (e.g. a wide table or log line that happens to wrap) could
+/// generate O(scanned_chars^2) candidates and filesystem probes on every hover.
+/// A real path needs only a handful of fragments around the hover point, so we
+/// keep the fragments nearest the point and drop the rest, bounding the search
+/// to O(MAX_LINK_PATH_FRAGMENTS^2) regardless of the surrounding content while
+/// leaving realistic paths (including paths with a few spaces) unaffected.
+const MAX_LINK_PATH_FRAGMENTS: usize = 32;
 
 /// Max number of characters to scan for a URL.
 const URL_SCAN_CHARACTER_MAX_COUNT: usize = 1000;
@@ -145,6 +158,28 @@ impl Fragment {
     fn has_separator(&self) -> bool {
         self.content.chars().any(is_file_link_separator)
     }
+}
+
+fn append_fragments_across_soft_wrap(
+    fragments: &mut Vec<Fragment>,
+    mut next_fragments: Vec<Fragment>,
+) {
+    match (fragments.last(), next_fragments.first()) {
+        (Some(last_fragment), Some(next_fragment))
+            if !last_fragment.has_separator() && !next_fragment.has_separator() =>
+        {
+            let mut fragment = fragments.pop().expect("Fragment should exist");
+
+            fragment.content.push_str(&next_fragment.content);
+            fragment.total_cell_width += next_fragment.total_cell_width;
+            fragments.push(fragment);
+
+            next_fragments.remove(0);
+        }
+        _ => (),
+    }
+
+    fragments.append(&mut next_fragments);
 }
 
 #[derive(Debug)]
@@ -390,6 +425,14 @@ pub struct GridHandler {
     track_content_length: bool,
 
     full_grid_clear_behavior: FullGridClearBehavior,
+
+    /// Accumulates dirty row ranges for find operations.
+    ///
+    /// Unlike `dirty_cells_range` in `ansi_handler_state` which is reset after each byte
+    /// processing pass, this field accumulates dirty rows until find explicitly consumes them.
+    /// This allows find to be updated less frequently than byte processing while still
+    /// knowing exactly which rows have changed.
+    find_dirty_rows_range: Option<RangeInclusive<usize>>,
 }
 
 impl GridHandler {
@@ -439,6 +482,7 @@ impl GridHandler {
             bottommost_visible_content_row: None,
             track_content_length: false,
             full_grid_clear_behavior: FullGridClearBehavior::Scroll,
+            find_dirty_rows_range: None,
         }
     }
 
@@ -570,6 +614,7 @@ impl GridHandler {
             bottommost_visible_content_row: None,
             track_content_length: false,
             full_grid_clear_behavior: FullGridClearBehavior::Scroll,
+            find_dirty_rows_range: None,
         };
 
         // Scan the full grid for secrets.  This is less performant than
@@ -1149,115 +1194,79 @@ impl GridHandler {
     /// Return all possible file paths containing the grid point ordered from longest to shortest.
     pub fn possible_file_paths_at_point(&self, displayed_point: Point) -> Vec<PossiblePath> {
         let point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
-        let last_row_end_with_line_wrap = point.row > 0 && self.row_wraps(point.row - 1);
-        let current_row_end_with_line_wrap =
-            point.row + 1 < self.total_rows() && self.row_wraps(point.row);
 
         // All fragments in the row before the point (not including the point)
-        // + Part of the fragments in the previous row if previous line ends with a line wrap.
-        let mut prefix_chunks = match (point.col > 0, last_row_end_with_line_wrap) {
-            // If the hovered point is not at column 0 and the last row ends with a linewrap,
-            // we should take the fragments from the beginning of the line to current row
-            // and the last couple of cells in the previous row. Note that we need to
-            // concatenate the last fragment in the previous row with the first fragment
-            // in the current row since they technically is one conherent fragment.
-            (true, true) => {
-                let mut prev_line_fragments = self.line_to_fragments(
-                    point.row - 1,
-                    self.columns().saturating_sub(LINK_NUM_CHARACTER_SCAN + 1)..self.columns() - 1,
-                    IncludeFirstWideChar::Yes, /*should_scan_forward*/
-                );
+        // + fragments in earlier soft-wrapped rows.
+        let mut prefix_chunks = Vec::new();
+        let mut first_prefix_row = point.row;
+        let mut scanned_prefix_width = point.col;
+        while first_prefix_row > 0
+            && self.row_wraps(first_prefix_row - 1)
+            && scanned_prefix_width < LINK_NUM_CHARACTER_SCAN
+        {
+            first_prefix_row -= 1;
+            scanned_prefix_width += self.columns();
+        }
 
-                let mut current_line_fragments =
-                    self.line_to_fragments(point.row, 0..point.col - 1, IncludeFirstWideChar::Yes);
+        for row in first_prefix_row..=point.row {
+            let range = if row == point.row {
+                if point.col == 0 {
+                    continue;
+                }
 
-                match (prev_line_fragments.last(), current_line_fragments.first()) {
-                    // Note that if any one of the two fragments has separator, we shouldn't
-                    // concatenate them.
-                    (Some(prev_line_fragment), Some(current_line_fragment))
-                        if prev_line_fragment.has_separator()
-                            || current_line_fragment.has_separator() =>
-                    {
-                        let mut fragment =
-                            prev_line_fragments.pop().expect("Fragment should exist");
+                0..point.col - 1
+            } else if row == first_prefix_row {
+                let extra_width = scanned_prefix_width.saturating_sub(LINK_NUM_CHARACTER_SCAN);
+                extra_width.min(self.columns().saturating_sub(1))..self.columns() - 1
+            } else {
+                0..self.columns() - 1
+            };
 
-                        fragment.content.push_str(&current_line_fragment.content);
-                        prev_line_fragments.push(Fragment {
-                            content: fragment.content,
-                            total_cell_width: fragment.total_cell_width
-                                + current_line_fragment.total_cell_width,
-                        });
-
-                        current_line_fragments.remove(0);
-                    }
-                    _ => (),
-                };
-
-                prev_line_fragments.append(&mut current_line_fragments);
-                prev_line_fragments
-            }
-            // If the previous line does not end with a linewrap, only parse for fragments in the current line.
-            (true, false) => {
-                self.line_to_fragments(point.row, 0..point.col - 1, IncludeFirstWideChar::Yes)
-            }
-            // If the point is at the start of the line and the previous line does end with a linewrap,
-            // parse for fragments in the previous line.
-            (false, true) => self.line_to_fragments(
-                point.row - 1,
-                self.columns().saturating_sub(LINK_NUM_CHARACTER_SCAN + 1)..self.columns() - 1,
-                IncludeFirstWideChar::Yes, /*should_scan_forward*/
-            ),
-            (false, false) => Vec::new(),
-        };
+            let fragments = self.line_to_fragments(row, range, IncludeFirstWideChar::Yes);
+            append_fragments_across_soft_wrap(&mut prefix_chunks, fragments);
+        }
 
         // All fragments in the row after the point (including the point)
-        // + Part of the fragments in the next row if the line ends with a line wrap.
+        // + fragments in later soft-wrapped rows.
         // Note that we set should_scan_forward here to false to prevent overlapping
         // width char characters between prefix and suffix.
-        let suffix_chunks = match current_row_end_with_line_wrap {
-            // If current line ends a line wrap, we parse for fragments in both the current and next line.
-            true => {
-                let mut current_line_fragments = self.line_to_fragments(
-                    point.row,
-                    point.col..self.columns() - 1,
-                    IncludeFirstWideChar::No, /*should_scan_forward*/
-                );
+        let mut suffix_chunks = Vec::new();
+        let mut last_suffix_row = point.row;
+        let mut scanned_suffix_width = self.columns().saturating_sub(point.col);
+        while last_suffix_row + 1 < self.total_rows()
+            && self.row_wraps(last_suffix_row)
+            && scanned_suffix_width < LINK_NUM_CHARACTER_SCAN
+        {
+            last_suffix_row += 1;
+            scanned_suffix_width += self.columns();
+        }
 
-                let mut next_line_fragments = self.line_to_fragments(
-                    point.row + 1,
-                    0..(self.columns() - 1).min(LINK_NUM_CHARACTER_SCAN),
-                    IncludeFirstWideChar::No,
-                );
+        for row in point.row..=last_suffix_row {
+            let range = if row == point.row {
+                point.col..self.columns() - 1
+            } else if row == last_suffix_row {
+                let extra_width = scanned_suffix_width.saturating_sub(LINK_NUM_CHARACTER_SCAN);
+                0..(self.columns() - 1).saturating_sub(extra_width)
+            } else {
+                0..self.columns() - 1
+            };
 
-                match (current_line_fragments.last(), next_line_fragments.first()) {
-                    (Some(current_line_fragment), Some(next_line_fragment))
-                        if current_line_fragment.has_separator()
-                            || next_line_fragment.has_separator() =>
-                    {
-                        let mut fragment =
-                            current_line_fragments.pop().expect("Fragment should exist");
+            let fragments = self.line_to_fragments(row, range, IncludeFirstWideChar::No);
+            append_fragments_across_soft_wrap(&mut suffix_chunks, fragments);
+        }
 
-                        fragment.content.push_str(&next_line_fragment.content);
-                        current_line_fragments.push(Fragment {
-                            content: fragment.content,
-                            total_cell_width: fragment.total_cell_width
-                                + next_line_fragment.total_cell_width,
-                        });
-
-                        next_line_fragments.remove(0);
-                    }
-                    _ => (),
-                };
-
-                current_line_fragments.append(&mut next_line_fragments);
-                current_line_fragments
-            }
-            false => self.line_to_fragments(
-                point.row,
-                point.col..self.columns() - 1,
-                IncludeFirstWideChar::No, /*should_scan_forward*/
-            ),
-        };
+        // Bound the number of fragment combinations the candidate search below
+        // considers. That search is O(prefix_chunks * suffix_chunks) and each
+        // combination is filesystem-checked by the caller, so a hover over
+        // separator-dense wrapped text would otherwise be quadratic in the
+        // scanned length. Only the fragments nearest the hover point can form a
+        // path through it, so drop the farthest ones on each side (prefix_chunks
+        // is ordered farthest-to-nearest, suffix_chunks nearest-to-farthest).
+        if prefix_chunks.len() > MAX_LINK_PATH_FRAGMENTS {
+            let excess = prefix_chunks.len() - MAX_LINK_PATH_FRAGMENTS;
+            prefix_chunks.drain(0..excess);
+        }
+        suffix_chunks.truncate(MAX_LINK_PATH_FRAGMENTS);
 
         // This addresses the case when the file path starts from the point -- in this case
         // the valid path is entirely constructed from suffix chunks. Note that this is only possible
@@ -1614,6 +1623,40 @@ impl GridHandler {
         let range_start = min(dirty_cells_range.start, cursor_point);
         let range_end = max(dirty_cells_range.end, cursor_point);
         *dirty_cells_range = range_start..range_end;
+
+        // Also update the find dirty rows range.
+        self.update_find_dirty_rows_range(cursor_point.row);
+    }
+
+    /// Updates the find dirty rows range to include the given row.
+    ///
+    /// This accumulates dirty rows across multiple byte processing passes
+    /// until find explicitly consumes them.
+    fn update_find_dirty_rows_range(&mut self, row: usize) {
+        self.find_dirty_rows_range = Some(match &self.find_dirty_rows_range {
+            Some(existing) => {
+                let start = min(*existing.start(), row);
+                let end = max(*existing.end(), row);
+                start..=end
+            }
+            None => row..=row,
+        });
+    }
+
+    /// Returns the accumulated dirty row range for find operations, if any.
+    ///
+    /// Unlike `dirty_cells_range()`, this range accumulates across multiple byte
+    /// processing passes until explicitly consumed with `take_find_dirty_rows_range()`.
+    pub fn find_dirty_rows_range(&self) -> Option<RangeInclusive<usize>> {
+        self.find_dirty_rows_range.clone()
+    }
+
+    /// Returns and clears the accumulated dirty row range for find operations.
+    ///
+    /// This should be called when find has processed the dirty range and no longer
+    /// needs to track those rows as dirty.
+    pub fn take_find_dirty_rows_range(&mut self) -> Option<RangeInclusive<usize>> {
+        self.find_dirty_rows_range.take()
     }
 
     fn reset_dirty_cells_range_to_cursor_point(&mut self) {
@@ -2029,7 +2072,15 @@ impl GridHandler {
         self.regex_iter(end, start, Direction::Left, dfas)
     }
 
-    fn find_in_range<'a>(&'a self, dfas: &'a RegexDFAs, start: Point, end: Point) -> RegexIter<'a> {
+    /// Find matches in a specific range of the grid.
+    ///
+    /// This is used by async find to scan chunks of a grid without scanning the entire grid.
+    pub(in crate::terminal) fn find_in_range<'a>(
+        &'a self,
+        dfas: &'a RegexDFAs,
+        start: Point,
+        end: Point,
+    ) -> RegexIter<'a> {
         self.regex_iter(end, start, Direction::Left, dfas)
     }
 

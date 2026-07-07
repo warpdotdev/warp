@@ -1,8 +1,8 @@
-use dirs::home_dir;
 use std::path::{Path, PathBuf};
 #[cfg(not(target_family = "wasm"))]
 use std::{fs, sync::Arc, time::Duration};
 
+use dirs::home_dir;
 #[cfg(not(target_family = "wasm"))]
 use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
 use repo_metadata::RepositoryUpdate;
@@ -44,6 +44,20 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
             );
         }
     }
+
+    // The TUI surface stores its settings in a separate config directory
+    // (see `warp_core::paths::tui_config_local_dir`). Create it up front — only
+    // for that surface — so the watcher can register it at startup and pick up
+    // the first settings write.
+    if settings::settings_mode() == settings::SettingsMode::Tui {
+        let tui_config_local_dir = warp_core::paths::tui_config_local_dir();
+        if let Err(err) = fs::create_dir_all(&tui_config_local_dir) {
+            log::warn!(
+                "Failed to create Warp TUI config directory {}: {err}",
+                tui_config_local_dir.display()
+            );
+        }
+    }
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -51,6 +65,7 @@ pub(crate) fn warp_home_config_dir() -> Option<PathBuf> {
     warp_core::paths::warp_home_config_dir()
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_home_skills_dir() -> Option<PathBuf> {
     warp_core::paths::warp_home_skills_dir()
 }
@@ -67,6 +82,7 @@ pub(crate) struct WarpMcpConfigPath {
     pub(crate) config_path: PathBuf,
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn warp_managed_skill_dirs() -> Vec<PathBuf> {
     warp_home_skills_dir().into_iter().collect()
 }
@@ -118,6 +134,7 @@ fn filter_repository_update(
     let mut filtered = RepositoryUpdate {
         commit_updated: update.commit_updated,
         index_lock_detected: update.index_lock_detected,
+        remote_ref_updated: update.remote_ref_updated,
         ..Default::default()
     };
 
@@ -195,6 +212,7 @@ fn filesystem_event_to_repository_update(event: &BulkFilesystemWatcherEvent) -> 
             .collect(),
         commit_updated: false,
         index_lock_detected: false,
+        remote_ref_updated: false,
     }
 }
 
@@ -244,11 +262,15 @@ impl WarpManagedPathsWatcher {
             let config_local_dir = warp_core::paths::config_local_dir();
             let should_register_config_local_dir = config_local_dir != data_dir;
             let worktrees_dir = data_dir.join("worktrees");
+            // Safe to use for both directory registration and event emission.
+            // If this rejects `worktrees_dir`, every descendant should be rejected too,
+            // so the recursive watcher never prunes an ancestor needed to reach an allowed path.
+            let filter = Arc::new(move |path: &Path| !path.starts_with(&worktrees_dir));
             Self::register_path(
                 ctx,
                 &watcher,
                 data_dir.clone(),
-                WatchFilter::with_filter(Arc::new(move |path| !path.starts_with(&worktrees_dir))),
+                WatchFilter::with_filter(filter.clone(), filter),
                 RecursiveMode::Recursive,
                 "Warp data directory",
             );
@@ -261,6 +283,28 @@ impl WarpManagedPathsWatcher {
                     RecursiveMode::Recursive,
                     "Warp config directory",
                 );
+            }
+            // Watch the TUI settings directory for that surface. On macOS it's
+            // a sibling `.warp_cli*` directory outside `config_local_dir`; on
+            // other platforms it nests under `config_local_dir` and is already
+            // covered by the recursive watch above (the `starts_with` guard
+            // skips the redundant registration).
+            if settings::settings_mode() == settings::SettingsMode::Tui {
+                let tui_config_local_dir = warp_core::paths::tui_config_local_dir();
+                if tui_config_local_dir.exists()
+                    && !tui_config_local_dir.starts_with(&data_dir)
+                    && (!should_register_config_local_dir
+                        || !tui_config_local_dir.starts_with(&config_local_dir))
+                {
+                    Self::register_path(
+                        ctx,
+                        &watcher,
+                        tui_config_local_dir,
+                        WatchFilter::accept_all(),
+                        RecursiveMode::Recursive,
+                        "Warp TUI config directory",
+                    );
+                }
             }
             if let Some(warp_home_skills_dir) = warp_home_skills_dir() {
                 if warp_home_skills_dir.exists()
@@ -286,13 +330,14 @@ impl WarpManagedPathsWatcher {
                     && (!should_register_config_local_dir
                         || !warp_home_config_dir.starts_with(&config_local_dir))
                 {
+                    // Watch the config directory non-recursively,
+                    // and ignore events for files other than the MCP config file.
+                    let emit = Arc::new(move |path: &Path| path == warp_home_mcp_config_path);
                     Self::register_path(
                         ctx,
                         &watcher,
                         warp_home_config_dir,
-                        WatchFilter::with_filter(Arc::new(move |path| {
-                            path == warp_home_mcp_config_path
-                        })),
+                        WatchFilter::with_filter(Arc::new(|_: &Path| true), emit),
                         RecursiveMode::NonRecursive,
                         "Warp home MCP config directory",
                     );
@@ -328,6 +373,7 @@ impl WarpManagedPathsWatcher {
 
     fn handle_fs_event(
         &mut self,
+        _: ModelHandle<BulkFilesystemWatcher>,
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -357,92 +403,5 @@ impl Entity for WarpManagedPathsWatcher {
 impl SingletonEntity for WarpManagedPathsWatcher {}
 
 #[cfg(test)]
-mod tests {
-    use dirs::home_dir;
-    use std::collections::{HashMap, HashSet};
-    use std::path::PathBuf;
-
-    use repo_metadata::{RepositoryUpdate, TargetFile};
-
-    use super::{
-        filter_repository_update_by_prefix, warp_home_mcp_config_file_path, warp_home_skills_dir,
-        warp_managed_mcp_config_path, warp_managed_skill_dirs,
-    };
-
-    #[test]
-    fn warp_managed_skill_dirs_contains_only_warp_home_path() {
-        let dirs = warp_managed_skill_dirs();
-        match warp_home_skills_dir() {
-            Some(warp_home_skills_dir) => assert_eq!(dirs, vec![warp_home_skills_dir]),
-            None => assert!(dirs.is_empty()),
-        }
-    }
-
-    #[test]
-    fn warp_managed_mcp_config_path_contains_only_warp_home_path() {
-        match (
-            home_dir(),
-            warp_home_mcp_config_file_path(),
-            warp_managed_mcp_config_path(),
-        ) {
-            (Some(home_dir), Some(warp_home_mcp_config_path), Some(path)) => {
-                assert_eq!(path.root_path, home_dir);
-                assert_eq!(path.config_path, warp_home_mcp_config_path);
-            }
-            (_, _, None) => {}
-            _ => panic!("Expected Warp MCP path when home directory is available"),
-        }
-    }
-
-    #[test]
-    fn filter_repository_update_by_prefix_keeps_only_matching_paths() {
-        let skills_dir = PathBuf::from("/tmp/.warp-local/skills");
-        let other_dir = PathBuf::from("/tmp/.warp-local/worktrees/repo");
-        let skill_file = skills_dir.join("deploy").join("SKILL.md");
-        let other_file = other_dir.join("README.md");
-
-        let update = RepositoryUpdate {
-            added: HashSet::from([
-                TargetFile::new(skill_file.clone(), false),
-                TargetFile::new(other_file.clone(), false),
-            ]),
-            modified: HashSet::new(),
-            deleted: HashSet::new(),
-            moved: HashMap::new(),
-            commit_updated: false,
-            index_lock_detected: false,
-        };
-
-        let filtered =
-            filter_repository_update_by_prefix(&update, &skills_dir).expect("expected update");
-
-        assert!(filtered.contains_added_or_modified(&TargetFile::new(skill_file, false)));
-        assert!(!filtered.contains_added_or_modified(&TargetFile::new(other_file, false)));
-    }
-
-    #[test]
-    fn filter_repository_update_by_prefix_converts_cross_boundary_moves() {
-        let skills_dir = PathBuf::from("/tmp/.warp-local/skills");
-        let skill_file = skills_dir.join("deploy").join("SKILL.md");
-        let ignored_file = PathBuf::from("/tmp/.warp-local/worktrees/repo/SKILL.md");
-
-        let update = RepositoryUpdate {
-            added: HashSet::new(),
-            modified: HashSet::new(),
-            deleted: HashSet::new(),
-            moved: HashMap::from([(
-                TargetFile::new(skill_file.clone(), false),
-                TargetFile::new(ignored_file, false),
-            )]),
-            commit_updated: false,
-            index_lock_detected: false,
-        };
-
-        let filtered =
-            filter_repository_update_by_prefix(&update, &skills_dir).expect("expected update");
-
-        assert!(filtered.contains_added_or_modified(&TargetFile::new(skill_file, false)));
-        assert!(filtered.moved.is_empty());
-        assert!(filtered.deleted.is_empty());
-    }
-}
+#[path = "warp_managed_paths_watcher_tests.rs"]
+mod tests;

@@ -6,6 +6,14 @@
 //! - StaticWorkflowEnumSuggestions
 //! - DynamicWorkflowEnumSuggestions
 
+use warpui::elements::{
+    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragBarSide,
+    DropShadow, Element, Empty, Flex, ParentElement, Radius, Resizable, Shrinkable,
+    SizeConstraintCondition, SizeConstraintSwitch, Text,
+};
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+
 use super::{
     DynamicEnumSuggestionStatus, Input, InputAction, MenuPositioning, DYNAMIC_ENUM_FAILURE_MESSAGE,
     DYNAMIC_ENUM_GENERATE_MESSAGE, DYNAMIC_ENUM_HORIZONTAL_TEXT_PADDING,
@@ -19,13 +27,6 @@ use crate::input_suggestions::{
     LABEL_PADDING as InputSuggestionsLabelPadding,
 };
 use crate::themes::theme::WarpTheme;
-use warpui::elements::{
-    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragBarSide,
-    DropShadow, Element, Empty, Flex, ParentElement, Radius, Resizable, Shrinkable,
-    SizeConstraintCondition, SizeConstraintSwitch, Text,
-};
-use warpui::presenter::ChildView;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 
 enum SuggestionsResizeConfig {
     WidthAndHeight,

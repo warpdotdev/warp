@@ -1,28 +1,24 @@
+use std::path::PathBuf;
+
+use lsp::supported_servers::LSPServerType;
+use warpui::elements::{
+    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
+};
+use warpui::keymap::Keystroke;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::keyboard_shortcut::KeyboardShortcut;
+use warpui::ui_components::text::Span;
+use warpui::{AppContext, Element, SingletonEntity, TypedActionView, ViewContext, ViewHandle};
+
+use super::{InitProjectBlockAction, InitStepBlock};
 use crate::ai::agent::icons::yellow_stop_icon;
 use crate::ai::blocklist::block::toggleable_items::{ToggleableItemBuilder, ToggleableItemsView};
 use crate::ai::blocklist::inline_action::inline_action_header::INLINE_ACTION_HORIZONTAL_PADDING;
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
-use lsp::supported_servers::LSPServerType;
-use std::path::PathBuf;
-
-use warpui::{
-    elements::{
-        Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded,
-        Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
-    },
-    keymap::Keystroke,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-        keyboard_shortcut::KeyboardShortcut,
-        text::Span,
-    },
-    AppContext, Element, SingletonEntity, TypedActionView, ViewContext, ViewHandle,
-};
-
-use super::{InitProjectBlockAction, InitStepBlock};
 
 #[derive(Debug, Clone)]
 pub struct LSPServerInfo {

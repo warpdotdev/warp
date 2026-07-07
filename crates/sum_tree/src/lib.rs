@@ -1,8 +1,10 @@
-use std::{fmt, iter::FromIterator, ops::AddAssign, sync::Arc};
+use std::fmt;
+use std::iter::FromIterator;
+use std::ops::AddAssign;
+use std::sync::Arc;
 
 use arrayvec::ArrayVec;
-pub use cursor::Cursor;
-pub use cursor::FilterCursor;
+pub use cursor::{Cursor, FilterCursor};
 
 mod cursor;
 

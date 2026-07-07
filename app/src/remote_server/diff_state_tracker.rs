@@ -7,7 +7,6 @@
 //! handle proto conversion and wire delivery.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -15,13 +14,12 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
-use crate::code_review::diff_state::{
-    DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, FileDiffAndContent,
-    GitDiffWithBaseContent, LocalDiffStateModel,
-};
-
 use super::protocol::RequestId;
 use super::server_model::ConnectionId;
+use crate::code_review::diff_state::{
+    BackendOrigin, DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, FileDiffAndContent,
+    GitDiffWithBaseContent, LocalDiffStateModel,
+};
 
 // ── Key type ────────────────────────────────────────────────────────
 
@@ -86,7 +84,8 @@ pub(super) enum DiffStateUpdate {
     FileDelta {
         repo_path: StandardizedPath,
         mode: DiffMode,
-        path: PathBuf,
+        /// Repo-relative path for the changed file.
+        path: String,
         diff: Option<Arc<FileDiffAndContent>>,
         metadata: Option<DiffMetadata>,
         subscribers: Vec<ConnectionId>,
@@ -270,7 +269,7 @@ impl RemoteDiffStateManager {
                         metadata: model_ref.metadata().cloned(),
                     }
                 }
-                DiffState::Loading => {
+                DiffState::Loading | DiffState::Disconnected => {
                     self.add_pending_response(key, request_id.clone(), conn_id);
                     SubscribeOutcome::Async
                 }
@@ -280,8 +279,9 @@ impl RemoteDiffStateManager {
             let repo_path_str = key.repo_path.to_string();
             let mode = key.mode.clone();
             let model = ctx.add_model(|ctx| {
-                let mut m = LocalDiffStateModel::new(Some(repo_path_str), ctx);
-                m.set_diff_mode(mode, false, ctx);
+                let mut m =
+                    LocalDiffStateModel::new(Some(repo_path_str), BackendOrigin::RemoteDaemon, ctx);
+                m.set_diff_mode(mode, false, false, ctx);
                 m.set_code_review_metadata_refresh_enabled(true, ctx);
                 m
             });
@@ -289,7 +289,7 @@ impl RemoteDiffStateManager {
             self.add_pending_response(key.clone(), request_id.clone(), conn_id);
 
             let key_for_sub = key;
-            ctx.subscribe_to_model(&model, move |me, event, ctx| {
+            ctx.subscribe_to_model(&model, move |me, _, event, ctx| {
                 me.handle_model_event(&key_for_sub, event, ctx);
             });
 
@@ -306,7 +306,7 @@ impl RemoteDiffStateManager {
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
-            DiffStateModelEvent::NewDiffsComputed(diffs) => {
+            DiffStateModelEvent::NewDiffsComputed { diffs, .. } => {
                 let Some((state, metadata)) = self.read_state_and_metadata(key, ctx) else {
                     log::warn!("NewDiffsComputed for absent model key={key:?}");
                     return;
@@ -339,7 +339,7 @@ impl RemoteDiffStateManager {
                 ctx.emit(DiffStateUpdate::MetadataUpdate {
                     repo_path: key.repo_path.clone(),
                     mode: key.mode.clone(),
-                    metadata: metadata.clone(),
+                    metadata: metadata.as_ref().clone(),
                     subscribers: self.subscribed_connections(key),
                 });
             }
@@ -369,6 +369,16 @@ impl RemoteDiffStateManager {
                     metadata,
                     subscribers: self.subscribed_connections(key),
                 });
+            }
+            DiffStateModelEvent::ConnectionLost => {
+                // Client-only event — should not occur on the server side.
+                log::warn!("Unexpected ConnectionLost event on server-side model key={key:?}");
+            }
+            DiffStateModelEvent::BranchesReceived(_)
+            | DiffStateModelEvent::GitOpCompleted(_)
+            | DiffStateModelEvent::CommitMessageGenerated(_)
+            | DiffStateModelEvent::BranchCommittedFilesReceived(_) => {
+                // Client-only events don't go through this tracker.
             }
         }
     }
@@ -410,9 +420,10 @@ impl RemoteDiffStateManager {
         ctx: &mut ModelContext<Self>,
     ) {
         let diff_mode = key.mode.clone();
-        let repo_path = PathBuf::from(key.repo_path.as_str());
+        let repo_path = std::path::PathBuf::from(key.repo_path.as_str());
         let resolve_id = request_id.clone();
         let abort_id = request_id.clone();
+        let abort_key = key.clone();
         let handle = ctx.spawn_abortable(
             async move {
                 LocalDiffStateModel::load_diffs_with_content_for_mode(diff_mode, repo_path).await
@@ -421,9 +432,11 @@ impl RemoteDiffStateManager {
                 me.in_progress.remove(&resolve_id);
                 me.resolve_pending_responses(&key, diffs, ctx);
             },
-            move |me, _ctx| {
+            move |me, ctx| {
                 log::info!("Request cancelled (request_id={abort_id})");
                 me.in_progress.remove(&abort_id);
+                // Drain pending responses with current state instead of orphaning them.
+                me.resolve_pending_responses(&abort_key, None, ctx);
             },
         );
         self.in_progress.insert(request_id.clone(), handle);
@@ -438,6 +451,19 @@ impl RemoteDiffStateManager {
         } else {
             false
         }
+    }
+
+    /// Removes a specific pending response by request_id across all keys.
+    /// Called by `handle_abort` when the client times out a request.
+    /// Returns `true` if a pending response was found and removed.
+    pub fn abort_pending_response(&mut self, request_id: &RequestId) -> bool {
+        for pending in self.pending_responses.values_mut() {
+            if let Some(pos) = pending.iter().position(|p| &p.request_id == request_id) {
+                pending.remove(pos);
+                return true;
+            }
+        }
+        false
     }
 }
 

@@ -1,8 +1,10 @@
-#[cfg(test)]
-use super::*;
-use ai::index::Symbol;
 use std::collections::HashSet;
 use std::path::PathBuf;
+
+use ai::index::Symbol;
+
+#[cfg(test)]
+use super::*;
 
 fn create_test_symbol(name: &str, type_prefix: Option<&str>) -> CodeSymbol {
     CodeSymbol {

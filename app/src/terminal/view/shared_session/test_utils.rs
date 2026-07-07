@@ -56,7 +56,7 @@ pub fn terminal_view_for_viewer(app: &mut App) -> ViewHandle<TerminalView> {
             ReplicaId::random(),
             Box::new(ParticipantList::default()),
             SessionId::new(),
-            SessionSourceType::default(),
+            SessionSourceType::User,
             ctx,
         );
     });

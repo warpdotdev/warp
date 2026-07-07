@@ -4,10 +4,10 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
-use crate::persistence::StartedCommandMetadata;
-use crate::terminal::{view::ExecuteCommandEvent, TerminalModel};
-use crate::terminal::{History, HistoryEntry};
-use crate::{persistence::ModelEvent, terminal::model::session::Sessions};
+use crate::persistence::{ModelEvent, StartedCommandMetadata};
+use crate::terminal::model::session::Sessions;
+use crate::terminal::view::ExecuteCommandEvent;
+use crate::terminal::{History, HistoryEntry, TerminalModel};
 
 pub fn update_command_history(
     event: &ExecuteCommandEvent,

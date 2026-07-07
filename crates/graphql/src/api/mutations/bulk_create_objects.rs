@@ -1,9 +1,10 @@
 use super::create_generic_string_object::CreateGenericStringObjectOutput;
-use crate::{
-    error::UserFacingError, generic_string_object::GenericStringObjectInput,
-    object_permissions::Owner, request_context::RequestContext, response_context::ResponseContext,
-    schema,
-};
+use crate::error::UserFacingError;
+use crate::generic_string_object::GenericStringObjectInput;
+use crate::object_permissions::Owner;
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct BulkCreateObjectsVariables {

@@ -1,40 +1,37 @@
 use std::sync::mpsc;
 
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    platform::WindowStyle, AddSingletonModel, App, EntityId, ModelHandle, ViewContext, ViewHandle,
-};
-
-use crate::{
-    ai::blocklist::BlocklistAIHistoryModel,
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    cloud_object::{
-        model::{actions::ObjectActions, persistence::CloudModel, view::CloudViewModel},
-        Owner,
-    },
-    network::NetworkStatus,
-    notebooks::{editor::keys::NotebookKeybindings, notebook::NotebookView},
-    pane_group::NotebookPane,
-    persistence::ModelEvent,
-    search::files::model::FileSearchModel,
-    server::{
-        cloud_objects::update_manager::UpdateManager, server_api::ServerApiProvider,
-        sync_queue::SyncQueue, telemetry::context_provider::AppTelemetryContextProvider,
-    },
-    settings::PrivacySettings,
-    settings_view::keybindings::KeybindingChangedNotifier,
-    terminal::{
-        keys::TerminalKeybindings, shared_session::permissions_manager::SessionPermissionsManager,
-    },
-    test_util::settings::initialize_settings_for_tests,
-    workspace::ActiveSession,
-    workspaces::{
-        team_tester::TeamTesterStatus, user_profiles::UserProfiles, user_workspaces::UserWorkspaces,
-    },
-    GlobalResourceHandles, GlobalResourceHandlesProvider,
-};
+use warpui::platform::WindowStyle;
+use warpui::{AddSingletonModel, App, EntityId, ModelHandle, ViewContext, ViewHandle};
 
 use super::NotebookManager;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::actions::ObjectActions;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::CloudViewModel;
+use crate::cloud_object::Owner;
+use crate::network::NetworkStatus;
+use crate::notebooks::editor::keys::NotebookKeybindings;
+use crate::notebooks::notebook::NotebookView;
+use crate::pane_group::NotebookPane;
+use crate::persistence::ModelEvent;
+use crate::search::files::model::FileSearchModel;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::SyncQueue;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings::PrivacySettings;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::terminal::keys::TerminalKeybindings;
+use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspace::ActiveSession;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
 struct TestState {
     manager: ModelHandle<NotebookManager>,

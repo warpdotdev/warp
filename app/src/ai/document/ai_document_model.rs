@@ -5,55 +5,48 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+use ai::diff_validation::DiffDelta;
 // TODO(vorporeal): Remove this re-export at some point.
 pub use ai::document::{AIDocumentId, AIDocumentVersion};
-use anyhow;
 use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use uuid::Uuid;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
-
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
-use crate::auth::auth_state::AuthStateProvider;
-use crate::cloud_object::CloudObject;
-use crate::global_resource_handles::GlobalResourceHandlesProvider;
-use crate::persistence::ModelEvent;
-use crate::{
-    ai::{
-        agent::{conversation::AIConversationId, AIAgentActionId},
-        blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
-        execution_profiles::profiles::AIExecutionProfilesModel,
-    },
-    appearance::Appearance,
-    cloud_object::{model::persistence::CloudModel, CloudObjectEventEntrypoint, Owner},
-    drive::folders::CloudFolder,
-    notebooks::{
-        editor::{
-            model::{FileLinkResolutionContext, NotebooksEditorModel, RichTextEditorModelEvent},
-            rich_text_styles,
-        },
-        file::MarkdownDisplayMode,
-        post_process_notebook, CloudNotebookModel, NotebookId,
-    },
-    server::{
-        cloud_objects::update_manager::{
-            InitiatedBy, ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ClientId, ServerId, SyncId},
-    },
-    settings::FontSettings,
-    terminal::{
-        model::session::{active_session::ActiveSession, Session},
-        TerminalView,
-    },
-    throttle::throttle,
-    workspaces::user_workspaces::UserWorkspaces,
-};
-use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
-use ai::diff_validation::DiffDelta;
-use warp_editor::{model::RichTextEditorModel, render::model::RichTextStyles};
+use warp_editor::model::RichTextEditorModel;
+use warp_editor::render::model::RichTextStyles;
 use warp_multi_agent_api as maa_api;
 use warpui::color::ColorU;
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
+
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentActionId;
+use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::appearance::Appearance;
+use crate::auth::auth_state::AuthStateProvider;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::{CloudObject, CloudObjectEventEntrypoint, Owner};
+use crate::drive::folders::CloudFolder;
+use crate::drive::CloudObjectTypeAndId;
+use crate::global_resource_handles::GlobalResourceHandlesProvider;
+use crate::notebooks::editor::model::{
+    FileLinkResolutionContext, NotebooksEditorModel, RichTextEditorModelEvent,
+};
+use crate::notebooks::editor::rich_text_styles;
+use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::{CloudNotebookModel, NotebookId};
+use crate::persistence::ModelEvent;
+use crate::server::cloud_objects::update_manager::{
+    InitiatedBy, ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
+};
+use crate::server::ids::{ClientId, ServerId, SyncId};
+use crate::settings::FontSettings;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::Session;
+use crate::terminal::TerminalView;
+use crate::throttle::throttle;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// The frequency at which we check for modifications and save the AI document to the server.
 /// Uses the same 2-second period as notebooks for consistency.
@@ -166,9 +159,7 @@ pub enum AIDocumentUpdateSource {
     Restoration,
 }
 
-/// Payload queued when the user edits the plan-card orchestration
-/// config block. Cleared after `send_request_input()` piggybacks it
-/// onto the outbound `UserInputs`.
+/// Queued plan-card edit; cleared once it piggybacks onto an outbound query.
 #[derive(Debug, Clone)]
 pub struct DirtyOrchestrationEvent {
     pub plan_id: String,
@@ -193,25 +184,28 @@ pub struct AIDocumentModel {
     /// tool calls to the corresponding AI document ID.
     streaming_create_documents: HashMap<(AIConversationId, AIAgentActionId, usize), AIDocumentId>,
 
-    /// Dirty event queued for the next outbound request.
-    /// Set when the user edits the config or toggles approval on the
-    /// plan card; cleared by the controller after piggybacking onto
-    /// the outbound `UserInputs`.
-    dirty_orchestration_events: HashMap<AIConversationId, DirtyOrchestrationEvent>,
+    /// Pending plan-card edits, drained on the next outbound request.
+    dirty_orchestration_events: HashMap<(AIConversationId, String), DirtyOrchestrationEvent>,
 }
 
 impl AIDocumentModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&UpdateManager::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&UpdateManager::handle(ctx), |me, _, event, ctx| {
             me.handle_update_manager_event(event, ctx);
+        });
+        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
+            me.handle_cloud_model_event(event, ctx);
         });
 
         // Subscribe to history events so we can hydrate the orchestration
         // config from OrchestrationConfigSnapshot messages that arrive
         // in the conversation's task message list.
-        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
-            me.handle_history_event_for_orchestration_config(event, ctx);
-        });
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, ctx| {
+                me.handle_history_event_for_orchestration_config(event, ctx);
+            },
+        );
 
         // Setup throttled save channel
         let (save_tx, save_rx) = async_channel::unbounded();
@@ -252,6 +246,9 @@ impl AIDocumentModel {
     /// Returns true if the create document request was sent successfully (or if there was already a notebook entry).
     /// Actually creating the notebook is done asynchronously in the background.
     pub fn sync_to_warp_drive(&mut self, id: AIDocumentId, ctx: &mut ModelContext<Self>) -> bool {
+        if self.reconcile_document_server_backing(&id, ctx) {
+            return true;
+        }
         let Some(document) = self.documents.get(&id) else {
             return false;
         };
@@ -299,6 +296,176 @@ impl AIDocumentModel {
         }
     }
 
+    /// Publishes every document owned by a conversation before child-agent launch.
+    pub(in crate::ai) fn publish_documents_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Vec<AIDocumentId> {
+        self.reconcile_all_document_server_backing(ctx);
+        let document_ids = self
+            .documents
+            .iter()
+            .filter_map(|(document_id, document)| {
+                (document.conversation_id == conversation_id).then_some(*document_id)
+            })
+            .collect::<Vec<_>>();
+        let mut awaiting_server_backing = Vec::new();
+
+        for document_id in document_ids {
+            match self.get_document_save_status(&document_id) {
+                AIDocumentSaveStatus::Saved => {
+                    self.maybe_update_cloud_notebook_data(&document_id, ctx);
+                }
+                AIDocumentSaveStatus::Saving => {
+                    self.refresh_saving_document_content(&document_id, ctx);
+                    awaiting_server_backing.push(document_id);
+                }
+                AIDocumentSaveStatus::NotSaved => {
+                    if !self.sync_to_warp_drive(document_id, ctx) {
+                        log::error!(
+                            "Failed to publish plan document {document_id} to Warp Drive before child-agent launch."
+                        );
+                    } else if !self.get_document_save_status(&document_id).is_saved() {
+                        awaiting_server_backing.push(document_id);
+                    }
+                }
+            }
+        }
+
+        awaiting_server_backing
+    }
+
+    /// Reconciles a document with an existing server-backed Warp Drive notebook.
+    fn reconcile_document_server_backing(
+        &mut self,
+        document_id: &AIDocumentId,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let server_sync_id = CloudModel::as_ref(ctx)
+            .get_all_active_notebooks()
+            .find(|notebook| {
+                notebook.id.into_server().is_some()
+                    && notebook.model().ai_document_id.as_ref() == Some(document_id)
+            })
+            .map(|notebook| notebook.id);
+        let Some(server_sync_id) = server_sync_id else {
+            return false;
+        };
+        self.set_document_server_backing(*document_id, server_sync_id, ctx);
+        true
+    }
+
+    /// Reconciles all loaded documents with server-backed Warp Drive notebooks.
+    fn reconcile_all_document_server_backing(&mut self, ctx: &mut ModelContext<Self>) {
+        let document_ids = self.documents.keys().copied().collect::<Vec<_>>();
+        for document_id in document_ids {
+            self.reconcile_document_server_backing(&document_id, ctx);
+        }
+    }
+
+    /// Refreshes the latest content for a plan whose Warp Drive creation is in progress.
+    fn refresh_saving_document_content(
+        &mut self,
+        document_id: &AIDocumentId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(document) = self.documents.get(document_id) else {
+            return;
+        };
+        let title = document.title.clone();
+        let content = document.editor.as_ref(ctx).markdown(ctx);
+        let sync_id = document.sync_id;
+
+        for pending in self
+            .pending_document_queue
+            .iter_mut()
+            .filter(|pending| pending.id == *document_id)
+        {
+            pending.title.clone_from(&title);
+            pending.content.clone_from(&content);
+        }
+
+        if sync_id.is_some_and(|sync_id| CloudModel::as_ref(ctx).get_notebook(&sync_id).is_some()) {
+            self.maybe_update_cloud_notebook_data(document_id, ctx);
+        }
+    }
+
+    fn handle_cloud_model_event(&mut self, event: &CloudModelEvent, ctx: &mut ModelContext<Self>) {
+        match event {
+            CloudModelEvent::ObjectSynced { server_id, .. } => {
+                self.reconcile_server_backed_notebook(SyncId::ServerId(*server_id), ctx);
+            }
+            CloudModelEvent::ObjectCreated {
+                type_and_id: CloudObjectTypeAndId::Notebook(sync_id),
+            }
+            | CloudModelEvent::ObjectUpdated {
+                type_and_id: CloudObjectTypeAndId::Notebook(sync_id),
+                ..
+            } => {
+                self.reconcile_server_backed_notebook(*sync_id, ctx);
+            }
+            CloudModelEvent::InitialLoadCompleted => {
+                self.reconcile_all_document_server_backing(ctx);
+            }
+            CloudModelEvent::ObjectMoved { .. }
+            | CloudModelEvent::ObjectUpdated { .. }
+            | CloudModelEvent::ObjectTrashed { .. }
+            | CloudModelEvent::ObjectUntrashed { .. }
+            | CloudModelEvent::ObjectDeleted { .. }
+            | CloudModelEvent::ObjectPermissionsUpdated { .. }
+            | CloudModelEvent::ObjectForceExpanded { .. }
+            | CloudModelEvent::ObjectCreated { .. }
+            | CloudModelEvent::NotebookEditorChangedFromServer { .. } => {}
+        }
+    }
+    /// Reconciles one server-backed notebook with its loaded AI document.
+    fn reconcile_server_backed_notebook(&mut self, sync_id: SyncId, ctx: &mut ModelContext<Self>) {
+        if sync_id.into_server().is_none() {
+            return;
+        }
+        let document_id = CloudModel::as_ref(ctx)
+            .get_notebook(&sync_id)
+            .and_then(|notebook| notebook.model().ai_document_id);
+        if let Some(document_id) = document_id {
+            self.set_document_server_backing(document_id, sync_id, ctx);
+        }
+    }
+
+    /// Updates a document and its conversation artifact with server backing.
+    fn set_document_server_backing(
+        &mut self,
+        document_id: AIDocumentId,
+        sync_id: SyncId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(document) = self.documents.get_mut(&document_id) else {
+            return;
+        };
+        if document.sync_id == Some(sync_id) {
+            return;
+        }
+        document.sync_id = Some(sync_id);
+        let conversation_id = document.conversation_id;
+        ctx.emit(AIDocumentModelEvent::DocumentSaveStatusUpdated(document_id));
+
+        let Some(server_id) = sync_id.into_server() else {
+            return;
+        };
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+            let terminal_view_id =
+                history_model.terminal_surface_id_for_conversation(&conversation_id);
+            if let Some(conversation) = history_model.conversation_mut(&conversation_id) {
+                conversation.update_plan_notebook_uid(
+                    document_id,
+                    NotebookId::from(server_id),
+                    terminal_view_id,
+                    ctx,
+                );
+            }
+        });
+    }
+
     fn handle_update_manager_event(
         &mut self,
         event: &UpdateManagerEvent,
@@ -312,7 +479,7 @@ impl AIDocumentModel {
         {
             return;
         }
-        let (Some(client_id), Some(server_id)) = (result.client_id, result.server_id) else {
+        if result.server_id.is_none() {
             return;
         };
 
@@ -340,36 +507,6 @@ impl AIDocumentModel {
                 }
             }
         }
-
-        let Some((doc_id, doc)) = self
-            .documents
-            .iter_mut()
-            .find(|(_, doc)| doc.sync_id.and_then(|id| id.into_client()) == Some(client_id))
-        else {
-            return;
-        };
-
-        let conversation_id = doc.conversation_id;
-        let ai_document_id = *doc_id;
-        doc.sync_id = Some(SyncId::ServerId(server_id));
-        ctx.emit(AIDocumentModelEvent::DocumentSaveStatusUpdated(
-            ai_document_id,
-        ));
-
-        // Update the plan artifact's notebook_uid in the conversation
-        let notebook_uid = NotebookId::from(server_id);
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-            let terminal_view_id =
-                history_model.terminal_view_id_for_conversation(&conversation_id);
-            if let Some(conversation) = history_model.conversation_mut(&conversation_id) {
-                conversation.update_plan_notebook_uid(
-                    ai_document_id,
-                    notebook_uid,
-                    terminal_view_id,
-                    ctx,
-                );
-            }
-        });
     }
 
     /// Create a new document with default title/content and return its ID.
@@ -425,6 +562,58 @@ impl AIDocumentModel {
         }
     }
 
+    /// Hydrates a saved plan notebook into the target conversation.
+    pub(in crate::ai) fn hydrate_saved_plan_from_warp_drive(
+        &mut self,
+        ai_document_id: AIDocumentId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), String> {
+        let notebook = CloudModel::as_ref(ctx)
+            .get_all_active_notebooks()
+            .find(|notebook| notebook.model().ai_document_id.as_ref() == Some(&ai_document_id))
+            .map(|notebook| {
+                (
+                    notebook.id,
+                    notebook.model().title.clone(),
+                    notebook.model().data.clone(),
+                )
+            })
+            .ok_or_else(|| {
+                format!("Plan document {ai_document_id} was not found in Warp Drive.")
+            })?;
+        let (sync_id, title, content) = notebook;
+        if sync_id.into_server().is_none() {
+            return Err(format!(
+                "Plan document {ai_document_id} is not backed by a saved Warp Drive notebook."
+            ));
+        }
+
+        self.latest_document_id_by_conversation_id
+            .insert(conversation_id, ai_document_id);
+
+        if let Some(document) = self.documents.get_mut(&ai_document_id) {
+            if document.sync_id != Some(sync_id) {
+                document.sync_id = Some(sync_id);
+                ctx.emit(AIDocumentModelEvent::DocumentSaveStatusUpdated(
+                    ai_document_id,
+                ));
+            }
+            return Ok(());
+        }
+
+        self.create_document_from_notebook(
+            ai_document_id,
+            sync_id,
+            title,
+            content,
+            conversation_id,
+            None,
+            ctx,
+        );
+        Ok(())
+    }
+
     fn create_document_internal(
         &mut self,
         id: AIDocumentId,
@@ -439,7 +628,7 @@ impl AIDocumentModel {
         let editor = Self::create_editor_model(content, file_link_resolution_context, ctx);
 
         // Subscribe to editor content changes
-        ctx.subscribe_to_model(&editor, move |me, event, ctx| {
+        ctx.subscribe_to_model(&editor, move |me, _, event, ctx| {
             me.handle_editor_event(&id, event, ctx);
         });
 
@@ -523,7 +712,7 @@ impl AIDocumentModel {
         doc.title = new_title.to_owned();
         let editor_handle = doc.editor.clone();
         editor_handle.update(ctx, |editor, editor_ctx| {
-            editor.update_to_new_markdown(&post_process_notebook(new_content), editor_ctx);
+            editor.update_to_new_markdown(new_content, editor_ctx);
         });
 
         ctx.emit(AIDocumentModelEvent::DocumentUpdated {
@@ -777,8 +966,7 @@ impl AIDocumentModel {
 
         log::info!("Applying persisted SQLite content for document {id} (content differs from conversation restoration)");
         doc.editor.update(ctx, |editor, editor_ctx| {
-            let processed = post_process_notebook(persisted_content);
-            editor.reset_with_markdown(&processed, editor_ctx);
+            editor.reset_with_markdown(persisted_content, editor_ctx);
         });
 
         // Mark as dirty so the updated plan is attached to the next agent query
@@ -832,9 +1020,7 @@ impl AIDocumentModel {
 
             let content = content.into();
             if !content.is_empty() {
-                // Post-process the content to remove extra newlines
-                let processed_content = post_process_notebook(&content);
-                model.reset_with_markdown(&processed_content, ctx);
+                model.reset_with_markdown(&content, ctx);
             }
             model
         })
@@ -929,25 +1115,7 @@ impl AIDocumentModel {
             ctx,
         );
 
-        // Update the sync status of a document by checking if it exists in Warp Drive.
-        let Some(doc) = self.documents.get(&id) else {
-            return;
-        };
-
-        if doc.sync_id.is_some() {
-            return;
-        }
-
-        let matching_notebook = CloudModel::as_ref(ctx)
-            .get_all_active_notebooks()
-            .find(|notebook| notebook.model().ai_document_id == Some(id));
-
-        if let Some(notebook) = matching_notebook {
-            if let Some(doc) = self.documents.get_mut(&id) {
-                doc.sync_id = Some(notebook.id);
-                ctx.emit(AIDocumentModelEvent::DocumentSaveStatusUpdated(id));
-            }
-        }
+        self.reconcile_document_server_backing(&id, ctx);
     }
 
     /// This is used for restoring EditDocuments results where we already have the final content.
@@ -963,8 +1131,7 @@ impl AIDocumentModel {
         if let Some(doc) = self.create_new_document_version(id, ctx) {
             let content = new_content.into();
             doc.editor.update(ctx, |editor, editor_ctx| {
-                let processed_content = post_process_notebook(&content);
-                editor.reset_with_markdown(&processed_content, editor_ctx);
+                editor.reset_with_markdown(&content, editor_ctx);
             });
             doc.created_at = created_at;
             ctx.emit(AIDocumentModelEvent::DocumentUpdated {
@@ -1067,7 +1234,7 @@ impl AIDocumentModel {
         };
         let content = doc.editor.as_ref(ctx).markdown(ctx);
         UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
-            update_manager.update_notebook_data(content.into(), sync_id.into(), ctx);
+            update_manager.update_notebook_data(content.into(), sync_id, ctx);
         });
     }
 
@@ -1210,113 +1377,117 @@ impl AIDocumentModel {
     }
 
     /// Scans all messages across all tasks in a restored conversation to find
-    /// the last `OrchestrationConfigSnapshot` and hydrate the config from it.
+    /// per-plan `OrchestrationConfigSnapshot` messages and hydrate the config map.
+    /// Backward scan: for each `plan_id`, the first snapshot found (most recent) wins.
     fn scan_conversation_for_orchestration_config(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Clone the snapshot out of the history borrow so we can pass
-        // &mut ctx to hydrate below.
-        let snapshot = {
+        use std::collections::HashMap;
+        let configs = {
             let history = BlocklistAIHistoryModel::as_ref(ctx);
             let Some(conversation) = history.conversation(&conversation_id) else {
                 return;
             };
-            // Find the *last* snapshot so we hydrate the most recent config.
-            conversation
+            let mut configs: HashMap<String, (OrchestrationConfig, OrchestrationConfigStatus)> =
+                HashMap::new();
+            let messages: Vec<_> = conversation
                 .all_tasks()
                 .flat_map(|task| task.messages())
-                .filter_map(|message| {
-                    if let Some(maa_api::message::Message::OrchestrationConfigSnapshot(snapshot)) =
-                        &message.message
-                    {
-                        Some(snapshot.clone())
-                    } else {
-                        None
+                .collect();
+            for message in messages.iter().rev() {
+                if let Some(maa_api::message::Message::OrchestrationConfigSnapshot(snapshot)) =
+                    &message.message
+                {
+                    if !snapshot.plan_id.is_empty() && !configs.contains_key(&snapshot.plan_id) {
+                        if let Some(config) = snapshot
+                            .config
+                            .as_ref()
+                            .map(OrchestrationConfig::from_proto)
+                        {
+                            let status =
+                                OrchestrationConfigStatus::from_proto(snapshot.status.as_ref());
+                            configs.insert(snapshot.plan_id.clone(), (config, status));
+                        }
                     }
-                })
-                .last()
+                }
+            }
+            configs
         };
-        if let Some(snapshot) = snapshot {
-            Self::hydrate_orchestration_config_from_snapshot(conversation_id, &snapshot, ctx);
+        if !configs.is_empty() {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, hctx| {
+                if let Some(conversation) = history.conversation_mut(&conversation_id) {
+                    if conversation.set_orchestration_configs(configs) {
+                        hctx.emit(BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
+                            conversation_id,
+                            from_restore: true,
+                        });
+                    }
+                }
+            });
         }
     }
 
     // ── Orchestration config accessors ────────────────────────────
 
-    pub fn take_dirty_orchestration_event(
+    /// Takes all dirty orchestration events for the given conversation,
+    /// returning one event per plan that was edited.
+    pub fn take_dirty_orchestration_events(
         &mut self,
         conversation_id: &AIConversationId,
-    ) -> Option<DirtyOrchestrationEvent> {
-        self.dirty_orchestration_events.remove(conversation_id)
+    ) -> Vec<DirtyOrchestrationEvent> {
+        let keys_to_remove: Vec<_> = self
+            .dirty_orchestration_events
+            .keys()
+            .filter(|(cid, _)| cid == conversation_id)
+            .cloned()
+            .collect();
+        keys_to_remove
+            .into_iter()
+            .filter_map(|key| self.dirty_orchestration_events.remove(&key))
+            .collect()
     }
 
-    /// Re-insert a dirty event that was taken but not successfully sent.
-    pub fn set_dirty_orchestration_event(
+    /// Re-insert dirty events that were taken but not successfully sent.
+    pub fn set_dirty_orchestration_events(
         &mut self,
         conversation_id: AIConversationId,
-        event: DirtyOrchestrationEvent,
+        events: Vec<DirtyOrchestrationEvent>,
     ) {
-        self.dirty_orchestration_events
-            .insert(conversation_id, event);
+        for event in events {
+            let plan_id = event.plan_id.clone();
+            self.dirty_orchestration_events
+                .insert((conversation_id, plan_id), event);
+        }
     }
 
-    /// Updates the conversation-level orchestration config and status.
-    /// Called from the plan card config block when the user edits a field
-    /// or toggles the approval switch.
-    pub fn set_orchestration_config(
+    /// Updates the per-plan orchestration config and status; called from
+    /// the plan card config block on field edit / approval toggle.
+    pub fn set_orchestration_config_for_plan(
         &mut self,
         conversation_id: AIConversationId,
+        plan_id: String,
         config: OrchestrationConfig,
         status: OrchestrationConfigStatus,
-        plan_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.dirty_orchestration_events.insert(
-            conversation_id,
+            (conversation_id, plan_id.clone()),
             DirtyOrchestrationEvent {
-                plan_id: plan_id.clone().unwrap_or_default(),
+                plan_id: plan_id.clone(),
                 config: config.clone(),
                 status,
             },
         );
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, hctx| {
             if let Some(conversation) = history.conversation_mut(&conversation_id) {
-                conversation.set_orchestration_config(Some(config), status, plan_id);
+                conversation.set_orchestration_config_for_plan(plan_id, config, status);
             }
-            hctx.emit(BlocklistAIHistoryEvent::OrchestrationConfigUpdated { conversation_id });
-        });
-    }
-
-    /// Hydrates the orchestration config from an in-history
-    /// `Message.OrchestrationConfigSnapshot`. Called during conversation
-    /// restore and on incoming `UpdateTaskMessage` / `AddMessagesToTask`
-    /// events that carry the snapshot.
-    fn hydrate_orchestration_config_from_snapshot(
-        conversation_id: AIConversationId,
-        snapshot: &maa_api::OrchestrationConfigSnapshot,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let config = snapshot
-            .config
-            .as_ref()
-            .map(OrchestrationConfig::from_proto);
-        let status = OrchestrationConfigStatus::from_proto(snapshot.status.as_ref());
-        let plan_id = if snapshot.plan_id.is_empty() {
-            None
-        } else {
-            Some(snapshot.plan_id.clone())
-        };
-
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, hctx| {
-            if let Some(conversation) = history.conversation_mut(&conversation_id) {
-                if conversation.set_orchestration_config(config, status, plan_id) {
-                    hctx.emit(BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
-                        conversation_id,
-                    });
-                }
-            }
+            hctx.emit(BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
+                conversation_id,
+                from_restore: false,
+            });
         });
     }
 

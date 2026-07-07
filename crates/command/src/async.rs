@@ -2,13 +2,13 @@
 // wrapper implementation that allows us to not import the above type elsewhere in this workspace.
 #![allow(clippy::disallowed_types)]
 
-use async_process::Child;
 use std::ffi::OsStr;
-use std::fmt;
 use std::future::Future;
-use std::io;
 use std::path::Path;
 use std::process::{ExitStatus, Output, Stdio};
+use std::{fmt, io};
+
+use async_process::Child;
 
 /// Wrapper around a [`async_process::Command`] that ensures any new Command is set with the windows
 /// `CREATE_NO_WINDOW` flag to avoid a console window temporarily popping up.

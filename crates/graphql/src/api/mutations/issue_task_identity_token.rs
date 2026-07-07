@@ -1,7 +1,8 @@
-use crate::{
-    error::UserFacingError, request_context::RequestContext, response_context::ResponseContext,
-    scalars::Time, schema,
-};
+use crate::error::UserFacingError;
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
+use crate::scalars::Time;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct IssueTaskIdentityTokenVariables {

@@ -1,27 +1,30 @@
-use super::OnboardingSlide;
-use crate::model::OnboardingStateModel;
-use crate::slides::{bottom_nav, layout, slide_content};
-use crate::visuals::{intention_terminal_visual, intention_visual};
-use crate::{OnboardingIntention, AI_FEATURES};
 use ui_components::{button, Component as _, Options as _};
 use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors, Icon};
-use warpui::prelude::Align;
-use warpui::{
-    elements::{
-        Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, ParentElement, Radius,
-    },
-    fonts::Weight,
-    keymap::Keystroke,
-    platform::Cursor,
-    text_layout::TextAlignment,
-    ui_components::components::{UiComponent as _, UiComponentStyles},
+use warp_core::ui::Icon;
+use warpui_core::elements::{
+    Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius,
+};
+use warpui_core::fonts::Weight;
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::Cursor;
+use warpui_core::prelude::Align;
+use warpui_core::text_layout::TextAlignment;
+use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui_core::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext,
 };
+
+use super::OnboardingSlide;
+use crate::model::{NoAiConfirmationSource, OnboardingStateModel};
+use crate::slides::{bottom_nav, layout, slide_content};
+use crate::visuals::{intention_terminal_visual, intention_visual};
+use crate::{OnboardingIntention, AI_FEATURES};
 
 #[derive(Debug, Clone)]
 pub enum IntentionSlideAction {
@@ -199,7 +202,7 @@ impl IntentionSlide {
         let header_row = {
             let label = appearance
                 .ui_builder()
-                .paragraph("Build faster with AI agents")
+                .paragraph("Build faster with agents")
                 .with_style(UiComponentStyles {
                     font_size: Some(16.),
                     font_weight: Some(Weight::Semibold),
@@ -237,7 +240,7 @@ impl IntentionSlide {
         };
 
         let description = FormattedTextElement::from_str(
-            "An agent-first experience with best in class terminal support. Get terminal and agent driven development AI features like:",
+            "Get AI features to accelerate terminal and agent-driven workflows:",
             appearance.ui_font_family(),
             14.,
         )
@@ -520,8 +523,14 @@ impl IntentionSlide {
     fn next(&mut self, ctx: &mut ViewContext<Self>) {
         self.onboarding_state.update(ctx, |model, ctx| {
             if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-                // Always advance to Customize slide; both intentions continue the flow.
-                model.next(ctx);
+                match model.intention() {
+                    // "Just use the terminal" confirms leaving AI behind before advancing.
+                    OnboardingIntention::Terminal => {
+                        model.request_no_ai_confirmation(NoAiConfirmationSource::Intention, ctx);
+                    }
+                    // Agent intention routes to the next step (the AI-setup fork).
+                    OnboardingIntention::AgentDrivenDevelopment => model.next(ctx),
+                }
             } else {
                 match model.intention() {
                     OnboardingIntention::Terminal => {

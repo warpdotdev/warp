@@ -1,9 +1,8 @@
+use warpui::elements::{ChildView, Empty, SavePosition};
+use warpui::platform::WindowStyle;
+use warpui::{App, ViewHandle};
+
 use super::*;
-use warpui::{
-    elements::{ChildView, Empty, SavePosition},
-    platform::WindowStyle,
-    App, ViewHandle,
-};
 
 struct TipContainer {
     tips_view: ViewHandle<TipsView>,

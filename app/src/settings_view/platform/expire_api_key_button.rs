@@ -1,11 +1,11 @@
-use crate::server::{ids::ApiKeyUid, server_api::auth::AuthClient};
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::MouseStateHandle, ui_components::components::UiComponent, AppContext, Element,
-    Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
+use warpui::elements::MouseStateHandle;
+use warpui::ui_components::components::UiComponent;
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::ui_components::{buttons::icon_button, icons::Icon};
+use crate::server::ids::ApiKeyUid;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
 
 #[derive(PartialEq, Eq)]
 enum RequestState {
@@ -45,10 +45,11 @@ impl ExpireApiKeyButton {
         self.request_state = RequestState::Pending;
         ctx.notify();
 
-        let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+        let auth_client =
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
         let uid_for_req = self.key_uid.clone();
         ctx.spawn(
-            async move { server_api.expire_api_key(&uid_for_req).await },
+            async move { auth_client.expire_api_key(&uid_for_req).await },
             move |me, res, ctx| match res {
                 Ok(
                     warp_graphql::mutations::expire_api_key::ExpireApiKeyResult::ExpireApiKeyOutput(

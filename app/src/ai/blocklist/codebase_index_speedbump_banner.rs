@@ -1,21 +1,18 @@
 use std::path::PathBuf;
 
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisSize, MouseStateHandle,
+    ParentElement, Shrinkable,
+};
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::Element;
+
 use crate::appearance::Appearance;
 use crate::terminal::view::{InlineBannerId, TerminalAction};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use warpui::elements::{Align, ConstrainedBox};
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::Coords;
-use warpui::{
-    elements::{
-        Container, CrossAxisAlignment, Flex, MainAxisSize, MouseStateHandle, ParentElement,
-        Shrinkable,
-    },
-    platform::Cursor,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    Element,
-};
 
 const SPEEDBUMP_HEADER: &str = "Index Codebase?";
 const SPEEDBUMP_TEXT: &str = "Indexing helps agents quickly understand context and provide targeted solutions. Code is never stored on the server.";

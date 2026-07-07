@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-
-use settings::{macros::define_settings_group, SupportedPlatforms, SyncToCloud};
+use settings::macros::define_settings_group;
+use settings::{SupportedPlatforms, SyncToCloud};
 
 #[derive(
     Clone,
@@ -30,6 +30,7 @@ define_settings_group!(UserAppInstallDetectionSettings, settings: [
         default: UserAppInstallStatus::default(),
         supported_platforms: SupportedPlatforms::WEB,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
         storage_key: "UserAppInstallStatus",
     }

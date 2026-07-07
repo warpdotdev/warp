@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
-use super::*;
 use warp_multi_agent_api as api;
+
+use super::*;
 
 // Helper function to create a basic message
 fn create_message(id: &str, task_id: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: "server_data".to_string(),
@@ -22,6 +24,7 @@ fn create_message(id: &str, task_id: &str) -> api::Message {
 
 fn create_subagent_tool_call_message(id: &str, task_id: &str, subtask_id: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: "server_data".to_string(),
@@ -44,6 +47,7 @@ fn create_subagent_tool_call_message(id: &str, task_id: &str, subtask_id: &str) 
 // Helper function to create a tool call result message.
 fn create_tool_call_result_message(id: &str, task_id: &str, tool_call_id: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: "server_data".to_string(),

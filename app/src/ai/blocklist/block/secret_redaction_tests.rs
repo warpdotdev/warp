@@ -3,9 +3,8 @@ use serial_test::serial;
 use warpui::elements::Text;
 use warpui::fonts::FamilyId;
 
-use crate::terminal::model::secrets::{self, SecretLevel};
-
 use super::*;
+use crate::terminal::model::secrets::{self, SecretLevel};
 
 #[test]
 fn test_merge_no_ranges() {

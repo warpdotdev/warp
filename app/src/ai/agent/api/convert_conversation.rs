@@ -4,12 +4,30 @@
 //! If some UI state is stored in the client, it needs to also be represented in the proto tasks somehow so it can be restored.
 //! Some conversions may be lossy if it's not important to recover that UI state.
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+use ai::agent::action_result::{
+    AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
+    RecordingStarted, RecordingStopped, RequestComputerUseResult, SendMessageToAgentResult,
+    StartAgentResult, StartAgentVersion, StartRecordingResult, StopRecordingResult,
+    UseComputerResult,
+};
+use ai::skills::{ParsedSkill, SkillPathOrigin};
+use chrono::{DateTime, Local, TimeZone};
+use persistence::model::AgentConversationData;
+use warp_core::command::ExitCode;
+use warp_multi_agent_api as api;
+use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
+
 use crate::ai::agent::api::convert_from::{
     convert_user_query_mode, ConversionParams, ConvertAPIMessageToClientOutputMessage,
     MaybeAIAgentOutputMessage,
 };
-use crate::ai::agent::conversation::update_todo_list_from_todo_op;
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::{
+    update_todo_list_from_todo_op, AIConversation, AIConversationId, ServerAIConversationMetadata,
+};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
@@ -24,7 +42,7 @@ use crate::ai::agent::{
     RequestFileEditsResult, SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId,
     Shared, ShellCommandCompletedTrigger, ShellCommandError, SuggestNewConversationResult,
     SuggestPromptResult, TransferShellCommandControlToUserResult, UpdatedFileContext,
-    UploadArtifactResult, WriteToLongRunningShellCommandResult,
+    UploadArtifactResult, UserQueryMode, WriteToLongRunningShellCommandResult,
 };
 use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -32,22 +50,6 @@ use crate::ai::llms::LLMId;
 use crate::ai_assistant::execution_context::{WarpAiExecutionContext, WarpAiOsContext};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::terminal_model::BlockIndex;
-use ai::agent::action_result::{
-    AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
-    RequestComputerUseResult, SendMessageToAgentResult, StartAgentResult, StartAgentVersion,
-    UseComputerResult,
-};
-use ai::skills::ParsedSkill;
-use chrono::{DateTime, Local, TimeZone};
-use persistence::model::AgentConversationData;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use warp_core::command::ExitCode;
-use warp_multi_agent_api as api;
-use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
-
-use crate::ai::agent::conversation::ServerAIConversationMetadata;
-use crate::ai::agent::UserQueryMode;
 
 /// How to restore a conversation from the cloud.
 pub enum RestorationMode {
@@ -84,9 +86,11 @@ pub fn convert_conversation_data_to_ai_conversation(
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            root_task_is_optimistic: None,
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,
+            pinned: false,
         },
         RestorationMode::Continue => AgentConversationData {
             server_conversation_token: Some(
@@ -101,13 +105,13 @@ pub fn convert_conversation_data_to_ai_conversation(
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
-            // TODO: Populate run_id from server metadata once it is exposed
-            // in ServerAIConversationMetadata. For cloud conversations that
-            // were spawned via the server API, the run_id is created at task
-            // dispatch time; adding it here would avoid a round-trip to StreamInit.
-            run_id: None,
+            root_task_is_optimistic: None,
+            run_id: metadata
+                .ambient_agent_task_id
+                .map(|task_id| task_id.to_string()),
             autoexecute_override: None,
             last_event_sequence: None,
+            pinned: false,
         },
     };
 
@@ -239,7 +243,8 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
             };
 
             // Convert binary data to base64
-            use base64::{engine::general_purpose, Engine};
+            use base64::engine::general_purpose;
+            use base64::Engine;
             let data = general_purpose::STANDARD.encode(&image.data);
 
             result.push(AIAgentContext::Image(ImageContext {
@@ -465,7 +470,10 @@ impl ConvertToExchanges for &api::Task {
                 }
                 api::message::Message::InvokeSkill(invoke_skill) => {
                     if let Some(api_skill) = invoke_skill.skill.clone() {
-                        if let Ok(parsed_skill) = ParsedSkill::try_from(api_skill) {
+                        if let Ok(parsed_skill) = ParsedSkill::try_from_api_with_origin(
+                            api_skill,
+                            &SkillPathOrigin::RestoredDisplayOnly,
+                        ) {
                             let user_query = invoke_skill
                                 .user_query
                                 .clone()
@@ -528,6 +536,7 @@ impl ConvertToExchanges for &api::Task {
                         // TODO(alokedesai): Support persistence for the code review state.
                         active_code_review: None,
                         task_id: &TaskId::new(api_message.task_id.clone()),
+                        skill_path_origin: &SkillPathOrigin::Unavailable,
                     })
                 {
                     current_outputs.push(output_msg);
@@ -585,6 +594,14 @@ pub(crate) fn convert_tool_call_result_to_input(
                         command: result.command.clone(),
                         output: finished.output.clone(),
                         exit_code: ExitCode::from(finished.exit_code),
+                        start_ts: finished
+                            .start_ts
+                            .as_ref()
+                            .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
+                        completed_ts: finished
+                            .finish_ts
+                            .as_ref()
+                            .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
                     }
                 }
                 Some(api::run_shell_command_result::Result::LongRunningCommandSnapshot(
@@ -631,6 +648,8 @@ pub(crate) fn convert_tool_call_result_to_input(
                         block_id: finished.command_id.clone().into(),
                         output: finished.output.clone(),
                         exit_code: ExitCode::from(finished.exit_code),
+                        start_ts: finished.start_ts.as_ref().map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
+                        completed_ts: finished.finish_ts.as_ref().map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
                     },
                     Some(api::write_to_long_running_shell_command_result::Result::Error(api::ShellCommandError{
                         r#type: Some(api::shell_command_error::Type::CommandNotFound(()))
@@ -1221,6 +1240,14 @@ pub(crate) fn convert_tool_call_result_to_input(
                         block_id: finished.command_id.clone().into(),
                         output: finished.output.clone(),
                         exit_code: ExitCode::from(finished.exit_code),
+                        start_ts: finished
+                            .start_ts
+                            .as_ref()
+                            .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
+                        completed_ts: finished
+                            .finish_ts
+                            .as_ref()
+                            .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
                     }
                 }
                 Some(
@@ -1271,6 +1298,8 @@ pub(crate) fn convert_tool_call_result_to_input(
                     block_id: finished.command_id.clone().into(),
                     output: finished.output.clone(),
                     exit_code: ExitCode::from(finished.exit_code),
+                    start_ts: finished.start_ts.as_ref().map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
+                    completed_ts: finished.finish_ts.as_ref().map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
                 },
                 Some(api::transfer_shell_command_control_to_user_result::Result::Error(
                     api::ShellCommandError {
@@ -1319,34 +1348,52 @@ pub(crate) fn convert_tool_call_result_to_input(
             })
         }
         Some(ToolCallResultType::UseComputer(result)) => {
-            let use_computer_result = match &result.result {
-                Some(api::use_computer_result::Result::Success(success)) => {
-                    let screenshot = success.screenshot.as_ref().map(|s| {
-                        // The original dimensions are not preserved through the API, so we use
-                        // the current dimensions for both.
-                        computer_use::Screenshot {
-                            width: s.width as usize,
-                            height: s.height as usize,
-                            original_width: s.width as usize,
-                            original_height: s.height as usize,
-                            data: s.data.clone(),
-                            mime_type: s.mime_type.clone().into(),
-                        }
-                    });
-                    let cursor_position = success
-                        .cursor_position
-                        .as_ref()
-                        .map(|c| computer_use::Vector2I::new(c.x, c.y));
-                    UseComputerResult::Success(computer_use::ActionResult {
-                        screenshot,
-                        cursor_position,
-                    })
-                }
-                Some(api::use_computer_result::Result::Error(error)) => {
-                    UseComputerResult::Error(error.message.clone())
-                }
-                None => UseComputerResult::Cancelled,
-            };
+            let use_computer_result =
+                match &result.result {
+                    Some(api::use_computer_result::Result::Success(success)) => {
+                        let screenshot = success.screenshot.as_ref().map(|s| {
+                            // The original dimensions are not preserved through the API, so we use
+                            // the current dimensions for both.
+                            computer_use::Screenshot {
+                                width: s.width as usize,
+                                height: s.height as usize,
+                                original_width: s.width as usize,
+                                original_height: s.height as usize,
+                                data: s.data.clone(),
+                                mime_type: s.mime_type.clone().into(),
+                            }
+                        });
+                        let cursor_position = success
+                            .cursor_position
+                            .as_ref()
+                            .map(|c| computer_use::Vector2I::new(c.x, c.y));
+                        let windows = success
+                            .windows
+                            .iter()
+                            .map(convert_api_window_info)
+                            .collect();
+                        // A present captured-window message indicates a window screenshot was taken.
+                        // The window id is an opaque string on the wire; on macOS it is a CGWindowID,
+                        // so parse it back to a u32, defaulting to 0 when it is not parseable.
+                        let captured_window = success.captured_window.as_ref().map(|c| {
+                            computer_use::CapturedWindow {
+                                window_id: c.window_id.parse().unwrap_or(0),
+                                width_px: c.width_px,
+                                height_px: c.height_px,
+                            }
+                        });
+                        UseComputerResult::Success(computer_use::ActionResult {
+                            screenshot,
+                            cursor_position,
+                            windows,
+                            captured_window,
+                        })
+                    }
+                    Some(api::use_computer_result::Result::Error(error)) => {
+                        UseComputerResult::Error(error.message.clone())
+                    }
+                    None => UseComputerResult::Cancelled,
+                };
 
             Some(AIAgentInput::ActionResult {
                 result: AIAgentActionResult {
@@ -1365,6 +1412,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                             api::request_computer_use_result::Approved {
                                 screen_dimensions: Some(screen_dimensions),
                                 initial_screenshot: Some(initial_screenshot),
+                                windows,
                                 ..
                             },
                             Some(platform),
@@ -1378,6 +1426,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 mime_type: initial_screenshot.mime_type.clone().into(),
                             },
                             platform,
+                            windows: windows.iter().map(convert_api_window_info).collect(),
                         },
                         _ => RequestComputerUseResult::Error(
                             "Missing screen dimensions, initial screenshot, or valid platform"
@@ -1618,6 +1667,75 @@ pub(crate) fn convert_tool_call_result_to_input(
                 context,
             })
         }
+        Some(ToolCallResultType::StartRecording(result)) => {
+            let start_result = match &result.result {
+                Some(api::start_recording_result::Result::Success(success)) => {
+                    StartRecordingResult::Success(RecordingStarted {
+                        recording_id: success.recording_id.clone(),
+                        started_at: success
+                            .started_at
+                            .as_ref()
+                            .map(proto_timestamp_to_system_time)
+                            .unwrap_or_else(SystemTime::now),
+                        width_px: success
+                            .settings
+                            .as_ref()
+                            .map(|s| s.width_px)
+                            .unwrap_or_default(),
+                        height_px: success
+                            .settings
+                            .as_ref()
+                            .map(|s| s.height_px)
+                            .unwrap_or_default(),
+                    })
+                }
+                Some(api::start_recording_result::Result::Error(error)) => {
+                    StartRecordingResult::Error(error.message.clone())
+                }
+                None => StartRecordingResult::Cancelled,
+            };
+            Some(AIAgentInput::ActionResult {
+                result: AIAgentActionResult {
+                    id: tool_call_id.into(),
+                    task_id: task_id.clone(),
+                    result: AIAgentActionResultType::StartRecording(start_result),
+                },
+                context,
+            })
+        }
+        Some(ToolCallResultType::StopRecording(result)) => {
+            let stop_result = match &result.result {
+                Some(api::stop_recording_result::Result::Success(success)) => {
+                    StopRecordingResult::Success(RecordingStopped {
+                        artifact_uid: success.artifact_uid.clone(),
+                        duration: success
+                            .duration
+                            .as_ref()
+                            .map(proto_duration_to_duration)
+                            .unwrap_or_default(),
+                        width_px: success.width_px,
+                        height_px: success.height_px,
+                        size_bytes: success.size_bytes,
+                        completion_status: convert_recording_completion_status(
+                            success.completion_status,
+                        ),
+                        termination_reason: success.termination_reason.clone(),
+                    })
+                }
+                Some(api::stop_recording_result::Result::Error(error)) => {
+                    StopRecordingResult::Error(error.message.clone())
+                }
+                None => StopRecordingResult::Cancelled,
+            };
+            Some(AIAgentInput::ActionResult {
+                result: AIAgentActionResult {
+                    id: tool_call_id.into(),
+                    task_id: task_id.clone(),
+                    result: AIAgentActionResultType::StopRecording(stop_result),
+                },
+                context,
+            })
+        }
         // Deprecated/unused result types or absent result.
         Some(ToolCallResultType::SuggestCreatePlan(..))
         | Some(ToolCallResultType::SuggestPlan(..))
@@ -1625,6 +1743,24 @@ pub(crate) fn convert_tool_call_result_to_input(
             log::warn!("No result present for tool call ID: {tool_call_id}");
             None
         }
+        Some(ToolCallResultType::WaitForEvents(_)) => None,
+    }
+}
+
+fn proto_timestamp_to_system_time(ts: &prost_types::Timestamp) -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::new(ts.seconds.max(0) as u64, ts.nanos.max(0) as u32)
+}
+
+fn proto_duration_to_duration(duration: &prost_types::Duration) -> Duration {
+    Duration::new(duration.seconds.max(0) as u64, duration.nanos.max(0) as u32)
+}
+
+fn convert_recording_completion_status(status: i32) -> computer_use::RecordingCompletionStatus {
+    match api::stop_recording_result::CompletionStatus::try_from(status) {
+        Ok(api::stop_recording_result::CompletionStatus::Complete) => {
+            computer_use::RecordingCompletionStatus::Completed
+        }
+        _ => computer_use::RecordingCompletionStatus::StoppedEarly,
     }
 }
 
@@ -1755,8 +1891,17 @@ fn create_cancelled_result_for_tool_call(
         ToolType::RunAgents(_) => {
             AIAgentActionResultType::RunAgents(ai::agent::action_result::RunAgentsResult::Cancelled)
         }
+        ToolType::StartRecording(_) => {
+            AIAgentActionResultType::StartRecording(StartRecordingResult::Cancelled)
+        }
+        ToolType::StopRecording(_) => {
+            AIAgentActionResultType::StopRecording(StopRecordingResult::Cancelled)
+        }
         // These tools are deprecated.
         ToolType::SuggestCreatePlan(_) | ToolType::SuggestPlan(_) => return None,
+        ToolType::WaitForEvents(_) => {
+            return None;
+        }
     };
 
     Some(AIAgentInput::ActionResult {
@@ -1854,6 +1999,10 @@ fn create_exchange_from_messages(
             model_id: model.model_id.clone().into(),
             display_name: model.model_display_name.clone(),
             is_fallback: model.is_fallback,
+            prompt_cache_expires_at: model
+                .prompt_cache_expires_at
+                .as_ref()
+                .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
         }),
         request_cost: None,
     };
@@ -2063,7 +2212,7 @@ fn convert_passive_suggestion_result_to_input(
         context,
     })
 }
-fn proto_timestamp_to_local_datetime(seconds: i64, nanos: i32) -> DateTime<Local> {
+pub(crate) fn proto_timestamp_to_local_datetime(seconds: i64, nanos: i32) -> DateTime<Local> {
     let nanos = if nanos < 0 { 0 } else { nanos as u32 };
 
     Local
@@ -2089,6 +2238,19 @@ fn convert_api_platform(platform: i32) -> Option<computer_use::Platform> {
             log::warn!("Unknown platform value: {platform}");
             None
         }
+    }
+}
+
+/// Reconstructs the internal computer_use window record from the API `WindowInfo` message.
+fn convert_api_window_info(window: &api::WindowInfo) -> computer_use::WindowInfo {
+    computer_use::WindowInfo {
+        // The window id arrives as an opaque string; on macOS it is a CGWindowID (u32). Default to
+        // 0 when it is not parseable.
+        window_id: window.window_id.parse().unwrap_or(0),
+        pid: window.pid,
+        app_name: window.app_name.clone(),
+        title: window.title.clone(),
+        layer: window.layer,
     }
 }
 

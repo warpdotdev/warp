@@ -1,22 +1,21 @@
-use itertools::Itertools;
 use std::collections::HashMap;
-use warpui::AppContext;
 
+use itertools::Itertools;
+use warpui::{AppContext, SingletonEntity};
+
+use super::{WorkflowIdentity, WorkflowSearchItem};
 use crate::completer::SessionContext;
+use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::command_search::settings::CommandSearchSettings;
+use crate::search::data_source::{Query, QueryResult};
+use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
+use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
 use crate::user_config::WarpConfig;
 use crate::workflows::local_workflows::LocalWorkflows;
 #[cfg(feature = "local_fs")]
 use crate::workflows::local_workflows::UseCache;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowSource, WorkflowType};
-use warpui::SingletonEntity;
-
-use super::{WorkflowIdentity, WorkflowSearchItem};
-use crate::search::command_search::searcher::CommandSearchItemAction;
-use crate::search::data_source::{Query, QueryResult};
-use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
-use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
 
 pub struct WorkflowsDataSource {
     /// Contains workflows keyed by WorkflowSource.

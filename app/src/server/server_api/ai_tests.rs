@@ -1,15 +1,15 @@
-use chrono::TimeZone;
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
+use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
 
-use super::super::auth::CLOUD_AGENT_ID_HEADER;
 use super::super::ServerApi;
 use super::{
     build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
     AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
-    ArtifactDownloadResponse, ArtifactType, ExecutionLocation, ForkConversationResponse,
-    ListRunsResponse, ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder,
-    SpawnAgentRequest, TaskListFilter, UserQueryMode,
+    ArtifactDownloadResponse, ArtifactType, ConnectedSelfHostedWorker, ExecutionLocation,
+    ForkConversationResponse, ListConnectedSelfHostedWorkersResponse, ListRunsResponse,
+    ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
+    TaskListFilter, UserQueryMode, CONNECTED_SELF_HOSTED_WORKERS_PATH,
 };
 use crate::notebooks::NotebookId;
 
@@ -30,14 +30,17 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
 
     assert_eq!(
         cloud_agent_headers,
-        vec![(CLOUD_AGENT_ID_HEADER, task_scoped_id.to_string())]
+        vec![(
+            CLOUD_AGENT_ID_HEADER.to_string(),
+            task_scoped_id.to_string()
+        )]
     );
 }
 
 #[test]
 fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
     let request = SpawnAgentRequest {
-        prompt: "hello".to_string(),
+        prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
@@ -51,6 +54,8 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         referenced_attachments: vec![],
         conversation_id: None,
         initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let value = serde_json::to_value(&request).unwrap();
@@ -60,6 +65,80 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         Some("agent_123")
     );
     assert!(value.get("agent_uid").is_none());
+}
+
+#[test]
+fn connected_self_hosted_workers_path_uses_public_api_route() {
+    assert_eq!(
+        CONNECTED_SELF_HOSTED_WORKERS_PATH,
+        "agent/connected-self-hosted-workers"
+    );
+}
+
+#[test]
+fn deserialize_connected_self_hosted_workers_response() {
+    let json = r#"{
+        "workers": [
+            {
+                "worker_host": "worker-2",
+                "connection_count": 2,
+                "connected_at": "2026-05-18T19:00:00Z",
+                "last_seen_at": "2026-05-18T19:05:00Z"
+            },
+            {
+                "worker_host": "worker-1",
+                "connection_count": 1,
+                "connected_at": "2026-05-18T18:00:00Z",
+                "last_seen_at": "2026-05-18T18:05:00Z"
+            }
+        ]
+    }"#;
+
+    let response: ListConnectedSelfHostedWorkersResponse = serde_json::from_str(json).unwrap();
+
+    assert_eq!(
+        response.workers,
+        vec![
+            ConnectedSelfHostedWorker {
+                worker_host: "worker-2".to_string(),
+                connection_count: 2,
+                connected_at: "2026-05-18T19:00:00Z".to_string(),
+                last_seen_at: "2026-05-18T19:05:00Z".to_string(),
+            },
+            ConnectedSelfHostedWorker {
+                worker_host: "worker-1".to_string(),
+                connection_count: 1,
+                connected_at: "2026-05-18T18:00:00Z".to_string(),
+                last_seen_at: "2026-05-18T18:05:00Z".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn spawn_agent_request_omits_prompt_when_none() {
+    let request = SpawnAgentRequest {
+        prompt: None,
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: None,
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    };
+
+    let value = serde_json::to_value(&request).unwrap();
+
+    assert!(value.get("prompt").is_none());
 }
 
 #[test]

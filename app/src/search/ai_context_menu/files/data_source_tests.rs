@@ -1,27 +1,28 @@
-use crate::search::{
-    ai_context_menu::{
-        files::data_source::{file_data_source_for_pwd, fuzzy_match_files, FileSnapshot},
-        mixer::AIContextMenuSearchableAction,
-    },
-    data_source::Query,
-    files::{model::FileSearchModel, search_item::FileSearchResult},
-    item::SearchItem,
-    mixer::AsyncDataSource,
-};
-use crate::{terminal::model::session::Session, workspace::ActiveSession};
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::RepoMetadataModel;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::RepoMetadataModel;
 use tempfile::tempdir;
+use warpui::elements::Empty;
 use warpui::platform::WindowStyle;
 use warpui::r#async::block_on;
 use warpui::windowing::WindowManager;
-use warpui::SingletonEntity;
-use warpui::{elements::Empty, App, AppContext, Element, Entity, TypedActionView, View};
+use warpui::{App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View};
+
+use crate::search::ai_context_menu::files::data_source::{
+    file_data_source_for_pwd, fuzzy_match_files, FileSnapshot,
+};
+use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
+use crate::search::data_source::Query;
+use crate::search::files::model::FileSearchModel;
+use crate::search::files::search_item::FileSearchResult;
+use crate::search::item::SearchItem;
+use crate::search::mixer::AsyncDataSource;
+use crate::terminal::model::session::Session;
+use crate::workspace::ActiveSession;
 struct TestView;
 
 impl Entity for TestView {
@@ -406,8 +407,9 @@ fn test_path_proximity_ranking() {
 
 #[test]
 fn test_directory_search_support() {
-    use crate::search::ai_context_menu::files::search_item::FileSearchItem;
     use fuzzy_match::FuzzyMatchResult;
+
+    use crate::search::ai_context_menu::files::search_item::FileSearchItem;
 
     // Test that directories can be created with is_directory flag
     let directory_item = FileSearchItem {
@@ -434,10 +436,11 @@ fn test_directory_search_support() {
 
 #[test]
 fn test_directory_action_type() {
+    use fuzzy_match::FuzzyMatchResult;
+
     use crate::search::ai_context_menu::files::search_item::FileSearchItem;
     use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
     use crate::search::item::SearchItem;
-    use fuzzy_match::FuzzyMatchResult;
 
     let directory_item = FileSearchItem {
         path: PathBuf::from("src/components/"),

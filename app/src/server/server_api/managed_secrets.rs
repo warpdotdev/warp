@@ -3,11 +3,24 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
+use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretType};
+use warp_graphql::mutations::create_managed_secret::{
+    CreateManagedSecret, CreateManagedSecretInput, CreateManagedSecretResult,
+    CreateManagedSecretVariables,
+};
+use warp_graphql::mutations::delete_managed_secret::{
+    DeleteManagedSecret, DeleteManagedSecretInput, DeleteManagedSecretResult,
+    DeleteManagedSecretVariables,
+};
 use warp_graphql::mutations::issue_task_identity_token::{
     IssueTaskIdentityToken, IssueTaskIdentityTokenInput, IssueTaskIdentityTokenResult,
     IssueTaskIdentityTokenVariables,
 };
-use warp_graphql::object_permissions::OwnerType;
+use warp_graphql::mutations::update_managed_secret::{
+    UpdateManagedSecret, UpdateManagedSecretInput, UpdateManagedSecretResult,
+    UpdateManagedSecretVariables,
+};
+use warp_graphql::object_permissions::{Owner, OwnerType};
 use warp_graphql::queries::list_harness_auth_secrets::{
     ListHarnessAuthSecrets, ListHarnessAuthSecretsInput, ListHarnessAuthSecretsVariables,
 };
@@ -20,30 +33,11 @@ use warp_graphql::queries::managed_secret_config::{
 use warp_graphql::queries::task_secrets::{
     ManagedSecretValue, TaskSecrets, TaskSecretsInput, TaskSecretsResult, TaskSecretsVariables,
 };
-use warp_graphql::{
-    managed_secrets::{ManagedSecret, ManagedSecretType},
-    mutations::{
-        create_managed_secret::{
-            CreateManagedSecret, CreateManagedSecretInput, CreateManagedSecretResult,
-            CreateManagedSecretVariables,
-        },
-        delete_managed_secret::{
-            DeleteManagedSecret, DeleteManagedSecretInput, DeleteManagedSecretResult,
-            DeleteManagedSecretVariables,
-        },
-        update_managed_secret::{
-            UpdateManagedSecret, UpdateManagedSecretInput, UpdateManagedSecretResult,
-            UpdateManagedSecretVariables,
-        },
-    },
-    object_permissions::Owner,
-};
+pub use warp_managed_secrets::client::{ManagedSecretConfigs, ManagedSecretsClient};
 use warp_managed_secrets::client::{SecretOwner, TaskIdentityToken};
 
 use super::ServerApi;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
-
-pub use warp_managed_secrets::client::{ManagedSecretConfigs, ManagedSecretsClient};
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]

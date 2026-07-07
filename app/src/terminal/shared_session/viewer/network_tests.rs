@@ -1,19 +1,19 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use async_channel::Sender;
 use async_io::Timer;
 use instant::Instant;
-use session_sharing_protocol::viewer::UpstreamMessage;
-use std::{sync::Arc, time::Duration};
-
 use parking_lot::FairMutex;
-
+use session_sharing_protocol::viewer::UpstreamMessage;
 use warpui::{App, ModelHandle};
 
-use crate::{
-    terminal::{event_listener::ChannelEventListener, TerminalModel},
-    test_util::{add_window_with_terminal, terminal::initialize_app_for_terminal_view},
-};
-
 use super::{Network, PtyBytesBatchStatus, Stage};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
+use crate::terminal::TerminalModel;
+use crate::test_util::add_window_with_terminal;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn create_network(app: &mut App) -> (ModelHandle<Network>, Sender<Vec<u8>>) {
     initialize_app_for_terminal_view(app);
@@ -28,6 +28,7 @@ fn create_network(app: &mut App) -> (ModelHandle<Network>, Sender<Vec<u8>>) {
             terminal_view,
             terminal_model,
             write_to_pty_events_rx,
+            RemoteUpdateGuard::new(),
             ctx,
         )
     });

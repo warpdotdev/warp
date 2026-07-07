@@ -1,31 +1,17 @@
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::vec2f;
-use pathfinder_geometry::vector::Vector2F;
-use warpui::elements::new_scrollable::AxisConfiguration;
-use warpui::elements::new_scrollable::ClippedAxisConfiguration;
-use warpui::elements::new_scrollable::DualAxisConfig;
-use warpui::elements::new_scrollable::NewScrollableElement;
-use warpui::elements::new_scrollable::ScrollableAppearance;
-use warpui::elements::new_scrollable::ScrollableAxis;
-use warpui::elements::Axis;
-
-use warpui::elements::ChildView;
-use warpui::elements::ClippedScrollStateHandle;
-use warpui::elements::NewScrollable;
-use warpui::elements::Point;
-use warpui::elements::ScrollData;
-use warpui::elements::ScrollStateHandle;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warpui::color::ColorU;
+use warpui::elements::new_scrollable::{
+    AxisConfiguration, ClippedAxisConfiguration, DualAxisConfig, NewScrollableElement,
+    ScrollableAppearance, ScrollableAxis,
+};
+use warpui::elements::{
+    Axis, ChildView, ClippedScrollStateHandle, ConstrainedBox, NewScrollable, ParentElement, Point,
+    Rect, ScrollData, ScrollStateHandle, ScrollbarWidth, Stack,
+};
 use warpui::keymap::FixedBinding;
 use warpui::units::Pixels;
-use warpui::AppContext;
-use warpui::TypedActionView;
-use warpui::ViewHandle;
-use warpui::{
-    elements::{ConstrainedBox, ParentElement, Rect, ScrollbarWidth, Stack},
-    Element, Entity, View, ViewContext,
-};
-
-use warpui::color::ColorU;
+use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 pub fn init(ctx: &mut AppContext) {
     use warpui::keymap::macros::*;

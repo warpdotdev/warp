@@ -1,33 +1,31 @@
-use std::{borrow::Cow, collections::VecDeque, sync::Arc};
+use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
 use thiserror::Error;
+use warp_util::path::ShellFamily;
 use warpui::r#async::block_on;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
+use super::Message;
 use crate::ai::agent::AIAgentPtyWriteMode;
 use crate::terminal::input::CommandExecutionSource;
+use crate::terminal::line_editor_status::{LineEditorStatus, LineEditorStatusEvent};
+use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::session::{
-    ExecutorCommandEvent, InBandCommandCancelledEvent, Sessions,
+    ExecutorCommandEvent, InBandCommandCancelledEvent, SessionInfo, Sessions,
 };
-use crate::terminal::model::tmux::commands::TmuxCommand;
-use crate::terminal::model_events::AnsiHandlerEvent;
+use crate::terminal::model::{escape_sequences, StartCommandOutcome};
+use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
+use crate::terminal::shell::ShellType;
 use crate::terminal::view::LINEFEED_REGEX;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::writeable_pty::bootstrap_file::{permanent_bootstrap_file, TempBootstrapFile};
-use crate::terminal::{
-    bootstrap,
-    line_editor_status::{LineEditorStatus, LineEditorStatusEvent},
-    model::{ansi::Handler, escape_sequences, session::SessionInfo},
-    model_events::{ModelEvent, ModelEventDispatcher},
-    shell::ShellType,
-    SizeUpdate, TerminalModel,
-};
+use crate::terminal::{bootstrap, SizeUpdate, TerminalModel};
 use crate::SessionSettings;
-
-use super::Message;
 
 /// Byte sequence to emulate the user pressing ENTER, used to execute a command in the shell.
 const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::LF];
@@ -47,7 +45,7 @@ enum PtyWrite {
         /// command.
         in_band_command_id: Option<String>,
         /// If 'some', the given callback is called right before the bytes are written to the PTY.
-        before_write_fn: Option<Box<dyn Fn() + Send + 'static>>,
+        before_write_fn: Option<Box<dyn Fn() -> StartCommandOutcome + Send + 'static>>,
     },
     Bytes {
         /// The bytes to be written.
@@ -59,7 +57,6 @@ enum PtyWrite {
         /// The `mode` for the agent's write.
         mode: AIAgentPtyWriteMode,
     },
-    TmuxCommand(TmuxCommand),
     RunNativeShellCompletions(NativeShellCompletionsState),
 }
 
@@ -77,13 +74,6 @@ impl NativeShellCompletionsState {
     fn is_awaiting_prompt(&self) -> bool {
         matches!(self, Self::AwaitingPrompt { .. })
     }
-}
-
-enum TmuxControlMode {
-    /// Tmux control mode is started, but we don't have the primary pane yet.
-    Pending { buffer: Vec<u8> },
-    /// Tmux control mode is active.
-    Active { primary_pane: u32 },
 }
 
 /// Controller for writes to the PTY.
@@ -105,7 +95,6 @@ pub struct PtyController<T: EventLoopSender> {
     /// complete, it will be dropped to clean up the temporary file.
     #[cfg(not(target_family = "wasm"))]
     bootstrap_file: Option<TempBootstrapFile>,
-    tmux_control_mode: Option<TmuxControlMode>,
     in_flight_native_completions_state: Option<NativeShellCompletionsState>,
 }
 
@@ -119,7 +108,7 @@ impl<T: EventLoopSender> PtyController<T> {
         terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&model_event_dispatcher, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&model_event_dispatcher, |me, _, event, ctx| match event {
             ModelEvent::Handler(AnsiHandlerEvent::UserCommandFinished) => {
                 me.is_user_command_executing = false;
             }
@@ -137,17 +126,6 @@ impl<T: EventLoopSender> PtyController<T> {
             ModelEvent::Handler(AnsiHandlerEvent::UnsetBracketedPaste) => {
                 me.is_bracketed_paste_enabled = false;
             }
-            ModelEvent::Handler(AnsiHandlerEvent::StartTmuxControlMode) => {
-                me.tmux_control_mode = Some(TmuxControlMode::Pending {
-                    buffer: Default::default(),
-                });
-            }
-            ModelEvent::Handler(AnsiHandlerEvent::RunTmuxCommand(command)) => {
-                me.send_write_to_event_loop(PtyWrite::TmuxCommand(command.to_owned()), ctx);
-            }
-            ModelEvent::Handler(AnsiHandlerEvent::EndTmuxControlMode) => {
-                me.tmux_control_mode = None;
-            }
             ModelEvent::HonorPS1OutOfSync => {
                 // We force re-sync the PS1 state of Warp settings with the shell's environment variable, $WARP_HONOR_PS1, via
                 // a bindkey (which triggers a shell function).
@@ -156,19 +134,6 @@ impl<T: EventLoopSender> PtyController<T> {
                     me.send_switch_to_ps1_bindkey(ctx);
                 } else {
                     me.send_switch_to_warp_prompt_bindkey(ctx);
-                }
-            }
-            ModelEvent::Handler(AnsiHandlerEvent::TmuxControlModeReady { primary_pane }) => {
-                let previous_control_mode_state = me.tmux_control_mode.replace(TmuxControlMode::Active {
-                        primary_pane: *primary_pane,
-                    });
-                if let Some(TmuxControlMode::Pending { buffer }) = previous_control_mode_state {
-                    me.send_write_to_event_loop(
-                        PtyWrite::Bytes {
-                            bytes: Cow::Owned(buffer),
-                        },
-                        ctx,
-                    );
                 }
             }
             ModelEvent::CompletionsFinished(data) => {
@@ -209,7 +174,7 @@ impl<T: EventLoopSender> PtyController<T> {
             _ => (),
         });
 
-        ctx.subscribe_to_model(&line_editor_status, |me, event, ctx| {
+        ctx.subscribe_to_model(&line_editor_status, |me, _, event, ctx| {
             if let LineEditorStatusEvent::Active = event {
                 let input_reporting_seq = me
                     .model_event_dispatcher
@@ -241,9 +206,6 @@ impl<T: EventLoopSender> PtyController<T> {
                 ExecutorCommandEvent::CancelCommand { id } => {
                     me.cancel_in_band_command(id.as_str());
                 }
-                ExecutorCommandEvent::ExecuteTmuxCommand(command) => {
-                    me.send_write_to_event_loop(PtyWrite::TmuxCommand(command), ctx);
-                }
             },
             |_, _| (),
         );
@@ -259,7 +221,6 @@ impl<T: EventLoopSender> PtyController<T> {
             is_bracketed_paste_enabled: false,
             #[cfg(not(target_family = "wasm"))]
             bootstrap_file: None,
-            tmux_control_mode: None,
             in_flight_native_completions_state: None,
         }
     }
@@ -346,15 +307,24 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         let terminal_model = self.terminal_model.clone();
+        let callback_command_id = command_id.clone();
         self.pending_writes.push_back(PtyWrite::Command {
             command: command.to_owned(),
             shell_type,
             in_band_command_id: Some(command_id),
             before_write_fn: Some(Box::new(move || {
                 let mut terminal_model = terminal_model.lock();
-                terminal_model
-                    .block_list_mut()
-                    .start_active_block_for_in_band_command();
+                let outcome = terminal_model.start_in_band_command_execution();
+                if !outcome.is_accepted() {
+                    if let Err(err) = block_on(cancel_tx.send(InBandCommandCancelledEvent {
+                        command_id: callback_command_id.clone(),
+                    })) {
+                        log::warn!(
+                            "Pty Controller failed to cancel rejected in band command: {err:?}"
+                        );
+                    }
+                }
+                outcome
             })),
         });
 
@@ -382,8 +352,8 @@ impl<T: EventLoopSender> PtyController<T> {
 
         if let Some(write) = self.pending_writes.pop_front() {
             let is_command = matches!(write, PtyWrite::Command { .. });
-            self.send_write_to_event_loop(write, ctx);
-            if !is_command {
+            let did_write = self.send_write_to_event_loop(write, ctx);
+            if !is_command || !did_write {
                 self.execute_next_queued_write(ctx);
             }
         }
@@ -468,6 +438,19 @@ impl<T: EventLoopSender> PtyController<T> {
                 self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
                 self.write_terminating_bootstrap_bytes(ctx);
             }
+        } else if bootstrap::is_container_subshell(pending_session_info) {
+            // Write in 4KB chunks with 50ms delays to avoid overwhelming
+            // PTY buffers in container exec sessions (podman/docker exec -it),
+            // where the double-PTY proxy drops data for large writes.
+            const CHUNK_SIZE: usize = 4096;
+            let bytes: Vec<u8> = bootstrap.into_owned();
+            let chunks: Vec<Vec<u8>> = bytes.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                ctx.spawn(
+                    warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),
+                    move |me, _, ctx| me.write_bytes(chunk, ctx),
+                );
+            }
         } else {
             self.write_bytes(bootstrap, ctx);
         }
@@ -482,8 +465,6 @@ impl<T: EventLoopSender> PtyController<T> {
         shell_type: ShellType,
         ctx: &mut ModelContext<Self>,
     ) {
-        use warp_util::path::ShellFamily;
-
         // TODO(CORE-2099): Figure out a more robust solution here. Fish users
         // can redefine these functions via fish functions. Ideally this won't
         // break if the user redefines the `source` or `.` built-in.
@@ -542,12 +523,12 @@ impl<T: EventLoopSender> PtyController<T> {
         shell_type: ShellType,
         source: CommandExecutionSource,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> StartCommandOutcome {
         {
             let mut model = self.terminal_model.lock();
 
             // Explicitly start the block now that the command is executed.
-            match source {
+            let outcome = match source {
                 CommandExecutionSource::AI { metadata } => {
                     model.start_command_execution_with_ai_metadata(metadata)
                 }
@@ -556,10 +537,15 @@ impl<T: EventLoopSender> PtyController<T> {
                     ai_metadata,
                     ..
                 } => model.start_command_execution_for_shared_session(participant_id, ai_metadata),
-                CommandExecutionSource::User => model.start_command_execution(),
+                CommandExecutionSource::User | CommandExecutionSource::QueuedCommand => {
+                    model.start_command_execution()
+                }
                 CommandExecutionSource::EnvVarCollection { metadata } => {
                     model.start_command_execution_from_env_var_collection(metadata)
                 }
+            };
+            if !outcome.is_accepted() {
+                return outcome;
             }
 
             // Ensure that the `TerminalModel` doesn't interpret any of the PTY output from the
@@ -585,6 +571,7 @@ impl<T: EventLoopSender> PtyController<T> {
         } else {
             self.pending_writes.push_back(write);
         }
+        StartCommandOutcome::Accepted
     }
 
     /// Synchronously writes the EOT (End-of-Transmission) char to the PTY.
@@ -655,8 +642,8 @@ impl<T: EventLoopSender> PtyController<T> {
     ///
     /// If the write corresponds to a command, this also calls
     /// [`LineEditorStatus::did_execute_command()`].
-    fn send_write_to_event_loop(&mut self, write: PtyWrite, ctx: &mut ModelContext<Self>) {
-        let (bytes_to_write, is_for_command, on_write_fn, raw_tmux_command) = match write {
+    fn send_write_to_event_loop(&mut self, write: PtyWrite, ctx: &mut ModelContext<Self>) -> bool {
+        let (bytes_to_write, is_for_command, on_write_fn) = match write {
             PtyWrite::Command {
                 command,
                 shell_type,
@@ -670,26 +657,13 @@ impl<T: EventLoopSender> PtyController<T> {
                 )),
                 true,
                 on_write_fn,
-                false,
             ),
             PtyWrite::AgentInput { bytes, mode } => {
                 let decorated_bytes =
                     mode.decorate_bytes(bytes.into_owned(), self.is_bracketed_paste_enabled);
-                (decorated_bytes.into(), false, None, false)
+                (decorated_bytes.into(), false, None)
             }
-            PtyWrite::Bytes { bytes } => (bytes, false, None, false),
-            PtyWrite::TmuxCommand(command) => {
-                let command = command.get_command_string();
-                debug_assert!(
-                    command.ends_with('\n'),
-                    "Tmux commands must end in a newlines so they are executed"
-                );
-                debug_assert!(
-                    self.tmux_control_mode.is_some(),
-                    "Received tmux command outside of control mode."
-                );
-                (command.into_bytes().into(), false, None, true)
-            }
+            PtyWrite::Bytes { bytes } => (bytes, false, None),
             PtyWrite::RunNativeShellCompletions(state) => {
                 self.in_flight_native_completions_state = Some(state);
 
@@ -697,29 +671,20 @@ impl<T: EventLoopSender> PtyController<T> {
                 // then wait for an OSC-based signal from the shell before we
                 // send the text that needs to be completed.
                 let bytes = vec![0x19_u8];
-                (bytes.into(), false, None, false)
+                (bytes.into(), false, None)
             }
         };
 
         // The terminal hangs if we send 0 bytes through.
         if bytes_to_write.is_empty() {
-            return;
+            return false;
         }
 
-        let bytes_to_write = match &mut self.tmux_control_mode {
-            None => bytes_to_write,
-            Some(_) if raw_tmux_command => bytes_to_write,
-            Some(TmuxControlMode::Pending { buffer }) => {
-                buffer.extend_from_slice(&bytes_to_write);
-                return;
+        if let Some(on_write_fn) = on_write_fn {
+            if !on_write_fn().is_accepted() {
+                return false;
             }
-            Some(TmuxControlMode::Active { primary_pane }) => {
-                crate::terminal::model::tmux::format_input(*primary_pane, &bytes_to_write)
-                    .as_bytes()
-                    .to_owned()
-                    .into()
-            }
-        };
+        }
 
         if is_for_command {
             self.line_editor_status
@@ -728,11 +693,8 @@ impl<T: EventLoopSender> PtyController<T> {
                 });
         }
 
-        if let Some(on_write_fn) = on_write_fn {
-            on_write_fn();
-        }
-
         self.send_message_to_event_loop(Message::Input(bytes_to_write), ctx);
+        true
     }
 
     /// Sends a message to the event loop. If the send fails with `SendError::Disconnected`, emits
@@ -787,6 +749,11 @@ fn bytes_to_execute_command(
     is_bracketed_paste_enabled: bool,
 ) -> Vec<u8> {
     let mut command_bytes = shell_type.kill_buffer_bytes().to_vec();
+    let command = match ShellFamily::from(shell_type) {
+        ShellFamily::Posix if cfg!(windows) => LINEFEED_REGEX.replace_all(command, "\n"),
+        ShellFamily::PowerShell => LINEFEED_REGEX.replace_all(command, "\r"),
+        _ => Cow::Borrowed(command),
+    };
 
     // Only execute the command via bracketed paste if the command is not empty. Some ZSH
     // bracketed paste magic functions return errors if bracketed paste is used without text
@@ -823,11 +790,7 @@ fn bytes_to_execute_command(
         }
     } else {
         let command_without_escapes = command.replace(escape_sequences::C0::ESC as char, "");
-        // This is a fix for PLAT-770 to allow multi-line commands in Powershell.
-        // In general, shells without bracketed paste don't handle `\n` that well,
-        // and in the case of PowerShell, it is explicitly ignored.
-        let command_without_newlines = LINEFEED_REGEX.replace_all(&command_without_escapes, "\r");
-        command_bytes.extend(command_without_newlines.as_bytes());
+        command_bytes.extend(command_without_escapes.as_bytes());
     }
     command_bytes.extend(shell_type.execute_command_bytes().to_vec());
     command_bytes
@@ -842,6 +805,13 @@ fn wrap_bytes_in_bracketed_paste(bytes: impl IntoIterator<Item = u8>) -> impl It
         .chain(bytes)
         .chain(escape_sequences::BRACKETED_PASTE_END.iter().copied())
 }
+
+#[cfg(test)]
+#[path = "pty_controller_command_bytes_tests.rs"]
+mod command_bytes_tests;
+#[cfg(test)]
+#[path = "pty_controller_lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[derive(Error, Debug)]
 pub enum EventLoopSendError {

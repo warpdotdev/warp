@@ -1,17 +1,15 @@
 use itertools::Itertools;
 use warpui::{AppContext, SingletonEntity};
 
+use super::notebook_search_item::NotebookSearchItem;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, Space};
 use crate::notebooks::CloudNotebook;
+use crate::search::data_source::{Query, QueryResult};
+use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
 use crate::search::notebook_embedding::embedded_fuzzy_match::FuzzyMatchEmbeddedObjectResult;
 use crate::search::notebook_embedding::is_embed_accessible;
 use crate::search::notebook_embedding::searcher::EmbeddingSearchItemAction;
-
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::search::data_source::{Query, QueryResult};
-use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
-
-use super::notebook_search_item::NotebookSearchItem;
 
 pub struct CloudNotebooksDataSource {
     /// The space containing the object we are embedding into.

@@ -1,12 +1,12 @@
 use std::ffi::c_void;
 
+use mio::event::Source;
+use mio::{Interest, Registry, Token};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Threading::{
     RegisterWaitForSingleObject, UnregisterWait, INFINITE, WT_EXECUTEINWAITTHREAD,
     WT_EXECUTEONLYONCE,
 };
-
-use mio::{event::Source, Interest, Registry, Token};
 
 use crate::terminal::local_tty::mio_channel;
 use crate::terminal::local_tty::windows::ShareableHandle;

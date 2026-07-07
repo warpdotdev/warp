@@ -12,3 +12,4 @@ rust-embed.workspace = true
 arborium.workspace = true
 lazy_static.workspace = true
 warp_editor = { path = "../editor" }
+warp_util.workspace = true

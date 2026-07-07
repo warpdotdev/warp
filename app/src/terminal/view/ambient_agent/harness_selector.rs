@@ -5,21 +5,19 @@
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
-        ParentOffsetBounds, Stack,
-    },
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
-};
-
+use settings::Setting as _;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-
-use settings::Setting as _;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
+    ParentOffsetBounds, Stack,
+};
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
 use crate::ai::blocklist::agent_view::agent_input_footer::AgentInputButtonTheme;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;

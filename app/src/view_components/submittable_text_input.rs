@@ -1,19 +1,19 @@
 use pathfinder_color::ColorU;
+use warpui::elements::{
+    Border, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, Shrinkable,
+};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, ParentElement, Radius, Shrinkable,
-    },
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    editor::{EditorOptions, EditorView, Event as EditorEvent, InteractionState, TextOptions},
-    themes::theme::Fill,
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorOptions, EditorView, Event as EditorEvent, InteractionState, TextOptions,
 };
+use crate::themes::theme::Fill;
 
 const ENTER_BUTTON_SIZE: f32 = 22.;
 

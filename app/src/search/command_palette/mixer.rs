@@ -1,3 +1,10 @@
+use std::sync::Arc;
+
+use strum_macros::IntoStaticStr;
+use warp_util::path::LineAndColumnArg;
+use warpui::keymap::BindingId;
+use warpui::{EntityId, WindowId};
+
 use crate::ai::agent::conversation::AIConversationId;
 use crate::drive::CloudObjectTypeAndId;
 use crate::launch_configs::launch_config::LaunchConfig;
@@ -6,11 +13,6 @@ use crate::search::mixer::SearchMixer;
 use crate::server::ids::SyncId;
 use crate::util::bindings::CommandBinding;
 use crate::workspace::PaneViewLocator;
-use std::sync::Arc;
-use strum_macros::IntoStaticStr;
-use warp_util::path::LineAndColumnArg;
-use warpui::keymap::BindingId;
-use warpui::{EntityId, WindowId};
 
 pub type CommandPaletteMixer = SearchMixer<CommandPaletteItemAction>;
 

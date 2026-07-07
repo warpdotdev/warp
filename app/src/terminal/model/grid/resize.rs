@@ -2,17 +2,13 @@
 // Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
 
 use string_offset::ByteOffset;
-use warp_terminal::model::{
-    grid::{
-        cell::{self, LineLength as _},
-        Dimensions as _,
-    },
-    Point, VisiblePoint, VisibleRow,
-};
-
-use crate::terminal::{model::grid::Cursor, SizeInfo};
+use warp_terminal::model::grid::cell::{self, LineLength as _};
+use warp_terminal::model::grid::Dimensions as _;
+use warp_terminal::model::{Point, VisiblePoint, VisibleRow};
 
 use super::{FullGridClearBehavior, GridHandler};
+use crate::terminal::model::grid::Cursor;
+use crate::terminal::SizeInfo;
 
 impl GridHandler {
     /// Resize terminal to new dimensions.

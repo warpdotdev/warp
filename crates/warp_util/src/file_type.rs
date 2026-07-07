@@ -4,17 +4,21 @@
 //! based on its filename and extension. It uses a hybrid approach combining MIME type detection
 //! with explicit extension checking for edge cases.
 
-use content_inspector::{inspect, ContentType};
-use mime_guess::{self, mime};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+
+use content_inspector::{inspect, ContentType};
+use mime_guess::{self, mime};
 
 /// File extensions for Markdown files.
 const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown"];
 
 /// Names of files that are typically Markdown or plain text.
 const MARKDOWN_FILE_NAMES: &[&str] = &["README", "CHANGELOG", "LICENSE"];
+
+/// File extension for Jupyter notebook files.
+const JUPYTER_NOTEBOOK_EXTENSION: &str = "ipynb";
 
 /// Checks if a buffer appears to contain binary content.
 /// Returns true if the buffer appears to be binary, false if it appears to be text.
@@ -140,6 +144,13 @@ pub fn is_markdown_file(path: impl AsRef<Path>) -> bool {
     }
 }
 
+/// Guess whether or not `path` is a Jupyter notebook file based on its `.ipynb` extension.
+pub fn is_jupyter_notebook_file(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(JUPYTER_NOTEBOOK_EXTENSION))
+}
+
 /// Determines if a file is likely to be a text file based on its filename.
 ///
 /// This function uses a hybrid approach:
@@ -226,7 +237,7 @@ fn is_development_text_extension(extension: &str) -> bool {
         "svelte" | "astro" | "blade" | "twig" | "mustache" | "hbs" |
         "handlebars" | "ejs" | "pug" | "jade" | "erb" | "haml" |
         // Configuration and data formats
-        "toml" | "yaml" | "yml" | "json" | "jsonc" | "json5" |
+        "toml" | "yaml" | "yml" | "json" | "jsonc" | "json5" | "jq" |
         "xml" | "ini" | "cfg" | "conf" | "config" | "properties" |
         "env" | "dotenv" | "editorconfig" | "gitignore" | "gitattributes" |
         // Documentation
@@ -287,122 +298,5 @@ fn is_extensionless_text_file(filename: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_common_text_files() {
-        // Programming languages
-        assert!(is_text_file("main.rs"));
-        assert!(is_text_file("script.py"));
-        assert!(is_text_file("app.js"));
-        assert!(is_text_file("component.tsx"));
-        assert!(is_text_file("Main.java"));
-        assert!(is_text_file("header.h"));
-        assert!(is_text_file("script.sh"));
-
-        // Web files
-        assert!(is_text_file("index.html"));
-        assert!(is_text_file("styles.css"));
-        assert!(is_text_file("component.vue"));
-
-        // Configuration files
-        assert!(is_text_file("config.json"));
-        assert!(is_text_file("settings.yaml"));
-        assert!(is_text_file("Cargo.toml"));
-        assert!(is_text_file(".gitignore"));
-        assert!(is_text_file(".env"));
-
-        // Documentation
-        assert!(is_text_file("README.md"));
-        assert!(is_text_file("docs.txt"));
-        assert!(is_text_file("manual.rst"));
-
-        // Build files
-        assert!(is_text_file("Dockerfile"));
-        assert!(is_text_file("Makefile"));
-        assert!(is_text_file("build.gradle"));
-
-        // Files without extensions
-        assert!(is_text_file("README"));
-        assert!(is_text_file("LICENSE"));
-        assert!(is_text_file("Dockerfile"));
-    }
-
-    #[test]
-    fn test_binary_files() {
-        // Images
-        assert!(!is_text_file("image.png"));
-        assert!(!is_text_file("photo.jpg"));
-        assert!(!is_text_file("icon.ico"));
-        // Note: SVG might be detected as text by MIME, which is correct
-
-        // Executables
-        assert!(!is_text_file("program.exe"));
-        assert!(!is_text_file("app.dmg"));
-
-        // Archives
-        assert!(!is_text_file("archive.zip"));
-        assert!(!is_text_file("package.tar.gz"));
-        assert!(!is_text_file("data.7z"));
-
-        // Media files
-        assert!(!is_text_file("video.mp4"));
-        assert!(!is_text_file("audio.mp3"));
-        assert!(!is_text_file("sound.wav"));
-
-        // Document formats (binary)
-        assert!(!is_text_file("document.pdf"));
-        assert!(!is_text_file("spreadsheet.xlsx"));
-        assert!(!is_text_file("presentation.pptx"));
-    }
-
-    #[test]
-    fn test_edge_cases() {
-        // Empty filename
-        assert!(!is_text_file(""));
-
-        // Files with multiple extensions
-        assert!(is_text_file("backup.tar.gz.txt"));
-        assert!(is_text_file("config.local.json"));
-
-        // Mixed case
-        assert!(is_text_file("Component.TSX"));
-        assert!(is_text_file("README.MD"));
-
-        // Path separators
-        assert!(is_text_file("/path/to/file.rs"));
-        assert!(is_text_file("..\\windows\\path\\file.py"));
-
-        // Unusual but valid text files
-        assert!(is_text_file("script.fish"));
-        assert!(is_text_file("data.graphql"));
-        assert!(is_text_file("schema.proto"));
-    }
-
-    #[test]
-    fn test_development_extensions() {
-        // Test some specific development file types
-        assert!(is_development_text_extension("rs"));
-        assert!(is_development_text_extension("py"));
-        assert!(is_development_text_extension("dockerfile"));
-        assert!(is_development_text_extension("yaml"));
-
-        assert!(!is_development_text_extension("png"));
-        assert!(!is_development_text_extension("exe"));
-        assert!(!is_development_text_extension("zip"));
-    }
-
-    #[test]
-    fn test_extensionless_files() {
-        assert!(is_extensionless_text_file("README"));
-        assert!(is_extensionless_text_file("LICENSE"));
-        assert!(is_extensionless_text_file("Dockerfile"));
-        assert!(is_extensionless_text_file(".gitignore"));
-        assert!(is_extensionless_text_file(".env"));
-
-        assert!(!is_extensionless_text_file("binary"));
-        assert!(!is_extensionless_text_file("unknown"));
-        assert!(!is_extensionless_text_file("data"));
-    }
-}
+#[path = "file_type_tests.rs"]
+mod tests;

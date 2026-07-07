@@ -5,60 +5,52 @@ use futures_util::future::BoxFuture;
 use itertools::Itertools;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::editor::EditorView;
+use warpui::platform::WindowStyle;
+use warpui::presenter::ChildView;
+use warpui::r#async::Timer;
+use warpui::telemetry::EventPayload;
 use warpui::{
-    platform::WindowStyle, presenter::ChildView, r#async::Timer, telemetry::EventPayload,
     AddSingletonModel, App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
     ViewHandle, WindowId,
 };
 
-use crate::{
-    auth::{
-        auth_manager::AuthManager,
-        user::{TEST_USER_EMAIL, TEST_USER_UID},
-        AuthStateProvider, UserUid,
-    },
-    cloud_object::{
-        model::{
-            actions::ObjectActions,
-            persistence::CloudModel,
-            view::{CloudViewModel, Editor, EditorState},
-        },
-        Owner, Revision, ServerCloudObject, ServerMetadata, ServerNotebook, ServerPermissions,
-    },
-    drive::OpenWarpDriveObjectSettings,
-    editor::{DisplayPoint, EditorAction, InteractionState, SelectAction},
-    network::NetworkStatus,
-    notebooks::{
-        active_notebook_data::Mode,
-        editor::{
-            keys::NotebookKeybindings, notebook_command::NotebookCommand, view::EditorViewAction,
-        },
-        notebook::FocusedComponent,
-        CloudNotebook, CloudNotebookModel, NotebookLocation,
-    },
-    pane_group::PaneEvent,
-    search::files::model::FileSearchModel,
-    server::{
-        cloud_objects::update_manager::{InitialLoadResponse, UpdateManager},
-        ids::{ClientId, SyncId::ServerId},
-        server_api::ServerApiProvider,
-        sync_queue::{QueueItem, SyncQueue, SyncQueueEvent},
-        telemetry::context_provider::AppTelemetryContextProvider,
-    },
-    settings_view::keybindings::KeybindingChangedNotifier,
-    terminal::keys::TerminalKeybindings,
-    test_util::settings::initialize_settings_for_tests,
-    workflows::{workflow::Workflow, WorkflowSource, WorkflowType},
-    workspace::ActiveSession,
-    workspaces::{
-        team_tester::TeamTesterStatus,
-        user_profiles::{UserProfileWithUID, UserProfiles},
-        user_workspaces::UserWorkspaces,
-    },
-    GlobalResourceHandles, GlobalResourceHandlesProvider, PrivacySettings,
-};
-
 use super::{NotebookEvent, NotebookView, EDIT_WINDOW_DURATION, SAVE_PERIOD};
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::user::{TEST_USER_EMAIL, TEST_USER_UID};
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::cloud_object::model::actions::ObjectActions;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::{CloudViewModel, Editor, EditorState};
+use crate::cloud_object::{
+    Owner, Revision, ServerCloudObject, ServerMetadata, ServerNotebook, ServerPermissions,
+};
+use crate::drive::OpenWarpDriveObjectSettings;
+use crate::editor::{DisplayPoint, EditorAction, InteractionState, SelectAction};
+use crate::network::NetworkStatus;
+use crate::notebooks::active_notebook_data::Mode;
+use crate::notebooks::editor::keys::NotebookKeybindings;
+use crate::notebooks::editor::notebook_command::NotebookCommand;
+use crate::notebooks::editor::view::EditorViewAction;
+use crate::notebooks::notebook::FocusedComponent;
+use crate::notebooks::{CloudNotebook, CloudNotebookModel, NotebookLocation};
+use crate::pane_group::PaneEvent;
+use crate::search::files::model::FileSearchModel;
+use crate::server::cloud_objects::update_manager::{InitialLoadResponse, UpdateManager};
+use crate::server::ids::ClientId;
+use crate::server::ids::SyncId::ServerId;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::{QueueItem, SyncQueue, SyncQueueEvent};
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::terminal::keys::TerminalKeybindings;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::{WorkflowSource, WorkflowType};
+use crate::workspace::ActiveSession;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider, PrivacySettings};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -162,15 +154,15 @@ fn cloud_notebook(title: impl Into<String>, data: impl Into<String>) -> CloudNot
 /// Mock a server notebook
 fn mock_server_notebook(title: impl Into<String>, data: impl Into<String>) -> ServerNotebook {
     let metadata_ts = Utc::now().into();
-    ServerNotebook {
-        id: ServerId(123.into()),
-        model: CloudNotebookModel {
+    ServerNotebook::new(
+        ServerId(123.into()),
+        CloudNotebookModel {
             title: title.into(),
             data: data.into(),
             ai_document_id: None,
             conversation_id: None,
         },
-        metadata: ServerMetadata {
+        ServerMetadata {
             uid: 123.into(),
             revision: Revision::now(),
             metadata_last_updated_ts: metadata_ts,
@@ -181,13 +173,13 @@ fn mock_server_notebook(title: impl Into<String>, data: impl Into<String>) -> Se
             last_editor_uid: None,
             current_editor_uid: None,
         },
-        permissions: ServerPermissions {
+        ServerPermissions {
             space: Owner::mock_current_user(),
             guests: Vec::new(),
             anyone_link_sharing: None,
             permissions_last_updated_ts: metadata_ts,
         },
-    }
+    )
 }
 
 /// Send changed objects to [`UpdateManager`] so that tests requiring "up-to-date" metadata can run.

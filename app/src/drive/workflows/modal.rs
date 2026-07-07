@@ -1,70 +1,27 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::{cmp::Ordering, sync::Arc};
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use warp_core::ui::theme::Fill;
 use warp_editor::editor::NavigationKey;
-use warpui::elements::Clipped;
-use warpui::FocusContext;
-use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        Align, Border, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        Radius, ScrollbarWidth, Shrinkable, Stack,
-    },
-    fonts::{FamilyId, Weight},
-    platform::Cursor,
-    presenter::ChildView,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, UpdateView, View, ViewContext,
-    ViewHandle,
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Align, Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, ScrollbarWidth, Shrinkable, Stack,
 };
-
-use crate::auth::UserUid;
-use crate::{
-    appearance::Appearance,
-    cloud_object::{
-        breadcrumbs::{ContainingObject, ContainingObjectKind},
-        model::persistence::{CloudModel, CloudModelEvent},
-        CloudObject, CloudObjectEventEntrypoint, ObjectType, Owner, Revision,
-    },
-    drive::{
-        cloud_object_styling::warp_drive_icon_color, items::WarpDriveItemId, CloudObjectTypeAndId,
-        DriveObjectType,
-    },
-    editor::{
-        EditorOptions, EditorView, EnterAction, EnterSettings, Event as EditorEvent,
-        InteractionState, PlainTextEditorViewAction as EditorAction,
-        PropagateAndNoOpNavigationKeys, TextOptions, TextStyleOperation,
-    },
-    menu::{Event, Menu, MenuItem, MenuItemFields},
-    network::NetworkStatus,
-    server::{
-        cloud_objects::update_manager::UpdateManager,
-        ids::{ClientId, ServerId, SyncId},
-        server_api::ai::AIClient,
-    },
-    themes::theme::AnsiColorIdentifier,
-    ui_components::{
-        blended_colors,
-        breadcrumb::{self, BreadcrumbState},
-        buttons::icon_button,
-        dialog::{dialog_styles, Dialog},
-        icons::{self, Icon, ICON_DIMENSIONS},
-        menu_button::{icon_button_with_context_menu, MenuDirection},
-    },
-    workflows::{
-        workflow::{Argument, Workflow},
-        CloudWorkflow,
-    },
+use warpui::fonts::{FamilyId, Weight};
+use warpui::platform::Cursor;
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, UpdateView, View,
+    ViewContext, ViewHandle,
 };
 
 use super::arguments::ArgumentsState;
@@ -73,6 +30,33 @@ use super::workflow_arg_selector::{
     WorkflowArgSelector, WorkflowArgSelectorEvent, WorkflowArgSelectorStyles,
 };
 use super::workflow_arg_type_helpers::{self, ArgumentEditorRowIndex};
+use crate::appearance::Appearance;
+use crate::auth::UserUid;
+use crate::cloud_object::breadcrumbs::{ContainingObject, ContainingObjectKind};
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::{CloudObject, CloudObjectEventEntrypoint, ObjectType, Owner, Revision};
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
+use crate::drive::items::WarpDriveItemId;
+use crate::drive::{CloudObjectTypeAndId, DriveObjectType};
+use crate::editor::{
+    EditorOptions, EditorView, EnterAction, EnterSettings, Event as EditorEvent, InteractionState,
+    PlainTextEditorViewAction as EditorAction, PropagateAndNoOpNavigationKeys, TextOptions,
+    TextStyleOperation,
+};
+use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
+use crate::network::NetworkStatus;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::{ClientId, ServerId, SyncId};
+use crate::server::server_api::ai::AIClient;
+use crate::themes::theme::AnsiColorIdentifier;
+use crate::ui_components::blended_colors;
+use crate::ui_components::breadcrumb::{self, BreadcrumbState};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::icons::{self, Icon, ICON_DIMENSIONS};
+use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+use crate::workflows::workflow::{Argument, Workflow};
+use crate::workflows::CloudWorkflow;
 
 const BREADCRUMBS_VERTICAL_MARGIN: f32 = 6.;
 const MODAL_WIDTH: f32 = 900.;

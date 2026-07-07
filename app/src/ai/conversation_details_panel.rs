@@ -1,6 +1,8 @@
 //! A reusable side panel component for displaying conversation metadata.
 
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Local};
 use instant::Instant;
@@ -10,28 +12,32 @@ use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
 use warp_core::channel::ChannelState;
 use warp_core::ui::color::coloru_with_opacity;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
+use warpui::elements::{
+    resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle,
+    SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::FixedBinding;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        new_scrollable::{NewScrollable, SingleAxisConfig},
-        resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable,
-        ResizableStateHandle, SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
-    },
-    fonts::{Properties, Weight},
-    keymap::FixedBinding,
-    platform::Cursor,
-    ui_components::components::UiComponent,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use crate::ai::agent::api::ServerConversationToken;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
 use crate::ai::agent_conversations_model::entry::PrincipalType;
-use crate::ai::agent_conversations_model::{AgentConversationEntry, AgentRunDisplayStatus};
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentRunDisplayStatus, TaskFetchError,
+};
 use crate::ai::agent_management::details_action_buttons::{
     ActionButtonsConfig, AgentDetailsButtonEvent, ConversationActionButtonsRow,
 };
@@ -45,6 +51,7 @@ use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::notebooks::NotebookId;
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};
@@ -65,7 +72,7 @@ use crate::view_components::copyable_text_field::{
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
-use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 
 const FIELD_SPACING: f32 = 16.0;
 const HEADER_SPACING: f32 = 12.0;
@@ -74,6 +81,9 @@ const HARNESS_CIRCLE_SIZE: f32 = 16.0;
 const HARNESS_ICON_IN_CIRCLE: f32 = 9.0;
 const LABEL_VALUE_GAP: f32 = 4.0;
 const SECTION_HEADER_GAP: f32 = 8.0;
+const RUN_METADATA_ACCESS_DENIED_TITLE: &str = "Run metadata is not available";
+const RUN_METADATA_ACCESS_DENIED_DESCRIPTION: &str =
+    "You can view this shared session, but run metadata is only visible to users with access to this run.";
 
 /// Panel rendering mode.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,10 +134,9 @@ struct PanelMouseStates {
     copy_run_id: MouseStateHandle,
     copy_environment_id: MouseStateHandle,
     copy_docker_image: MouseStateHandle,
+    copy_fetch_error: MouseStateHandle,
     copy_error: MouseStateHandle,
     copy_setup_commands: MouseStateHandle,
-    inference_info_tooltip: MouseStateHandle,
-    compute_info_tooltip: MouseStateHandle,
     skill_link: MouseStateHandle,
     skill_source_link: MouseStateHandle,
     executor_agent_link: MouseStateHandle,
@@ -141,6 +150,7 @@ enum CopyButtonKind {
     RunId,
     EnvironmentId,
     DockerImage,
+    FetchError,
     Error,
     SetupCommands,
 }
@@ -174,6 +184,24 @@ impl PrincipalInfo {
         let first_char = uid.chars().next().unwrap_or('?').to_uppercase().to_string();
         Self::new(first_char, None)
     }
+
+    fn from_user_profile(profile: &UserProfileWithUID) -> Self {
+        let display_name = profile
+            .display_name
+            .as_ref()
+            .filter(|name| !name.is_empty())
+            .or_else(|| (!profile.email.is_empty()).then_some(&profile.email))
+            .cloned()
+            .unwrap_or_else(|| profile.firebase_uid.to_string());
+        let photo_url = Some(profile.photo_url.clone()).filter(|url| !url.is_empty());
+
+        Self {
+            display_name,
+            photo_url,
+            uid: Some(profile.firebase_uid.to_string()),
+            is_service_account: false,
+        }
+    }
 }
 
 impl From<&TaskPrincipalInfo> for PrincipalInfo {
@@ -188,13 +216,6 @@ impl From<&TaskPrincipalInfo> for PrincipalInfo {
     }
 }
 
-/// Credit usage information for a conversation or task.
-#[derive(Debug, Clone)]
-enum CreditsInfo {
-    LocalConversation(f32),
-    AmbientConversation { inference: f32, compute: f32 },
-}
-
 /// Data model for the conversation details panel.
 /// Any field that is left as None will not be rendered.
 #[derive(Debug, Clone, Default)]
@@ -207,7 +228,8 @@ pub struct ConversationDetailsData {
     executor: Option<PrincipalInfo>,
     /// When the conversation was created.
     created_at: Option<DateTime<Local>>,
-    credits: Option<CreditsInfo>,
+    /// Total credits spent on the conversation/task.
+    credits: Option<f32>,
     /// Total duration of the conversation.
     run_time: Option<Duration>,
     /// Artifacts created during the conversation (plans, PRs, branches).
@@ -222,6 +244,8 @@ pub struct ConversationDetailsData {
     skill_spec: Option<SkillSpec>,
     /// Execution harness for this conversation/task.
     harness: Option<Harness>,
+    /// Error details displayed when the API call to fetch run data failed.
+    fetch_error: Option<TaskFetchError>,
 }
 
 impl ConversationDetailsData {
@@ -257,7 +281,9 @@ impl ConversationDetailsData {
         // Server metadata (creator, timestamps)
         let mut creator = None;
         if let Some(server_metadata) = conversation.server_metadata() {
-            if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
+            if let Some(creator_profile) = &server_metadata.creator {
+                creator = Some(PrincipalInfo::from_user_profile(creator_profile));
+            } else if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
                 let creator_uid = UserUid::new(creator_uid_str);
                 let user_profiles = UserProfiles::handle(app).as_ref(app);
 
@@ -323,7 +349,7 @@ impl ConversationDetailsData {
             creator,
             executor: None,
             created_at,
-            credits: Some(CreditsInfo::LocalConversation(conversation.credits_spent())),
+            credits: Some(conversation.credits_spent()),
             run_time,
             artifacts: conversation.artifacts().to_vec(),
             open_action: None,
@@ -331,6 +357,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            fetch_error: None,
         }
     }
 
@@ -351,12 +378,7 @@ impl ConversationDetailsData {
             .as_ref()
             .and_then(|config| config.environment_id.clone());
 
-        let credits = task.active_run_execution().request_usage.and_then(|u| {
-            Some(CreditsInfo::AmbientConversation {
-                inference: u.inference_cost? as f32,
-                compute: u.compute_cost? as f32,
-            })
-        });
+        let credits = task.credits_used();
 
         let skill_spec = task
             .agent_config_snapshot
@@ -381,6 +403,8 @@ impl ConversationDetailsData {
                 environment_id,
                 conversation_id: task.conversation_id().map(str::to_string),
             },
+            // Intentionally uses task.title; revisit when product decides
+            // whether to also show the short orchestrator label here.
             title: task.title.clone(),
             created_at: Some(task.created_at.with_timezone(&Local)),
             artifacts: task.artifacts.clone(),
@@ -397,6 +421,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec,
             harness,
+            fetch_error: None,
         }
     }
 
@@ -432,14 +457,12 @@ impl ConversationDetailsData {
                     .then(|| task.status_message.as_ref().map(|m| m.message.clone()))
                     .flatten()
             });
-            let credits = task.and_then(|task| {
-                task.active_run_execution().request_usage.and_then(|u| {
-                    Some(CreditsInfo::AmbientConversation {
-                        inference: u.inference_cost? as f32,
-                        compute: u.compute_cost? as f32,
-                    })
-                })
-            });
+            // Fall back to the entry's denormalized total when the task record isn't
+            // currently loaded, so the panel stays consistent with the card metadata
+            // (which always reads `entry.display.request_usage`).
+            let credits = task
+                .and_then(AmbientAgentTask::credits_used)
+                .or(entry.display.request_usage);
             let skill_spec = task
                 .and_then(|task| task.agent_config_snapshot.as_ref())
                 .and_then(|config| config.skill_spec.as_ref())
@@ -470,6 +493,7 @@ impl ConversationDetailsData {
                 copy_link_url,
                 skill_spec,
                 harness,
+                fetch_error: None,
             };
         }
 
@@ -488,10 +512,7 @@ impl ConversationDetailsData {
             creator,
             executor: None,
             created_at,
-            credits: entry
-                .display
-                .request_usage
-                .map(CreditsInfo::LocalConversation),
+            credits: entry.display.request_usage,
             run_time: None,
             artifacts: entry.display.artifacts.clone(),
             open_action,
@@ -499,12 +520,16 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            fetch_error: None,
         }
     }
 
     /// Minimal details data for when we only know the task id (e.g. shared sessions)
     /// but have not loaded the full `AmbientAgentTask` yet.
-    pub fn from_task_id(task_id: AmbientAgentTaskId) -> Self {
+    pub(crate) fn from_task_id(
+        task_id: AmbientAgentTaskId,
+        fetch_error: Option<TaskFetchError>,
+    ) -> Self {
         ConversationDetailsData {
             mode: PanelMode::Task {
                 task_id: Some(task_id),
@@ -526,6 +551,7 @@ impl ConversationDetailsData {
             copy_link_url: None,
             skill_spec: None,
             harness: None,
+            fetch_error,
         }
     }
 
@@ -559,7 +585,7 @@ impl ConversationDetailsData {
             creator: creator_name.map(|name| PrincipalInfo::new(name, None)),
             executor: None,
             created_at: Some(created_at),
-            credits: credits_used.map(CreditsInfo::LocalConversation),
+            credits: credits_used,
             run_time: None,
             open_action,
             artifacts,
@@ -567,6 +593,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            fetch_error: None,
         }
     }
 }
@@ -587,6 +614,7 @@ pub enum ConversationDetailsPanelAction {
     CopyRunId,
     CopyEnvironmentId,
     CopyDockerImage,
+    CopyFetchError,
     CopyError,
     CopySetupCommands(String),
     Focus,
@@ -594,6 +622,16 @@ pub enum ConversationDetailsPanelAction {
     #[cfg(not(target_family = "wasm"))]
     ContinueLocally,
     OpenInOz,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug)]
+enum DetailsPanelLocalContinuationInfo {
+    Conversation(AIConversationId),
+    ThirdPartyTask {
+        task_id: AmbientAgentTaskId,
+        harness: AIAgentHarness,
+    },
 }
 
 pub fn init(app: &mut AppContext) {
@@ -704,7 +742,10 @@ impl ConversationDetailsPanel {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn continue_locally_conversation_id(&self, app: &AppContext) -> Option<AIConversationId> {
+    fn local_continuation_info(
+        &self,
+        app: &AppContext,
+    ) -> Option<DetailsPanelLocalContinuationInfo> {
         if !AISettings::as_ref(app).is_any_ai_enabled(app) {
             return None;
         }
@@ -719,9 +760,12 @@ impl ConversationDetailsPanel {
                 if status.is_in_progress() {
                     return None;
                 }
-                Some(*ai_conversation_id.as_ref()?)
+                Some(DetailsPanelLocalContinuationInfo::Conversation(
+                    *ai_conversation_id.as_ref()?,
+                ))
             }
             PanelMode::Task {
+                task_id,
                 display_status,
                 conversation_id,
                 ..
@@ -730,15 +774,29 @@ impl ConversationDetailsPanel {
                 if status.is_working() {
                     return None;
                 }
-                // Hide for non-Oz harnesses (e.g. Claude, Gemini): they can't be
-                // forked into a local Warp conversation.
-                if matches!(self.data.harness, Some(h) if h != Harness::Oz) {
-                    return None;
-                }
 
-                let server_token = ServerConversationToken::new(conversation_id.as_ref()?.clone());
-                BlocklistAIHistoryModel::as_ref(app)
-                    .find_conversation_id_by_server_token(&server_token)
+                match self.data.harness {
+                    Some(Harness::Claude) => {
+                        Some(DetailsPanelLocalContinuationInfo::ThirdPartyTask {
+                            task_id: *task_id.as_ref()?,
+                            harness: AIAgentHarness::ClaudeCode,
+                        })
+                    }
+                    Some(Harness::Codex) => {
+                        Some(DetailsPanelLocalContinuationInfo::ThirdPartyTask {
+                            task_id: *task_id.as_ref()?,
+                            harness: AIAgentHarness::Codex,
+                        })
+                    }
+                    Some(Harness::Oz) | None => {
+                        let server_token =
+                            ServerConversationToken::new(conversation_id.as_ref()?.clone());
+                        BlocklistAIHistoryModel::as_ref(app)
+                            .find_conversation_id_by_server_token(&server_token)
+                            .map(DetailsPanelLocalContinuationInfo::Conversation)
+                    }
+                    Some(Harness::Gemini | Harness::OpenCode | Harness::Unknown) => None,
+                }
             }
         }
     }
@@ -905,6 +963,7 @@ impl ConversationDetailsPanel {
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: None,
+                    initial_attachments: vec![],
                     destination: ForkedConversationDestination::NewTab,
                 });
             }
@@ -1120,6 +1179,97 @@ impl ConversationDetailsPanel {
         )
     }
 
+    fn render_fetch_error_notice(
+        &self,
+        fetch_error: &TaskFetchError,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let ui_font_size = appearance.ui_font_size();
+        if fetch_error.is_access_denied() {
+            let icon_color = blended_colors::text_sub(theme, theme.surface_1());
+            let notice_icon =
+                ConstrainedBox::new(Icon::Info.to_warpui_icon(icon_color.into()).finish())
+                    .with_width(STATUS_ICON_SIZE)
+                    .with_height(STATUS_ICON_SIZE)
+                    .finish();
+
+            let title = Text::new(
+                RUN_METADATA_ACCESS_DENIED_TITLE,
+                appearance.ui_font_family(),
+                ui_font_size,
+            )
+            .with_color(blended_colors::text_main(theme, theme.surface_1()))
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .with_selectable(true)
+            .finish();
+            let description = Text::new(
+                RUN_METADATA_ACCESS_DENIED_DESCRIPTION,
+                appearance.ui_font_family(),
+                ui_font_size - 1.,
+            )
+            .with_color(icon_color)
+            .with_selectable(true)
+            .soft_wrap(true)
+            .finish();
+
+            let notice_text = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(title)
+                .with_child(
+                    Container::new(description)
+                        .with_margin_top(LABEL_VALUE_GAP)
+                        .finish(),
+                )
+                .finish();
+            let notice_row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(Container::new(notice_icon).with_margin_right(8.).finish())
+                .with_child(Expanded::new(1., notice_text).finish())
+                .finish();
+
+            return Container::new(notice_row)
+                .with_uniform_padding(10.)
+                .with_background(coloru_with_opacity(blended_colors::neutral_2(theme), 70))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .finish();
+        }
+
+        let error_icon = ConstrainedBox::new(
+            Icon::Triangle
+                .to_warpui_icon(theme.ansi_fg_red().into())
+                .finish(),
+        )
+        .with_width(STATUS_ICON_SIZE)
+        .with_height(STATUS_ICON_SIZE)
+        .finish();
+        let error_text = render_copyable_text_field(
+            CopyableTextFieldConfig::new(fetch_error.message().to_string())
+                .with_font_size(ui_font_size)
+                .with_text_color(theme.ansi_fg_red())
+                .with_wrap_text(true)
+                .with_icon_size(16.)
+                .with_mouse_state(self.mouse_state_for_copy_button(CopyButtonKind::FetchError))
+                .with_last_copied_at(self.copy_feedback_times.get(&CopyButtonKind::FetchError))
+                .with_cross_axis_alignment(CrossAxisAlignment::Start),
+            |ctx| {
+                ctx.dispatch_typed_action(ConversationDetailsPanelAction::CopyFetchError);
+            },
+            app,
+        );
+        let error_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(Container::new(error_icon).with_margin_right(4.).finish())
+            .with_child(Expanded::new(1., error_text).finish())
+            .finish();
+        Container::new(error_row)
+            .with_uniform_padding(8.)
+            .with_background(coloru_with_opacity(theme.ansi_fg_red(), 10))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .finish()
+    }
+
     fn render_status_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
@@ -1274,7 +1424,7 @@ impl ConversationDetailsPanel {
 
         let oz_root_url = ChannelState::oz_root_url();
         let encoded_skill_name = urlencoding::encode(&skill_name);
-        let skill_url = format!("{oz_root_url}/agents/{encoded_skill_name}");
+        let skill_url = format!("{oz_root_url}/skills/{encoded_skill_name}");
 
         let oz_link = appearance
             .ui_builder()
@@ -1597,99 +1747,6 @@ impl ConversationDetailsPanel {
             .finish()
     }
 
-    /// Renders the credits section with a breakdown of inference and compute costs.
-    fn render_credits_with_split(
-        &self,
-        inference: f32,
-        compute: f32,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-
-        let label_text = Text::new(
-            "Credits used".to_string(),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
-        .finish();
-
-        let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
-        column.add_child(
-            Container::new(label_text)
-                .with_margin_bottom(LABEL_VALUE_GAP)
-                .finish(),
-        );
-
-        let inference_row = self.render_cost_sub_row(
-            "Inference",
-            inference,
-            "Credits spent on AI model requests",
-            self.mouse_states.inference_info_tooltip.clone(),
-            appearance,
-        );
-        column.add_child(
-            Container::new(inference_row)
-                .with_margin_bottom(LABEL_VALUE_GAP)
-                .finish(),
-        );
-
-        let compute_row = self.render_cost_sub_row(
-            "Compute",
-            compute,
-            "Credits spent on sandbox compute time",
-            self.mouse_states.compute_info_tooltip.clone(),
-            appearance,
-        );
-        column.add_child(compute_row);
-
-        column.finish()
-    }
-
-    fn render_cost_sub_row(
-        &self,
-        label: &str,
-        value: f32,
-        tooltip: &str,
-        tooltip_mouse_state: MouseStateHandle,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-
-        let label_text = Text::new(
-            format!("{label}: "),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
-        .finish();
-
-        let value_text = Text::new(
-            format!("{value:.1}"),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(theme.foreground().into())
-        .with_selectable(true)
-        .finish();
-
-        let info_icon = appearance
-            .ui_builder()
-            .info_button_with_tooltip(
-                appearance.ui_font_size() * 0.85,
-                tooltip,
-                tooltip_mouse_state,
-            )
-            .finish();
-
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(label_text)
-            .with_child(value_text)
-            .with_child(Container::new(info_icon).with_margin_left(4.).finish())
-            .finish()
-    }
-
     /// Returns the mouse state handle for the given copy button kind.
     fn mouse_state_for_copy_button(&self, kind: CopyButtonKind) -> MouseStateHandle {
         match kind {
@@ -1698,6 +1755,7 @@ impl ConversationDetailsPanel {
             CopyButtonKind::RunId => self.mouse_states.copy_run_id.clone(),
             CopyButtonKind::EnvironmentId => self.mouse_states.copy_environment_id.clone(),
             CopyButtonKind::DockerImage => self.mouse_states.copy_docker_image.clone(),
+            CopyButtonKind::FetchError => self.mouse_states.copy_fetch_error.clone(),
             CopyButtonKind::Error => self.mouse_states.copy_error.clone(),
             CopyButtonKind::SetupCommands => self.mouse_states.copy_setup_commands.clone(),
         }
@@ -1756,16 +1814,16 @@ impl View for ConversationDetailsPanel {
         let has_action_buttons = !self.action_buttons.as_ref(app).is_empty();
 
         #[cfg(not(target_family = "wasm"))]
-        let has_continue_locally = self.continue_locally_conversation_id(app).is_some();
+        let has_local_continuation_info = self.local_continuation_info(app).is_some();
         #[cfg(target_family = "wasm")]
-        let has_continue_locally = false;
+        let has_local_continuation_info = false;
         let has_oz_url = Self::oz_run_url(&self.data).is_some();
 
-        if has_continue_locally || has_oz_url {
+        if has_local_continuation_info || has_oz_url {
             let mut buttons_wrap = Wrap::row().with_spacing(8.).with_run_spacing(8.);
 
             #[cfg(not(target_family = "wasm"))]
-            if has_continue_locally {
+            if has_local_continuation_info {
                 buttons_wrap.add_child(ChildView::new(&self.continue_locally_button).finish());
             }
             if has_oz_url {
@@ -1860,6 +1918,15 @@ impl View for ConversationDetailsPanel {
             .with_margin_bottom(FIELD_SPACING)
             .finish(),
         );
+
+        // Fetch error banner (shown when the API call to load run data failed)
+        if let Some(fetch_error) = &self.data.fetch_error {
+            content.add_child(
+                Container::new(self.render_fetch_error_notice(fetch_error, appearance, app))
+                    .with_margin_bottom(FIELD_SPACING)
+                    .finish(),
+            );
+        }
 
         // Status section
         if let Some(status_section) = self.render_status_section(appearance) {
@@ -1967,29 +2034,13 @@ impl View for ConversationDetailsPanel {
             }
         }
 
-        match &self.data.credits {
-            Some(CreditsInfo::AmbientConversation { inference, compute }) => {
-                content.add_child(
-                    Container::new(
-                        self.render_credits_with_split(*inference, *compute, appearance),
-                    )
+        if let Some(credits) = self.data.credits {
+            let formatted = format!("{credits:.1}");
+            content.add_child(
+                Container::new(self.render_simple_field("Credits used", &formatted, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
-                );
-            }
-            Some(CreditsInfo::LocalConversation(credits)) => {
-                let formatted = format!("{credits:.1}");
-                content.add_child(
-                    Container::new(self.render_simple_field(
-                        "Credits used",
-                        &formatted,
-                        appearance,
-                    ))
-                    .with_margin_bottom(FIELD_SPACING)
-                    .finish(),
-                );
-            }
-            None => {}
+            );
         }
 
         if let Some(duration) = self.data.run_time {
@@ -2179,6 +2230,13 @@ impl TypedActionView for ConversationDetailsPanel {
                     }
                 }
             }
+            ConversationDetailsPanelAction::CopyFetchError => {
+                if let Some(error) = &self.data.fetch_error {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(error.message().to_string()));
+                    self.record_copy(CopyButtonKind::FetchError, ctx);
+                }
+            }
             ConversationDetailsPanelAction::CopyError => {
                 if let PanelMode::Task {
                     error_message: Some(error),
@@ -2207,14 +2265,26 @@ impl TypedActionView for ConversationDetailsPanel {
             }
             #[cfg(not(target_family = "wasm"))]
             ConversationDetailsPanelAction::ContinueLocally => {
-                if let Some(conversation_id) = self.continue_locally_conversation_id(ctx) {
+                if let Some(continuation_info) = self.local_continuation_info(ctx) {
                     send_telemetry_from_ctx!(
                         AgentManagementTelemetryEvent::DetailsPanelContinueLocally,
                         ctx
                     );
-                    ctx.dispatch_typed_action(&WorkspaceAction::ContinueConversationLocally {
-                        conversation_id,
-                    });
+                    match continuation_info {
+                        DetailsPanelLocalContinuationInfo::Conversation(conversation_id) => {
+                            ctx.dispatch_typed_action(
+                                &WorkspaceAction::ContinueConversationLocally { conversation_id },
+                            );
+                        }
+                        DetailsPanelLocalContinuationInfo::ThirdPartyTask { task_id, harness } => {
+                            ctx.dispatch_typed_action(
+                                &WorkspaceAction::ContinueThirdPartyConversationLocally {
+                                    task_id,
+                                    harness,
+                                },
+                            );
+                        }
+                    }
                 }
             }
             ConversationDetailsPanelAction::OpenInOz => {

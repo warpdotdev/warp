@@ -1,18 +1,17 @@
-use super::{
-    font_handle::FontHandle, FontFamily, LoadedSystemFonts, TextLayoutSystem,
-    ValidateFontSupportsEn,
-};
-use crate::fonts::FontId;
-use anyhow::Result;
-use font_kit::loader::Loader as _;
-use font_kit::{
-    family_name::FamilyName as FKFamilyName, properties::Properties as FKProperties,
-    properties::Style as FKStyle, properties::Weight as FKWeight, source::SystemSource as FKSource,
-};
-use itertools::Itertools;
-use owned_ttf_parser::OwnedFace;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use anyhow::Result;
+use font_kit::family_name::FamilyName as FKFamilyName;
+use font_kit::loader::Loader as _;
+use font_kit::properties::{Properties as FKProperties, Style as FKStyle, Weight as FKWeight};
+use font_kit::source::SystemSource as FKSource;
+use itertools::Itertools;
+use owned_ttf_parser::OwnedFace;
+
+use super::font_handle::FontHandle;
+use super::{FontFamily, LoadedSystemFonts, TextLayoutSystem, ValidateFontSupportsEn};
+use crate::fonts::FontId;
 
 const EN_US_LOCALE: &str = "en-US";
 
@@ -21,9 +20,8 @@ const EN_US_LOCALE: &str = "en-US";
 const SYMBOL_ICON_FONTS: &[&str] = &["Segoe Fluent Icons", "Segoe MDL2 Assets"];
 
 pub(crate) mod loader {
-    use crate::fonts::FontInfo;
-
     use super::*;
+    use crate::fonts::FontInfo;
 
     pub fn load_all_system_fonts() -> LoadedSystemFonts {
         let source = font_kit::source::SystemSource::new();

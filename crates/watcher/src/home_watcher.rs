@@ -1,7 +1,8 @@
-use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
 use std::path::PathBuf;
 use std::time::Duration;
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
+
+use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
+use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
@@ -46,6 +47,7 @@ impl HomeDirectoryWatcher {
     /// Forwards filesystem events to home directory watcher subscribers.
     fn handle_fs_event(
         &mut self,
+        _: ModelHandle<BulkFilesystemWatcher>,
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {

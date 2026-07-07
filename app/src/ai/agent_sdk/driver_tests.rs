@@ -1,25 +1,49 @@
-use std::{collections::HashMap, ffi::OsString, sync::Arc, time::Duration};
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 
+use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
+use futures::executor::block_on;
+use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+use tempfile::TempDir;
 use warp_cli::agent::Harness;
+use warp_cli::mcp::MCPSpec;
+use warp_cli::skill::SkillSpec;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_graphql::mutations::create_managed_mcp_client_config::{
+    CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
+};
+use warp_graphql::response_context::ResponseContext;
+use warp_managed_secrets::ManagedSecretValue;
+use warp_util::standardized_path::StandardizedPath;
+use warpui::{App, SingletonEntity as _};
 
 use super::{
-    build_secret_env_vars, IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
-    LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    build_secret_env_vars, AgentDriver, AgentDriverError, IdleTimeoutSender,
+    LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
+    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
 };
+use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    task::TaskId, AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
     AIAgentOutputMessage, ArtifactCreatedData, MessageId, UploadArtifactResult,
 };
+use crate::ai::agent_sdk::task_env_vars;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::mcp::parsing::normalize_mcp_json;
-use crate::ai::{agent_sdk::task_env_vars, ambient_agents::AmbientAgentTaskId};
-use warp_managed_secrets::ManagedSecretValue;
+use crate::ai::mcp::JSONTransportType;
+use crate::ai::skills::SkillManager;
+use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 #[test]
 fn test_normalize_single_cli_server() {
@@ -110,6 +134,239 @@ fn test_normalize_sse_server_with_headers() {
     );
 }
 
+fn managed_client_config_output(mcp_config_json: &str) -> CreateManagedMcpClientConfigOutput {
+    CreateManagedMcpClientConfigOutput {
+        transport_kind: ManagedMcpTransportKind::Command,
+        mcp_config_json: mcp_config_json.to_string(),
+        proxy_url: None,
+        proxy_token: None,
+        authorization_header_name: None,
+        authorization_header_value: None,
+        expires_at: None,
+        response_context: ResponseContext {
+            server_version: None,
+        },
+    }
+}
+
+fn raw_secret(value: &str) -> ManagedSecretValue {
+    ManagedSecretValue::RawValue {
+        value: value.to_string(),
+    }
+}
+
+fn render_installations(
+    installations: Vec<crate::ai::mcp::TemplatableMCPServerInstallation>,
+    secrets: HashMap<String, ManagedSecretValue>,
+) -> HashMap<String, crate::ai::mcp::JSONMCPServer> {
+    AgentDriver::mcp_installations_to_json(installations, &secrets).unwrap()
+}
+
+#[test]
+fn managed_resolver_local_uuid_does_not_call_managed_client() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let mock = MockManagedMcpClient::new();
+    let local_installed_uuids = HashSet::from([uuid]);
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &local_installed_uuids,
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.local_uuids, vec![uuid]);
+    assert!(resolved.ephemeral_installations.is_empty());
+}
+
+#[test]
+fn managed_resolver_non_local_uuid_calls_managed_client() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let config_json =
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(move |requested_uid| {
+            assert_eq!(requested_uid, uuid);
+            Ok(managed_client_config_output(config_json))
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn managed_command_config_env_placeholder_uses_local_secret() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("API_TOKEN".to_string(), raw_secret("real"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { env, .. } => {
+            assert_eq!(env.get("API_TOKEN").map(String::as_str), Some("real"));
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_command_config_arg_placeholder_uses_local_secret() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("API_TOKEN".to_string(), raw_secret("real"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { args, .. } => {
+            assert_eq!(args, &vec!["--token=real".to_string()]);
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_command_config_preserves_literal_env_when_synthesizing_arg_placeholder() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"],"env":{"LOG_LEVEL":"info"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("API_TOKEN".to_string(), raw_secret("real"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { args, env, .. } => {
+            assert_eq!(args, &vec!["--token=real".to_string()]);
+            assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("info"));
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_url_config_preserves_proxy_url_and_header() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(installations, HashMap::new());
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::SSEServer { url, headers } => {
+            assert_eq!(url, "https://proxy.example/mcp");
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("Bearer proxy-token")
+            );
+        }
+        other => panic!("expected SSE server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_url_config_preserves_header_despite_colliding_local_secret() {
+    // A server-rendered proxy header must not be overwritten by a local secret that
+    // happens to share the header's key name (`apply_secrets` implicit key-name match).
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("Authorization".to_string(), raw_secret("local-secret"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::SSEServer { url, headers } => {
+            assert_eq!(url, "https://proxy.example/mcp");
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("Bearer proxy-token")
+            );
+        }
+        other => panic!("expected SSE server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_command_config_preserves_literal_env_despite_colliding_local_secret() {
+    // A literal env value rendered by the server must survive even when a local secret
+    // shares the env key name.
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"LOG_LEVEL":"info"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("LOG_LEVEL".to_string(), raw_secret("debug"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { env, .. } => {
+            assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("info"));
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_command_config_missing_secret_leaves_placeholder() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(installations, HashMap::new());
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { args, .. } => {
+            assert_eq!(args, &vec!["--token={{API_TOKEN}}".to_string()]);
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_resolution_failure_includes_uid_and_message() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(|_| Err(anyhow::anyhow!("not active")));
+
+    let err = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap_err();
+
+    match err {
+        AgentDriverError::ManagedMcpResolutionFailed { uid, message } => {
+            assert_eq!(uid, uuid);
+            assert!(message.contains("not active"));
+        }
+        other => panic!("expected managed MCP resolution failure, got {other:?}"),
+    }
+}
+
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
 
 #[test]
@@ -176,6 +433,53 @@ fn idle_timeout_sender_later_send_after_supersedes_earlier() {
 
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(rx.try_recv().unwrap(), Some(2));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_none_sends_immediately() {
+    // `complete_with_optional_idle(None, value)` routes to `end_run_now` and
+    // delivers `value` synchronously.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(None, 7);
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
+    // `complete_with_optional_idle(Some(d), value)` routes to `end_run_after`
+    // and defers delivery by `d`.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+
+    // Not delivered yet.
+    assert_eq!(rx.try_recv().unwrap(), None);
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_timer() {
+    // Cross-path cancellation: the Stage 2c skip-initial-turn driver path
+    // schedules a deferred `Success` via `complete_with_optional_idle(Some(_), _)`
+    // *before* the history subscription is wired up; a later
+    // `AppendedExchange` in that subscription closure invalidates the timer
+    // via `cancel_idle_timeout()`. The shared `Arc<AtomicUsize>` generation
+    // counter is what makes that work across the two logical code paths.
+    // This test exercises the same sequence in isolation: schedule via the
+    // helper, then cancel via the unrelated `cancel_idle_timeout` entry point,
+    // and verify the value is never delivered.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+    idle_timeout.cancel_idle_timeout();
+
+    std::thread::sleep(Duration::from_millis(100));
+    // Sender was never consumed by the cancelled timer, so the channel is
+    // still open but empty.
+    assert_eq!(rx.try_recv().unwrap(), None);
 }
 
 #[test]
@@ -570,4 +874,291 @@ fn worker_injected_env_skips_entire_bedrock_secret() {
     assert!(!env_vars.contains_key(&OsString::from("CLAUDE_CODE_USE_BEDROCK")));
     assert!(!env_vars.contains_key(&OsString::from("AWS_REGION")));
     std::env::remove_var("AWS_REGION");
+}
+
+// ── Skill-loading integration test ───────────────────────────────────────────
+
+/// Verifies that `load_environment_skills` loads every skill from an env repo
+/// while `load_global_skills` loads only the explicitly requested subset from a
+/// global-only repo.
+///
+/// The test writes real SKILL.md files on disk, seeds `RepoMetadataModel` with a
+/// minimal file-tree for the env repo so the indexing wait resolves immediately,
+/// and drives both loading methods through a live `AgentDriver` model via a
+/// `ModelSpawner`.
+#[test]
+fn split_loading_env_loads_all_global_loads_subset() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        // Create real skill files on disk.
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Environment repo: three skills. All should be loaded.
+        let env_repo = working_dir.join("env-repo");
+        write_skill_file(&env_repo, "build");
+        write_skill_file(&env_repo, "test-skill");
+        write_skill_file(&env_repo, "deploy");
+
+        // Global-only repo: three skills; only "linter" is explicitly requested.
+        let global_repo = working_dir.join("global-repo");
+        write_skill_file(&global_repo, "linter");
+        write_skill_file(&global_repo, "formatter");
+        write_skill_file(&global_repo, "docs");
+
+        // Trigger a real filesystem scan of the env repo so `repository_indexed`
+        // resolves immediately once indexing completes.
+        let env_repo_std = StandardizedPath::from_local_canonicalized(&env_repo).unwrap();
+        let repo_handle = DirectoryWatcher::handle(&app).update(&mut app, |watcher, ctx| {
+            watcher.add_directory(env_repo_std.clone(), ctx).unwrap()
+        });
+        let (indexed_tx, indexed_rx) = futures::channel::oneshot::channel::<()>();
+        let tx_cell = std::rc::Rc::new(std::cell::RefCell::new(Some(indexed_tx)));
+        let env_repo_for_event = env_repo_std.clone();
+        app.update(|ctx| {
+            let tx_cell = tx_cell.clone();
+            ctx.subscribe_to_model(
+                &RepoMetadataModel::handle(ctx),
+                move |_, event: &RepoMetadataEvent, _ctx| {
+                    if let RepoMetadataEvent::RepositoryUpdated {
+                        id: RepositoryIdentifier::Local(path),
+                    } = event
+                    {
+                        if *path == env_repo_for_event {
+                            if let Some(tx) = tx_cell.borrow_mut().take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                    }
+                },
+            );
+        });
+        RepoMetadataModel::handle(&app).update(&mut app, |model: &mut RepoMetadataModel, ctx| {
+            model.index_directory(repo_handle, ctx).unwrap();
+        });
+        indexed_rx.await.expect("env repo should be indexed");
+
+        // Construct a minimal AgentDriver backed by a stub terminal view.
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        // Run both loading methods through the driver's ModelSpawner.
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        let env_repos = vec![SourceRepo::new(
+            CodeForge::GitHub,
+            "org".to_string(),
+            "env-repo".to_string(),
+        )];
+        let global_repos = vec![GithubRepo::new(
+            "org".to_string(),
+            "global-repo".to_string(),
+        )];
+        let global_specs: Vec<SkillSpec> = ["org/global-repo:linter".to_string()]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_environment_skills(&spawner, env_repos).await;
+                    AgentDriver::load_global_skills(&spawner, global_specs, global_repos).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // Verify SkillManager contains the right skills.
+        // is_cloud_environment=true (set by both loaders), so get_skills_for_working_directory
+        // with cwd=None returns all registered skills.
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"build".to_string()),
+            "env skill 'build' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"test-skill".to_string()),
+            "env skill 'test-skill' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"deploy".to_string()),
+            "env skill 'deploy' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"linter".to_string()),
+            "requested global skill 'linter' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            !skill_names.contains(&"formatter".to_string()),
+            "unrequested global skill 'formatter' should NOT be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            !skill_names.contains(&"docs".to_string()),
+            "unrequested global skill 'docs' should NOT be loaded; got: {skill_names:?}"
+        );
+    });
+}
+
+/// Verifies that when a repo is in both the environment list and the global skill
+/// specs, all skills from that repo are loaded (environment wins), the targeted
+/// global skill is present, and no skill is registered more than once.
+#[test]
+fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // A single repo with three skills, appearing in both the environment
+        // and a global spec that targets only one of them.
+        let shared_repo = working_dir.join("shared-repo");
+        write_skill_file(&shared_repo, "deploy");
+        write_skill_file(&shared_repo, "lint");
+        write_skill_file(&shared_repo, "test-cmd");
+
+        // Index the repo so `load_environment_skills` can scan it.
+        let shared_repo_std = StandardizedPath::from_local_canonicalized(&shared_repo).unwrap();
+        let repo_handle = DirectoryWatcher::handle(&app).update(&mut app, |watcher, ctx| {
+            watcher.add_directory(shared_repo_std.clone(), ctx).unwrap()
+        });
+        let (indexed_tx, indexed_rx) = futures::channel::oneshot::channel::<()>();
+        let tx_cell = std::rc::Rc::new(std::cell::RefCell::new(Some(indexed_tx)));
+        let shared_repo_for_event = shared_repo_std.clone();
+        app.update(|ctx| {
+            let tx_cell = tx_cell.clone();
+            ctx.subscribe_to_model(
+                &RepoMetadataModel::handle(ctx),
+                move |_, event: &RepoMetadataEvent, _ctx| {
+                    if let RepoMetadataEvent::RepositoryUpdated {
+                        id: RepositoryIdentifier::Local(path),
+                    } = event
+                    {
+                        if *path == shared_repo_for_event {
+                            if let Some(tx) = tx_cell.borrow_mut().take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                    }
+                },
+            );
+        });
+        RepoMetadataModel::handle(&app).update(&mut app, |model: &mut RepoMetadataModel, ctx| {
+            model.index_directory(repo_handle, ctx).unwrap();
+        });
+        indexed_rx.await.expect("shared repo should be indexed");
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        // The same repo is listed in both env repos and global repos.
+        // The global spec targets only "deploy".
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        let env_repos = vec![SourceRepo::new(
+            CodeForge::GitHub,
+            "org".to_string(),
+            "shared-repo".to_string(),
+        )];
+        let global_repos = vec![GithubRepo::new(
+            "org".to_string(),
+            "shared-repo".to_string(),
+        )];
+        let global_specs: Vec<SkillSpec> = ["org/shared-repo:deploy".to_string()]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_environment_skills(&spawner, env_repos).await;
+                    AgentDriver::load_global_skills(&spawner, global_specs, global_repos).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        // All three skills from the repo are present (env loading wins).
+        assert!(
+            skill_names.contains(&"deploy".to_string()),
+            "'deploy' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"lint".to_string()),
+            "'lint' should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"test-cmd".to_string()),
+            "'test-cmd' should be loaded; got: {skill_names:?}"
+        );
+
+        // No skill is duplicated.
+        let deploy_count = skill_names.iter().filter(|n| *n == "deploy").count();
+        assert_eq!(
+            deploy_count, 1,
+            "'deploy' should appear exactly once; got: {skill_names:?}"
+        );
+    });
+}
+
+/// Write a minimal SKILL.md at `{repo}/.agents/skills/{name}/SKILL.md`.
+/// The name is derived from the parent directory name, so no frontmatter is required.
+fn write_skill_file(repo: &Path, name: &str) {
+    let skill_dir = repo.join(".agents").join("skills").join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), format!("Skill: {name}.")).unwrap();
+}
+
+#[test]
+#[serial_test::serial]
+fn openai_api_key_exports_only_api_key_not_base_url() {
+    // The OpenAI typed secret should only export OPENAI_API_KEY as an env var.
+    // base_url is piped through the structured secret to the harness instead.
+    std::env::remove_var("OPENAI_API_KEY");
+    std::env::remove_var("OPENAI_BASE_URL");
+    let secrets = HashMap::from([(
+        "openai-key".to_string(),
+        ManagedSecretValue::openai_api_key(
+            "sk-test-key",
+            Some("https://us.api.openai.com/v1".to_string()),
+        ),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets);
+    assert_eq!(
+        env_vars.get(&OsString::from("OPENAI_API_KEY")),
+        Some(&OsString::from("sk-test-key")),
+        "OPENAI_API_KEY should be exported from the typed secret"
+    );
+    assert!(
+        !env_vars.contains_key(&OsString::from("OPENAI_BASE_URL")),
+        "OPENAI_BASE_URL should NOT be exported as an env var"
+    );
 }

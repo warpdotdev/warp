@@ -1,18 +1,15 @@
 //! Module to attribute AI-generated requested commands
 //! to known documents (e.g. Warp Drive objects).
 
-use warpui::AppContext;
-use warpui::SingletonEntity;
+use markdown_parser::{parse_markdown, FormattedTextLine};
+use warpui::{AppContext, SingletonEntity};
 
-use crate::env_vars::EnvVarCollection;
-use crate::env_vars::EnvVarValue;
+use crate::ai::agent::AIAgentCitation;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::env_vars::{EnvVarCollection, EnvVarCollectionExt, EnvVarExt, EnvVarValue};
 use crate::notebooks::CloudNotebookModel;
 use crate::terminal::shell::ShellType;
-use crate::{
-    ai::agent::AIAgentCitation, cloud_object::model::persistence::CloudModel,
-    workflows::command_parser::command_matches_workflow,
-};
-use markdown_parser::{parse_markdown, FormattedTextLine};
+use crate::workflows::command_parser::command_matches_workflow;
 
 /// Returns true iff the `command` is directly copied from the `document`.
 pub(crate) fn is_command_copied_from_document(

@@ -1,11 +1,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+
 #[cfg(feature = "local_fs")]
 use crate::install::{fetch_latest_metadata_from_github, install_from_github, AssetKind};
 use crate::language_server_candidate::{LanguageServerCandidate, LanguageServerMetadata};
 use crate::CommandBuilder;
-use async_trait::async_trait;
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub struct RustAnalyzerCandidate {

@@ -1,11 +1,12 @@
-use super::*;
-use crate::{
-    ai::request_usage_model::{RequestLimitInfo, RequestLimitRefreshDuration},
-    test_util::settings::initialize_settings_for_tests,
-};
 use chrono::Utc;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{App, SingletonEntity};
+
+use super::*;
+use crate::ai::request_usage_model::{RequestLimitInfo, RequestLimitRefreshDuration};
+use crate::auth::AuthStateProvider;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 fn create_test_request_limit_info(
     limit: usize,
@@ -30,6 +31,11 @@ fn create_test_request_limit_info(
     }
 }
 
+fn add_ai_enablement_dependencies_for_test(app: &mut App) {
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(UserWorkspaces::default_mock);
+}
+
 // FocusedTerminalInfo Tests
 
 #[test]
@@ -40,11 +46,10 @@ fn test_update_both_values_changed() {
 
         // Setup event tracking
         let (sender, receiver) = async_channel::unbounded();
-        let model_handle_clone = model_handle.clone();
-        model_handle.update(&mut app, move |_, ctx| {
+        app.update(|ctx| {
             let sender = sender.clone();
             ctx.subscribe_to_model(
-                &model_handle_clone,
+                &model_handle,
                 move |_, event: &FocusedTerminalInfoEvent, _| match event {
                     FocusedTerminalInfoEvent::TerminalInfoUpdated => {
                         let _ = sender.try_send(());
@@ -81,11 +86,10 @@ fn test_update_additional_value_changed() {
 
         // Setup event tracking
         let (sender, receiver) = async_channel::unbounded();
-        let model_handle_clone = model_handle.clone();
-        model_handle.update(&mut app, move |_, ctx| {
+        app.update(|ctx| {
             let sender = sender.clone();
             ctx.subscribe_to_model(
-                &model_handle_clone,
+                &model_handle,
                 move |_, event: &FocusedTerminalInfoEvent, _| match event {
                     FocusedTerminalInfoEvent::TerminalInfoUpdated => {
                         let _ = sender.try_send(());
@@ -130,11 +134,10 @@ fn test_update_no_change() {
 
         // Setup event tracking
         let (sender, receiver) = async_channel::unbounded();
-        let model_handle_clone = model_handle.clone();
-        model_handle.update(&mut app, move |_, ctx| {
+        app.update(|ctx| {
             let sender = sender.clone();
             ctx.subscribe_to_model(
-                &model_handle_clone,
+                &model_handle,
                 move |_, event: &FocusedTerminalInfoEvent, _| match event {
                     FocusedTerminalInfoEvent::TerminalInfoUpdated => {
                         let _ = sender.try_send(());
@@ -179,11 +182,10 @@ fn test_update_only_remote_toggles() {
 
         // Setup event tracking
         let (sender, receiver) = async_channel::unbounded();
-        let model_handle_clone = model_handle.clone();
-        model_handle.update(&mut app, move |_, ctx| {
+        app.update(|ctx| {
             let sender = sender.clone();
             ctx.subscribe_to_model(
-                &model_handle_clone,
+                &model_handle,
                 move |_, event: &FocusedTerminalInfoEvent, _| match event {
                     FocusedTerminalInfoEvent::TerminalInfoUpdated => {
                         let _ = sender.try_send(());
@@ -228,11 +230,10 @@ fn test_update_only_restored_toggles() {
 
         // Setup event tracking
         let (sender, receiver) = async_channel::unbounded();
-        let model_handle_clone = model_handle.clone();
-        model_handle.update(&mut app, move |_, ctx| {
+        app.update(|ctx| {
             let sender = sender.clone();
             ctx.subscribe_to_model(
-                &model_handle_clone,
+                &model_handle,
                 move |_, event: &FocusedTerminalInfoEvent, _| match event {
                     FocusedTerminalInfoEvent::TerminalInfoUpdated => {
                         let _ = sender.try_send(());
@@ -379,6 +380,18 @@ fn test_toolbar_command_map_matched_agent() {
             let agent =
                 CompiledCommandsForCodingAgentToolbar::matched_agent(ctx, "unmatched-command");
             assert_eq!(agent, None);
+        });
+    });
+}
+
+#[test]
+fn orchestration_is_enabled_when_ai_is_enabled() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        add_ai_enablement_dependencies_for_test(&mut app);
+
+        AISettings::handle(&app).read(&app, |settings, ctx| {
+            assert!(settings.is_orchestration_enabled(ctx));
         });
     });
 }

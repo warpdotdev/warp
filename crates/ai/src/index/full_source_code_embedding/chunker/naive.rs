@@ -1,7 +1,9 @@
-use crate::index::full_source_code_embedding::chunker::{coalesce_fragments, Fragment};
+use std::path::Path;
+
 use itertools::Itertools;
 use line_span::{LineSpan, LineSpans};
-use std::path::Path;
+
+use crate::index::full_source_code_embedding::chunker::{coalesce_fragments, Fragment};
 
 /// Chunks the given file into [`Fragment`]s. Each chunk is at most `num_lines_per_chunk` lines long, and contains at most `max_bytes_per_chunk` bytes.
 pub(super) fn chunk_code<'a>(

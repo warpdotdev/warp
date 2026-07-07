@@ -5,10 +5,9 @@ mod texture_with_bind_group;
 
 use std::sync::{Arc, LazyLock, Mutex};
 
-use wgpu::wgt::WgpuHasDisplayHandle;
-
 pub use renderer::Renderer;
 pub use resources::{adapter_has_rendering_offset_bug, Resources};
+use wgpu::wgt::WgpuHasDisplayHandle;
 
 use crate::platform::GraphicsBackend;
 #[cfg(not(target_family = "wasm"))]
@@ -80,7 +79,8 @@ pub fn init_wgpu_instance(display_handle: Box<dyn WgpuHasDisplayHandle>) {
         instance_lock_guard.get_or_insert_with(|| {
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             {
-                use crate::windowing::{winit::app::WINDOWING_SYSTEM, WindowingSystem};
+                use crate::windowing::winit::app::WINDOWING_SYSTEM;
+                use crate::windowing::WindowingSystem;
                 // If the user hasn't enabled (and is making use of) native Wayland
                 // support, due to the fact that we force use of X11 in
                 // ui/src/windowing/winit/app.rs, we need to make sure wgpu doesn't

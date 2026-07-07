@@ -1,38 +1,37 @@
+use cloud_objects::cloud_object::ServerPermissions;
 use warp_core::ui::appearance::Appearance;
-use warp_server_client::cloud_object::ServerPermissions;
-use warpui::{
-    platform::WindowStyle, AddSingletonModel, App, SingletonEntity, TypedActionView, ViewHandle,
-};
-
-use crate::{
-    ai::blocklist::BlocklistAIHistoryModel,
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    cloud_object::{
-        model::{actions::ObjectActions, persistence::CloudModel, view::CloudViewModel},
-        CloudObjectSyncStatus, ObjectIdType, ObjectType, Owner, ServerCreationInfo, Space,
-    },
-    drive::{items::WarpDriveItemId, CloudObjectTypeAndId},
-    menu::MenuItem,
-    network::NetworkStatus,
-    notebooks::{CloudNotebook, CloudNotebookModel},
-    server::{
-        cloud_objects::update_manager::UpdateManager,
-        ids::{ClientId, ServerIdAndType, SyncId},
-        server_api::ServerApiProvider,
-        sync_queue::{QueueItem, SyncQueue},
-        telemetry::context_provider::AppTelemetryContextProvider,
-    },
-    settings_view::keybindings::KeybindingChangedNotifier,
-    terminal::shared_session::permissions_manager::SessionPermissionsManager,
-    test_util::settings::initialize_settings_for_tests,
-    workflows::{workflow::Workflow, CloudWorkflow, CloudWorkflowModel},
-    workspaces::{
-        team_tester::TeamTesterStatus, user_profiles::UserProfiles, user_workspaces::UserWorkspaces,
-    },
-    Assets,
-};
+use warpui::platform::WindowStyle;
+use warpui::{AddSingletonModel, App, SingletonEntity, TypedActionView, ViewHandle};
 
 use super::{DriveIndex, DriveIndexAction};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::actions::ObjectActions;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::CloudViewModel;
+use crate::cloud_object::{
+    CloudObjectSyncStatus, ObjectIdType, ObjectType, Owner, ServerCreationInfo, Space,
+};
+use crate::drive::items::WarpDriveItemId;
+use crate::drive::CloudObjectTypeAndId;
+use crate::menu::MenuItem;
+use crate::network::NetworkStatus;
+use crate::notebooks::{CloudNotebook, CloudNotebookModel};
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::{ClientId, ServerIdAndType, SyncId};
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::{QueueItem, SyncQueue};
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::ASSETS;
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -121,7 +120,7 @@ fn label_for_menu_item(item: &MenuItem<DriveIndexAction>) -> &str {
 
 #[test]
 fn test_retry_menu_item_visibility() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let index = create_index(&mut app);
         let sync_id = create_workflow(&mut app);
@@ -171,7 +170,7 @@ fn test_retry_menu_item_visibility() {
 
 #[test]
 fn test_retry_menu_item_logic() {
-    App::test(Assets, |mut app| async move {
+    App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
         let index = create_index(&mut app);
         let sync_id = create_workflow(&mut app);

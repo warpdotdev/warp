@@ -1,11 +1,10 @@
-use ai::agent::action::InsertReviewComment;
-use chrono::{DateTime, Local};
 use std::path::PathBuf;
 
-use super::{
-    comment::ImportedCommentDetails, PendingImportedReviewComment,
-    PendingImportedReviewCommentTarget,
-};
+use ai::agent::action::InsertReviewComment;
+use chrono::{DateTime, Local};
+
+use super::comment::ImportedCommentDetails;
+use super::{PendingImportedReviewComment, PendingImportedReviewCommentTarget};
 use crate::code_review::comments::diff_hunk_parser::parse_diff_hunk;
 
 #[derive(Debug)]

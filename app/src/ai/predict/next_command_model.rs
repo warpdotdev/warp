@@ -1,25 +1,13 @@
-use crate::ai::block_context::BlockContext;
-use crate::ai_assistant::execution_context::WarpAiExecutionContext;
-use crate::completer::SessionContext;
+use std::collections::HashMap;
+use std::sync::Arc;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
-use crate::report_error;
-use crate::server::server_api::{AIApiError, ServerApi};
-use crate::settings::AISettings;
-use crate::terminal::event::UserBlockCompleted;
-use crate::terminal::input::{CompleterData, IntelligentAutosuggestionResult};
-use crate::terminal::model::session::Sessions;
-use crate::terminal::{History, HistoryEntry, TerminalModel};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use std::time::Duration;
+
 use chrono::Utc;
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 #[cfg_attr(not(feature = "local_fs"), allow(unused_imports))]
 use parking_lot::{FairMutex, Mutex};
-use std::collections::HashMap;
-use std::sync::Arc;
-#[cfg(feature = "local_fs")]
-use std::time::Duration;
 use warp_completer::completer::{
     self, expand_command_aliases, AliasExpansionResult, CompleterOptions,
     CompletionsFallbackStrategy, MatchStrategy,
@@ -36,6 +24,19 @@ use super::generate_ai_input_suggestions::{
     create_generate_ai_input_suggestions_request, get_context_messages,
     GenerateAIInputSuggestionsRequest, GenerateAIInputSuggestionsResponseV2, NextCommandContext,
 };
+use crate::ai::block_context::BlockContext;
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::completer::SessionContext;
+#[cfg(feature = "local_fs")]
+use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::report_error;
+use crate::server::server_api::{AIApiError, ServerApi};
+use crate::settings::AISettings;
+use crate::terminal::event::UserBlockCompleted;
+use crate::terminal::input::{CompleterData, IntelligentAutosuggestionResult};
+use crate::terminal::model::session::Sessions;
+use crate::terminal::{History, HistoryEntry, TerminalModel};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {

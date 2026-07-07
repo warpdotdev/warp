@@ -1,7 +1,7 @@
-use crate::{
-    error::UserFacingError, full_source_code_embedding::EmbeddingConfig,
-    request_context::RequestContext, schema,
-};
+use crate::error::UserFacingError;
+use crate::full_source_code_embedding::EmbeddingConfig;
+use crate::request_context::RequestContext;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct CodebaseContextConfigVariables {

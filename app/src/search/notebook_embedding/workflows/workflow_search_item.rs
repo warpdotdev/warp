@@ -1,30 +1,24 @@
 use ordered_float::OrderedFloat;
-use warpui::{
-    elements::{
-        Clipped, ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, MainAxisAlignment,
-        MainAxisSize, ParentElement, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Element, SingletonEntity,
+use warpui::elements::{
+    Clipped, ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, MainAxisAlignment,
+    MainAxisSize, ParentElement, Shrinkable, Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity};
 
+use crate::appearance::Appearance;
+use crate::cloud_object::CloudObject;
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
+use crate::drive::DriveObjectType;
+use crate::search::item::{IconLocation, SearchItem};
+use crate::search::notebook_embedding::embedded_fuzzy_match::FuzzyMatchEmbeddedObjectResult;
+use crate::search::notebook_embedding::searcher::EmbeddingSearchItemAction;
+use crate::search::notebook_embedding::view::styles;
 use crate::search::result_renderer::ItemHighlightState;
-use crate::{
-    appearance::Appearance,
-    cloud_object::CloudObject,
-    drive::{cloud_object_styling::warp_drive_icon_color, DriveObjectType},
-    search::{
-        item::IconLocation,
-        notebook_embedding::{
-            embedded_fuzzy_match::FuzzyMatchEmbeddedObjectResult,
-            searcher::EmbeddingSearchItemAction, view::styles,
-        },
-    },
-    themes::theme::Fill,
-    ui_components::icons::Icon,
-};
-use crate::{search::item::SearchItem, workflows::CloudWorkflow};
+use crate::themes::theme::Fill;
+use crate::ui_components::icons::Icon;
+use crate::workflows::CloudWorkflow;
 
 /// The size of the object type icons, in pixels.
 const ICON_SIZE: f32 = 16.;

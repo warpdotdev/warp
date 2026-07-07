@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use warpui::{keymap::EditableBinding, AppContext, Entity, EntityId, SingletonEntity, WindowId};
-
-use crate::util::bindings::{BindingGroup, CustomAction};
+use warpui::keymap::EditableBinding;
+use warpui::{AppContext, Entity, EntityId, SingletonEntity, WindowId};
 
 use super::WorkspaceAction;
+use crate::util::bindings::{BindingGroup, CustomAction};
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;

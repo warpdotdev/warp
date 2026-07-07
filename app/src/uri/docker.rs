@@ -1,16 +1,16 @@
-use std::{collections::HashMap, fmt::Display};
+use std::collections::HashMap;
+use std::fmt::Display;
 
-use crate::{
-    send_telemetry_from_app_ctx, server::telemetry::TelemetryEvent, terminal::shell::ShellType,
-};
+use anyhow::{anyhow, Result};
 use regex::Regex;
 use url::Url;
 use warp_util::path::{is_posix_portable_pathname, ShellFamily};
 use warpui::AppContext;
 
 use crate::root_view::SubshellCommandArg;
-
-use anyhow::{anyhow, Result};
+use crate::send_telemetry_from_app_ctx;
+use crate::server::telemetry::TelemetryEvent;
+use crate::terminal::shell::ShellType;
 
 /// String of hex digits meant to represent a Docker container ID.
 #[derive(Debug)]

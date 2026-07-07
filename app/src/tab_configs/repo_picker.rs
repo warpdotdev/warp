@@ -1,20 +1,18 @@
 use std::path::PathBuf;
 
 use warp_util::path::user_friendly_path;
+use warpui::elements::{Border, ChildView, Container, Hoverable, MouseStateHandle, Text};
+use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::components::UiComponentStyles;
 use warpui::{
-    elements::{Border, ChildView, Container, Hoverable, MouseStateHandle, Text},
-    platform::Cursor,
-    text_layout::ClipConfig,
-    ui_components::components::UiComponentStyles,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::{
-    ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent},
-    appearance::Appearance,
-    tab_configs::PickerStyle,
-    view_components::{DropdownItem, FilterableDropdown},
-};
+use crate::ai::persisted_workspace::{PersistedWorkspace, PersistedWorkspaceEvent};
+use crate::appearance::Appearance;
+use crate::tab_configs::PickerStyle;
+use crate::view_components::{DropdownItem, FilterableDropdown};
 
 const DEFAULT_DROPDOWN_WIDTH: f32 = 380.;
 

@@ -1,67 +1,49 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use chrono::Utc;
+use cloud_object_client::MockObjectClient;
 use lazy_static::lazy_static;
+use mockall::Sequence;
+use rand::Rng;
 use settings::{RespectUserSyncSetting, SyncToCloud};
 use warpui::{App, ModelHandle};
 
+use super::*;
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::user::TEST_USER_UID;
-use crate::auth::AuthStateProvider;
-use crate::auth::UserUid;
+use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::actions::ObjectActions;
 use crate::cloud_object::model::generic_string_model::GenericStringModel;
-use crate::cloud_object::model::view::CloudViewModel;
-use crate::cloud_object::model::view::EditorState;
-use crate::cloud_object::model::view::UpdateTimestamp;
-use crate::cloud_object::model::view::EDITOR_TIMEOUT_DURATION_MINUTES;
-use crate::cloud_object::CloudObjectMetadata;
-use crate::cloud_object::CloudObjectPermissions;
-use crate::cloud_object::CloudObjectStatuses;
-use crate::cloud_object::CloudObjectSyncStatus;
-use crate::cloud_object::NumInFlightRequests;
-use crate::cloud_object::ObjectIdType;
-use crate::cloud_object::Owner;
-use crate::cloud_object::ServerMetadata;
-use crate::cloud_object::ServerPermissions;
-use crate::drive::folders::CloudFolderModel;
-use crate::drive::folders::FolderId;
+use crate::cloud_object::model::view::{
+    CloudViewModel, EditorState, UpdateTimestamp, EDITOR_TIMEOUT_DURATION_MINUTES,
+};
+use crate::cloud_object::{
+    CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses, CloudObjectSyncStatus,
+    NumInFlightRequests, ObjectIdType, Owner, ServerMetadata, ServerPermissions,
+};
+use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::drive::DriveIndexVariant;
 use crate::features::FeatureFlag;
-use crate::notebooks::CloudNotebookModel;
-use crate::notebooks::NotebookId;
+use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::server::cloud_objects::listener::ObjectUpdateMessage;
 use crate::server::cloud_objects::update_manager::InitialLoadResponse;
-use crate::server::ids::ServerId;
-use crate::server::ids::ServerIdAndType;
+use crate::server::ids::{ServerId, ServerIdAndType};
 use crate::server::server_api::object::ObjectClient;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::init_and_register_user_preferences;
-use crate::settings::Preference;
+use crate::settings::{init_and_register_user_preferences, Preference};
 use crate::system::SystemStats;
+use crate::workflows::CloudWorkflowModel;
 use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::Workspace;
-
-use crate::workflows::CloudWorkflowModel;
-use crate::workspaces::workspace::WorkspaceUid;
-use crate::NetworkStatus;
-use crate::UpdateManager;
-use mockall::Sequence;
-use rand::Rng;
-use std::sync::Arc;
-use std::time::Duration;
-
-use super::*;
-
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
-#[cfg(test)]
-use crate::server::server_api::team::MockTeamClient;
-#[cfg(test)]
-use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::workspaces::workspace::{Workspace, WorkspaceUid};
+use crate::{NetworkStatus, UpdateManager};
 
 fn create_cloud_model(
     app: &mut App,
@@ -173,14 +155,16 @@ fn mock_server_workflows(
     number_of_workflows: i64,
 ) -> Vec<ServerWorkflow> {
     (0..number_of_workflows)
-        .map(|idx| ServerWorkflow {
-            id: SyncId::ServerId((start_id + idx).into()),
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-            model: CloudWorkflowModel::new(Workflow::new(
-                format!("w{}", start_id + idx),
-                format!("c{}", start_id + idx),
-            )),
+        .map(|idx| {
+            ServerWorkflow::new(
+                SyncId::ServerId((start_id + idx).into()),
+                CloudWorkflowModel::new(Workflow::new(
+                    format!("w{}", start_id + idx),
+                    format!("c{}", start_id + idx),
+                )),
+                mock_server_metadata(),
+                mock_server_permissions(owner),
+            )
         })
         .collect()
 }
@@ -194,11 +178,13 @@ fn mock_random_folders(start_id: i64, owner: Owner) -> Vec<ServerFolder> {
 
 fn mock_server_folders(start_id: i64, owner: Owner, number_of_folders: i64) -> Vec<ServerFolder> {
     (0..number_of_folders)
-        .map(|idx| ServerFolder {
-            id: SyncId::ServerId((start_id + idx).into()),
-            model: CloudFolderModel::new(&format!("f{}", start_id + idx), false),
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
+        .map(|idx| {
+            ServerFolder::new(
+                SyncId::ServerId((start_id + idx).into()),
+                CloudFolderModel::new(&format!("f{}", start_id + idx), false),
+                mock_server_metadata(),
+                mock_server_permissions(owner),
+            )
         })
         .collect()
 }
@@ -206,50 +192,50 @@ fn mock_server_folders(start_id: i64, owner: Owner, number_of_folders: i64) -> V
 fn mock_server_notebooks() -> Vec<ServerNotebook> {
     let owner = Owner::mock_current_user();
     vec![
-        ServerNotebook {
-            id: SyncId::ServerId(1.into()),
-            model: CloudNotebookModel {
+        ServerNotebook::new(
+            SyncId::ServerId(1.into()),
+            CloudNotebookModel {
                 title: "t1".to_string(),
                 data: "d1".to_string(),
                 ai_document_id: None,
                 conversation_id: None,
             },
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-        },
-        ServerNotebook {
-            id: SyncId::ServerId(2.into()),
-            model: CloudNotebookModel {
+            mock_server_metadata(),
+            mock_server_permissions(owner),
+        ),
+        ServerNotebook::new(
+            SyncId::ServerId(2.into()),
+            CloudNotebookModel {
                 title: "t2".to_string(),
                 data: "d2".to_string(),
                 ai_document_id: None,
                 conversation_id: None,
             },
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-        },
-        ServerNotebook {
-            id: SyncId::ServerId(3.into()),
-            model: CloudNotebookModel {
+            mock_server_metadata(),
+            mock_server_permissions(owner),
+        ),
+        ServerNotebook::new(
+            SyncId::ServerId(3.into()),
+            CloudNotebookModel {
                 title: "t3".to_string(),
                 data: "d3".to_string(),
                 ai_document_id: None,
                 conversation_id: None,
             },
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-        },
-        ServerNotebook {
-            id: SyncId::ServerId(4.into()),
-            model: CloudNotebookModel {
+            mock_server_metadata(),
+            mock_server_permissions(owner),
+        ),
+        ServerNotebook::new(
+            SyncId::ServerId(4.into()),
+            CloudNotebookModel {
                 title: "t4".to_string(),
                 data: "d4".to_string(),
                 ai_document_id: None,
                 conversation_id: None,
             },
-            metadata: mock_server_metadata(),
-            permissions: mock_server_permissions(owner),
-        },
+            mock_server_metadata(),
+            mock_server_permissions(owner),
+        ),
     ]
 }
 
@@ -1049,18 +1035,18 @@ fn test_collapse_all_in_location() {
             let folder_1 = folder_from_cloud_model(model, folder_1_id);
             let folder_4 = folder_from_cloud_model(model, folder_4_id);
             let folder_5 = folder_from_cloud_model(model, folder_5_id);
-            assert!(!folder_1.model.is_open);
-            assert!(!folder_4.model.is_open);
-            assert!(!folder_5.model.is_open);
+            assert!(!folder_1.model().is_open);
+            assert!(!folder_4.model().is_open);
+            assert!(!folder_5.model().is_open);
             // but the others are still open
             let folder_2 = folder_from_cloud_model(model, folder_2_id);
             let folder_3 = folder_from_cloud_model(model, folder_3_id);
             let folder_6 = folder_from_cloud_model(model, folder_6_id);
             let folder_7 = folder_from_cloud_model(model, folder_7_id);
-            assert!(folder_2.model.is_open);
-            assert!(folder_3.model.is_open);
-            assert!(folder_6.model.is_open);
-            assert!(folder_7.model.is_open);
+            assert!(folder_2.model().is_open);
+            assert!(folder_3.model().is_open);
+            assert!(folder_6.model().is_open);
+            assert!(folder_7.model().is_open);
 
             model.collapse_all_in_location(
                 CloudObjectLocation::Space(Default::default()),
@@ -1075,13 +1061,13 @@ fn test_collapse_all_in_location() {
             let folder_5 = folder_from_cloud_model(model, folder_5_id);
             let folder_6 = folder_from_cloud_model(model, folder_6_id);
             let folder_7 = folder_from_cloud_model(model, folder_7_id);
-            assert!(!folder_1.model.is_open);
-            assert!(!folder_2.model.is_open);
-            assert!(!folder_3.model.is_open);
-            assert!(!folder_4.model.is_open);
-            assert!(!folder_5.model.is_open);
-            assert!(!folder_6.model.is_open);
-            assert!(!folder_7.model.is_open);
+            assert!(!folder_1.model().is_open);
+            assert!(!folder_2.model().is_open);
+            assert!(!folder_3.model().is_open);
+            assert!(!folder_4.model().is_open);
+            assert!(!folder_5.model().is_open);
+            assert!(!folder_6.model().is_open);
+            assert!(!folder_7.model().is_open);
         });
     })
 }
@@ -1146,19 +1132,19 @@ fn test_collapse_all_in_trash() {
             // folders 1, 4 should be collapsed
             let folder_1 = folder_from_cloud_model(model, folder_1_id);
             let folder_4 = folder_from_cloud_model(model, folder_4_id);
-            assert!(!folder_1.model.is_open);
-            assert!(!folder_4.model.is_open);
+            assert!(!folder_1.model().is_open);
+            assert!(!folder_4.model().is_open);
             // but the others, including folder 5, are still open
             let folder_2 = folder_from_cloud_model(model, folder_2_id);
             let folder_3 = folder_from_cloud_model(model, folder_3_id);
             let folder_5 = folder_from_cloud_model(model, folder_5_id);
             let folder_6 = folder_from_cloud_model(model, folder_6_id);
             let folder_7 = folder_from_cloud_model(model, folder_7_id);
-            assert!(folder_2.model.is_open);
-            assert!(folder_3.model.is_open);
-            assert!(folder_5.model.is_open);
-            assert!(folder_6.model.is_open);
-            assert!(folder_7.model.is_open);
+            assert!(folder_2.model().is_open);
+            assert!(folder_3.model().is_open);
+            assert!(folder_5.model().is_open);
+            assert!(folder_6.model().is_open);
+            assert!(folder_7.model().is_open);
 
             model.collapse_all_in_location(
                 CloudObjectLocation::Space(Default::default()),
@@ -1173,13 +1159,13 @@ fn test_collapse_all_in_trash() {
             let folder_5 = folder_from_cloud_model(model, folder_5_id);
             let folder_6 = folder_from_cloud_model(model, folder_6_id);
             let folder_7 = folder_from_cloud_model(model, folder_7_id);
-            assert!(!folder_1.model.is_open);
-            assert!(!folder_2.model.is_open);
-            assert!(!folder_3.model.is_open);
-            assert!(!folder_4.model.is_open);
-            assert!(!folder_5.model.is_open);
-            assert!(!folder_6.model.is_open);
-            assert!(!folder_7.model.is_open);
+            assert!(!folder_1.model().is_open);
+            assert!(!folder_2.model().is_open);
+            assert!(!folder_3.model().is_open);
+            assert!(!folder_4.model().is_open);
+            assert!(!folder_5.model().is_open);
+            assert!(!folder_6.model().is_open);
+            assert!(!folder_7.model().is_open);
         });
     })
 }
@@ -1335,15 +1321,15 @@ fn test_update_folder_timestamp_from_child_update() {
         let new_ts = initial_ts + chrono::Duration::seconds(5);
         receive_rtc_update(
             ObjectUpdateMessage::ObjectContentChanged {
-                server_object: Box::new(ServerCloudObject::Notebook(ServerNotebook {
-                    id: SyncId::ServerId(notebook_id),
-                    model: CloudNotebookModel {
+                server_object: Box::new(ServerCloudObject::Notebook(ServerNotebook::new(
+                    SyncId::ServerId(notebook_id),
+                    CloudNotebookModel {
                         title: "Test Notebook".to_string(),
                         data: "test2".into(),
                         ai_document_id: None,
                         conversation_id: None,
                     },
-                    metadata: ServerMetadata {
+                    ServerMetadata {
                         uid: notebook_id,
                         revision: new_ts.into(),
                         metadata_last_updated_ts: new_ts.into(),
@@ -1354,8 +1340,8 @@ fn test_update_folder_timestamp_from_child_update() {
                         last_editor_uid: None,
                         current_editor_uid: None,
                     },
-                    permissions: mock_server_permissions(Owner::mock_current_user()),
-                })),
+                    mock_server_permissions(Owner::mock_current_user()),
+                ))),
                 last_editor: None,
             },
             &mut app,
@@ -1466,15 +1452,15 @@ fn test_update_folder_timestamp_from_new_child() {
         // Create a notebook inside the folder.
         receive_rtc_update(
             ObjectUpdateMessage::ObjectContentChanged {
-                server_object: Box::new(ServerCloudObject::Notebook(ServerNotebook {
-                    id: SyncId::ServerId(notebook_id),
-                    model: CloudNotebookModel {
+                server_object: Box::new(ServerCloudObject::Notebook(ServerNotebook::new(
+                    SyncId::ServerId(notebook_id),
+                    CloudNotebookModel {
                         title: "Test Notebook".to_string(),
                         data: "test".to_string(),
                         ai_document_id: None,
                         conversation_id: None,
                     },
-                    metadata: ServerMetadata {
+                    ServerMetadata {
                         uid: notebook_id,
                         revision: t2.into(),
                         metadata_last_updated_ts: t2.into(),
@@ -1485,8 +1471,8 @@ fn test_update_folder_timestamp_from_new_child() {
                         last_editor_uid: None,
                         current_editor_uid: None,
                     },
-                    permissions: mock_server_permissions(Owner::mock_current_user()),
-                })),
+                    mock_server_permissions(Owner::mock_current_user()),
+                ))),
                 last_editor: None,
             },
             &mut app,

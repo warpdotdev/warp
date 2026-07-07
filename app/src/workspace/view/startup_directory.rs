@@ -1,14 +1,15 @@
 //! Logic to determine the working directory for new terminal sessions.
 
+use std::path::PathBuf;
+
+use warpui::{AppContext, SingletonEntity, ViewContext, WindowId};
+
 use super::Workspace;
 use crate::terminal::available_shells::AvailableShell;
 #[cfg(feature = "local_tty")]
 use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::session_settings::{NewSessionSource, SessionSettings};
 use crate::terminal::ShellLaunchData;
-use std::path::PathBuf;
-use warpui::SingletonEntity;
-use warpui::{AppContext, ViewContext, WindowId};
 
 impl Workspace {
     /// Helper function to compute the initial directory for a new session

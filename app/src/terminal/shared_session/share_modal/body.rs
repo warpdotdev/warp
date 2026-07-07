@@ -1,35 +1,30 @@
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::appearance::Appearance;
-
-use crate::terminal::shared_session::replay_agent_conversations::reconstruct_response_events_from_conversations;
-use crate::terminal::shared_session::role_change_modal::TEXT_FONT_SIZE;
-use crate::terminal::shared_session::{
-    ai_agent::encode_agent_response_event, max_session_size, SharedSessionActionSource,
-    SharedSessionScrollbackType,
-};
-use crate::terminal::TerminalModel;
-use byte_unit::Byte;
-use warp_core::features::FeatureFlag;
-
 use std::default::Default;
 use std::sync::Arc;
 
+use byte_unit::Byte;
 use parking_lot::FairMutex;
-
+use warp_core::features::FeatureFlag;
 use warpui::elements::{
     Container, Flex, MainAxisSize, MouseStateHandle, ParentElement, Shrinkable, Text,
 };
+use warpui::platform::Cursor;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::UiComponent;
 use warpui::ui_components::radio_buttons::{
     RadioButtonItem, RadioButtonLayout, RadioButtonStateHandle,
 };
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::style::{self, BUTTON_GAP, MODAL_MARGIN};
-use warpui::{
-    platform::Cursor, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
-    ViewContext,
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::appearance::Appearance;
+use crate::terminal::shared_session::ai_agent::encode_agent_response_event;
+use crate::terminal::shared_session::replay_agent_conversations::reconstruct_response_events_from_conversations;
+use crate::terminal::shared_session::role_change_modal::TEXT_FONT_SIZE;
+use crate::terminal::shared_session::{
+    max_session_size, SharedSessionActionSource, SharedSessionScrollbackType,
 };
+use crate::terminal::TerminalModel;
 
 #[derive(Default)]
 struct ButtonMouseStateHandles {
@@ -86,7 +81,7 @@ impl Body {
         ctx: &ViewContext<Self>,
     ) -> Byte {
         let conversations: Vec<_> = BlocklistAIHistoryModel::as_ref(ctx)
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
             .filter(|conv| conv.exchange_count() > 0)
             .cloned()
             .collect();
@@ -126,7 +121,7 @@ impl Body {
         // Check if agent shared sessions is enabled and there are active conversations
         self.has_agent_conversations = if FeatureFlag::AgentSharedSessions.is_enabled() {
             BlocklistAIHistoryModel::as_ref(ctx)
-                .all_live_conversations_for_terminal_view(terminal_view_id)
+                .all_live_conversations_for_terminal_surface(terminal_view_id)
                 .any(|conv| conv.exchange_count() > 0)
         } else {
             false

@@ -1,6 +1,7 @@
-use crate::{
-    error::UserFacingError, request_context::RequestContext, schema, user::DiscoverableTeamData,
-};
+use crate::error::UserFacingError;
+use crate::request_context::RequestContext;
+use crate::schema;
+use crate::user::DiscoverableTeamData;
 
 /*
 query GetDiscoverableTeams($requestContext: RequestContext!) {

@@ -1,13 +1,16 @@
 //! Common types for hashes that identify codebase embedding state.
 
+use std::fmt;
+use std::str::FromStr;
+use std::sync::Arc;
+
 use generic_array::GenericArray;
 use serde::{Deserialize, Serialize};
-use sha2::{digest::OutputSizeUser, Digest, Sha256};
-use std::{fmt, str::FromStr, sync::Arc};
-
-use crate::index::full_source_code_embedding::chunker::Fragment;
+use sha2::digest::OutputSizeUser;
+use sha2::{Digest, Sha256};
 
 use super::Error;
+use crate::index::full_source_code_embedding::chunker::Fragment;
 
 /// The hash of an *intermediate* node in the [`MerkleTree`].
 ///

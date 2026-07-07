@@ -2,75 +2,63 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::document::ai_document_model::{AIDocumentSaveStatus, AIDocumentUserEditStatus};
-use crate::ai::document::orchestration_config_block::OrchestrationConfigBlockView;
-use crate::appearance::Appearance;
-use crate::drive::{items::WarpDriveItemId, sharing::ShareableObject, CloudObjectTypeAndId};
-use crate::notebooks::editor::view::RichTextEditorConfig;
-use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::view::header::components::{
-    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
-    CenteredHeaderEdgeWidth,
-};
-use crate::pane_group::pane::view::header::toolbelt_button_position_id;
-use crate::pane_group::pane::view::header::PaneHeaderAction;
-use crate::send_telemetry_from_ctx;
-use crate::settings::FontSettings;
-use crate::terminal::input::MenuPositioning;
-use crate::terminal::view::TerminalView;
-use crate::util::bindings::keybinding_name_to_keystroke;
-use crate::view_components::action_button::{
-    ButtonSize, NakedTheme, SecondaryTheme, TooltipAlignment,
-};
-use crate::view_components::DismissibleToast;
-use crate::workspace::ToastStack;
-use crate::BlocklistAIHistoryModel;
-use crate::{
-    ai::document::ai_document_model::{
-        AIDocumentId, AIDocumentInstance, AIDocumentModel, AIDocumentModelEvent,
-        AIDocumentUpdateSource, AIDocumentVersion,
-    },
-    editor::InteractionState,
-    menu::{Menu, MenuItem, MenuItemFields},
-    notebooks::{
-        editor::{
-            model::NotebooksEditorModel,
-            rich_text_styles,
-            view::{EditorViewEvent, RichTextEditorView},
-        },
-        link::{NotebookLinks, SessionSource},
-    },
-    pane_group::{pane::view, BackingView, PaneConfiguration, PaneEvent},
-    server::telemetry::TelemetryEvent,
-    ui_components::buttons::icon_button,
-    ui_components::icons::Icon,
-    view_components::action_button::{ActionButton, PrimaryTheme},
-};
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::icons;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::clipboard::ClipboardContent;
-use warpui::elements::CrossAxisAlignment;
-use warpui::elements::MainAxisAlignment;
-use warpui::elements::MainAxisSize;
-use warpui::elements::{ChildAnchor, PositionedElementAnchor, PositionedElementOffsetBounds};
-use warpui::keymap::EditableBinding;
-use warpui::keymap::FixedBinding;
+use warpui::elements::{
+    ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Stack,
+};
+use warpui::keymap::{EditableBinding, FixedBinding};
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonTooltipPosition;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        ChildView, ConstrainedBox, Container, Flex, Hoverable, MouseStateHandle, OffsetPositioning,
-        ParentElement, SavePosition, Stack,
-    },
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    id, AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
-use warpui::{id, EntityId};
+
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::document::ai_document_model::{
+    AIDocumentId, AIDocumentInstance, AIDocumentModel, AIDocumentModelEvent, AIDocumentSaveStatus,
+    AIDocumentUpdateSource, AIDocumentUserEditStatus, AIDocumentVersion,
+};
+use crate::ai::document::orchestration_config_block::OrchestrationConfigBlockView;
+use crate::appearance::Appearance;
+use crate::drive::items::WarpDriveItemId;
+use crate::drive::sharing::ShareableObject;
+use crate::drive::CloudObjectTypeAndId;
+use crate::editor::InteractionState;
+use crate::menu::{Menu, MenuItem, MenuItemFields};
+use crate::notebooks::editor::model::NotebooksEditorModel;
+use crate::notebooks::editor::rich_text_styles;
+use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
+use crate::notebooks::link::{NotebookLinks, SessionSource};
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view;
+use crate::pane_group::pane::view::header::components::{
+    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
+    CenteredHeaderEdgeWidth,
+};
+use crate::pane_group::pane::view::header::{toolbelt_button_position_id, PaneHeaderAction};
+use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings::FontSettings;
+use crate::terminal::input::MenuPositioning;
+use crate::terminal::view::TerminalView;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::view_components::action_button::{
+    ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme, TooltipAlignment,
+};
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
+use crate::{send_telemetry_from_ctx, BlocklistAIHistoryModel};
 
 pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([EditableBinding::new(
@@ -92,23 +80,24 @@ pub fn init(app: &mut AppContext) {
 }
 
 #[cfg(feature = "local_fs")]
+use warp_util::path::LineAndColumnArg;
+
+#[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
+// Import keybinding constants from code view to ensure consistency
+use crate::code::view::{SAVE_FILE_BINDING_DESCRIPTION, SAVE_FILE_BINDING_NAME};
+use crate::notebooks::file::MarkdownDisplayMode;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::settings::EditorLayout;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
-#[cfg(feature = "local_fs")]
-use warp_util::path::LineAndColumnArg;
-
-// Import keybinding constants from code view to ensure consistency
-use crate::code::view::{SAVE_FILE_BINDING_DESCRIPTION, SAVE_FILE_BINDING_NAME};
-use crate::notebooks::file::MarkdownDisplayMode;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AIDocumentAction {
     Close,
     SelectVersion(AIDocumentVersion),
     Export,
+    CopyAsMarkdown,
     OpenVersionMenu,
     CreateWarpDriveNotebook,
     RevertToDocumentVersion,
@@ -274,42 +263,58 @@ impl AIDocumentView {
                 use crate::ai::blocklist::BlocklistAIHistoryEvent;
                 match event {
                     BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                        terminal_view_id, ..
+                        terminal_surface_id,
+                        ..
                     } => {
                         // Check if this is our terminal view
                         if let Some(tv) = &me.original_terminal_view {
-                            if tv.id() == *terminal_view_id {
+                            if tv.id() == *terminal_surface_id {
                                 me.update_header_buttons(ctx);
                             }
                         }
                     }
                     BlocklistAIHistoryEvent::RestoredConversations {
-                        terminal_view_id,
+                        terminal_surface_id,
                         conversation_ids,
                     } => {
                         // Try to populate terminal view if conversations were restored
-                        me.maybe_populate_terminal_view(*terminal_view_id, conversation_ids, ctx);
+                        me.maybe_populate_terminal_view(
+                            *terminal_surface_id,
+                            conversation_ids,
+                            ctx,
+                        );
                     }
                     BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
                         conversation_id: cid,
+                        from_restore,
                     } => {
-                        // Re-render so the config block picks up changes
-                        // only for our document's conversation.
                         let our_conv = AIDocumentModel::as_ref(ctx)
                             .get_conversation_id_for_document_id(&document_id);
                         if our_conv.as_ref() == Some(cid) {
-                            // Lazily create the config block view if it
-                            // wasn't available at construction time (the
-                            // plan sidebar can open before the server
-                            // sends the orchestration config).
-                            if me.orchestration_config_block.is_none() {
+                            // Lazily create the config block view if the
+                            // plan sidebar opened before the orchestration
+                            // config arrived.
+                            let was_freshly_created = if me.orchestration_config_block.is_none() {
                                 let conv_id = *cid;
+                                // TODO: introduce DocumentId / PlanId newtypes to make this
+                                // conversion type-safe.
+                                let plan_id = document_id.to_string();
                                 me.orchestration_config_block =
                                     Some(ctx.add_typed_action_view(move |ctx| {
-                                        OrchestrationConfigBlockView::new_with_conversation_id(
-                                            conv_id, ctx,
-                                        )
+                                        OrchestrationConfigBlockView::new(conv_id, plan_id, ctx)
                                     }));
+                                true
+                            } else {
+                                false
+                            };
+                            // Arm auto-pop for live agent dispatches but
+                            // not for restore-hydrated events.
+                            if was_freshly_created && !*from_restore {
+                                if let Some(block) = &me.orchestration_config_block {
+                                    block.update(ctx, |block, ctx| {
+                                        block.arm_for_fresh_dispatch(ctx);
+                                    });
+                                }
                             }
                             ctx.notify();
                         }
@@ -439,11 +444,17 @@ impl AIDocumentView {
         let has_orchestration_config = doc_conversation_id.and_then(|cid| {
             BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&cid)
-                .and_then(|conv| conv.orchestration_config().map(|_| cid))
+                .and_then(|conv| {
+                    let plan_id_str = document_id.to_string();
+                    conv.orchestration_config_for_plan(&plan_id_str)
+                        .map(|_| cid)
+                })
         });
+        let doc_id_for_block = document_id;
         let orchestration_config_block = has_orchestration_config.map(|conv_id| {
+            let plan_id = doc_id_for_block.to_string();
             ctx.add_typed_action_view(move |ctx| {
-                OrchestrationConfigBlockView::new_with_conversation_id(conv_id, ctx)
+                OrchestrationConfigBlockView::new(conv_id, plan_id, ctx)
             })
         });
 
@@ -1003,8 +1014,9 @@ impl AIDocumentView {
     /// Export the current content as a markdown file.
     #[cfg(feature = "local_fs")]
     fn export(&self, ctx: &mut ViewContext<Self>) {
-        use crate::drive::export::safe_filename;
         use warpui::platform::SaveFilePickerConfiguration;
+
+        use crate::drive::export::safe_filename;
         let markdown = self.editor.as_ref(ctx).markdown_unescaped(ctx);
 
         // Get the document title from the model
@@ -1064,9 +1076,10 @@ impl View for AIDocumentView {
         let has_orchestration_config = AIDocumentModel::as_ref(app)
             .get_conversation_id_for_document_id(&self.document_id)
             .and_then(|cid| {
+                let plan_id_str = self.document_id.to_string();
                 BlocklistAIHistoryModel::as_ref(app)
                     .conversation(&cid)
-                    .and_then(|conv| conv.orchestration_config().map(|_| ()))
+                    .and_then(|conv| conv.orchestration_config_for_plan(&plan_id_str).map(|_| ()))
             })
             .is_some();
 
@@ -1125,6 +1138,20 @@ impl TypedActionView for AIDocumentView {
                 self.refresh(ctx);
             }
             AIDocumentAction::Export => self.export(ctx),
+            AIDocumentAction::CopyAsMarkdown => {
+                let markdown = self.editor.as_ref(ctx).markdown_unescaped(ctx);
+                ctx.clipboard()
+                    .write(ClipboardContent::plain_text(markdown));
+
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::success("Copied to clipboard as Markdown".to_string()),
+                        window_id,
+                        ctx,
+                    );
+                });
+            }
             AIDocumentAction::CreateWarpDriveNotebook => self.create_warp_drive_notebook(ctx),
             AIDocumentAction::CopyLink(link) => {
                 send_telemetry_from_ctx!(
@@ -1312,6 +1339,13 @@ impl BackingView for AIDocumentView {
                     .into_item(),
             );
         }
+
+        menu_items.push(
+            MenuItemFields::new("Copy as Markdown")
+                .with_on_select_action(AIDocumentAction::CopyAsMarkdown)
+                .with_icon(Icon::Copy)
+                .into_item(),
+        );
 
         #[cfg(feature = "local_fs")]
         {

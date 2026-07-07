@@ -2,22 +2,22 @@ use std::sync::Arc;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
-        ParentOffsetBounds, Stack,
-    },
-    fonts::{Properties, Weight},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
-
+use settings::Setting as _;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
+    ParentOffsetBounds, Stack,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
 
-use settings::Setting as _;
-
+use crate::ai::blocklist::inline_action::orchestration_controls::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
@@ -41,6 +41,12 @@ const BUTTON_TOOLTIP: &str = "Execution host";
 
 const MENU_HEADER_LABEL: &str = "Execution host";
 
+const DEFAULT_BADGE: &str = "Default";
+
+const CONNECTED_BADGE: &str = "Connected";
+
+const DISCONNECTED_BADGE: &str = "Disconnected";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Host {
     Warp,
@@ -58,7 +64,7 @@ impl Host {
     /// Returns the value to send as `worker_host` in the config snapshot.
     pub fn worker_host_value(&self) -> Option<String> {
         match self {
-            Host::Warp => Some("warp".to_string()),
+            Host::Warp => Some(ORCHESTRATION_WARP_WORKER_HOST.to_string()),
             Host::SelfHosted { slug } => Some(slug.clone()),
         }
     }
@@ -125,6 +131,12 @@ impl HostSelector {
         ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, _, ctx| {
             me.refresh_menu(ctx);
         });
+        ctx.subscribe_to_model(
+            &ConnectedSelfHostedWorkersModel::handle(ctx),
+            |me, _, _, ctx| {
+                me.refresh_menu(ctx);
+            },
+        );
 
         let mut me = Self {
             button,
@@ -140,7 +152,7 @@ impl HostSelector {
             .value()
             .as_deref()
         {
-            let restored = if saved_slug == "warp" {
+            let restored = if saved_slug == ORCHESTRATION_WARP_WORKER_HOST {
                 Host::Warp
             } else {
                 Host::SelfHosted {
@@ -216,6 +228,9 @@ impl HostSelector {
         }
         self.is_menu_open = is_open;
         if is_open {
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(ctx);
+            });
             ctx.focus(&self.menu);
             self.highlight_selected_host(ctx);
         }
@@ -233,6 +248,8 @@ impl HostSelector {
             hover_background,
             header_text_color,
             self.default_host.as_ref(),
+            &self.selected,
+            ctx,
         );
         self.menu.update(ctx, |menu, ctx| {
             menu.set_border(Some(border));
@@ -262,6 +279,8 @@ fn build_menu_items(
     hover_background: Fill,
     header_text_color: ColorU,
     default_host: Option<&Host>,
+    selected: &Host,
+    ctx: &mut ViewContext<HostSelector>,
 ) -> Vec<MenuItem<HostSelectorAction>> {
     let header = MenuItem::Header {
         fields: MenuItemFields::new(MENU_HEADER_LABEL)
@@ -273,22 +292,58 @@ fn build_menu_items(
         right_side_fields: None,
     };
 
-    let item_for = |host: Host| {
+    let item_for = |host: Host, badge: Option<&str>| {
         let label = host.display_name().to_string();
-        MenuItem::Item(
-            MenuItemFields::new(label)
-                .with_font_size_override(ITEM_FONT_SIZE)
-                .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-                .with_override_hover_background_color(hover_background)
-                .with_on_select_action(HostSelectorAction::SelectHost(host)),
-        )
+        let mut fields = MenuItemFields::new(label)
+            .with_font_size_override(ITEM_FONT_SIZE)
+            .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+            .with_override_hover_background_color(hover_background)
+            .with_on_select_action(HostSelectorAction::SelectHost(host));
+        if let Some(badge) = badge {
+            fields = fields.with_right_side_label(
+                badge,
+                Properties {
+                    weight: Weight::Semibold,
+                    ..Default::default()
+                },
+            );
+        }
+        MenuItem::Item(fields)
     };
 
     let mut items = vec![header];
     if let Some(host) = default_host {
-        items.push(item_for(host.clone()));
+        items.push(item_for(host.clone(), Some(DEFAULT_BADGE)));
     }
-    items.push(item_for(Host::Warp));
+    items.push(item_for(Host::Warp, None));
+    let default_slug = match default_host {
+        Some(Host::SelfHosted { slug }) => Some(slug.as_str()),
+        Some(Host::Warp) | None => None,
+    };
+    let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
+        .worker_hosts_excluding(default_slug)
+        .into_iter()
+        .collect::<Vec<_>>();
+    connected_hosts.sort();
+    connected_hosts.dedup();
+    for host in &connected_hosts {
+        items.push(item_for(
+            Host::SelfHosted { slug: host.clone() },
+            Some(CONNECTED_BADGE),
+        ));
+    }
+    if let Host::SelfHosted { slug } = selected {
+        let is_default = default_slug == Some(slug.as_str());
+        let is_connected = connected_hosts
+            .iter()
+            .any(|host| host.eq_ignore_ascii_case(slug));
+        if !is_default && !is_connected {
+            items.push(item_for(
+                Host::SelfHosted { slug: slug.clone() },
+                Some(DISCONNECTED_BADGE),
+            ));
+        }
+    }
     items
 }
 

@@ -4,10 +4,19 @@
 //! finalized when the button is released. The selection should be cleared
 //! when text is added/removed/scrolled on the screen. The selection should
 //! also be cleared if the user clicks off of the selection.
+use std::cmp::{max, min};
 use std::fmt::Debug;
-use vec1::Vec1;
-use warp_terminal::model::grid::cell;
+use std::mem;
+use std::ops::RangeInclusive;
+pub use std::ops::{Range, RangeBounds};
 
+use vec1::Vec1;
+use warp_core::semantic_selection::SemanticSelection;
+use warp_terminal::model::grid::cell;
+use warpui::text::SelectionType;
+use warpui::units::Lines;
+
+use super::index::{Direction, VisibleRow};
 use crate::terminal::model::ansi::CursorShape;
 use crate::terminal::model::cell::Flags;
 use crate::terminal::model::grid::grid_handler::GridHandler;
@@ -15,15 +24,6 @@ use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::{Point, Side};
 use crate::terminal::model::GridStorage;
 use crate::terminal::Vector2F;
-use std::cmp::{max, min};
-use std::mem;
-use std::ops::RangeInclusive;
-pub use std::ops::{Range, RangeBounds};
-use warp_core::semantic_selection::SemanticSelection;
-use warpui::text::SelectionType;
-use warpui::units::Lines;
-
-use super::index::{Direction, VisibleRow};
 
 /// A Point and side within that point.
 #[derive(Debug, Copy, Clone, PartialEq)]

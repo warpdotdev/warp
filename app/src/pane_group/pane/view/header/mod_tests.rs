@@ -1,30 +1,27 @@
 use std::sync::Arc;
-use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::Empty, platform::WindowStyle, App, AppContext, Element, Entity, TypedActionView,
-    View, ViewContext,
-};
 
-use crate::{
-    ai::blocklist::BlocklistAIHistoryModel,
-    auth::AuthStateProvider,
-    cloud_object::model::persistence::CloudModel,
-    menu::MenuItemFields,
-    pane_group::{focus_state::PaneFocusHandle, BackingView, PaneConfiguration, PaneId, PaneView},
-    server::server_api::{object::MockObjectClient, ServerApiProvider},
-    settings_view::keybindings::KeybindingChangedNotifier,
-    terminal::shared_session::permissions_manager::SessionPermissionsManager,
-    test_util::settings::initialize_settings_for_tests,
-    NetworkStatus, SyncQueue, TeamTesterStatus, UpdateManager, UserProfiles, UserWorkspaces,
-};
+use cloud_object_client::MockObjectClient;
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{App, AppContext, Element, Entity, TypedActionView, View, ViewContext};
 
 use super::{Event, OpenOverlay};
-
-#[cfg(test)]
-use crate::server::server_api::workspace::MockWorkspaceClient;
-
-#[cfg(test)]
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::menu::MenuItemFields;
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::{BackingView, PaneConfiguration, PaneId, PaneView};
 use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::server::server_api::ServerApiProvider;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::{
+    NetworkStatus, SyncQueue, TeamTesterStatus, UpdateManager, UserProfiles, UserWorkspaces,
+};
 
 /// A dummy view that is also a backing pane view for testing purposes.
 struct TestView {

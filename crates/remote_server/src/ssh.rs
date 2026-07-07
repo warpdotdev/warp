@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use command::r#async::Command;
-use warpui::r#async::FutureExt as _;
+use warpui_core::r#async::FutureExt as _;
+
+use crate::transport::ControlPath;
 
 /// Transport-level error from [`run_ssh_command`] or [`run_ssh_script`].
 ///
@@ -48,7 +50,7 @@ pub fn ssh_args(socket_path: &Path) -> Vec<String> {
 }
 
 /// Runs `ssh -O exit -o ControlPath=<socket_path>` to force the local
-/// SSH `ControlMaster` managing `socket_path` to exit immediately,
+/// SSH `ControlMaster` behind `control_path` to exit immediately,
 /// without waiting for multiplexed channels to finish draining.
 ///
 /// The user's interactive ssh is spawned with `-o ControlMaster=yes` by
@@ -58,13 +60,30 @@ pub fn ssh_args(socket_path: &Path) -> Vec<String> {
 /// `ssh ... remote-server-proxy`) to finish cleanup on the remote
 /// side. Sending `-O exit` bypasses that wait.
 ///
+/// Only [`ControlPath::WarpManaged`] masters are acted on: a
+/// [`ControlPath::UserOwned`] master (the SSH wrapper attached to a
+/// master the user already had running) is left untouched, and
+/// [`ControlPath::None`] is a no-op.
+///
 /// **Only safe to call once the user's shell has already exited** --
-/// this tears down the interactive ssh outright. In practice it is
-/// invoked from the `ExitShell` teardown path on the client.
+/// for Warp-managed masters this tears down the interactive ssh
+/// outright. In practice it is invoked from the `ExitShell` teardown
+/// path on the client.
 ///
 /// Fire-and-forget. Errors are logged but not propagated: at teardown
 /// time there is nothing useful to do with them.
-pub async fn stop_control_master(socket_path: &Path) {
+pub async fn stop_control_master(control_path: &ControlPath) {
+    let socket_path = match control_path {
+        ControlPath::WarpManaged(socket_path) => socket_path,
+        ControlPath::UserOwned(socket_path) => {
+            log::info!(
+                "stop_control_master: leaving user-owned ControlMaster at {} running",
+                socket_path.display()
+            );
+            return;
+        }
+        ControlPath::None => return,
+    };
     let args = ssh_args(socket_path);
     let result = async {
         Command::new("ssh")
@@ -196,7 +215,7 @@ pub async fn scp_upload(
     remote_path: &str,
     timeout: Duration,
 ) -> anyhow::Result<()> {
-    async {
+    let output = async {
         Command::new("scp")
             .arg("-o")
             .arg(format!("ControlPath={}", socket_path.display()))
@@ -213,16 +232,16 @@ pub async fn scp_upload(
     .with_timeout(timeout)
     .await
     .map_err(|_| anyhow!("scp timed out after {timeout:?}"))?
-    .map_err(|e| anyhow!("scp failed to execute: {e}"))
-    .and_then(|output| {
-        if output.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(anyhow!(
-                "scp failed (exit {:?}): {stderr}",
-                output.status.code()
-            ))
-        }
-    })
+    .map_err(|e| anyhow!("scp failed to execute: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(anyhow!(
+            "scp failed (exit {:?}): {}",
+            output.status.code(),
+            stderr
+        ))
+    }
 }

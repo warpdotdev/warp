@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
+use super::super::blocklist::block::secret_redaction::{
+    find_secrets_in_text, SECRET_REDACTION_REPLACEMENT_CHARACTER,
+};
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput, AnyFileContent,
     AskUserQuestionAnswerItem, AskUserQuestionResult, BlockContext, PassiveSuggestionResultType,
     PassiveSuggestionTrigger, RequestCommandOutputResult, TransferShellCommandControlToUserResult,
-};
-
-use super::super::blocklist::block::secret_redaction::{
-    find_secrets_in_text, SECRET_REDACTION_REPLACEMENT_CHARACTER,
 };
 
 /// Redact all detected secrets in-place within the given string.
@@ -264,7 +263,12 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     }
                     // Orchestrate results contain agent IDs / canonical error
                     // strings only; no user-provided text to redact.
-                    AIAgentActionResultType::RunAgents(_) => {}
+                    AIAgentActionResultType::RunAgents(_)
+                    | AIAgentActionResultType::WaitForEvents(_) => {}
+
+                    // Recording results carry an artifact ref and metadata only.
+                    AIAgentActionResultType::StartRecording(_)
+                    | AIAgentActionResultType::StopRecording(_) => {}
                 }
             }
             AIAgentInput::FetchReviewComments { repo_path, context } => {
@@ -349,6 +353,8 @@ fn redact_context(context: &mut [AIAgentContext]) {
             | AIAgentContext::Codebase { .. }
             | AIAgentContext::ProjectRules { .. }
             | AIAgentContext::Git { .. }
+            | AIAgentContext::Repository { .. }
+            | AIAgentContext::PullRequest { .. }
             | AIAgentContext::File(_)
             | AIAgentContext::Skills { .. } => {}
         }

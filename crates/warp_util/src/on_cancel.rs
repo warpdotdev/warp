@@ -1,7 +1,8 @@
-use pin_project::{pin_project, pinned_drop};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use pin_project::{pin_project, pinned_drop};
 
 /// Trait allowing you to attach a function to a [`Future`] that will be called if the future is
 /// cancelled.  

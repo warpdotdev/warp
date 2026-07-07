@@ -14,25 +14,34 @@ pub mod spawner;
 #[cfg(unix)]
 pub mod terminal_attributes;
 pub mod terminal_manager;
+mod terminal_view_adaptor;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 pub mod windows;
 
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::io;
+use std::path::PathBuf;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, ffi::OsString, io, path::PathBuf};
+use shell::ShellStarter;
 
+pub use self::terminal_manager::{get_shell_starter, TerminalManager};
+#[cfg(feature = "tui")]
+pub use self::terminal_manager::{TerminalManagerInit, TerminalSurfaceInit, TerminalSurfaceResult};
+#[cfg(windows)]
+pub use self::terminal_view_adaptor::shutdown_all_pty_event_loops;
+pub(crate) use self::terminal_view_adaptor::{
+    create_terminal_view_surface, terminal_view_restored_blocks, TerminalViewSurfaceConfig,
+};
 #[cfg(unix)]
 pub use self::unix::*;
 #[cfg(windows)]
 pub use self::windows::*;
 use super::SizeInfo;
-use shell::ShellStarter;
-
-#[cfg(windows)]
-pub use self::terminal_manager::shutdown_all_pty_event_loops;
-pub use self::terminal_manager::{get_shell_starter, TerminalManager};
 
 /// This trait defines the behaviour needed to read and/or write to a stream.
 /// It defines an abstraction over mio's interface in order to allow either one
@@ -93,7 +102,16 @@ pub struct PtyOptions {
     // Refers to the original SSH wrapper that uses ControlMaster and
     // requires overwriting the user's SSH command at the shell layer.
     pub enable_ssh_wrapper: bool,
+    /// Whether the legacy SSH wrapper should attach to an existing
+    /// ControlMaster for the destination host (discovered via `ssh -G` and
+    /// verified with `ssh -O check`) instead of always creating its own.
+    #[serde(default)]
+    pub reuse_ssh_control_master: bool,
     pub shell_debug_mode: bool,
     pub honor_ps1: bool,
+    /// Whether the Node.js Version context chip is enabled for this session. When
+    /// `false`, the shell bootstrap skips the per-prompt `node --version` detection
+    /// (gated via the `WARP_PROMPT_NODE_VERSION_ENABLED` env var).
+    pub node_version_chip_enabled: bool,
     pub close_fds: bool,
 }

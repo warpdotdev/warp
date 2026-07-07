@@ -1,10 +1,10 @@
-use crate::editor::view::model::buffer::time::ReplicaId;
-use crate::editor::view::model::buffer::EditOperation;
+use itertools::Itertools;
+use string_offset::CharOffset;
 
 use super::super::time::{Global, Lamport};
 use super::{DeferredOperations, Operation};
-use itertools::Itertools;
-use string_offset::CharOffset;
+use crate::editor::view::model::buffer::time::ReplicaId;
+use crate::editor::view::model::buffer::EditOperation;
 
 fn edit_operation(lamport: Lamport) -> Operation {
     Operation::Edit(EditOperation {

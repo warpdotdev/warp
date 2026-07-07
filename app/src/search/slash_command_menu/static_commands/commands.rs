@@ -1,13 +1,14 @@
-use std::{collections::HashMap, sync::LazyLock};
+use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 
-use crate::search::slash_command_menu::{static_commands::Argument, StaticCommand};
-use crate::ui_components::color_dot;
-
 use super::Availability;
+use crate::search::slash_command_menu::static_commands::Argument;
+use crate::search::slash_command_menu::StaticCommand;
+use crate::ui_components::color_dot;
 
 pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/agent",
@@ -136,6 +137,17 @@ pub static RENAME_TAB: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand 
     argument: Some(Argument::required().with_hint_text("<tab name>")),
 });
 
+pub static RENAME_CONVERSATION: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/rename-conversation",
+    description: "Rename the current conversation",
+    icon_path: "bundled/svg/pencil-line.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::ACTIVE_CONVERSATION
+        | Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument::required().with_hint_text("<new title>")),
+});
+
 static SET_TAB_COLOR_HINT: LazyLock<String> = LazyLock::new(|| {
     let mut hint = String::from("<");
     for color in color_dot::TAB_COLOR_OPTIONS {
@@ -164,8 +176,7 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
             | Availability::NO_LRC_CONTROL
-            | Availability::AI_ENABLED
-            | Availability::NOT_CLOUD_AGENT,
+            | Availability::AI_ENABLED,
         auto_enter_ai_mode: true,
         argument: Some(Argument::optional().with_hint_text(hint_text)),
     }
@@ -310,7 +321,7 @@ pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     icon_path: "bundled/svg/oz-cloud.svg",
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
-        | Availability::CLOUD_AGENT_V2,
+        | Availability::CLOUD_MODE_V2_COMPOSER,
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -321,7 +332,7 @@ pub static HARNESS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     icon_path: "bundled/svg/oz.svg",
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
-        | Availability::CLOUD_AGENT_V2,
+        | Availability::CLOUD_MODE_V2_COMPOSER,
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -332,7 +343,7 @@ pub static ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     icon_path: "bundled/svg/globe-04.svg",
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
-        | Availability::CLOUD_AGENT_V2,
+        | Availability::CLOUD_MODE_V2_COMPOSER,
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -413,7 +424,6 @@ pub static QUEUE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     icon_path: "bundled/svg/clock-plus.svg",
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
-        | Availability::NO_LRC_CONTROL
         | Availability::AI_ENABLED
         | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
@@ -449,14 +459,15 @@ pub const FORK_FROM: StaticCommand = StaticCommand {
 };
 
 pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
-    let hint_text = "<optional prompt to send in forked conversation>";
+    let hint_text = "<optional prompt to send in local conversation>";
     StaticCommand {
         name: "/continue-locally",
         description: "Continue this cloud conversation locally",
         icon_path: "bundled/svg/arrow-split.svg",
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
-            | Availability::AI_ENABLED,
+            | Availability::AI_ENABLED
+            | Availability::CLOUD_AGENT,
         auto_enter_ai_mode: true,
         argument: Some(Argument::optional().with_hint_text(hint_text)),
     }
@@ -626,6 +637,7 @@ fn all_commands() -> Vec<StaticCommand> {
         AGENT.clone(),
         NEW.clone(),
         PLAN.clone(),
+        RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
         USAGE,
@@ -722,9 +734,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(OPEN_REPO);
     }
 
-    if FeatureFlag::Orchestration.is_enabled() {
-        commands.push(ORCHESTRATE.clone());
-    }
+    commands.push(ORCHESTRATE.clone());
 
     if FeatureFlag::SettingsFile.is_enabled() && cfg!(feature = "local_fs") {
         commands.push(OPEN_SETTINGS_FILE);
@@ -740,121 +750,5 @@ fn all_commands() -> Vec<StaticCommand> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use super::*;
-
-    #[test]
-    fn command_names_are_unique() {
-        let names = COMMAND_REGISTRY.all_commands().map(|command| command.name);
-        let mut seen = HashSet::new();
-        for name in names {
-            assert!(seen.insert(name), "duplicate slash command name: {name}");
-        }
-    }
-
-    #[test]
-    fn rename_tab_command_requires_argument() {
-        let command = COMMAND_REGISTRY
-            .get_command_with_name(RENAME_TAB.name)
-            .expect("expected /rename-tab to be registered");
-        let argument = command
-            .argument
-            .as_ref()
-            .expect("expected /rename-tab to require an argument");
-
-        assert!(!argument.is_optional);
-        assert!(!argument.should_execute_on_selection);
-        assert_eq!(argument.hint_text, Some("<tab name>"));
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    #[test]
-    fn continue_locally_command_is_registered() {
-        let command = COMMAND_REGISTRY
-            .get_command_with_name(CONTINUE_LOCALLY.name)
-            .expect("expected /continue-locally to be registered");
-
-        assert_eq!(command.name, "/continue-locally");
-        assert_eq!(command.icon_path, "bundled/svg/arrow-split.svg");
-        assert!(command.auto_enter_ai_mode);
-        assert_eq!(
-            command.availability,
-            Availability::AGENT_VIEW | Availability::ACTIVE_CONVERSATION | Availability::AI_ENABLED
-        );
-
-        let argument = command
-            .argument
-            .as_ref()
-            .expect("expected /continue-locally to declare an argument");
-        assert!(argument.is_optional);
-        assert!(!argument.should_execute_on_selection);
-        assert_eq!(
-            argument.hint_text,
-            Some("<optional prompt to send in forked conversation>")
-        );
-    }
-
-    #[test]
-    fn set_tab_color_command_requires_argument() {
-        let command = COMMAND_REGISTRY
-            .get_command_with_name(SET_TAB_COLOR.name)
-            .expect("expected /set-tab-color to be registered");
-        let argument = command
-            .argument
-            .as_ref()
-            .expect("expected /set-tab-color to require an argument");
-
-        assert!(!argument.is_optional);
-        assert!(!argument.should_execute_on_selection);
-
-        let hint = argument
-            .hint_text
-            .expect("/set-tab-color hint text is set dynamically");
-        for color in color_dot::TAB_COLOR_OPTIONS {
-            let lower = color.to_string().to_ascii_lowercase();
-            assert!(hint.contains(&lower), "hint should mention `{lower}`");
-        }
-        assert!(hint.contains("none"), "hint should mention `none`");
-    }
-
-    #[test]
-    fn strip_command_prefix_matches_orchestrate() {
-        let result = strip_command_prefix("/orchestrate deploy services", "/orchestrate");
-        assert_eq!(result, Some("deploy services".to_string()));
-    }
-
-    #[test]
-    fn strip_command_prefix_no_match() {
-        let result = strip_command_prefix("just a normal query", "/plan");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn strip_command_prefix_empty() {
-        let result = strip_command_prefix("", "/plan");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn strip_command_prefix_no_trailing_space() {
-        // "/plan" alone (no trailing space) should NOT be stripped
-        let result = strip_command_prefix("/plan", "/plan");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn strip_command_prefix_trailing_space_only() {
-        // "/plan " with nothing after should strip to empty string
-        let result = strip_command_prefix("/plan ", "/plan");
-        assert_eq!(result, Some(String::new()));
-    }
-
-    #[test]
-    fn strip_command_prefix_substring_not_matched() {
-        // "/planning" should not match "/plan"
-        let result = strip_command_prefix("/planning something", "/plan");
-        assert_eq!(result, None);
-    }
-}
+#[path = "commands_tests.rs"]
+mod tests;

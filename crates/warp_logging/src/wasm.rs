@@ -1,10 +1,11 @@
 // Vendored wasm-logger.
 // MIT License: Copyright (c) 2018 Limira
-use crate::LogConfig;
 use anyhow::Result;
 use log::{Level, Log, Metadata, Record};
 use wasm_bindgen::prelude::*;
 use web_sys::console;
+
+use crate::LogConfig;
 
 /// Initializes the global logger for the application.
 /// Note: On WASM, `config` is ignored since we always log to the browser console.

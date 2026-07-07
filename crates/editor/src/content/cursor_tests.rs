@@ -1,9 +1,8 @@
+use string_offset::CharOffset;
 use sum_tree::SumTree;
 
-use crate::content::text::{BufferBlockStyle, BufferText, BufferTextStyle, MarkerDir};
-use string_offset::CharOffset;
-
 use super::{BufferCursor, BufferSumTree};
+use crate::content::text::{BufferBlockStyle, BufferText, BufferTextStyle, MarkerDir};
 
 /// Helper function to count the number of Text fragments in a SumTree
 fn count_text_fragments(tree: &SumTree<BufferText>) -> usize {

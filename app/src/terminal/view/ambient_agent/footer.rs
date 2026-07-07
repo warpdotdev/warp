@@ -1,13 +1,11 @@
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement, Text,
-    },
-    fonts::{Properties, Weight},
-    Element,
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
+    ParentElement, Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::Element;
 
 use crate::ui_components::blended_colors;
 

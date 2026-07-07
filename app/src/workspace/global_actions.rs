@@ -1,24 +1,24 @@
-use crate::auth;
-use crate::network::NetworkStatus;
-use crate::persistence::ModelEvent;
-use crate::server::server_api::auth::AuthClient;
-use crate::terminal::alt_screen_reporting::AltScreenReporting;
-use crate::terminal::general_settings::GeneralSettings;
-use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
-use crate::{app_state::get_app_state, server::server_api::ServerApiProvider};
+use std::path::PathBuf;
+
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::root_view::OpenPath;
-use crate::undo_close::UndoCloseStack;
-use crate::workspace::{Workspace, WorkspaceAction};
-use crate::GlobalResourceHandlesProvider;
-use std::path::PathBuf;
 use warp_graphql::mutations::create_anonymous_user::AnonymousUserType;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, SingletonEntity, TypedActionView};
+
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentExchangeId;
+use crate::app_state::get_app_state;
+use crate::network::NetworkStatus;
+use crate::persistence::ModelEvent;
+use crate::root_view::OpenPath;
+use crate::server::server_api::ServerApiProvider;
+use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::general_settings::GeneralSettings;
+use crate::undo_close::UndoCloseStack;
+use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
+use crate::workspace::{Workspace, WorkspaceAction};
+use crate::{auth, GlobalResourceHandlesProvider};
 
 /// Specifies where a forked conversation should be opened.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -33,6 +33,16 @@ pub enum ForkedConversationDestination {
 }
 
 impl ForkedConversationDestination {
+    /// Fork destination from an Enter (`false`) / Cmd-or-Ctrl+Enter (`true`) trigger: Enter
+    /// opens a new split pane, Cmd/Ctrl+Enter opens a new tab. Shared by all fork-style commands.
+    pub fn for_fork_trigger(cmd_or_ctrl_enter: bool) -> Self {
+        if cmd_or_ctrl_enter {
+            Self::NewTab
+        } else {
+            Self::SplitPane
+        }
+    }
+
     pub fn is_new_tab(&self) -> bool {
         matches!(self, Self::NewTab)
     }
@@ -173,9 +183,10 @@ fn toggle_debug_network_status(_: &(), ctx: &mut AppContext) {
 fn create_anonymous_user(_: &(), ctx: &mut AppContext) {
     log::info!("Creating anonymous user");
     let anonymous_user_type = AnonymousUserType::NativeClientAnonymousUser;
-    let server_api = ServerApiProvider::handle(ctx).read(ctx, |provider, _ctx| provider.get());
+    let auth_client =
+        ServerApiProvider::handle(ctx).read(ctx, |provider, _ctx| provider.get_auth_client());
     let result =
-        warpui::r#async::block_on(server_api.create_anonymous_user(None, anonymous_user_type));
+        warpui::r#async::block_on(auth_client.create_anonymous_user(None, anonymous_user_type));
     match result {
         Ok(user) => log::info!("Successfully created anonymous user {user:?}"),
         Err(err) => log::error!("Failed to create anonymous user: {err:?}"),
@@ -231,6 +242,7 @@ fn fork_ai_conversation(params: &ForkAIConversationParams, ctx: &mut AppContext)
             summarize_after_fork: params.summarize_after_fork,
             summarization_prompt: params.summarization_prompt.clone(),
             initial_prompt: params.initial_prompt.clone(),
+            initial_attachments: vec![],
             destination: params.destination,
         },
     );

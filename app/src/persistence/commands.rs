@@ -1,5 +1,6 @@
 use anyhow::Result;
-use diesel::{sqlite::SqliteConnection, ExpressionMethods, QueryDsl, RunQueryDsl};
+use diesel::sqlite::SqliteConnection;
+use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl};
 
 use crate::terminal::event::UserBlockCompleted;
 

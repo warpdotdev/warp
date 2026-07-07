@@ -1,16 +1,11 @@
 //! This module implements terminal find functionality for the alt screen.
 use std::ops::RangeInclusive;
 
-use crate::{
-    terminal::model::{
-        alt_screen::AltScreen,
-        find::{FindConfig, RegexDFAs},
-        index::Point,
-    },
-    view_components::find::FindDirection,
-};
-
 use super::FindOptions;
+use crate::terminal::model::alt_screen::AltScreen;
+use crate::terminal::model::find::{FindConfig, RegexDFAs};
+use crate::terminal::model::index::Point;
+use crate::view_components::find::FindDirection;
 
 /// Runs a find operation on the blocklist using the given `options` and returns an
 /// `AltScreenFindRun` with the results.

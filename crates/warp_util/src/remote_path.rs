@@ -19,4 +19,18 @@ impl RemotePath {
     pub fn new(host_id: HostId, path: StandardizedPath) -> Self {
         Self { host_id, path }
     }
+
+    /// Returns true if the given host and path identify this remote path.
+    pub fn matches(&self, host_id: &HostId, path: &StandardizedPath) -> bool {
+        host_id == &self.host_id && path == &self.path
+    }
+}
+
+/// The result of a `navigate_to_directory` request to the remote server.
+#[derive(Clone, Debug)]
+pub struct RemoteNavigationResult {
+    /// The canonicalized remote path returned by the server.
+    pub remote_path: RemotePath,
+    /// Whether the server detected a git repository at this path.
+    pub is_git: bool,
 }

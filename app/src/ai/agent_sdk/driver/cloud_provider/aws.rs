@@ -1,4 +1,8 @@
-use std::{collections::HashMap, ffi::OsString, future::Future, pin::Pin, time::Duration};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
 
 use anyhow::Context;
 use tempfile::{Builder, NamedTempFile};
@@ -7,11 +11,10 @@ use warp_core::safe_info;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::{ModelSpawner, SingletonEntity};
 
-use crate::ai::aws_credentials::aws_role_session_name;
-use crate::ai::cloud_environments::AwsProviderConfig;
-
 use super::super::terminal::TerminalDriver;
 use super::{CloudProvider, CloudProviderSetupError, Result};
+use crate::ai::aws_credentials::aws_role_session_name;
+use crate::ai::cloud_environments::AwsProviderConfig;
 
 /// Default duration for OIDC identity tokens issued for cloud provider auth.
 /// The AWS CLI doesn't offer a mechanism for refreshing web identity tokens, so we

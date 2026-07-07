@@ -1,45 +1,36 @@
 use std::path::PathBuf;
 
 use uuid::Uuid;
-
+use warp_core::execution_mode::ExecutionMode;
 use warp_util::path::EscapeChar;
 use warpui::{App, EntityId, ModelHandle};
 
-use warp_core::execution_mode::ExecutionMode;
-
+use super::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::permissions::{
+    CommandExecutionPermission, CommandExecutionPermissionDeniedReason, FileReadPermission,
+    FileReadPermissionAllowedReason, FileReadPermissionDeniedReason, FileWritePermission,
+    FileWritePermissionAllowedReason, FileWritePermissionDeniedReason,
+};
+use crate::ai::blocklist::CommandExecutionPermissionAllowedReason;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::network::NetworkStatus;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::sync_queue::SyncQueue;
+use crate::settings::{AgentModeCommandExecutionPredicate, PrivacySettings};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::test_util::settings::initialize_settings_for_tests_with_mode;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::SandboxedAgentSettings;
 use crate::{
-    ai::{
-        agent::conversation::AIConversationId,
-        blocklist::{
-            permissions::{
-                CommandExecutionPermission, CommandExecutionPermissionDeniedReason,
-                FileReadPermission, FileReadPermissionAllowedReason,
-                FileReadPermissionDeniedReason, FileWritePermission,
-                FileWritePermissionAllowedReason, FileWritePermissionDeniedReason,
-            },
-            CommandExecutionPermissionAllowedReason,
-        },
-        execution_profiles::{
-            profiles::AIExecutionProfilesModel, ActionPermission, WriteToPtyPermission,
-        },
-        mcp::templatable_manager::TemplatableMCPServerManager,
-    },
-    auth::AuthStateProvider,
-    cloud_object::model::persistence::CloudModel,
-    network::NetworkStatus,
-    server::{cloud_objects::update_manager::UpdateManager, sync_queue::SyncQueue},
-    settings::{AgentModeCommandExecutionPredicate, PrivacySettings},
-    test_util::settings::initialize_settings_for_tests_with_mode,
-    workspaces::{
-        team_tester::TeamTesterStatus, user_workspaces::UserWorkspaces,
-        workspace::SandboxedAgentSettings,
-    },
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
 };
-
-use super::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 
 struct PermissionsTestState {
     convo_id: AIConversationId,
@@ -91,7 +82,7 @@ fn initialize_permissions_test_with_mode(
     let user_workspaces = app.add_singleton_model(UserWorkspaces::default_mock);
 
     let conversation_id = history.update(app, |history_model, ctx| {
-        history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+        history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     });
 
     PermissionsTestState {
@@ -682,6 +673,74 @@ fn test_can_autoexecute_command_denylist_precedence() {
 }
 
 #[test]
+fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
+    App::test((), |mut app| async move {
+        let PermissionsTestState {
+            convo_id,
+            permissions,
+            profile_model,
+            terminal_view_id,
+            ..
+        } = initialize_permissions_test(&mut app);
+
+        profile_model.update(&mut app, |model, ctx| {
+            let profile_id = *model.active_profile(Some(terminal_view_id), ctx).id();
+            model.set_execute_commands(profile_id, &ActionPermission::AlwaysAllow, ctx);
+            model.add_to_command_denylist(
+                profile_id,
+                &AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
+                ctx,
+            );
+        });
+
+        for command in [
+            "X=1 rm file.txt",
+            "echo ok && X=1 rm file.txt",
+            "echo $(X=1 rm file.txt)",
+        ] {
+            permissions.read(&app, |model, ctx| {
+                let result = model.can_autoexecute_command(
+                    &convo_id,
+                    command,
+                    EscapeChar::Backslash,
+                    false,
+                    None,
+                    Some(terminal_view_id),
+                    ctx,
+                );
+                assert!(
+                    matches!(
+                        result,
+                        CommandExecutionPermission::Denied(
+                            CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted
+                        )
+                    ),
+                    "{command:?} should be denied by the rm denylist, got {result:?}"
+                );
+            });
+        }
+
+        permissions.read(&app, |model, ctx| {
+            let result = model.can_autoexecute_command(
+                &convo_id,
+                "X=1 git status",
+                EscapeChar::Backslash,
+                false,
+                None,
+                Some(terminal_view_id),
+                ctx,
+            );
+            assert!(matches!(
+                result,
+                CommandExecutionPermission::Allowed(
+                    CommandExecutionPermissionAllowedReason::AlwaysAllowed
+                )
+            ));
+        });
+    })
+}
+
+#[test]
 fn test_can_autoexecute_command_allowlist_precedence() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
@@ -778,6 +837,25 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                     CommandExecutionPermissionAllowedReason::ExplicitlyAllowlisted
                 )
             ));
+
+            let result = model.can_autoexecute_command(
+                &convo_id,
+                "PATH=/tmp ls -l",
+                EscapeChar::Backslash,
+                false,
+                None,
+                Some(terminal_view_id),
+                ctx,
+            );
+            assert!(
+                matches!(
+                    result,
+                    CommandExecutionPermission::Denied(
+                        CommandExecutionPermissionDeniedReason::AlwaysAskEnabled
+                    )
+                ),
+                "env-prefixed commands should not be normalized for allowlist matching"
+            );
         });
     })
 }
@@ -1495,6 +1573,29 @@ fn test_denylist_matches_multiline_commands() {
             assert!(
                 !result.is_allowed(),
                 "multiline rm command should be denied by denylist"
+            );
+            assert!(matches!(
+                result,
+                CommandExecutionPermission::Denied(
+                    CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted
+                )
+            ));
+        });
+
+        // Env-prefixed multiline rm command should also be denied after normalization.
+        permissions.read(&app, |model, ctx| {
+            let result = model.can_autoexecute_command(
+                &convo_id,
+                "X=1 rm file1.txt \\\nfile2.txt \\\nfile3.txt",
+                EscapeChar::Backslash,
+                false,
+                None,
+                Some(terminal_view_id),
+                ctx,
+            );
+            assert!(
+                !result.is_allowed(),
+                "env-prefixed multiline rm command should be denied by denylist"
             );
             assert!(matches!(
                 result,

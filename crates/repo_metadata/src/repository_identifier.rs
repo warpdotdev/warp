@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 
@@ -42,6 +43,17 @@ impl RepositoryIdentifier {
         match self {
             Self::Local(path) => path.to_local_path(),
             Self::Remote(_) => None,
+        }
+    }
+
+    /// Converts this identifier to a `LocalOrRemotePath`.
+    ///
+    /// Returns `None` only for `Local` identifiers whose `StandardizedPath`
+    /// cannot be converted to a local `PathBuf` (cross-platform edge case).
+    pub fn to_local_or_remote_path(&self) -> Option<LocalOrRemotePath> {
+        match self {
+            Self::Local(path) => path.to_local_path().map(LocalOrRemotePath::Local),
+            Self::Remote(remote) => Some(LocalOrRemotePath::Remote(remote.clone())),
         }
     }
 }

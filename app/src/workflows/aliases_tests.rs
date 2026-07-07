@@ -1,7 +1,7 @@
-use crate::settings::init_and_register_user_preferences;
+use settings::manager::SettingsManager;
 
 use super::*;
-use settings::manager::SettingsManager;
+use crate::settings::init_and_register_user_preferences;
 
 #[test]
 fn test_set_aliases() {

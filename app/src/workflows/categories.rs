@@ -1,47 +1,44 @@
-use itertools::Itertools;
-use warp_editor::editor::NavigationKey;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, DispatchEventResult, Element, Fill, Flex, ParentElement,
-        ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Text,
-        UniformList, UniformListState, LEFT_PADDING as SCROLLABLE_LEFT_PADDING,
-    },
-    fonts::{Properties, Weight},
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WeakViewHandle,
-};
-
-use crate::appearance::Appearance;
-use crate::util::bindings::CustomAction;
-use crate::voltron::{VoltronFeatureViewMeta, VoltronMetadata};
-use crate::workflows::WorkflowType;
-use crate::{
-    cloud_object::model::persistence::CloudModel, workspaces::user_workspaces::UserWorkspaces,
-};
-use crate::{editor::Event as EditorEvent, send_telemetry_from_ctx};
-use crate::{server::telemetry::TelemetryEvent, user_config::WarpConfig};
-use crate::{
-    themes::theme::{self, Blend, WarpTheme},
-    user_config::WarpConfigUpdateEvent,
-};
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use std::collections::HashMap;
 use std::ops::Deref;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use itertools::Itertools;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::color::internal_colors;
+use warp_editor::editor::NavigationKey;
 use warp_workflows::workflows as global_workflows;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::color::ColorU;
 use warpui::elements::{
-    Align, CrossAxisAlignment, EventHandler, Highlight, Hoverable, MainAxisSize, MouseStateHandle,
+    Align, ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult, Element,
+    EventHandler, Fill, Flex, Highlight, Hoverable, MainAxisSize, MouseStateHandle, ParentElement,
+    ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Text,
+    UniformList, UniformListState, LEFT_PADDING as SCROLLABLE_LEFT_PADDING,
 };
+use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::text_layout::TextStyle;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WeakViewHandle,
+};
 
-use super::{workflow::Workflow, WorkflowSource};
+use super::workflow::Workflow;
+use super::WorkflowSource;
+use crate::appearance::Appearance;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::editor::Event as EditorEvent;
+use crate::send_telemetry_from_ctx;
+use crate::server::telemetry::TelemetryEvent;
+use crate::themes::theme::{self, Blend, WarpTheme};
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
+use crate::util::bindings::CustomAction;
+use crate::voltron::{VoltronFeatureViewMeta, VoltronMetadata};
+use crate::workflows::WorkflowType;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 const DESCRIPTION_MARGIN: f32 = 24.;

@@ -5,7 +5,7 @@ use std::fmt;
 use std::ops::{Add, AddAssign, Range, Sub, SubAssign};
 
 use serde::{Deserialize, Serialize};
-use warpui::units::Lines;
+use warpui_core::units::Lines;
 
 use super::grid::Dimensions;
 

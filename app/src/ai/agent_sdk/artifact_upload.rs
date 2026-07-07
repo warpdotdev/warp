@@ -16,6 +16,7 @@ use crate::server::server_api::ai::{
     AIClient, CreateFileArtifactUploadRequest, CreateFileArtifactUploadResponse,
     FileArtifactRecord, FileArtifactUploadTargetInfo,
 };
+use crate::server::server_api::harness_support::FileUploadBody;
 use crate::server::server_api::presigned_upload::upload_file_to_target;
 use crate::server::server_api::ServerApi;
 use crate::util::image::{infer_mime_type, MIME_SNIFF_BYTES};
@@ -164,8 +165,7 @@ impl FileArtifactUploader {
         upload_file_to_target(
             self.server_api.http_client(),
             target,
-            &artifact.path,
-            artifact.file_size,
+            FileUploadBody::new(artifact.path.clone()),
         )
         .await
     }

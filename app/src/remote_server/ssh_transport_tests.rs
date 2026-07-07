@@ -1,5 +1,6 @@
-use super::*;
 use warpui::r#async::BoxFuture;
+
+use super::*;
 
 fn static_auth_context() -> Arc<RemoteServerAuthContext> {
     Arc::new(RemoteServerAuthContext::new(
@@ -16,6 +17,7 @@ fn remote_proxy_command_quotes_identity_key() {
     let transport = SshTransport::new(
         PathBuf::from("/tmp/control-master.sock"),
         static_auth_context(),
+        true,
     );
 
     let command = transport.remote_proxy_command();

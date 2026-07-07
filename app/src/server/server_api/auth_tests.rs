@@ -1,7 +1,8 @@
+use anyhow::Result;
+
 use crate::auth::credentials::{FirebaseToken, RefreshToken};
 #[cfg(feature = "skip_login")]
 use crate::server::server_api::ServerApi;
-use anyhow::Result;
 
 #[test]
 fn test_firebase_token_urls() -> Result<()> {
@@ -44,7 +45,7 @@ fn access_token_skip_login_rejects_bearer_token() {
     let server_api =
         ServerApi::new_for_test_with_bearer_token(Some("daemon-token".to_string()), event_sender);
 
-    let error = futures::executor::block_on(server_api.access_token()).unwrap_err();
+    let error = futures::executor::block_on(server_api.get_or_refresh_access_token()).unwrap_err();
 
     assert_eq!(
         error.to_string(),

@@ -1,7 +1,7 @@
-use super::*;
 use anyhow::anyhow;
 use chrono::{TimeZone, Utc};
 
+use super::*;
 #[cfg(feature = "local_fs")]
 use crate::ai::artifact_download::default_download_filename;
 use crate::server::server_api::ai::{
@@ -148,6 +148,17 @@ fn default_download_filename_falls_back_to_artifact_uid_with_extension() {
             },
         }),
         "artifact-artifact-123.txt"
+    );
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn download_success_message_includes_filename_and_directory() {
+    use std::path::Path;
+
+    assert_eq!(
+        download_success_message("report.csv", Path::new("/Users/me/Downloads")),
+        "report.csv was downloaded to /Users/me/Downloads."
     );
 }
 

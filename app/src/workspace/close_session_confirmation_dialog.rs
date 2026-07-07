@@ -1,26 +1,22 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
+use warpui::elements::{
+    Align, ChildAnchor, Container, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentOffsetBounds, Stack,
+};
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::text::Span;
 use warpui::{
-    elements::{
-        Align, ChildAnchor, Container, MouseStateHandle, OffsetPositioning, ParentAnchor,
-        ParentOffsetBounds, Stack,
-    },
-    fonts::Weight,
-    platform::Cursor,
-    ui_components::{
-        button::ButtonVariant,
-        components::{Coords, UiComponent, UiComponentStyles},
-        text::Span,
-    },
     AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    appearance::Appearance,
-    pane_group::PaneId,
-    ui_components::dialog::{dialog_styles, Dialog},
-    workspace::TabMovement,
-};
+use crate::appearance::Appearance;
+use crate::pane_group::PaneId;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::workspace::TabMovement;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Copy, Clone)]

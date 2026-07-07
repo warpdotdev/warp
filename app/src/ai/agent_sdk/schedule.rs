@@ -2,25 +2,25 @@ use chrono::{DateTime, Utc};
 use comfy_table::Cell;
 use futures::future;
 use serde::Serialize;
+use warp_cli::agent::OutputFormat;
 use warp_cli::schedule::{
     CreateScheduleArgs, DeleteScheduleArgs, GetScheduleArgs, PauseScheduleArgs, ScheduleCommand,
     ScheduleSubcommand, UnpauseScheduleArgs, UpdateScheduleArgs,
 };
-use warp_cli::{agent::OutputFormat, GlobalOptions};
+use warp_cli::GlobalOptions;
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity};
 
+use super::common::{EnvironmentChoice, ResolveConfigurationError};
+use super::output::{self, TableFormat};
 use crate::ai::ambient_agents::scheduled::{
     CloudScheduledAmbientAgent, ScheduledAgentManager, ScheduledAmbientAgent, UpdateScheduleParams,
 };
 use crate::ai::ambient_agents::AgentConfigSnapshot;
-use crate::cloud_object::CloudObject;
+use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::server::ids::{ServerId, SyncId};
 use crate::util::time_format::format_approx_duration_from_now_utc;
-
-use super::common::{EnvironmentChoice, ResolveConfigurationError};
-use super::output::{self, TableFormat};
 
 /// Run a scheduled agent command.
 pub fn run(
@@ -113,6 +113,8 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 crate::ai::ambient_agents::AgentConfigSnapshot {
                     name: None,
                     environment_id,
+                    // TODO(REMOTE-1936): support --runner for scheduled agents.
+                    runner_id: None,
                     model_id: args.model.model.clone(),
                     base_prompt: None,
                     mcp_servers: cli_mcp_servers,

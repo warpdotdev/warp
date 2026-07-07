@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
-use warpui::{
-    elements::{
-        Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
-        Highlight, MainAxisAlignment, MainAxisSize, ParentElement, Radius, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Element, SingletonEntity,
+use warpui::elements::{
+    Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Highlight,
+    MainAxisAlignment, MainAxisSize, ParentElement, Radius, Shrinkable, Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::command_search::searcher::{AcceptedWorkflow, CommandSearchItemAction};

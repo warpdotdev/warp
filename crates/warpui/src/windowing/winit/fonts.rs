@@ -9,10 +9,6 @@ mod linux;
 
 #[cfg(target_os = "windows")]
 mod windows;
-use warpui_core::fonts::{Style, Weight};
-#[cfg(target_os = "windows")]
-use windows::loader;
-
 use std::any::Any;
 use std::collections::HashMap;
 use std::ops::{DerefMut, Range};
@@ -22,38 +18,33 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
 use bimap::BiMap;
-use pathfinder_geometry::{
-    rect::{RectF, RectI},
-    vector::Vector2F,
-};
-use resvg::usvg::fontdb;
-use resvg::usvg::fontdb::Query;
-use vec1::Vec1;
-
 use cosmic_text::{
     Align, Attrs, AttrsList, BidiParagraphs, LayoutGlyph, LayoutLine, ShapeLine, Shaping, Wrap,
 };
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use fontdb::Source;
 use itertools::Itertools;
 use parking_lot::RwLock;
-use pathfinder_geometry::vector::{vec2f, vec2i, Vector2I};
+use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::vector::{vec2f, vec2i, Vector2F, Vector2I};
+use resvg::usvg::fontdb;
+use resvg::usvg::fontdb::Query;
+use vec1::Vec1;
+use warpui_core::fonts::{Style, Weight};
+#[cfg(target_os = "windows")]
+use windows::loader;
 
 use self::font_handle::{FontData, FontHandle};
 use self::str_index_map::StrIndexMap;
 use self::text_layout::{RunBuilder, TextStylesMap};
-use crate::fonts::Metrics;
-use crate::platform::{self};
-use crate::text_layout::{CaretPosition, TextAlignment};
-use crate::{
-    fonts::{
-        canvas::RasterFormat, FamilyId, FontId, GlyphId, Properties, RasterizedGlyph,
-        SubpixelAlignment,
-    },
-    platform::LineStyle,
-    rendering::GlyphConfig,
-    text_layout::{ClipConfig, Line, StyleAndFont, TextFrame},
+use crate::fonts::canvas::RasterFormat;
+use crate::fonts::{
+    FamilyId, FontId, GlyphId, Metrics, Properties, RasterizedGlyph, SubpixelAlignment,
 };
+use crate::platform::{self, LineStyle};
+use crate::rendering::GlyphConfig;
+use crate::text_layout::{CaretPosition, ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
 
 struct FontFamily {
     name: String,
@@ -62,9 +53,10 @@ struct FontFamily {
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod loader {
+    use anyhow::Result;
+
     use super::*;
     use crate::windowing::winit::fonts::linux::{Error, FontconfigLoader};
-    use anyhow::Result;
 
     pub fn load_all_system_fonts() -> LoadedSystemFonts {
         let manager = match FontconfigLoader::new() {

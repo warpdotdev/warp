@@ -1,19 +1,19 @@
-use std::{borrow::Cow, cell::RefCell};
+use std::borrow::Cow;
+use std::cell::RefCell;
 
-use warp_core::ui::{
-    appearance::Appearance,
-    builder::UiBuilder,
-    theme::{color::internal_colors, WarpTheme},
-};
-use warpui::{
-    clipboard::ClipboardContent,
-    elements::*,
-    text_layout::ClipConfig,
-    ui_components::{button::ButtonVariant, components::UiComponent as _},
-    Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
-};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::builder::UiBuilder;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::WarpTheme;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::*;
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::UiComponent as _;
+use warpui::{Entity, SingletonEntity as _, TypedActionView, View, ViewContext};
 
-use crate::{terminal::model::terminal_model::ExitReason, ui_components};
+use crate::terminal::model::terminal_model::ExitReason;
+use crate::ui_components;
 
 const FILE_ISSUE_TEXT: &str = "File issue";
 const MORE_INFO_TEXT: &str = "More info";

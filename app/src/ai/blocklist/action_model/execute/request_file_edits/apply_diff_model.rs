@@ -14,12 +14,11 @@ use vec1::Vec1;
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
+use super::diff_application::{apply_edits, DiffApplicationError, FileReadResult};
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
 use crate::auth::AuthStateProvider;
 use crate::terminal::model::session::active_session::ActiveSession;
-
-use super::diff_application::{apply_edits, DiffApplicationError, FileReadResult};
 
 /// Entity submodel that encapsulates filesystem access for diff application.
 ///
@@ -51,17 +50,15 @@ impl ApplyDiffModel {
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         let ai_identifiers = ai_identifiers.clone();
 
-        let remote_client = session_context.host_id().and_then(|host_id| {
-            remote_server::manager::RemoteServerManager::as_ref(ctx)
-                .client_for_host(host_id)
-                .cloned()
+        let host_request_handle = session_context.host_id().map(|host_id| {
+            remote_server::manager::RemoteServerManager::as_ref(ctx).host_request_handle(host_id)
         });
 
         let is_remote = session_context.is_remote();
         let fut = async move {
             if is_remote {
-                match remote_client {
-                    Some(client) => {
+                match host_request_handle {
+                    Some(handle) => {
                         apply_edits(
                             edits,
                             &session_context,
@@ -70,8 +67,8 @@ impl ApplyDiffModel {
                             auth_state,
                             passive_diff,
                             |path| {
-                                let client = client.clone();
-                                async move { read_remote_file(&client, &path).await }
+                                let handle = &handle;
+                                async move { read_remote_file(handle, &path).await }
                             },
                         )
                         .await
@@ -109,7 +106,7 @@ impl ApplyDiffModel {
 const MAX_DIFF_READ_BYTES: u32 = 10_000_000;
 
 async fn read_remote_file(
-    client: &remote_server::client::RemoteServerClient,
+    handle: &remote_server::manager::HostRequestHandle,
     path: &str,
 ) -> FileReadResult {
     let request = remote_server::proto::ReadFileContextRequest {
@@ -120,7 +117,7 @@ async fn read_remote_file(
         max_file_bytes: Some(MAX_DIFF_READ_BYTES),
         max_batch_bytes: None,
     };
-    match client.read_file_context(request).await {
+    match handle.read_file_context(request).await {
         Ok(response) => {
             if let Some(fc) = response.file_contexts.into_iter().next() {
                 // A whole-file read that was truncated by the byte limit will

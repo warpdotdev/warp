@@ -1,6 +1,5 @@
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 use warp_core::features::FeatureFlag;
 
 use super::DriveSortOrder;
@@ -13,6 +12,7 @@ define_settings_group!(WarpDriveSettings, settings: [
         default: DriveSortOrder::ByObjectType,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "warp_drive.sorting_choice",
         description: "The sort order for items in Warp Drive.",
@@ -22,6 +22,7 @@ define_settings_group!(WarpDriveSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     // Controls whether Warp Drive appears in the tools panel, command palette, and command search.
@@ -30,6 +31,7 @@ define_settings_group!(WarpDriveSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "warp_drive.enabled",
         description: "Whether Warp Drive is enabled.",

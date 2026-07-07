@@ -1,17 +1,13 @@
 use warpui::{AppContext, EntityId, ModelHandle, SingletonEntity};
 
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversation, AIAgentAction, AIAgentActionId, AIAgentActionType,
-            AIAgentInput, AIAgentOutputMessageType, SummarizationType,
-        },
-        blocklist::BlocklistAIActionModel,
-    },
-    BlocklistAIHistoryModel,
-};
-
 use super::AIBlockModel;
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
+    SummarizationType,
+};
+use crate::ai::blocklist::BlocklistAIActionModel;
+use crate::BlocklistAIHistoryModel;
 
 // Helper methods for accessing data on an impl of `AIBlockModel`.
 //

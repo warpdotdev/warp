@@ -2,7 +2,6 @@ mod allocator;
 mod manager;
 
 pub(crate) use manager::{Manager, TextureId};
-
 use pathfinder_geometry::rect::{RectF, RectI};
 use thiserror::Error;
 

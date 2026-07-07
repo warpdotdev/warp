@@ -56,9 +56,8 @@ fn test_command_at_cursor_has_common_package_installer_prefix_with_alias_expansi
     use warpui::App;
 
     use crate::completer::SessionContext;
-    use crate::terminal::model::session::{
-        command_executor::testing::TestCommandExecutor, Session, SessionInfo,
-    };
+    use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+    use crate::terminal::model::session::{Session, SessionInfo};
 
     App::test((), |app| async move {
         // Alias 'ya' expands to 'yarn add'

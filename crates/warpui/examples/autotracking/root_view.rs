@@ -1,11 +1,10 @@
 use pathfinder_color::ColorU;
-use warpui::elements::DispatchEventResult;
+use warpui::elements::{
+    Align, Border, ChildView, Container, CornerRadius, DispatchEventResult, EventHandler, Flex,
+    ParentElement, Radius, Rect, Stack, Text,
+};
 use warpui::fonts::FamilyId;
 use warpui::{
-    elements::{
-        Align, Border, ChildView, Container, CornerRadius, EventHandler, Flex, ParentElement,
-        Radius, Rect, Stack, Text,
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, Tracked, TypedActionView, View,
     ViewContext, ViewHandle,
 };

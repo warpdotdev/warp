@@ -1,16 +1,13 @@
-use warpui::{
-    elements::{MouseStateHandle, Text},
-    Element,
-};
-
-use crate::appearance::Appearance;
-use crate::terminal::alias::AliasedCommand;
-use crate::terminal::view::TerminalAction;
+use warpui::elements::{MouseStateHandle, Text};
+use warpui::Element;
 
 use super::{
     render_inline_block_list_banner, InlineBannerButtonState, InlineBannerCloseButton,
     InlineBannerContent, InlineBannerStyle, InlineBannerTextButton, InlineBannerTextButtonVariant,
 };
+use crate::appearance::Appearance;
+use crate::terminal::alias::AliasedCommand;
+use crate::terminal::view::TerminalAction;
 
 #[derive(Clone, Copy, Debug)]
 pub enum AliasExpansionBannerAction {

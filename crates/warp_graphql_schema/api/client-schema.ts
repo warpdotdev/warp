@@ -12,6 +12,7 @@ const clientMutations = [
   'createFileArtifactUploadTarget',
   'createFolder',
   'createGenericStringObject',
+  'createManagedMcpClientConfig',
   'createManagedSecret',
   'createNotebook',
   'createTeam',
@@ -80,8 +81,10 @@ const clientMutations = [
 const clientQueries = [
   'cloudObject',
   'codebaseContextConfig',
+  'freeAvailableModels',
   'getRelevantFragments',
   'rerankFragments',
+  'harnessAuthSecrets',
   'listWarpDevImages',
   'pricingInfo',
   'managedSecrets',

@@ -5,11 +5,9 @@ use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::elements::{ChildView, Element, Empty, ParentElement, Wrap};
 use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
+use super::{file_button_label, Artifact};
 use crate::notebooks::NotebookId;
 use crate::terminal::input::MenuPositioning;
-
-use super::file_button_label;
-use super::Artifact;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, SecondaryTheme, TooltipAlignment,
 };

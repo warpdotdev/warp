@@ -1,5 +1,6 @@
+use std::fs::remove_file;
 use std::sync::Arc;
-use std::{fs::remove_file, time::Duration};
+use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{LocalResult, TimeZone, Utc};
@@ -8,16 +9,12 @@ use warp_core::{report_error, report_if_error};
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, Entity, ModelContext, SingletonEntity};
 
-use super::{rudder_event_file_path, RUDDER_TELEMETRY_EVENTS_FILE_NAME};
+use super::{clear_event_queue, rudder_event_file_path, RUDDER_TELEMETRY_EVENTS_FILE_NAME};
 use crate::auth::AuthStateProvider;
 use crate::channel::ChannelState;
 use crate::features::FeatureFlag;
-use crate::{
-    server::server_api::ServerApi,
-    settings::{PrivacySettings, PrivacySettingsChangedEvent},
-};
-
-use super::clear_event_queue;
+use crate::server::server_api::ServerApi;
+use crate::settings::{PrivacySettings, PrivacySettingsChangedEvent};
 
 // How often we send Active Usage signals.
 const ACTIVE_USAGE_DURATION: Duration = Duration::from_secs(60);
@@ -73,7 +70,7 @@ impl TelemetryCollector {
         // previously opted-out of telemetry. In the case where the user turns the telemetry from
         // on to off, we should not send another request with any telemetry, even if the event was
         // initially recorded prior to the user turning telemetry off.`
-        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |_me, event, _ctx| {
+        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |_me, _, event, _ctx| {
             if let PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled { .. } = event {
                 clear_event_queue();
             }

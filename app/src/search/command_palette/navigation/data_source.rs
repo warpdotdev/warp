@@ -1,3 +1,5 @@
+use warpui::{AppContext, Entity, ModelHandle};
+
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::navigation::search::{
     FuzzySessionSearcher, MatchedSession, SessionMatchResult, SessionSearcher,
@@ -8,7 +10,6 @@ use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::SyncDataSource;
 use crate::session_management::{SessionNavigationData, SessionSource};
 use crate::workspace::PaneViewLocator;
-use warpui::{AppContext, Entity, ModelHandle};
 
 /// Data source that produces possible running sessions a user could navigate to.
 pub struct DataSource {
@@ -56,9 +57,7 @@ impl SyncDataSource for DataSource {
         self.searcher
             .search(&query.text.trim().to_lowercase(), app)
             .map_err(|err| {
-                let search_error = DataSourceSearchError {
-                    message: err.to_string(),
-                };
+                let search_error = DataSourceSearchError::new(err.to_string());
                 Box::new(search_error) as DataSourceRunErrorWrapper
             })
     }

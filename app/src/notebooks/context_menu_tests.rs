@@ -2,32 +2,31 @@ use pathfinder_geometry::vector::vec2f;
 use string_offset::ByteOffset;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::model::CoreEditorModel;
-use warpui::{platform::WindowStyle, App};
-
-use crate::search::files::model::FileSearchModel;
+use warpui::platform::WindowStyle;
+use warpui::App;
 
 use super::MenuSource;
 use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::CloudViewModel;
+use crate::editor::InteractionState;
+use crate::network::NetworkStatus;
+use crate::notebooks::editor::keys::NotebookKeybindings;
+use crate::notebooks::notebook::NotebookView;
 use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusState};
 use crate::pane_group::{BackingView as _, PaneId};
+use crate::search::files::model::FileSearchModel;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::SyncQueue;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::keys::TerminalKeybindings;
-use crate::{
-    cloud_object::model::{persistence::CloudModel, view::CloudViewModel},
-    editor::InteractionState,
-    network::NetworkStatus,
-    notebooks::{editor::keys::NotebookKeybindings, notebook::NotebookView},
-    server::{
-        cloud_objects::update_manager::UpdateManager, server_api::ServerApiProvider,
-        sync_queue::SyncQueue,
-    },
-    settings_view::keybindings::KeybindingChangedNotifier,
-    test_util::settings::initialize_settings_for_tests,
-    workspace::ActiveSession,
-    workspaces::{
-        team_tester::TeamTesterStatus, user_profiles::UserProfiles, user_workspaces::UserWorkspaces,
-    },
-    GlobalResourceHandles, GlobalResourceHandlesProvider,
-};
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspace::ActiveSession;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -246,6 +245,88 @@ fn test_split_pane_actions() {
                 vec![
                     "Paste",
                     "----",
+                    "Split pane right",
+                    "Split pane left",
+                    "Split pane down",
+                    "Split pane up",
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn test_copy_file_path_action() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_window_id, notebook) = app.add_window(WindowStyle::NotStealFocus, NotebookView::new);
+
+        // When a path is set, "Copy file path" appears as its own section, separated from the
+        // text-action section (here "Paste") and the split-pane section.
+        notebook.update(&mut app, |notebook, ctx| {
+            notebook
+                .context_menu()
+                .set_copy_file_path(Some("/tmp/notes.md".to_string()));
+            let source = MenuSource::RichTextEditor {
+                parent_offset: vec2f(0., 0.),
+                editor: notebook.input_editor(),
+            };
+            notebook.context_menu().show_context_menu(source, ctx);
+            assert_eq!(
+                notebook.context_menu().item_names(ctx),
+                vec![
+                    "Paste",
+                    "----",
+                    "Copy file path",
+                    "----",
+                    "Split pane right",
+                    "Split pane left",
+                    "Split pane down",
+                    "Split pane up",
+                ]
+            );
+        });
+
+        // With an empty text-action section (read-only, no selection), "Copy file path" leads the
+        // menu with no separator before it.
+        notebook.update(&mut app, |notebook, ctx| {
+            notebook.input_editor().update(ctx, |editor, ctx| {
+                editor.set_interaction_state(InteractionState::Selectable, ctx)
+            });
+            notebook
+                .context_menu()
+                .set_copy_file_path(Some("/tmp/notes.md".to_string()));
+            let source = MenuSource::RichTextEditor {
+                parent_offset: vec2f(0., 0.),
+                editor: notebook.input_editor(),
+            };
+            notebook.context_menu().show_context_menu(source, ctx);
+            assert_eq!(
+                notebook.context_menu().item_names(ctx),
+                vec![
+                    "Copy file path",
+                    "----",
+                    "Split pane right",
+                    "Split pane left",
+                    "Split pane down",
+                    "Split pane up",
+                ]
+            );
+        });
+
+        // When no path is set, the item is absent (the default for non-file notebooks). The
+        // editor is still read-only from above, so only the split-pane items remain.
+        notebook.update(&mut app, |notebook, ctx| {
+            notebook.context_menu().set_copy_file_path(None);
+            let source = MenuSource::RichTextEditor {
+                parent_offset: vec2f(0., 0.),
+                editor: notebook.input_editor(),
+            };
+            notebook.context_menu().show_context_menu(source, ctx);
+            assert_eq!(
+                notebook.context_menu().item_names(ctx),
+                vec![
                     "Split pane right",
                     "Split pane left",
                     "Split pane down",

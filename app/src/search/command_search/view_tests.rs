@@ -1,24 +1,20 @@
-use warpui::{platform::WindowStyle, App};
-
-use crate::{
-    cloud_object::model::persistence::CloudModel,
-    network::NetworkStatus,
-    server::{
-        cloud_objects::{listener::Listener, update_manager::UpdateManager},
-        server_api::ServerApiProvider,
-        sync_queue::SyncQueue,
-        telemetry::context_provider::AppTelemetryContextProvider,
-    },
-    settings_view::keybindings::KeybindingChangedNotifier,
-    system::SystemStats,
-    test_util::settings::initialize_settings_for_tests,
-    workspaces::{
-        team_tester::TeamTesterStatus, update_manager::TeamUpdateManager,
-        user_workspaces::UserWorkspaces,
-    },
-};
+use warpui::platform::WindowStyle;
+use warpui::App;
 
 use super::*;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::network::NetworkStatus;
+use crate::server::cloud_objects::listener::Listener;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::sync_queue::SyncQueue;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::system::SystemStats;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);

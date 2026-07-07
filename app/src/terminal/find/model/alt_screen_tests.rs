@@ -1,8 +1,7 @@
-use crate::terminal::{
-    find::model::{alt_screen::run_find_on_alt_screen, FindOptions},
-    model::index::Point,
-    TerminalModel,
-};
+use crate::terminal::find::model::alt_screen::run_find_on_alt_screen;
+use crate::terminal::find::model::FindOptions;
+use crate::terminal::model::index::Point;
+use crate::terminal::TerminalModel;
 
 #[test]
 fn test_run_find_on_alt_screen() {

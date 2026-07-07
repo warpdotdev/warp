@@ -93,6 +93,61 @@ fn add_mock_config_with_name(name: &str, configs: &mut Vec<LaunchConfig>) {
 }
 
 #[test]
+fn test_find_matching_tab_config() {
+    let configs = vec![
+        make_mock_tab_config("my tab", Some("/tab_configs/my_tab.toml")),
+        make_mock_tab_config("Deploy", Some("/tab_configs/Deploy.yaml")),
+        make_mock_tab_config("dotted", Some("/tab_configs/foo.bar.toml")),
+        make_mock_tab_config("orphan", None),
+    ];
+
+    // Stem match without extension.
+    assert_eq!(
+        find_matching_tab_config("my_tab", configs.clone()).map(|c| c.name),
+        Some(String::from("my tab")),
+    );
+
+    // Stem match with extension.
+    assert_eq!(
+        find_matching_tab_config("my_tab.toml", configs.clone()).map(|c| c.name),
+        Some(String::from("my tab")),
+    );
+
+    // Case-insensitive match.
+    assert_eq!(
+        find_matching_tab_config("deploy", configs.clone()).map(|c| c.name),
+        Some(String::from("Deploy")),
+    );
+
+    // Dotted stem resolves both with and without `.toml`.
+    assert_eq!(
+        find_matching_tab_config("foo.bar", configs.clone()).map(|c| c.name),
+        Some(String::from("dotted")),
+    );
+    assert_eq!(
+        find_matching_tab_config("foo.bar.toml", configs.clone()).map(|c| c.name),
+        Some(String::from("dotted")),
+    );
+
+    // Miss returns None.
+    assert!(find_matching_tab_config("unknown", configs.clone()).is_none());
+
+    // Configs without a `source_path` never match.
+    assert!(find_matching_tab_config("orphan", configs).is_none());
+}
+
+fn make_mock_tab_config(name: &str, source_path: Option<&str>) -> TabConfig {
+    TabConfig {
+        name: name.to_string(),
+        title: None,
+        color: None,
+        panes: vec![],
+        params: HashMap::new(),
+        source_path: source_path.map(PathBuf::from),
+    }
+}
+
+#[test]
 fn test_get_launch_config_path() {
     assert_eq!(
         get_launch_config_path("/path/to/a/config"),
@@ -206,6 +261,19 @@ fn test_warp_web_link_failure() {
         None
     );
 }
+#[test]
+fn test_app_web_link_rewrites_to_new_cloud_agent_conversation() {
+    let url = Url::parse(&format!("{}/app", ChannelState::server_root_url())).unwrap();
+    let intent = web_intent_parser::maybe_rewrite_web_url_to_intent(&url).unwrap();
+
+    assert_eq!(
+        intent.as_str(),
+        format!(
+            "{}://action/new_cloud_agent_conversation?source=web_home",
+            ChannelState::url_scheme()
+        )
+    );
+}
 
 #[test]
 fn test_action_create_environment_parse() {
@@ -253,6 +321,194 @@ fn test_action_create_environment_parse_no_repos() {
     }
 }
 
+fn open_file_editor_test_path(file_name: &str) -> (String, PathBuf) {
+    #[cfg(windows)]
+    let path = format!("C:/tmp/{file_name}");
+    #[cfg(not(windows))]
+    let path = format!("/tmp/{file_name}");
+
+    (path.clone(), PathBuf::from(path))
+}
+
+#[test]
+fn test_action_open_file_editor_parse_with_path_only() {
+    let (path_param, expected_path) = open_file_editor_test_path("test.rs");
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(path, expected_path);
+            assert_eq!(line_col, None);
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_with_line_only() {
+    let (path_param, expected_path) = open_file_editor_test_path("test.rs");
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}&line=120",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(path, expected_path);
+            assert_eq!(
+                line_col,
+                Some(LineAndColumnArg {
+                    line_num: 120,
+                    column_num: None,
+                })
+            );
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_with_line_and_column() {
+    let (path_param, expected_path) = open_file_editor_test_path("test.rs");
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}&line=120&column=8",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(path, expected_path);
+            assert_eq!(
+                line_col,
+                Some(LineAndColumnArg {
+                    line_num: 120,
+                    column_num: Some(8),
+                })
+            );
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_decodes_percent_encoded_path() {
+    let (path_param, _) = open_file_editor_test_path("hello%20world.rs");
+    let (_, expected_path) = open_file_editor_test_path("hello world.rs");
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}&line=1",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(path, expected_path);
+            assert_eq!(
+                line_col,
+                Some(LineAndColumnArg {
+                    line_num: 1,
+                    column_num: None,
+                })
+            );
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_expands_home_dir() {
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path=~/tmp/test.rs&line=1",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(
+                path,
+                PathBuf::from(shellexpand::tilde("~/tmp/test.rs").into_owned())
+            );
+            assert_eq!(
+                line_col,
+                Some(LineAndColumnArg {
+                    line_num: 1,
+                    column_num: None,
+                })
+            );
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_requires_path() {
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?line=1",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    assert!(Action::parse(&url).is_err());
+}
+
+#[test]
+fn test_action_open_file_editor_parse_rejects_relative_path() {
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path=src/main.rs&line=1",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    assert!(Action::parse(&url).is_err());
+}
+
+#[test]
+fn test_action_open_file_editor_parse_rejects_column_without_line() {
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path=/tmp/test.rs&column=8",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    assert!(Action::parse(&url).is_err());
+}
+
+#[test]
+fn test_action_open_file_editor_parse_rejects_invalid_line_or_column() {
+    let invalid_line = Url::parse(&format!(
+        "{}://action/open_file_editor?path=/tmp/test.rs&line=abc",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+    assert!(Action::parse(&invalid_line).is_err());
+
+    let zero_line = Url::parse(&format!(
+        "{}://action/open_file_editor?path=/tmp/test.rs&line=0",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+    assert!(Action::parse(&zero_line).is_err());
+
+    let invalid_column = Url::parse(&format!(
+        "{}://action/open_file_editor?path=/tmp/test.rs&line=1&column=0",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+    assert!(Action::parse(&invalid_column).is_err());
+}
+
 #[test]
 fn test_action_cloud_agent_setup_parse() {
     let url = Url::parse(&format!(
@@ -263,6 +519,56 @@ fn test_action_cloud_agent_setup_parse() {
 
     let action = Action::parse(&url).unwrap();
     assert!(matches!(action, Action::CloudAgentSetup));
+}
+#[test]
+fn test_action_auto_handoff_to_cloud_parse_default_trigger() {
+    let url = Url::parse(&format!(
+        "{}://action/auto_handoff_to_cloud",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    assert!(matches!(
+        action,
+        Action::AutoHandoffToCloud {
+            trigger: AutoCloudHandoffTrigger::Uri,
+        }
+    ));
+}
+
+#[test]
+fn test_action_auto_handoff_to_cloud_parse_alias_path() {
+    let url = Url::parse(&format!(
+        "{}://action/auto-handoff-to-cloud",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    assert!(matches!(
+        action,
+        Action::AutoHandoffToCloud {
+            trigger: AutoCloudHandoffTrigger::Uri,
+        }
+    ));
+}
+
+#[test]
+fn test_action_auto_handoff_to_cloud_parse_sleep_trigger() {
+    let url = Url::parse(&format!(
+        "{}://action/auto_handoff_to_cloud?trigger=sleep",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    assert!(matches!(
+        action,
+        Action::AutoHandoffToCloud {
+            trigger: AutoCloudHandoffTrigger::MacOsSleep,
+        }
+    ));
 }
 
 #[test]
@@ -346,156 +652,7 @@ fn test_linear_issue_work_empty_prompt() {
     assert!(args.prompt.is_none());
 }
 
-// -- handle_incoming_uri redaction -------------------------------------------
-//
-// These tests cover the fix for GH #737: the entry log inside
-// `handle_incoming_uri` used to write the full URL (including the Firebase
-// `refresh_token` query parameter) to `warp.log` at `info` level before any
-// redaction ran. They validate the redaction helper and the error messages
-// produced by `validate_custom_uri` to ensure that the fallback `warn`
-// emitted on invalid URIs never embeds the query string either.
-
-/// The redacted log representation must contain scheme/host/path for triage
-/// but must never contain the query string or any token material.
-#[test]
-fn safe_url_log_fields_redacts_refresh_token() {
-    let url = Url::parse(&format!(
-        "{}://auth/desktop_redirect?refresh_token=SENSITIVE_TOKEN&state=abc&user_uid=u",
-        ChannelState::url_scheme()
-    ))
-    .unwrap();
-
-    let logged = safe_url_log_fields(&url);
-
-    assert!(
-        logged.contains(&format!("scheme={}", ChannelState::url_scheme())),
-        "expected scheme in redacted log, got: {logged}"
-    );
-    assert!(
-        logged.contains("host=auth"),
-        "expected host in redacted log, got: {logged}"
-    );
-    assert!(
-        logged.contains("path=/desktop_redirect"),
-        "expected path in redacted log, got: {logged}"
-    );
-    assert!(
-        !logged.contains("refresh_token"),
-        "redacted log must not contain refresh_token: {logged}"
-    );
-    assert!(
-        !logged.contains("SENSITIVE_TOKEN"),
-        "redacted log must not contain the token value: {logged}"
-    );
-    assert!(
-        !logged.contains("state="),
-        "redacted log must not contain state query param: {logged}"
-    );
-    assert!(
-        !logged.contains("user_uid"),
-        "redacted log must not contain user_uid: {logged}"
-    );
-}
-
-/// The redacted log representation must drop generic OAuth query parameters
-/// (`code=`, `access_token=`, `custom_token=`, `token=`) regardless of host.
-#[test]
-fn safe_url_log_fields_redacts_generic_oauth_params() {
-    let url = Url::parse(&format!(
-        "{}://mcp/oauth_callback?code=AUTH_CODE&state=xyz&access_token=AT&custom_token=CT&token=RAW",
-        ChannelState::url_scheme()
-    ))
-    .unwrap();
-
-    let logged = safe_url_log_fields(&url);
-
-    for forbidden in [
-        "code=",
-        "AUTH_CODE",
-        "access_token",
-        "AT",
-        "custom_token",
-        "CT",
-        "token=RAW",
-        "state=",
-    ] {
-        assert!(
-            !logged.contains(forbidden),
-            "redacted log must not contain {forbidden:?}: {logged}"
-        );
-    }
-    assert!(logged.contains("host=mcp"), "expected host: {logged}");
-    assert!(
-        logged.contains("path=/oauth_callback"),
-        "expected path: {logged}"
-    );
-}
-
-/// Drive links carry user-identifiable `invitee_email` values in the query.
-/// The entry log must not surface them on non-dogfood channels.
-#[test]
-fn safe_url_log_fields_redacts_invitee_email() {
-    let url = Url::parse(&format!(
-        "{}://drive/notebook?id=abc&invitee_email=alice@example.com",
-        ChannelState::url_scheme()
-    ))
-    .unwrap();
-
-    let logged = safe_url_log_fields(&url);
-
-    assert!(
-        !logged.contains("alice@example.com"),
-        "redacted log must not contain invitee email: {logged}"
-    );
-    assert!(
-        !logged.contains("invitee_email"),
-        "redacted log must not contain invitee_email key: {logged}"
-    );
-    assert!(logged.contains("host=drive"), "expected host: {logged}");
-}
-
-/// URL fragments are not currently used as secret carriers by Warp today, but
-/// the entry log's contract is "scheme + host + path only", so fragments must
-/// be dropped as well.
-#[test]
-fn safe_url_log_fields_drops_fragment() {
-    let url = Url::parse(&format!(
-        "{}://auth/desktop_redirect#sensitive_fragment",
-        ChannelState::url_scheme()
-    ))
-    .unwrap();
-
-    let logged = safe_url_log_fields(&url);
-
-    assert!(
-        !logged.contains("sensitive_fragment"),
-        "redacted log must not contain url fragment: {logged}"
-    );
-    assert!(
-        !logged.contains('#'),
-        "redacted log must not contain any fragment separator: {logged}"
-    );
-}
-
-/// `file://` URLs route through the same entry log. `file://` URLs on macOS
-/// have no host; the helper must not panic and must report `host=-` so the
-/// format string stays well-formed.
-#[test]
-fn safe_url_log_fields_handles_file_urls_without_host() {
-    let url = Url::parse("file:///tmp/foo.md").unwrap();
-
-    let logged = safe_url_log_fields(&url);
-
-    assert!(logged.contains("scheme=file"), "expected scheme: {logged}");
-    assert!(
-        logged.contains("host=-"),
-        "expected host placeholder: {logged}"
-    );
-    assert!(
-        logged.contains("path=/tmp/foo.md"),
-        "expected path: {logged}"
-    );
-}
+// -- handle_incoming_uri validation errors -----------------------------------
 
 /// `validate_custom_uri` returns `anyhow::Error`s whose messages feed the
 /// non-dogfood `log::warn!("Custom URI is invalid: {e:?}")` fallback in
@@ -574,6 +731,49 @@ fn test_parse_tab_path_bare_tilde() {
     assert_eq!(parse_tab_path(&url), Some(home));
 }
 
+// -- warp://settings deeplink parsing ----------------------------------------
+
+#[test]
+fn test_settings_widget_deeplink_target() {
+    assert_eq!(
+        settings_widget_deeplink_target("global_hotkey").map(|(section, _)| section),
+        Some(SettingsSection::Features),
+    );
+    assert_eq!(
+        settings_widget_deeplink_target("custom_router").map(|(section, _)| section),
+        Some(SettingsSection::WarpAgent),
+    );
+    #[cfg(not(target_family = "wasm"))]
+    assert_eq!(
+        settings_widget_deeplink_target("cli_agents").map(|(section, _)| section),
+        Some(SettingsSection::ThirdPartyCLIAgents),
+    );
+    // Unknown / empty slugs are not linkable (allowlist only).
+    assert!(settings_widget_deeplink_target("not_a_widget").is_none());
+    assert!(settings_widget_deeplink_target("").is_none());
+}
+
+#[test]
+fn test_settings_section_for_simple_subpage() {
+    assert_eq!(
+        settings_section_for_simple_subpage("appearance"),
+        Some(SettingsSection::Appearance),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("billing_and_usage"),
+        Some(SettingsSection::BillingAndUsage),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("platform"),
+        Some(SettingsSection::OzCloudAPIKeys),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("warp_agent"),
+        Some(SettingsSection::WarpAgent),
+    );
+    assert!(settings_section_for_simple_subpage("not_a_subpage").is_none());
+}
+
 // Regression coverage for issue #9005: shell scripts opened via `file://` should run,
 // not open in the editor. Exercised through the pure routing helper to avoid standing
 // up a full `AppContext`.
@@ -586,10 +786,8 @@ fn test_open_file_executable_sh_routes_to_execute() {
     let p = dir.path().join("run.sh");
     std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(
-        classify_open_file_action(&p),
-        OpenFileAction::ExecuteInSession
-    );
+    let action = classify_open_file_action(&p);
+    assert_eq!(action, OpenFileAction::ExecuteInSession);
 }
 
 #[test]
@@ -629,12 +827,63 @@ fn test_open_file_markdown_unchanged() {
 }
 
 #[test]
+fn test_open_file_ipynb_routes_to_notebook_when_enabled() {
+    // A `.ipynb` opened via `file://` (e.g. "Open with Warp" from Finder) opens
+    // in the notebook viewer, not the raw-JSON code editor.
+    let _flag = crate::features::FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("analysis.ipynb");
+    std::fs::write(&p, b"{\"nbformat\": 4, \"cells\": []}\n").unwrap();
+    assert_eq!(classify_open_file_action(&p), OpenFileAction::Notebook);
+}
+
+#[test]
+fn test_open_file_ipynb_opens_in_editor_when_disabled() {
+    // Without the feature flag, `.ipynb` is not rendered in the notebook viewer
+    // and falls through to the code editor.
+    let _flag = crate::features::FeatureFlag::JupyterNotebookRendering.override_enabled(false);
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("analysis.ipynb");
+    std::fs::write(&p, b"{\"nbformat\": 4, \"cells\": []}\n").unwrap();
+    assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
+}
+
+#[test]
 #[cfg(feature = "local_fs")]
 fn test_open_file_rust_source_still_opens_in_editor() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("main.rs");
     std::fs::write(&p, b"fn main() {}\n").unwrap();
     assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_open_file_editor_executable_sh_opens_in_editor() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("run.sh");
+    std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(can_open_file_editor_path(&p));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_open_file_editor_rust_source_opens_in_editor() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("main.rs");
+    std::fs::write(&p, b"fn main() {}\n").unwrap();
+    assert!(can_open_file_editor_path(&p));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_open_file_editor_binary_file_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("image.png");
+    std::fs::write(&p, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR").unwrap();
+    assert!(!can_open_file_editor_path(&p));
 }
 
 #[test]

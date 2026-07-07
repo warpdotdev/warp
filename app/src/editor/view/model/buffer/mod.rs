@@ -7,6 +7,30 @@ mod text;
 mod time;
 mod undo;
 
+use std::cmp::{self};
+use std::collections::{BTreeSet, HashMap};
+use std::iter::{self, Iterator};
+use std::ops::{AddAssign, Range};
+use std::rc::Rc;
+use std::str;
+
+use anyhow::{anyhow, Result};
+use itertools::Itertools;
+use lazy_static::lazy_static;
+#[cfg(test)]
+use rand::prelude::*;
+use serde::{Deserialize, Serialize};
+use string_offset::{ByteOffset, CharOffset};
+use sum_tree::{self, Cursor, FilterCursor, SeekBias, SumTree};
+use time::{Global, Lamport};
+use undo::{LocalUndoStack, UndoHistory};
+use vec1::{vec1, Vec1};
+use warpui::color::ColorU;
+use warpui::text::point::Point;
+use warpui::text::words::is_default_word_boundary;
+use warpui::text::{BufferIndex, TextBuffer};
+use warpui::text_layout::TextStyle;
+use warpui::{Entity, ModelContext};
 /// The public interfaces that we expose to the model.
 /// This should be a very limited set of APIs and should
 /// not expose the internal details of the buffer.
@@ -19,36 +43,10 @@ pub use {
 };
 
 use super::selections::{
-    AsSelection, MarkedTextState, RemoteSelection, RemoteSelections, Selection,
+    AsSelection, LocalSelections, MarkedTextState, RemoteSelection, RemoteSelections, Selection,
 };
-use super::EditorSnapshot;
-use super::{selections::LocalSelections, LocalSelection};
+use super::{EditorSnapshot, LocalSelection};
 use crate::editor::{CursorColors, PlainTextEditorViewAction};
-use anyhow::{anyhow, Result};
-use itertools::Itertools;
-use lazy_static::lazy_static;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::rc::Rc;
-use std::{
-    cmp::{self},
-    collections::HashMap,
-    iter::{self, Iterator},
-    ops::{AddAssign, Range},
-    str,
-};
-use string_offset::{ByteOffset, CharOffset};
-use sum_tree::{self, Cursor, FilterCursor, SeekBias, SumTree};
-use time::{Global, Lamport};
-use undo::{LocalUndoStack, UndoHistory};
-use vec1::{vec1, Vec1};
-use warpui::color::ColorU;
-use warpui::text::{point::Point, words::is_default_word_boundary, BufferIndex, TextBuffer};
-use warpui::text_layout::TextStyle;
-use warpui::{Entity, ModelContext};
-
-#[cfg(test)]
-use rand::prelude::*;
 
 #[cfg_attr(test, derive(Clone))]
 pub struct Buffer {
@@ -1544,8 +1542,9 @@ impl Buffer {
 
     #[cfg(test)]
     pub(super) fn selections_for_replica(&self, replica: ReplicaId) -> Vec<Range<CharOffset>> {
-        use crate::editor::RangeExt;
         use itertools::Either;
+
+        use crate::editor::RangeExt;
 
         let selections = if replica == self.replica_id() {
             Either::Left(

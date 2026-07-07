@@ -1,28 +1,27 @@
 mod model;
 
-pub use model::*;
-use pathfinder_color::ColorU;
-
 use std::borrow::Cow;
 
-use warp_core::{features::FeatureFlag, ui::appearance::Appearance};
-use warpui::{
-    elements::{Border, Container, CrossAxisAlignment, Expanded, Flex, ParentElement, Text},
-    keymap::Keystroke,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Element, SingletonEntity,
+pub use model::*;
+use pathfinder_color::ColorU;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::{
+    Border, Container, CrossAxisAlignment, Expanded, Flex, ParentElement, Text,
 };
+use warpui::keymap::Keystroke;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element, SingletonEntity};
 
-use crate::ai::blocklist::agent_view::ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE;
-use crate::{
-    ai::blocklist::agent_view::ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
-    cmd_or_ctrl_shift,
-    terminal::{self, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING},
-    ui_components::blended_colors,
-    util::bindings::keybinding_name_to_keystroke,
-    workspace::view::{
-        TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, TOGGLE_RIGHT_PANEL_BINDING_NAME,
-    },
+use crate::ai::blocklist::agent_view::{
+    ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE, ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
+};
+use crate::cmd_or_ctrl_shift;
+use crate::terminal::{self, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING};
+use crate::ui_components::blended_colors;
+use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::workspace::view::{
+    TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, TOGGLE_RIGHT_PANEL_BINDING_NAME,
 };
 
 #[derive(Copy, Clone, Debug, Default)]

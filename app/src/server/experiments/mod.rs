@@ -11,16 +11,11 @@
 //! See [here](https://www.notion.so/warpdev/Server-side-experiments-dynamic-feature-enablement-c0fb9aed695d4178a19b8830e3269094)
 //! for a full guide on the server-side experiment framework.
 
-use crate::features::FeatureFlag;
-use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::CustomerType;
-use settings::Setting;
 use warpui::AppContext;
-#[cfg(not(test))]
-use warpui::SingletonEntity as _;
 #[cfg(test)]
 use warpui::SingletonEntity;
+
+use crate::features::FeatureFlag;
 
 mod convert;
 mod model;
@@ -37,8 +32,6 @@ pub enum ServerExperiment {
     EnvVarsEarlyAccessExperiment,
     AgentModeAnalyticsExperiment,
     WindowsLaunchExperiment,
-    TmuxSshWarpificationControl,
-    TmuxSshWarpificationExperiment,
     CodebaseContextExperiment,
     CodebaseContextControl,
     SuggestedCodeDiffsControl,
@@ -49,12 +42,8 @@ pub enum ServerExperiment {
     PromptSuggestionsViaMaaControl,
     PromptSuggestionsViaMaaExperiment,
     PromptSuggestionsViaMaaOutOfBandExperiment,
-    FreeUserNoAiControl,
-    FreeUserNoAiExperiment,
     OzMultiHarnessControl,
     OzMultiHarnessExperiment,
-    SshRemoteServerControl,
-    SshRemoteServerExperiment,
     /// A test-only experiment.
     /// Does not correspond to a real server-side experiment.
     #[cfg(test)]
@@ -97,14 +86,6 @@ impl ServerExperiment {
                 // TODO(alokedesai): Clean this up now that we no longer gate access to the Windows
                 // build on an allowlist.
             }
-            Self::TmuxSshWarpificationControl => FeatureFlag::SSHTmuxWrapper.set_enabled(false),
-            Self::TmuxSshWarpificationExperiment => {
-                // Only enable the TMUX-based experience if not on windows. ConPTY doesn't support
-                // DCS, which we need in order to use tmux control mode.
-                if cfg!(not(windows)) {
-                    FeatureFlag::SSHTmuxWrapper.set_enabled(true)
-                }
-            }
             Self::CodebaseContextExperiment => {
                 FeatureFlag::FullSourceCodeEmbedding.set_enabled(true);
                 FeatureFlag::CodebaseIndexPersistence.set_enabled(true);
@@ -142,61 +123,11 @@ impl ServerExperiment {
             }
             // The normal experiment arm is no longer used.
             Self::PromptSuggestionsViaMaaExperiment => {}
-            Self::FreeUserNoAiControl => {
-                FeatureFlag::FreeUserNoAi.set_enabled(false);
-            }
-            Self::FreeUserNoAiExperiment => {
-                FeatureFlag::FreeUserNoAi.set_enabled(true);
-            }
             Self::OzMultiHarnessControl => {
                 FeatureFlag::AgentHarness.set_enabled(false);
             }
             Self::OzMultiHarnessExperiment => {
                 FeatureFlag::AgentHarness.set_enabled(true);
-            }
-            Self::SshRemoteServerControl => {
-                // Remote server binary is not yet supported on Windows.
-                if cfg!(not(windows)) {
-                    FeatureFlag::SshRemoteServer.set_enabled(true);
-                    // Override the default install mode to NeverInstall for users
-                    // who haven't explicitly changed it. `load_value` sets the
-                    // in-memory value without persisting, so the override is
-                    // re-applied from the experiment cache on every launch and
-                    // disappears if the user leaves the experiment.
-                    WarpifySettings::handle(_ctx).update(_ctx, |settings, ctx| {
-                        if !settings
-                            .ssh_extension_install_mode
-                            .is_value_explicitly_set()
-                        {
-                            let _ = settings.ssh_extension_install_mode.load_value(
-                                SshExtensionInstallMode::NeverInstall,
-                                false,
-                                ctx,
-                            );
-                        }
-                    });
-                }
-            }
-            Self::SshRemoteServerExperiment => {
-                // Remote server binary is not yet supported on Windows.
-                if cfg!(not(windows)) {
-                    FeatureFlag::SshRemoteServer.set_enabled(true);
-                    // Restore the default install mode in case the user was
-                    // previously in the control arm (which overrides it to
-                    // NeverInstall).
-                    WarpifySettings::handle(_ctx).update(_ctx, |settings, ctx| {
-                        if !settings
-                            .ssh_extension_install_mode
-                            .is_value_explicitly_set()
-                        {
-                            let _ = settings.ssh_extension_install_mode.load_value(
-                                SshExtensionInstallMode::default(),
-                                false,
-                                ctx,
-                            );
-                        }
-                    });
-                }
             }
             #[cfg(test)]
             Self::TestExperiment => {
@@ -206,17 +137,4 @@ impl ServerExperiment {
             }
         }
     }
-}
-
-/// Returns `true` when the user is in the `FreeUserNoAiExperiment` arm **and** is on the
-/// free tier. This is the single source of truth for gating any client-side behaviour
-/// that should be locked/disabled for users without AI credits.
-pub fn is_free_user_no_ai_experiment_active(ctx: &AppContext) -> bool {
-    let in_experiment = FeatureFlag::FreeUserNoAi.is_enabled();
-    let is_free_tier = UserWorkspaces::handle(ctx)
-        .as_ref(ctx)
-        .current_team()
-        .map(|team| team.billing_metadata.customer_type == CustomerType::Free)
-        .unwrap_or(true); // no team = solo free user
-    in_experiment && is_free_tier
 }

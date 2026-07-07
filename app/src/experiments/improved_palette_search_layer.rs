@@ -1,8 +1,10 @@
-use crate::experiments::{BucketRange, Experiment, Layer};
-use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::str::FromStr;
+
+use lazy_static::lazy_static;
 use warpui::AppContext;
+
+use crate::experiments::{BucketRange, Experiment, Layer};
 
 lazy_static! {
     pub static ref IMPROVED_PALETTE_SEARCH_LAYER: Layer = Layer {

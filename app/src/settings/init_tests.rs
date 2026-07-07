@@ -2,17 +2,17 @@ use instant::Duration;
 use settings::{PrivatePreferences, PublicPreferences, Setting, SettingsManager};
 use settings_value::SettingsValue;
 use warp_core::features::FeatureFlag;
-use warp_core::settings::{macros::define_settings_group, SupportedPlatforms, SyncToCloud};
+use warp_core::settings::macros::define_settings_group;
+use warp_core::settings::{SupportedPlatforms, SyncToCloud};
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::SingletonEntity;
 use warpui_extras::user_preferences;
 
-use crate::terminal::session_settings::{NotificationsMode, NotificationsSettings};
-
 use super::{
-    migrate_native_settings_to_settings_file, needs_settings_file_migration,
+    migrate_native_settings_to_settings_file, needs_settings_file_migration_for_path,
     SETTINGS_FILE_MIGRATION_COMPLETE_KEY,
 };
+use crate::terminal::session_settings::{NotificationsMode, NotificationsSettings};
 
 // A minimal settings group with one public and one private setting, used to
 // verify that migration only copies public settings.
@@ -22,6 +22,7 @@ define_settings_group!(MigrationTestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "migration_test.public_setting",
     },
@@ -30,6 +31,7 @@ define_settings_group!(MigrationTestSettings, settings: [
         default: String::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "migration_test.public_string_setting",
     },
@@ -38,6 +40,7 @@ define_settings_group!(MigrationTestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
 ]);
@@ -221,6 +224,8 @@ fn test_migration_handles_string_setting() {
 fn test_migration_does_not_rerun_when_marker_present() {
     warpui::App::test((), |mut app| async move {
         let _guard = FeatureFlag::SettingsFile.override_enabled(true);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let settings_file_path = temp_dir.path().join("settings.toml");
 
         app.update(init_test_app);
 
@@ -235,7 +240,7 @@ fn test_migration_does_not_rerun_when_marker_present() {
         // Before migration, the guard should allow migration.
         app.read(|ctx| {
             assert!(
-                needs_settings_file_migration(ctx),
+                needs_settings_file_migration_for_path(ctx, &settings_file_path),
                 "migration should be needed before first run"
             );
         });
@@ -248,8 +253,27 @@ fn test_migration_does_not_rerun_when_marker_present() {
         // After migration, the marker should prevent re-migration.
         app.read(|ctx| {
             assert!(
-                !needs_settings_file_migration(ctx),
+                !needs_settings_file_migration_for_path(ctx, &settings_file_path),
                 "migration should not be needed after marker is written"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_migration_not_needed_when_settings_file_exists() {
+    warpui::App::test((), |mut app| async move {
+        let _guard = FeatureFlag::SettingsFile.override_enabled(true);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let settings_file_path = temp_dir.path().join("settings.toml");
+        std::fs::write(&settings_file_path, "").unwrap();
+
+        app.update(init_test_app);
+
+        app.read(|ctx| {
+            assert!(
+                !needs_settings_file_migration_for_path(ctx, &settings_file_path),
+                "migration should not be needed when settings.toml exists"
             );
         });
     });
@@ -352,7 +376,8 @@ fn test_migration_with_multiple_setting_types() {
 
 mod notifications_migration {
     use settings::{PrivatePreferences, PublicPreferences, SettingsManager};
-    use warp_core::settings::{macros::define_settings_group, SupportedPlatforms, SyncToCloud};
+    use warp_core::settings::macros::define_settings_group;
+    use warp_core::settings::{SupportedPlatforms, SyncToCloud};
     use warpui_extras::user_preferences;
 
     use crate::terminal::session_settings::NotificationsSettings;
@@ -363,6 +388,7 @@ mod notifications_migration {
             default: NotificationsSettings::default(),
             supported_platforms: SupportedPlatforms::ALL,
             sync_to_cloud: SyncToCloud::Never,
+            surface: settings::SettingSurfaces::GUI,
             private: false,
             toml_path: "migration_test.notifications",
             max_table_depth: 1,

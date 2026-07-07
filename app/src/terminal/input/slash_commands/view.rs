@@ -3,8 +3,7 @@ use std::collections::HashSet;
 use ai::skills::SkillReference;
 use lazy_static::lazy_static;
 use warpui::elements::ChildView;
-use warpui::{AppContext, Element, ViewContext};
-use warpui::{Entity, ModelHandle, View, ViewHandle};
+use warpui::{AppContext, Element, Entity, ModelHandle, View, ViewContext, ViewHandle};
 
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::search::data_source::{Query, QueryFilter};
@@ -13,11 +12,10 @@ use crate::search::slash_command_menu::SlashCommandId;
 use crate::server::ids::SyncId;
 use crate::terminal::input::buffer_model::InputBufferModel;
 use crate::terminal::input::inline_menu::{InlineMenuEvent, InlineMenuPositioner, InlineMenuView};
-use crate::terminal::input::slash_command_model::SlashCommandEntryState;
-use crate::terminal::input::slash_command_model::SlashCommandModel;
-use crate::terminal::input::slash_commands::UpdatedActiveCommands;
+use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::{
-    AcceptSlashCommandOrSavedPrompt, SlashCommandDataSource, ZeroStateDataSource,
+    AcceptSlashCommandOrSavedPrompt, SlashCommandDataSource, UpdatedActiveCommands,
+    ZeroStateDataSource,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,

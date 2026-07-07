@@ -8,6 +8,7 @@ pub enum ManagedSecretType {
     AnthropicBedrockAccessKey,
     AnthropicBedrockApiKey,
     Dotenvx,
+    OpenaiApiKey,
     RawValue,
 }
 
@@ -19,6 +20,7 @@ impl ManagedSecretType {
             ManagedSecretType::AnthropicBedrockAccessKey => "anthropic_bedrock_access_key",
             ManagedSecretType::AnthropicBedrockApiKey => "anthropic_bedrock_api_key",
             ManagedSecretType::Dotenvx => "dotenvx",
+            ManagedSecretType::OpenaiApiKey => "openai_api_key",
             ManagedSecretType::RawValue => "raw_value",
         }
     }

@@ -1,30 +1,25 @@
 use pathfinder_geometry::vector::vec2f;
 use warpui::elements::{
-    Align, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, DispatchEventResult,
-    EventHandler, Hoverable, Icon, MouseStateHandle, OffsetPositioning, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, ScrollbarWidth, Stack,
+    Align, Border, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
+    Hoverable, Icon, MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, ScrollbarWidth, Shrinkable, Stack,
 };
+use warpui::fonts::Weight;
+use warpui::keymap::{FixedBinding, Keystroke};
 use warpui::platform::Cursor;
 use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex,
-        ParentElement, Shrinkable,
-    },
-    fonts::Weight,
-    keymap::Keystroke,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Entity, TypedActionView, View,
+    Action, AppContext, BlurContext, Entity, EntityId, ModelHandle, SingletonEntity,
+    TypedActionView, View, ViewContext, WindowId,
 };
-use warpui::{keymap::FixedBinding, ViewContext};
-use warpui::{Action, BlurContext, EntityId, ModelHandle, SingletonEntity, WindowId};
 
+use super::WELCOME_TIP_FEATURE_LENGTH;
 use crate::appearance::Appearance;
 use crate::resource_center::{Tip, TipAction, TipsCompleted};
 use crate::themes::theme::{Blend, Fill};
 use crate::util::bindings::trigger_to_keystroke;
-
-use super::WELCOME_TIP_FEATURE_LENGTH;
 
 const CHECK_MARK_WIDTH: f32 = 20.;
 const TIP_VIEW_WIDTH: f32 = 250.;

@@ -1,11 +1,9 @@
-use crate::index::full_source_code_embedding::merkle_tree::{
-    construct_test_merkle_tree, node::ChildrenPath,
-};
 use futures::executor::block_on;
-
 use virtual_fs::VirtualFS;
 
 use super::*;
+use crate::index::full_source_code_embedding::merkle_tree::construct_test_merkle_tree;
+use crate::index::full_source_code_embedding::merkle_tree::node::ChildrenPath;
 
 #[test]
 fn test_nodes_from_path() {

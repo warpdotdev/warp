@@ -1,40 +1,13 @@
-use serde::{Deserialize, Serialize};
-
-use crate::{
-    cloud_object::{
-        model::{
-            generic_string_model::{GenericStringModel, GenericStringObjectId, StringModel},
-            json_model::{JsonModel, JsonSerializer},
-        },
-        GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey,
-        JsonObjectType, Revision, ServerCloudObject,
-    },
-    server::sync_queue::QueueItem,
+pub use cloud_object_models::{
+    CloudWorkflowEnum, CloudWorkflowEnumModel, EnumVariants, WorkflowEnum,
 };
 
-/// Data model for a workflow enum, one type of argument that can be inserted into a workflow
-/// A workflow enum can either be static or dynamic, as determined by the type of `EnumVariants` it uses
-///
-/// A `Static` enum contains a finite set of user-specified string values
-/// A `Dynamic` enum contains a single shell command, which is executed to determine suggested variants for that argument
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Hash, PartialOrd)]
-pub struct WorkflowEnum {
-    /// Enum name
-    pub name: String,
-    /// Whether or not the variable should be visible to other workflows
-    pub is_shared: bool,
-    /// The variants for this enum
-    pub variants: EnumVariants,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Hash, PartialOrd)]
-pub enum EnumVariants {
-    Static(Vec<String>), // contains the explicit variants for a static enum
-    Dynamic(String),     // contains the value of the shell command associated with the dynamic enum
-}
-
-pub type CloudWorkflowEnum = GenericCloudObject<GenericStringObjectId, CloudWorkflowEnumModel>;
-pub type CloudWorkflowEnumModel = GenericStringModel<WorkflowEnum, JsonSerializer>;
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::model::json_model::JsonModel;
+use crate::cloud_object::{
+    GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, Revision,
+};
+use crate::server::sync_queue::QueueItem;
 
 impl StringModel for WorkflowEnum {
     type CloudObjectType = CloudWorkflowEnum;
@@ -73,13 +46,6 @@ impl StringModel for WorkflowEnum {
             id: object.id,
             revision: revision_ts.or_else(|| object.metadata.revision.clone()),
         }
-    }
-
-    fn new_from_server_update(&self, server_cloud_object: &ServerCloudObject) -> Option<Self> {
-        if let ServerCloudObject::WorkflowEnum(server_workflow_enum) = server_cloud_object {
-            return Some(server_workflow_enum.model.clone().string_model);
-        }
-        None
     }
 
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey> {

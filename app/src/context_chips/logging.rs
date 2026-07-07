@@ -1,4 +1,6 @@
 use std::sync::mpsc;
+#[cfg(test)]
+use std::sync::Arc;
 #[cfg(not(test))]
 use std::sync::OnceLock;
 #[cfg(not(target_family = "wasm"))]
@@ -13,12 +15,8 @@ use chrono::{Local, SecondsFormat};
 use parking_lot::Mutex;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 
-#[cfg(test)]
-use std::sync::Arc;
-
-use crate::terminal::shell::ShellType;
-
 use super::ContextChipKind;
+use crate::terminal::shell::ShellType;
 
 const EMPTY_VALUE: &str = "<empty>";
 const MISSING_VALUE: &str = "<none>";

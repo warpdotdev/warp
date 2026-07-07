@@ -20,7 +20,7 @@ use crate::view_components::action_button::{ActionButton, ActionButtonTheme, But
 const MODAL_WIDTH: f32 = 420.;
 const HERO_HEIGHT: f32 = 92.;
 const HERO_IMAGE_PATH: &str = "async/png/onboarding/orchestration_launch_banner.png";
-const LEARN_MORE_URL: &str = "https://warp.dev/placeholder-launch-blog-link";
+const LEARN_MORE_URL: &str = "https://www.warp.dev/blog/multi-harness-cloud-agent-orchestration";
 fn modal_background(appearance: &Appearance) -> Fill {
     appearance.theme().surface_3()
 }
@@ -71,9 +71,9 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
         badge: None,
     },
     FeatureItem {
-        icon: Icon::Atom02,
+        icon: Icon::Atom,
         title: "Multi-agent orchestration",
-        description: "Warp Agents will now orchestrate subagents automatically, deploying and tracking parallel agents.",
+        description: "Warp Agents will now orchestrate swarms of subagents, allowing you to parallelize tasks.",
         badge: None,
     },
     FeatureItem {
@@ -193,7 +193,7 @@ impl OrchestrationLaunchModal {
         });
 
         let go_to_warp_button = ctx.add_view(|_ctx| {
-            ActionButton::new("Go to Warp", CtaButtonTheme)
+            ActionButton::new("Close", CtaButtonTheme)
                 .with_full_width(true)
                 .on_click(|ctx| ctx.dispatch_typed_action(OrchestrationLaunchModalAction::Close))
         });
@@ -280,7 +280,7 @@ impl OrchestrationLaunchModal {
 
     fn render_description(appearance: &Appearance) -> Box<dyn Element> {
         Text::new(
-            "Major improvements to Warp's cloud agent orchestration platform, Oz.",
+            "We've made major improvements to Warp's cloud agent orchestration platform, Oz.",
             appearance.ui_font_family(),
             14.,
         )
@@ -424,13 +424,7 @@ impl View for OrchestrationLaunchModal {
         .finish();
 
         Container::new(Align::new(card).finish())
-            .with_background_color(
-                appearance
-                    .theme()
-                    .foreground()
-                    .with_opacity(70)
-                    .into_solid(),
-            )
+            .with_background(Fill::Solid(ColorU::new(97, 97, 97, 255)).with_opacity(50))
             .finish()
     }
 }

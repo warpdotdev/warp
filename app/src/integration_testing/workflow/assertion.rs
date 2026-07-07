@@ -1,14 +1,11 @@
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{AssertionCallback, AssertionWithDataCallback},
-    App, ViewHandle,
-};
+use warpui::integration::{AssertionCallback, AssertionWithDataCallback};
+use warpui::{async_assert, async_assert_eq, App, ViewHandle};
 
-use crate::{
-    integration_testing::{cloud_object::assert_metadata_revision, view_getters::workflow_view},
-    server::ids::SyncId,
-    workflows::{workflow_view::WorkflowView, CloudWorkflowModel, WorkflowId},
-};
+use crate::integration_testing::cloud_object::assert_metadata_revision;
+use crate::integration_testing::view_getters::workflow_view;
+use crate::server::ids::SyncId;
+use crate::workflows::workflow_view::WorkflowView;
+use crate::workflows::{CloudWorkflowModel, WorkflowId};
 
 /// Asserts metadata exists for the workflow with the given key and that the revision in that
 /// metadata matches the given expected revision.

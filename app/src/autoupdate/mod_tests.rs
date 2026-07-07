@@ -1,16 +1,11 @@
 use chrono::{Local, TimeZone};
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, ModelHandle, ReadModel, UpdateModel};
 
-use crate::{
-    auth::{AuthManager, AuthStateProvider},
-    server::{
-        server_api::ServerApiProvider, telemetry::context_provider::AppTelemetryContextProvider,
-    },
-};
-
-use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
-
 use super::*;
+use crate::auth::{AuthManager, AuthStateProvider};
+use crate::server::server_api::ServerApiProvider;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 
 fn initialize_app(app: &mut App) -> ModelHandle<AutoupdateState> {
     let server_api_provider = app.add_singleton_model(|_| ServerApiProvider::new_for_test());

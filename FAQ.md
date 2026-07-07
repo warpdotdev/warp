@@ -1,12 +1,12 @@
 # Frequently Asked Questions
 
-This FAQ covers the questions we hear most often about contributing to the Warp client, working with agents in this repository, and how this repo fits into Warp the product. For the full contribution flow, see [CONTRIBUTING.md](CONTRIBUTING.md). For engineering details — build setup, code style, testing — see [WARP.md](WARP.md).
+This FAQ covers the questions we hear most often about contributing to the Warp client, working with agents in this repository, and how this repo fits into Warp the product. For the full contribution flow, see [CONTRIBUTING.md](CONTRIBUTING.md). For engineering details — build setup, code style, testing — see [AGENTS.md](AGENTS.md).
 
 ## Contributing
 
 ### How do I contribute?
 
-Start with a GitHub issue. Bug reports are implicitly ready to fix once triaged; feature requests go through a short spec PR before any code is written. The full flow — readiness labels, spec PRs, code PRs, review — is documented in [CONTRIBUTING.md](CONTRIBUTING.md).
+Start with a GitHub issue. Bug reports can go straight to a code PR once they are triaged as actionable; feature requests go through a short spec PR before any code is written. The full flow — readiness labels, spec PRs, code PRs, review — is documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### How do I file a good bug report or feature request?
 
@@ -17,7 +17,7 @@ If you're already running Warp, the `/feedback` command files an issue with logs
 ### What do the readiness labels mean?
 
 - **`ready-to-spec`** — the problem is understood, the design is open. Next step is a spec PR.
-- **`ready-to-implement`** — the design is settled, or it's a triaged bug. Next step is a code PR.
+- **`ready-to-implement`** — the issue is ready for a code PR. For bugs, this means the report is sufficiently reproducible or actionable.
 - **`needs-mocks`** — design mocks are required before implementation can start.
 
 Anyone can pick up a labeled issue. Mention **@oss-maintainers** on an issue if it needs triage or readiness re-evaluation.
@@ -34,7 +34,7 @@ cargo run            # build and run Warp
 ./script/presubmit   # fmt, clippy, and tests
 ```
 
-macOS, Linux, and Windows are all supported. Platform-specific setup is handled by `./script/bootstrap`. See [WARP.md](WARP.md) for the full engineering guide.
+macOS, Linux, and Windows are all supported. Platform-specific setup is handled by `./script/bootstrap`. See [AGENTS.md](AGENTS.md) for the full engineering guide.
 
 ### Will my PR be reviewed by a human or by an agent?
 
@@ -58,7 +58,7 @@ Contributors with several merged PRs may be invited to become collaborators. The
 
 ### Can I use my own coding agent to contribute?
 
-Yes. Use whatever you like — Warp's built-in agent, Claude Code, Codex, Gemini CLI, Cursor, others, or no agent at all. The repo ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`WARP.md`](WARP.md)) that any harness supporting these formats can pick up.
+Yes. Use whatever you like — Warp's built-in agent, Claude Code, Codex, Gemini CLI, Cursor, others, or no agent at all. The repo ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`AGENTS.md`](AGENTS.md)) that any harness supporting these formats can pick up.
 
 ### Can I use Codex or Claude models with my existing subscriptions in Warp, or submit a PR to add that?
 
@@ -80,7 +80,7 @@ No. Contributing by hand or with your own agent is free. Oz runs on Warp's credi
 
 ### Are agent-generated PRs held to the same bar as human ones?
 
-Yes. The same Oz + SME review, the same tests, and the same `cargo fmt` / `cargo clippy` / presubmit checks apply regardless of who (or what) wrote the code. Whether a PR is hand-written or agent-written doesn't change the quality bar — it changes how quickly you can iterate to meet it.
+Yes. The same Oz + SME review, the same tests, and the same `./script/format` / `cargo clippy` / presubmit checks apply regardless of who (or what) wrote the code. Whether a PR is hand-written or agent-written doesn't change the quality bar — it changes how quickly you can iterate to meet it.
 
 ### Will my issues, comments, or code be used to train models?
 

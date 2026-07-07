@@ -3,7 +3,8 @@ use markdown_parser::{
 };
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
+use warp_core::ui::theme::phenomenon::PhenomenonStyle;
+use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Align, CacheOption, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,

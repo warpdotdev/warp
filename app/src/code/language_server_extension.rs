@@ -2,32 +2,27 @@ use lsp::{HoverContents, LspServerLogLevel, MarkupKind};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use num_traits::SaturatingSub;
 use string_offset::CharOffset;
-use warp_core::ui::{
-    appearance::Appearance,
-    theme::{color::internal_colors, WarpTheme},
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::WarpTheme;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_editor::render::model::Decoration;
+use warpui::elements::{
+    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
+    MouseStateHandle, ParentElement, Radius, Rect, ScrollbarWidth,
 };
-use warp_editor::{
-    content::buffer::InitialBufferState,
-    render::{element::VerticalExpansionBehavior, model::Decoration},
-};
-use warpui::{
-    elements::{
-        Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement, HighlightedHyperlink,
-        Hoverable, MouseStateHandle, ParentElement, Radius, Rect, ScrollbarWidth,
-    },
-    AppContext, Element, SingletonEntity, ViewContext,
-};
+use warpui::{AppContext, Element, SingletonEntity, ViewContext};
 
+use super::editor::view::{CodeEditorRenderOptions, CodeEditorView};
+use super::lsp_telemetry::LspTelemetryEvent;
 use crate::code::local_code_editor::{
     HoverContentSegment, LocalCodeEditorView, LspHoverState, HOVER_TOOLTIP_MAX_HEIGHT,
     HOVER_TOOLTIP_MAX_WIDTH,
 };
 use crate::editor::InteractionState;
-
-use super::editor::view::{CodeEditorRenderOptions, CodeEditorView};
-use super::lsp_telemetry::LspTelemetryEvent;
-use warp_core::send_telemetry_from_ctx;
 
 /// A processed diagnostic with its converted offset range.
 /// Stored on LocalCodeEditorView and used for both decoration and hover display.

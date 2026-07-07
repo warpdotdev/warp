@@ -4,20 +4,17 @@ use std::iter::FromIterator;
 use string_offset::ByteOffset;
 use typed_path::TypedPathBuf;
 
-use crate::completer::EngineDirEntry;
-use crate::completer::{context::CompletionContext, suggest::MatchRequirement};
-use crate::completer::{
-    describe::OptionCaseSensitivity,
-    testing::{FakeCompletionContext, MockPathCompletionContext},
-};
-use crate::completer::{suggest::SuggestionType, TopLevelCommandCaseSensitivity};
-use crate::meta::{Span, SpannedItem};
-use crate::signatures::{
-    testing::{add_content_signature, create_test_command_registry, git_signature, test_signature},
-    CommandRegistry,
-};
-
 use super::{describe, Description};
+use crate::completer::context::CompletionContext;
+use crate::completer::describe::OptionCaseSensitivity;
+use crate::completer::suggest::{MatchRequirement, SuggestionType};
+use crate::completer::testing::{FakeCompletionContext, MockPathCompletionContext};
+use crate::completer::{EngineDirEntry, TopLevelCommandCaseSensitivity};
+use crate::meta::{Span, SpannedItem};
+use crate::signatures::testing::{
+    add_content_signature, create_test_command_registry, git_signature, test_signature,
+};
+use crate::signatures::CommandRegistry;
 
 #[cfg(windows)]
 mod windows_constants {
@@ -42,7 +39,7 @@ fn describe_at_cursor<T: CompletionContext>(
     pos: ByteOffset,
     ctx: &T,
 ) -> Option<Description> {
-    warpui::r#async::block_on(describe(line, pos, ctx))
+    warpui_core::r#async::block_on(describe(line, pos, ctx))
 }
 
 #[test]

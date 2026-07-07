@@ -1,8 +1,8 @@
-use windows::core::{Result, HSTRING, PWSTR};
-use windows::Win32::System::LibraryLoader::SetDllDirectoryW;
-
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt as _;
+
+use windows::core::{Result, HSTRING, PWSTR};
+use windows::Win32::System::LibraryLoader::SetDllDirectoryW;
 
 pub(super) fn configure_library_loading() {
     if let Err(err) = set_dll_directory("") {

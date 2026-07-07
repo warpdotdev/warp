@@ -1,13 +1,9 @@
 use pathfinder_color::ColorU;
-use warpui::{
-    elements::{Align, Container},
-    presenter::ChildView,
-    ui_components::{
-        components::{UiComponent, UiComponentStyles},
-        slider::{Slider, SliderStateHandle},
-    },
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle,
-};
+use warpui::elements::{Align, Container};
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::ui_components::slider::{Slider, SliderStateHandle};
+use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 /// Renders a center-aligned slider component against a black background. When the slider is
 /// dragged, the updated value is printed to stdout.

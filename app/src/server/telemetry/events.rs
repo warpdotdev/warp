@@ -1,96 +1,78 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use serde_json::Value;
-use session_sharing_protocol::common::ParticipantId;
-use session_sharing_protocol::common::Role;
-use session_sharing_protocol::common::SessionId as SharedSessionId;
-use session_sharing_protocol::sharer::SessionEndedReason;
-use strum_macros::EnumDiscriminants;
-use strum_macros::EnumIter;
+use serde_json::{json, Value};
+use session_sharing_protocol::common::{ParticipantId, Role, SessionId as SharedSessionId};
+use session_sharing_protocol::sharer::{SessionEndedReason, SessionSourceType};
+use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_completer::completer::MatchType;
 use warp_core::command::ExitCode;
-use warp_core::telemetry::EnablementState;
-use warp_core::telemetry::TelemetryEvent as TelemetryEventTrait;
-use warp_core::telemetry::TelemetryEventDesc;
+use warp_core::interval_timer::TimingDataPoint;
+use warp_core::telemetry::{
+    EnablementState, TelemetryEvent as TelemetryEventTrait, TelemetryEventDesc,
+};
 use warpui::keymap::Keystroke;
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome};
 use warpui::rendering::ThinStrokes;
 
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentActionId;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::ai::agent::AIAgentInput as FullAIAgentInput;
-use crate::ai::agent::AIIdentifiers;
-use crate::ai::agent::EntrypointType;
-use crate::ai::agent::PassiveSuggestionTrigger;
-use crate::ai::agent::ServerOutputId;
-use crate::ai::agent::SuggestedLoggingId;
+use crate::ai::agent::{
+    AIAgentActionId, AIAgentExchangeId, AIAgentInput as FullAIAgentInput, AIIdentifiers,
+    EntrypointType, PassiveSuggestionTrigger, ServerOutputId, SuggestedLoggingId,
+};
 use crate::ai::agent_management::notifications::NotificationSourceAgent;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::blocklist::AIBlockResponseRating;
-use crate::ai::blocklist::CommandExecutionPermissionAllowedReason;
-use crate::ai::blocklist::InputType;
+use crate::ai::blocklist::{
+    AIBlockResponseRating, CommandExecutionPermissionAllowedReason, InputType,
+    InputTypeAutoDetectionSource, QueuedQueryOrigin,
+};
+use crate::ai::execution_profiles::AskUserQuestionPermission;
 use crate::ai::mcp::TemplateVariable;
-use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsRequest;
-use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsResponseV2;
+use crate::ai::predict::generate_ai_input_suggestions::{
+    GenerateAIInputSuggestionsRequest, GenerateAIInputSuggestionsResponseV2,
+};
 use crate::ai::predict::next_command_model::HistoryBasedAutosuggestionState;
 use crate::auth::auth_manager::LoginGatedFeature;
 use crate::channel::Channel;
-use crate::cloud_object::{
-    model::generic_string_model::GenericStringObjectId, GenericStringObjectFormat, ObjectType,
-    Space,
-};
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::{GenericStringObjectFormat, ObjectType, Space};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
-use crate::drive::CloudObjectTypeAndId;
-use crate::drive::DriveSortOrder;
+use crate::drive::{CloudObjectTypeAndId, DriveSortOrder};
 use crate::features::FeatureFlag;
 use crate::launch_configs::save_modal::SaveState;
 use crate::notebooks::telemetry::NotebookTelemetryAction;
-use crate::notebooks::NotebookId;
-use crate::notebooks::NotebookLocation;
+use crate::notebooks::{NotebookId, NotebookLocation};
 use crate::palette::PaletteMode;
 use crate::pane_group::PaneDragDropLocation;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::QueryFilter;
 use crate::server::block::DisplaySetting;
-use crate::server::ids::ObjectUid;
-use crate::server::ids::ServerId;
-use crate::settings::import::config::ParsedTerminalSetting;
-use crate::settings::import::config::SettingType;
+use crate::server::ids::{ObjectUid, ServerId};
+use crate::settings::import::config::{ParsedTerminalSetting, SettingType};
 use crate::settings::import::model::TerminalType;
 use crate::settings::AgentModeCodingPermissionsType;
 use crate::settings_view::TeamsInviteOption;
 use crate::tab::TabTelemetryAction;
 use crate::terminal::block_list_viewport::InputMode;
-use crate::terminal::cli_agent_sessions::CLIAgentInputEntrypoint;
-use crate::terminal::cli_agent_sessions::CLIAgentRichInputCloseReason;
+use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentRichInputCloseReason};
 use crate::terminal::input::TelemetryInputSuggestionsMode;
-use crate::terminal::model::ansi::WarpificationUnavailableReason;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::model::terminal_model::BlockSelectionCardinality;
-use crate::terminal::model::terminal_model::TmuxInstallationState;
 use crate::terminal::settings::AltScreenPaddingMode;
 use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shell::ShellType;
-use crate::terminal::ssh::ssh_detection::SshInteractiveSessionDetected;
-use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
-use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionTriggeredFrom;
-use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
-use crate::terminal::view::BlockEntity;
-use crate::terminal::view::BlockSelectionDetails;
-use crate::terminal::view::ContextMenuInfo;
-use crate::terminal::view::GridHighlightedLink;
-use crate::terminal::view::PromptPart;
+use crate::terminal::view::inline_banner::{
+    ZeroStatePromptSuggestionTriggeredFrom, ZeroStatePromptSuggestionType,
+};
 use crate::terminal::view::{
+    BlockEntity, BlockSelectionDetails, ContextMenuInfo, GridHighlightedLink,
     NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction, NotificationsTrigger,
+    PromptPart,
 };
 use crate::terminal::ShareBlockType;
 use crate::tips::WelcomeTipFeature;
@@ -98,14 +80,9 @@ use crate::tips::WelcomeTipFeature;
 use crate::util::file::external_editor::settings::EditorLayout;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
-use crate::workflows::WorkflowId;
-use crate::workflows::WorkflowSelectionSource;
-use crate::workflows::WorkflowSource;
-use crate::workspace::tab_settings::TabCloseButtonPosition;
-use crate::workspace::tab_settings::WorkspaceDecorationVisibility;
+use crate::workflows::{WorkflowId, WorkflowSelectionSource, WorkflowSource};
+use crate::workspace::tab_settings::{TabCloseButtonPosition, WorkspaceDecorationVisibility};
 use crate::workspace::TabMovement;
-use session_sharing_protocol::sharer::SessionSourceType;
-use warp_core::interval_timer::TimingDataPoint;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BootstrappingInfo {
@@ -374,6 +351,8 @@ impl From<rmcp::RmcpError> for MCPServerTelemetryError {
                 // The enum is marked as non-exhaustive, so we need a catch-all.
                 _ => Self::InternalError(err.to_string()),
             },
+            // The enum is marked as non-exhaustive, so we need a catch-all.
+            _ => Self::InternalError(err.to_string()),
         }
     }
 }
@@ -461,7 +440,6 @@ pub enum PaletteSource {
     ConversationManager,
     ContextChip,
     PaneHeader,
-    RecentsViewAll,
     AgentTip,
     TitleBarSearchBar,
 }
@@ -502,6 +480,7 @@ pub enum CLIAgentType {
     Goose,
     Hermes,
     Vibe,
+    Antigravity,
     Unknown,
 }
 
@@ -1011,6 +990,12 @@ pub enum AgentModeCitation {
         #[serde(skip_serializing)]
         url: String,
     },
+    /// A fetched memory surfaced as a citation so we can track whether memory-backed
+    /// responses are shown to users and whether users open those memory citations.
+    AgentMemory {
+        memory_store_id: String,
+        memory_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -1111,6 +1096,7 @@ pub enum TelemetryAgentViewEntryOrigin {
     InlineCodeReview,
     AmbientAgent,
     Cli,
+    Tui,
     ImageAdded,
     SlashCommand,
     CodeReviewContext,
@@ -1135,6 +1121,7 @@ pub enum TelemetryAgentViewEntryOrigin {
     LinearDeepLink,
     ThirdPartyCloudAgent,
     OrchestrationPillBar,
+    JumpToLatestAgentMessage,
 }
 
 impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
@@ -1162,6 +1149,7 @@ impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
             AgentViewEntryOrigin::CloudAgent => Self::AmbientAgent,
             AgentViewEntryOrigin::ThirdPartyCloudAgent => Self::ThirdPartyCloudAgent,
             AgentViewEntryOrigin::Cli => Self::Cli,
+            AgentViewEntryOrigin::Tui => Self::Tui,
             AgentViewEntryOrigin::ImageAdded => Self::ImageAdded,
             AgentViewEntryOrigin::SlashCommand { .. } => Self::SlashCommand,
             AgentViewEntryOrigin::CodeReviewContext => Self::CodeReviewContext,
@@ -1176,7 +1164,7 @@ impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
             AgentViewEntryOrigin::OnboardingCallout => Self::OnboardingCallout,
             AgentViewEntryOrigin::ConversationListView => Self::ConversationListView,
             AgentViewEntryOrigin::Onboarding => Self::Onboarding,
-            AgentViewEntryOrigin::Keybinding => Self::Keybinding,
+            AgentViewEntryOrigin::Keybinding(_) => Self::Keybinding,
             AgentViewEntryOrigin::SlashInit => Self::SlashInit,
             AgentViewEntryOrigin::CreateEnvironment => Self::CreateEnvironment,
             AgentViewEntryOrigin::ProjectEntry => Self::ProjectEntry,
@@ -1185,6 +1173,7 @@ impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
             AgentViewEntryOrigin::ChildAgent => Self::ChildAgent,
             AgentViewEntryOrigin::LinearDeepLink => Self::LinearDeepLink,
             AgentViewEntryOrigin::OrchestrationPillBar => Self::OrchestrationPillBar,
+            AgentViewEntryOrigin::JumpToLatestAgentMessage => Self::JumpToLatestAgentMessage,
         }
     }
 }
@@ -1200,6 +1189,42 @@ pub enum SlashMenuSource {
 pub enum LoginEventSource {
     OnboardingSlide,
     AuthModal,
+}
+
+/// Origin of a queued prompt, mirrored for telemetry so we don't pull serde derives onto the
+/// canonical `QueuedQueryOrigin` enum (which doesn't otherwise need them).
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TelemetryQueuedQueryOrigin {
+    InitialCloudMode,
+    QueueSlashCommand,
+    AutoQueueToggle,
+    LrcAutoQueue,
+    PendingLrcAutoQueue,
+    CompactAndSlashCommand,
+    ForkAndCompactSlashCommand,
+}
+
+impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
+    fn from(origin: QueuedQueryOrigin) -> Self {
+        match origin {
+            QueuedQueryOrigin::InitialCloudMode => Self::InitialCloudMode,
+            QueuedQueryOrigin::QueueSlashCommand => Self::QueueSlashCommand,
+            QueuedQueryOrigin::AutoQueueToggle => Self::AutoQueueToggle,
+            QueuedQueryOrigin::LrcAutoQueue => Self::LrcAutoQueue,
+            QueuedQueryOrigin::PendingLrcAutoQueue => Self::PendingLrcAutoQueue,
+            QueuedQueryOrigin::CompactAndSlashCommand => Self::CompactAndSlashCommand,
+            QueuedQueryOrigin::ForkAndCompactSlashCommand => Self::ForkAndCompactSlashCommand,
+        }
+    }
+}
+
+/// How a queued prompt row was sent immediately.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueuedPromptSendNowTrigger {
+    SendNowButton,
+    EnterOnEmptyInput,
 }
 
 /// Details about which type of slash command was accepted
@@ -1234,6 +1259,20 @@ pub enum CLISubagentControlState {
     UserInControl,
     AgentTaggedIn,
     AgentTaggedOut,
+}
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteCodebaseIndexStatusTelemetrySource {
+    Snapshot,
+    PushUpdate,
+    MutationResponse,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteCodebaseAutoIndexTrigger {
+    NavigatedToGitRepo,
+    CodebaseContextEnablementChanged,
 }
 
 #[derive(Clone, EnumDiscriminants)]
@@ -1477,6 +1516,7 @@ pub enum TelemetryEvent {
         direction: TabMovement,
     },
     DragAndDropTab,
+    DragAndDropTabGroup,
     TabOperations {
         action: TabTelemetryAction,
     },
@@ -1489,6 +1529,7 @@ pub enum TelemetryEvent {
         enable_bookmark: bool,
     },
     JumpToBookmark,
+    JumpToLatestAgentMessage,
     JumpToBottomofBlockButtonClicked,
     ToggleJumpToBottomofBlockButton {
         enabled: bool,
@@ -1556,12 +1597,24 @@ pub enum TelemetryEvent {
     CommandSearchFilterChanged {
         new_filter: Option<QueryFilter>,
     },
-    CommandSearchAsyncQueryCompleted {
-        filters: HashSet<QueryFilter>,
-        error_payload: Option<Value>,
-    },
     GlobalSearchOpened,
     GlobalSearchQueryStarted,
+    GlobalSearchQueryCompleted {
+        duration_ms: u64,
+        /// Number of distinct remote hosts searched via the remote server
+        /// daemon (0 for purely local searches).
+        remote_host_count: usize,
+        total_match_count: usize,
+        /// Whether the result set was capped (locally or by a remote
+        /// server-side cap).
+        capped: bool,
+        /// Whether the local search source failed while another source
+        /// completed.
+        local_source_failed: bool,
+        /// Number of remote host search sources that failed while another
+        /// source completed.
+        remote_source_failures: usize,
+    },
     AICommandSearchOpened {
         entrypoint: AICommandSearchEntrypoint,
     },
@@ -1678,12 +1731,6 @@ pub enum TelemetryEvent {
     AddAddedSubshellCommand,
     RemoveAddedSubshellCommand,
     ReceivedSubshellRcFileDcs,
-    AddDenylistedSshTmuxWrapperHost,
-    RemoveDenylistedSshTmuxWrapperHost,
-    /// User Setting for enabling SSH Tmux Wrapper changed.
-    ToggleSshTmuxWrapper {
-        enabled: bool,
-    },
     ToggleSshWarpification {
         enabled: bool,
     },
@@ -1696,13 +1743,6 @@ pub enum TelemetryEvent {
     SshRemoteServerChoiceDoNotAskAgainToggled {
         checked: bool,
     },
-    /// An ssh interactive session was detected.
-    SshInteractiveSessionDetected(SshInteractiveSessionDetected),
-    SshTmuxWarpifyBannerDisplayed,
-    /// A SSH Warpify Block was accepted
-    SshTmuxWarpifyBlockAccepted,
-    /// A SSH Warpify Block was dismissed
-    SshTmuxWarpifyBlockDismissed,
     WarpifyFooterShown {
         is_ssh: bool,
     },
@@ -1710,22 +1750,6 @@ pub enum TelemetryEvent {
     WarpifyFooterAcceptedWarpify {
         is_ssh: bool,
     },
-    /// How long until the warpify process succeeded
-    SshTmuxWarpificationSuccess {
-        tmux_installation: Option<TmuxInstallationState>,
-        duration_ms: u64,
-    },
-    /// An SSH Error block was displayed to the user.
-    SshTmuxWarpificationErrorBlock {
-        error: WarpificationUnavailableReason,
-        tmux_installation: Option<TmuxInstallationState>,
-    },
-    /// A SSH Install Tmux Block was displayed.
-    SshInstallTmuxBlockDisplayed,
-    /// A SSH Install Tmux Block was accepted.
-    SshInstallTmuxBlockAccepted,
-    /// A SSH Install Tmux Block was dismissed.
-    SshInstallTmuxBlockDismissed,
     ShowAliasExpansionBanner,
     EnableAliasExpansionFromBanner,
     DismissAliasExpansionBanner,
@@ -2123,6 +2147,26 @@ pub enum TelemetryEvent {
         is_ai_enabled: bool,
     },
 
+    /// Emitted when the user clicks "Connect SuperGrok subscription" (or
+    /// equivalent) in the AI settings page to begin the OAuth connection flow.
+    ///
+    /// This is emitted at the start of the attempt (immediately on click),
+    /// before binding the loopback callback server or opening the browser.
+    /// It is always followed by a `SuperGrokSubscriptionConnectFinished`
+    /// (success or a short stable error code on failure).
+    SuperGrokSubscriptionConnectInitiated,
+
+    /// Outcome (success or failure) of the user attempting to connect their
+    /// SuperGrok / xAI subscription via the OAuth flow in AI settings.
+    ///
+    /// On failure, `error` contains a short stable error *code* (e.g.
+    /// "bind_failed", "oauth_failed"). The full error chain/body is emitted
+    /// via `safe_error!` at the call site (only the code goes into telemetry).
+    SuperGrokSubscriptionConnectFinished {
+        /// Short stable error code on failure (e.g. "bind_failed"); absent on success.
+        error: Option<String>,
+    },
+
     /// Emitted when the user toggles codebase context.
     ToggleCodebaseContext {
         is_codebase_context_enabled: bool,
@@ -2279,6 +2323,10 @@ pub enum TelemetryEvent {
         src: AutonomySettingToggleSource,
         new: AgentModeCodingPermissionsType,
     },
+    ChangedAgentModeAskUserQuestionPermission {
+        src: AutonomySettingToggleSource,
+        new: AskUserQuestionPermission,
+    },
     FullEmbedCodebaseContextSearchSuccess {
         action_id: AIAgentActionId,
         total_search_duration: Duration,
@@ -2297,9 +2345,6 @@ pub enum TelemetryEvent {
     },
     AutoexecutedAgentModeRequestedCommand {
         reason: CommandExecutionPermissionAllowedReason,
-    },
-    AgenticOnboardingBlockSelected {
-        block_type: OnboardingChipType,
     },
     KnowledgePaneOpened {
         entrypoint: KnowledgePaneEntrypoint,
@@ -2347,6 +2392,10 @@ pub enum TelemetryEvent {
     AutoupdateMutexTimeout,
     #[cfg(windows)]
     AutoupdateForcekillFailed {
+        exit_code: i32,
+    },
+    #[cfg(windows)]
+    AutoupdateMinidumpCleanupFailed {
         exit_code: i32,
     },
     ExecutedWarpDrivePrompt {
@@ -2505,6 +2554,7 @@ pub enum TelemetryEvent {
     },
     AIExecutionProfileContextWindowSelected {
         tokens: Option<u32>,
+        model_id: String,
     },
     /// The AI input was not sent because there was already an in-flight request.
     AIInputNotSent {
@@ -2540,7 +2590,9 @@ pub enum TelemetryEvent {
     InputBufferSubmitted {
         input_type: input_classifier::InputType,
         is_locked: bool,
+        input_type_decision_source: Option<InputTypeAutoDetectionSource>,
         was_lock_set_with_empty_buffer: bool,
+        block_id: BlockId,
     },
     /// User submitted a prompt from the create project view - metadata (non-UGC)
     CreateProjectPromptSubmitted {
@@ -2824,6 +2876,9 @@ pub enum TelemetryEvent {
         exit_code: Option<i32>,
         /// Whether the SSH subprocess was killed by a signal.
         signal_killed: Option<bool>,
+        /// Last lines from the proxy's stderr, if available.
+        /// Provides server-side context for why the proxy exited.
+        proxy_stderr: Option<String>,
     },
     /// Emitted when an established remote server connection drops.
     RemoteServerDisconnection {
@@ -2855,17 +2910,84 @@ pub enum TelemetryEvent {
     },
     /// Emitted when the preinstall check classifies the remote host as
     /// unsupported by the prebuilt remote-server binary, so the controller
-    /// silently falls back to the legacy SSH/`RemoteCommandExecutor`
+    /// silently falls back to the wrapper-only SSH/`RemoteCommandExecutor`
     /// flow without surfacing an install prompt.
     RemoteServerHostUnsupported {
         remote_os: Option<String>,
         remote_arch: Option<String>,
+        /// Typed unsupported reason. Converted into stable telemetry
+        /// fields in `payload()`.
+        unsupported_reason: remote_server::setup::UnsupportedReason,
         /// Detected libc on the remote host, e.g. `"glibc 2.28"`,
         /// `"musl"`, `"unknown"`.
         detected_libc: String,
-        /// Required minimum glibc reported by the script. Empty when
-        /// the unsupported classification was not glibc-related.
-        required_glibc: String,
+    },
+    /// Emitted when a reconnection attempt succeeds after a spontaneous disconnect.
+    RemoteServerReconnection {
+        attempt: u32,
+        remote_os: Option<String>,
+        remote_arch: Option<String>,
+    },
+    /// Emitted when the remote server daemon process finishes startup and
+    /// binds its Unix domain socket.  Reports the same `IntervalTimer`
+    /// data that `AppStartup` reports for the GUI, but from the headless
+    /// daemon process on the remote host.  Only emitted on success — if
+    /// the daemon crashes before binding, no event is sent.
+    RemoteServerDaemonStartup {
+        timing_data: Vec<warp_core::interval_timer::TimingDataPoint>,
+    },
+    /// Emitted when all reconnection attempts are exhausted.
+    RemoteServerReconnectExhausted {
+        attempts: u32,
+        remote_os: Option<String>,
+        remote_arch: Option<String>,
+        exit_code: Option<i32>,
+        signal_killed: Option<bool>,
+    },
+    /// Emitted when the remote codebase index status changes.
+    RemoteCodebaseIndexStatusChanged {
+        state: remote_server::codebase_index_proto::RemoteCodebaseIndexState,
+        previous_state: Option<remote_server::codebase_index_proto::RemoteCodebaseIndexState>,
+        has_root_hash: bool,
+        has_failure_message: bool,
+        progress_completed: Option<u64>,
+        progress_total: Option<u64>,
+        mutation_kind: Option<remote_server::manager::RemoteCodebaseIndexUpdateOperation>,
+        source: RemoteCodebaseIndexStatusTelemetrySource,
+        remote_os: Option<String>,
+        remote_arch: Option<String>,
+    },
+    /// Emitted when auto-indexing requests one or more remote codebases.
+    RemoteCodebaseAutoIndexRequested {
+        trigger: RemoteCodebaseAutoIndexTrigger,
+        requested_count: usize,
+        remote_os: Option<String>,
+        remote_arch: Option<String>,
+    },
+    /// Emitted when the user commits a non-empty edit to a queued prompt row.
+    QueuedPromptEdited {
+        origin: TelemetryQueuedQueryOrigin,
+    },
+    /// Emitted when the user deletes a queued prompt row via the trash button or the
+    /// commit-empty edit shortcut.
+    QueuedPromptDeleted {
+        origin: TelemetryQueuedQueryOrigin,
+    },
+    /// Emitted when the user reorders a queued prompt row via drag-and-drop.
+    QueuedPromptReordered {
+        origin: TelemetryQueuedQueryOrigin,
+        from_index: usize,
+        to_index: usize,
+    },
+    /// Emitted when the user toggles the queued prompts panel collapse state.
+    QueuedPromptPanelCollapseToggled {
+        collapsed: bool,
+    },
+    /// Emitted when the user sends a queued prompt row immediately, via the row's send-now
+    /// button or by pressing Enter with an empty input.
+    QueuedPromptSentNow {
+        origin: TelemetryQueuedQueryOrigin,
+        trigger: QueuedPromptSendNowTrigger,
     },
 }
 
@@ -3154,10 +3276,6 @@ impl TelemetryEvent {
             TelemetryEvent::CommandSearchFilterChanged { new_filter } => {
                 Some(json!({ "new_filter": new_filter }))
             }
-            TelemetryEvent::CommandSearchAsyncQueryCompleted {
-                filters,
-                error_payload,
-            } => Some(json!({ "filter": filters, "error": error_payload })),
             TelemetryEvent::AICommandSearchOpened { entrypoint } => {
                 Some(json!({ "entrypoint": entrypoint }))
             }
@@ -3410,29 +3528,11 @@ impl TelemetryEvent {
             TelemetryEvent::ToggleNewWindowsAtCustomSize { enabled } => {
                 Some(json!({"enabled": enabled}))
             }
-            TelemetryEvent::ToggleSshTmuxWrapper { enabled } => Some(json!({"enabled": enabled})),
             TelemetryEvent::ToggleSshWarpification { enabled } => Some(json!({"enabled": enabled})),
             TelemetryEvent::SetSshExtensionInstallMode { mode } => Some(json!({"mode": mode})),
             TelemetryEvent::SshRemoteServerChoiceDoNotAskAgainToggled { checked } => {
                 Some(json!({"checked": checked}))
             }
-            TelemetryEvent::SshInteractiveSessionDetected(ssh_interactive_session_detected) => {
-                Some(json!({"ssh_interactive_session": ssh_interactive_session_detected}))
-            }
-            TelemetryEvent::SshTmuxWarpificationSuccess {
-                duration_ms,
-                tmux_installation,
-            } => Some(json!({
-                "duration_ms": duration_ms,
-                "tmux_installation": *tmux_installation,
-            })),
-            TelemetryEvent::SshTmuxWarpificationErrorBlock {
-                error,
-                tmux_installation,
-            } => Some(json!({
-                "error": error,
-                "tmux_installation": *tmux_installation,
-            })),
             TelemetryEvent::JoinedSharedSession {
                 session_id,
                 source_type,
@@ -3779,6 +3879,10 @@ impl TelemetryEvent {
             TelemetryEvent::ToggleGlobalAI { is_ai_enabled } => {
                 Some(json!({"is_ai_enabled": is_ai_enabled}))
             }
+            TelemetryEvent::SuperGrokSubscriptionConnectInitiated => None,
+            TelemetryEvent::SuperGrokSubscriptionConnectFinished { error } => {
+                Some(json!({ "error": error }))
+            }
             TelemetryEvent::ToggleActiveAI {
                 is_active_ai_enabled,
             } => Some(json!({"is_active_ai_enabled": is_active_ai_enabled})),
@@ -3847,6 +3951,10 @@ impl TelemetryEvent {
                 "source": src,
                 "new": new,
             })),
+            TelemetryEvent::ChangedAgentModeAskUserQuestionPermission { src, new } => Some(json!({
+                "source": src,
+                "new": new,
+            })),
             TelemetryEvent::FullEmbedCodebaseContextSearchSuccess {
                 action_id,
                 total_search_duration,
@@ -3874,9 +3982,6 @@ impl TelemetryEvent {
             })),
             TelemetryEvent::AutoexecutedAgentModeRequestedCommand { reason } => Some(json!({
                 "reason": reason,
-            })),
-            TelemetryEvent::AgenticOnboardingBlockSelected { block_type } => Some(json!({
-                "block_type": block_type,
             })),
             TelemetryEvent::AttachedImagesToAgentModeQuery {
                 num_images,
@@ -4063,9 +4168,11 @@ impl TelemetryEvent {
             | TelemetryEvent::OpenTeamFromURI
             | TelemetryEvent::SelectNavigationPaletteItem
             | TelemetryEvent::DragAndDropTab
+            | TelemetryEvent::DragAndDropTabGroup
             | TelemetryEvent::EditedInputBeforePrecmd
             | TelemetryEvent::TriedToExecuteBeforePrecmd
             | TelemetryEvent::JumpToBookmark
+            | TelemetryEvent::JumpToLatestAgentMessage
             | TelemetryEvent::JumpToBottomofBlockButtonClicked
             | TelemetryEvent::ShowInFileExplorer
             | TelemetryEvent::OpenLaunchConfigSaveModal
@@ -4100,19 +4207,11 @@ impl TelemetryEvent {
             | TelemetryEvent::SetNewWindowsAtCustomSize
             | TelemetryEvent::DisableInputSync
             | TelemetryEvent::ShowSubshellBanner
-            | TelemetryEvent::SshTmuxWarpifyBannerDisplayed
             | TelemetryEvent::AddDenylistedSubshellCommand
             | TelemetryEvent::RemoveDenylistedSubshellCommand
             | TelemetryEvent::AddAddedSubshellCommand
             | TelemetryEvent::RemoveAddedSubshellCommand
             | TelemetryEvent::ReceivedSubshellRcFileDcs
-            | TelemetryEvent::AddDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::SshTmuxWarpifyBlockAccepted
-            | TelemetryEvent::SshTmuxWarpifyBlockDismissed
-            | TelemetryEvent::SshInstallTmuxBlockDisplayed
-            | TelemetryEvent::SshInstallTmuxBlockAccepted
-            | TelemetryEvent::SshInstallTmuxBlockDismissed
             | TelemetryEvent::ShowAliasExpansionBanner
             | TelemetryEvent::EnableAliasExpansionFromBanner
             | TelemetryEvent::DismissAliasExpansionBanner
@@ -4153,6 +4252,21 @@ impl TelemetryEvent {
             | TelemetryEvent::GlobalSearchOpened
             | TelemetryEvent::GlobalSearchQueryStarted
             | TelemetryEvent::GetStartedSkipToTerminal => None,
+            TelemetryEvent::GlobalSearchQueryCompleted {
+                duration_ms,
+                remote_host_count,
+                total_match_count,
+                capped,
+                local_source_failed,
+                remote_source_failures,
+            } => Some(json!({
+                "duration_ms": duration_ms,
+                "remote_host_count": remote_host_count,
+                "total_match_count": total_match_count,
+                "capped": capped,
+                "local_source_failed": local_source_failed,
+                "remote_source_failures": remote_source_failures,
+            })),
             TelemetryEvent::SSHControlMasterError { has_remote_server } => Some(json!({
                 "has_remote_server": has_remote_server,
             })),
@@ -4185,6 +4299,7 @@ impl TelemetryEvent {
                 remote_arch,
                 exit_code,
                 signal_killed,
+                proxy_stderr,
             } => Some(json!({
                 "phase": phase,
                 "error": error,
@@ -4192,6 +4307,7 @@ impl TelemetryEvent {
                 "remote_arch": remote_arch,
                 "exit_code": exit_code,
                 "signal_killed": signal_killed,
+                "proxy_stderr": proxy_stderr,
             })),
             TelemetryEvent::RemoteServerDisconnection {
                 remote_os,
@@ -4199,6 +4315,28 @@ impl TelemetryEvent {
             } => Some(json!({
                 "remote_os": remote_os,
                 "remote_arch": remote_arch,
+            })),
+            TelemetryEvent::RemoteServerReconnection {
+                attempt,
+                remote_os,
+                remote_arch,
+            } => Some(json!({
+                "attempt": attempt,
+                "remote_os": remote_os,
+                "remote_arch": remote_arch,
+            })),
+            TelemetryEvent::RemoteServerReconnectExhausted {
+                attempts,
+                remote_os,
+                remote_arch,
+                exit_code,
+                signal_killed,
+            } => Some(json!({
+                "attempts": attempts,
+                "remote_os": remote_os,
+                "remote_arch": remote_arch,
+                "exit_code": exit_code,
+                "signal_killed": signal_killed,
             })),
             TelemetryEvent::RemoteServerClientRequestError {
                 operation,
@@ -4218,6 +4356,43 @@ impl TelemetryEvent {
                 "remote_os": remote_os,
                 "remote_arch": remote_arch,
             })),
+            TelemetryEvent::RemoteCodebaseIndexStatusChanged {
+                state,
+                previous_state,
+                has_root_hash,
+                has_failure_message,
+                progress_completed,
+                progress_total,
+                mutation_kind,
+                source,
+                remote_os,
+                remote_arch,
+            } => Some(json!({
+                "state": state,
+                "previous_state": previous_state,
+                "has_root_hash": has_root_hash,
+                "has_failure_message": has_failure_message,
+                "progress_completed": progress_completed,
+                "progress_total": progress_total,
+                "mutation_kind": mutation_kind,
+                "source": source,
+                "remote_os": remote_os,
+                "remote_arch": remote_arch,
+            })),
+            TelemetryEvent::RemoteCodebaseAutoIndexRequested {
+                trigger,
+                requested_count,
+                remote_os,
+                remote_arch,
+            } => Some(json!({
+                "trigger": trigger,
+                "requested_count": requested_count,
+                "remote_os": remote_os,
+                "remote_arch": remote_arch,
+            })),
+            TelemetryEvent::RemoteServerDaemonStartup { timing_data } => {
+                Some(json!({ "timing_data": timing_data }))
+            }
             TelemetryEvent::RemoteServerSetupDuration {
                 duration_ms,
                 installed_binary,
@@ -4234,14 +4409,34 @@ impl TelemetryEvent {
             TelemetryEvent::RemoteServerHostUnsupported {
                 remote_os,
                 remote_arch,
+                unsupported_reason,
                 detected_libc,
-                required_glibc,
-            } => Some(json!({
-                "remote_os": remote_os,
-                "remote_arch": remote_arch,
-                "detected_libc": detected_libc,
-                "required_glibc": required_glibc,
-            })),
+            } => {
+                let unsupported_os = match unsupported_reason {
+                    remote_server::setup::UnsupportedReason::UnsupportedOs { os } => {
+                        Some(os.clone())
+                    }
+                    remote_server::setup::UnsupportedReason::GlibcTooOld { .. }
+                    | remote_server::setup::UnsupportedReason::NonGlibc { .. }
+                    | remote_server::setup::UnsupportedReason::UnsupportedArch { .. } => None,
+                };
+                let unsupported_arch = match unsupported_reason {
+                    remote_server::setup::UnsupportedReason::UnsupportedArch { arch } => {
+                        Some(arch.clone())
+                    }
+                    remote_server::setup::UnsupportedReason::GlibcTooOld { .. }
+                    | remote_server::setup::UnsupportedReason::NonGlibc { .. }
+                    | remote_server::setup::UnsupportedReason::UnsupportedOs { .. } => None,
+                };
+                Some(json!({
+                    "remote_os": remote_os,
+                    "remote_arch": remote_arch,
+                    "reason": unsupported_reason.as_telemetry_reason(),
+                    "detected_libc": detected_libc,
+                    "unsupported_os": unsupported_os,
+                    "unsupported_arch": unsupported_arch,
+                }))
+            }
             TelemetryEvent::ConversationListItemOpened { is_ambient_agent } => Some(json!({
                 "is_ambient_agent": is_ambient_agent,
             })),
@@ -4284,9 +4479,12 @@ impl TelemetryEvent {
                 "model_type": model_type,
                 "model_value": model_value,
             })),
-            TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens } => Some(json!({
-                "tokens": tokens,
-            })),
+            TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens, model_id } => {
+                Some(json!({
+                    "tokens": tokens,
+                    "model_id": model_id,
+                }))
+            }
             TelemetryEvent::AIInputNotSent {
                 entrypoint,
                 inputs,
@@ -4334,14 +4532,22 @@ impl TelemetryEvent {
             TelemetryEvent::AutoupdateForcekillFailed { exit_code } => Some(json!({
                 "exit_code": exit_code,
             })),
+            #[cfg(windows)]
+            TelemetryEvent::AutoupdateMinidumpCleanupFailed { exit_code } => Some(json!({
+                "exit_code": exit_code,
+            })),
             TelemetryEvent::InputBufferSubmitted {
                 input_type,
                 is_locked,
+                input_type_decision_source,
                 was_lock_set_with_empty_buffer,
+                block_id,
             } => Some(json!({
                 "input_type": input_type,
                 "is_locked": is_locked,
+                "input_type_decision_source": input_type_decision_source,
                 "was_lock_set_with_empty_buffer": was_lock_set_with_empty_buffer,
+                "block_id": block_id,
             })),
             TelemetryEvent::CreateProjectPromptSubmitted {
                 is_custom_prompt,
@@ -4593,6 +4799,28 @@ impl TelemetryEvent {
             | TelemetryEvent::OpenAuthPrivacySettings { source } => Some(json!({
                 "source": source,
             })),
+            TelemetryEvent::QueuedPromptEdited { origin } => Some(json!({
+                "origin": origin,
+            })),
+            TelemetryEvent::QueuedPromptDeleted { origin } => Some(json!({
+                "origin": origin,
+            })),
+            TelemetryEvent::QueuedPromptReordered {
+                origin,
+                from_index,
+                to_index,
+            } => Some(json!({
+                "origin": origin,
+                "from_index": from_index,
+                "to_index": to_index,
+            })),
+            TelemetryEvent::QueuedPromptPanelCollapseToggled { collapsed } => Some(json!({
+                "collapsed": collapsed,
+            })),
+            TelemetryEvent::QueuedPromptSentNow { origin, trigger } => Some(json!({
+                "origin": origin,
+                "trigger": trigger,
+            })),
         }
     }
 
@@ -4606,6 +4834,7 @@ impl TelemetryEvent {
             TelemetryEvent::AgentExitedShellProcess { .. } => true,
             TelemetryEvent::CreateProjectPromptSubmitted { .. } => false,
             TelemetryEvent::CreateProjectPromptSubmittedContent { .. } => true,
+            TelemetryEvent::InputBufferSubmitted { .. } => false,
             TelemetryEvent::AgentModePrediction {
                 actual_next_command_run,
                 history_based_autosuggestion_state,
@@ -4723,12 +4952,14 @@ impl TelemetryEvent {
             | TelemetryEvent::MoveActiveTab { .. }
             | TelemetryEvent::MoveTab { .. }
             | TelemetryEvent::DragAndDropTab
+            | TelemetryEvent::DragAndDropTabGroup
             | TelemetryEvent::TabOperations { .. }
             | TelemetryEvent::EditedInputBeforePrecmd
             | TelemetryEvent::TriedToExecuteBeforePrecmd
             | TelemetryEvent::ThinStrokesSettingChanged { .. }
             | TelemetryEvent::BookmarkBlockToggled { .. }
             | TelemetryEvent::JumpToBookmark
+            | TelemetryEvent::JumpToLatestAgentMessage
             | TelemetryEvent::JumpToBottomofBlockButtonClicked
             | TelemetryEvent::ToggleJumpToBottomofBlockButton { .. }
             | TelemetryEvent::ToggleShowBlockDividers { .. }
@@ -4759,11 +4990,11 @@ impl TelemetryEvent {
             | TelemetryEvent::KeybindingsPageOpened
             | TelemetryEvent::GlobalSearchOpened
             | TelemetryEvent::GlobalSearchQueryStarted
+            | TelemetryEvent::GlobalSearchQueryCompleted { .. }
             | TelemetryEvent::CommandSearchOpened { .. }
             | TelemetryEvent::CommandSearchExited { .. }
             | TelemetryEvent::CommandSearchResultAccepted { .. }
             | TelemetryEvent::CommandSearchFilterChanged { .. }
-            | TelemetryEvent::CommandSearchAsyncQueryCompleted { .. }
             | TelemetryEvent::AICommandSearchOpened { .. }
             | TelemetryEvent::OpenNotebook(_)
             | TelemetryEvent::EditNotebook { .. }
@@ -4814,21 +5045,9 @@ impl TelemetryEvent {
             | TelemetryEvent::AddAddedSubshellCommand
             | TelemetryEvent::RemoveAddedSubshellCommand
             | TelemetryEvent::ReceivedSubshellRcFileDcs
-            | TelemetryEvent::AddDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::ToggleSshTmuxWrapper { .. }
-            | TelemetryEvent::SshInteractiveSessionDetected(_)
-            | TelemetryEvent::SshTmuxWarpifyBannerDisplayed
-            | TelemetryEvent::SshTmuxWarpifyBlockAccepted
-            | TelemetryEvent::SshTmuxWarpifyBlockDismissed
             | TelemetryEvent::WarpifyFooterShown { .. }
             | TelemetryEvent::AgentToolbarDismissed
             | TelemetryEvent::WarpifyFooterAcceptedWarpify { .. }
-            | TelemetryEvent::SshTmuxWarpificationSuccess { .. }
-            | TelemetryEvent::SshTmuxWarpificationErrorBlock { .. }
-            | TelemetryEvent::SshInstallTmuxBlockDisplayed
-            | TelemetryEvent::SshInstallTmuxBlockAccepted
-            | TelemetryEvent::SshInstallTmuxBlockDismissed
             | TelemetryEvent::ShowAliasExpansionBanner
             | TelemetryEvent::EnableAliasExpansionFromBanner
             | TelemetryEvent::DismissAliasExpansionBanner
@@ -4901,6 +5120,8 @@ impl TelemetryEvent {
             | TelemetryEvent::AgentModeCodeDiffHunksNavigated { .. }
             | TelemetryEvent::ToggleIntelligentAutosuggestionsSetting { .. }
             | TelemetryEvent::ToggleGlobalAI { .. }
+            | TelemetryEvent::SuperGrokSubscriptionConnectInitiated
+            | TelemetryEvent::SuperGrokSubscriptionConnectFinished { .. }
             | TelemetryEvent::ToggleCodebaseContext { .. }
             | TelemetryEvent::ToggleAutoIndexing { .. }
             | TelemetryEvent::ToggleActiveAI { .. }
@@ -4932,10 +5153,10 @@ impl TelemetryEvent {
             | TelemetryEvent::WorkflowAliasArgumentEdited { .. }
             | TelemetryEvent::ToggledAgentModeAutoexecuteReadonlyCommandsSetting { .. }
             | TelemetryEvent::ChangedAgentModeCodingPermissions { .. }
+            | TelemetryEvent::ChangedAgentModeAskUserQuestionPermission { .. }
             | TelemetryEvent::RepoOutlineConstructionSuccess { .. }
             | TelemetryEvent::RepoOutlineConstructionFailed { .. }
             | TelemetryEvent::AutoexecutedAgentModeRequestedCommand { .. }
-            | TelemetryEvent::AgenticOnboardingBlockSelected { .. }
             | TelemetryEvent::KnowledgePaneOpened { .. }
             | TelemetryEvent::MCPServerCollectionPaneOpened { .. }
             | TelemetryEvent::MCPServerAdded { .. }
@@ -5010,12 +5231,16 @@ impl TelemetryEvent {
             | TelemetryEvent::InlineConversationMenuOpened { .. }
             | TelemetryEvent::InlineConversationMenuItemSelected { .. }
             | TelemetryEvent::AgentShortcutsViewToggled { .. }
-            | TelemetryEvent::InputBufferSubmitted { .. }
             | TelemetryEvent::RecentMenuItemSelected { .. }
             | TelemetryEvent::OpenRepoFolderSubmitted { .. }
             | TelemetryEvent::OutOfCreditsBannerClosed { .. }
             | TelemetryEvent::AutoReloadModalClosed { .. }
             | TelemetryEvent::AutoReloadToggledFromBillingSettings { .. }
+            | TelemetryEvent::QueuedPromptEdited { .. }
+            | TelemetryEvent::QueuedPromptDeleted { .. }
+            | TelemetryEvent::QueuedPromptReordered { .. }
+            | TelemetryEvent::QueuedPromptPanelCollapseToggled { .. }
+            | TelemetryEvent::QueuedPromptSentNow { .. }
             | TelemetryEvent::CLISubagentControlStateChanged { .. }
             | TelemetryEvent::CLISubagentResponsesToggled { .. }
             | TelemetryEvent::CLISubagentInputDismissed { .. }
@@ -5056,11 +5281,16 @@ impl TelemetryEvent {
             | TelemetryEvent::RemoteServerBinaryCheck { .. }
             | TelemetryEvent::RemoteServerInstallation { .. }
             | TelemetryEvent::RemoteServerInitialization { .. }
+            | TelemetryEvent::RemoteServerDaemonStartup { .. }
             | TelemetryEvent::RemoteServerDisconnection { .. }
             | TelemetryEvent::RemoteServerClientRequestError { .. }
             | TelemetryEvent::RemoteServerMessageDecodingError { .. }
             | TelemetryEvent::RemoteServerSetupDuration { .. }
-            | TelemetryEvent::RemoteServerHostUnsupported { .. } => false,
+            | TelemetryEvent::RemoteServerHostUnsupported { .. }
+            | TelemetryEvent::RemoteServerReconnection { .. }
+            | TelemetryEvent::RemoteServerReconnectExhausted { .. }
+            | TelemetryEvent::RemoteCodebaseIndexStatusChanged { .. }
+            | TelemetryEvent::RemoteCodebaseAutoIndexRequested { .. } => false,
             #[cfg(feature = "local_fs")]
             TelemetryEvent::CodePaneOpened { .. }
             | TelemetryEvent::CodePanelsFileOpened { .. }
@@ -5070,7 +5300,8 @@ impl TelemetryEvent {
             | TelemetryEvent::AutoupdateUnableToCloseApplications
             | TelemetryEvent::AutoupdateFileInUse
             | TelemetryEvent::AutoupdateMutexTimeout
-            | TelemetryEvent::AutoupdateForcekillFailed { .. } => false,
+            | TelemetryEvent::AutoupdateForcekillFailed { .. }
+            | TelemetryEvent::AutoupdateMinidumpCleanupFailed { .. } => false,
         }
     }
 
@@ -5079,7 +5310,7 @@ impl TelemetryEvent {
     #[cfg(not(target_family = "wasm"))]
     pub fn print_telemetry_events_json() -> anyhow::Result<()> {
         // We initialize the feature flags so that we can determine which telemetry events to print.
-        crate::init_feature_flags();
+        crate::features::init_feature_flags();
 
         let events: serde_json::Map<String, Value> = warp_core::telemetry::all_events()
             .filter_map(|event| {
@@ -5281,12 +5512,14 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MoveActiveTab => EnablementState::Always,
             Self::MoveTab => EnablementState::Always,
             Self::DragAndDropTab => EnablementState::Always,
+            Self::DragAndDropTabGroup => EnablementState::Always,
             Self::TabOperations => EnablementState::Always,
             Self::EditedInputBeforePrecmd => EnablementState::Always,
             Self::TriedToExecuteBeforePrecmd => EnablementState::Always,
             Self::ThinStrokesSettingChanged => EnablementState::Always,
             Self::BookmarkBlockToggled => EnablementState::Always,
             Self::JumpToBookmark => EnablementState::Always,
+            Self::JumpToLatestAgentMessage => EnablementState::Always,
             Self::JumpToBottomofBlockButtonClicked => EnablementState::Always,
             Self::ToggleJumpToBottomofBlockButton => EnablementState::Always,
             Self::OpenLink => EnablementState::Always,
@@ -5315,11 +5548,11 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::KeybindingsPageOpened => EnablementState::Always,
             Self::GlobalSearchOpened => EnablementState::Always,
             Self::GlobalSearchQueryStarted => EnablementState::Always,
+            Self::GlobalSearchQueryCompleted => EnablementState::Always,
             Self::CommandSearchOpened => EnablementState::Always,
             Self::CommandSearchExited => EnablementState::Always,
             Self::CommandSearchResultAccepted => EnablementState::Always,
             Self::CommandSearchFilterChanged => EnablementState::Always,
-            Self::CommandSearchAsyncQueryCompleted => EnablementState::Always,
             Self::AICommandSearchOpened => EnablementState::Always,
             Self::OpenedAltScreenFind => EnablementState::Always,
             Self::UserInitiatedClose => EnablementState::Always,
@@ -5359,28 +5592,16 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleTabIndicators => EnablementState::Always,
             Self::TogglePreserveActiveTabColor => EnablementState::Always,
             Self::ShowSubshellBanner => EnablementState::Always,
-            Self::SshTmuxWarpifyBannerDisplayed => EnablementState::Always,
             Self::DeclineSubshellBootstrap => EnablementState::Always,
             Self::TriggerSubshellBootstrap => EnablementState::Always,
             Self::AddDenylistedSubshellCommand => EnablementState::Always,
             Self::RemoveDenylistedSubshellCommand => EnablementState::Always,
-            Self::ToggleSshTmuxWrapper => EnablementState::Always,
             Self::ToggleSshWarpification => EnablementState::Always,
             Self::SetSshExtensionInstallMode => EnablementState::Always,
             Self::SshRemoteServerChoiceDoNotAskAgainToggled => EnablementState::Always,
-            Self::AddDenylistedSshTmuxWrapperHost => EnablementState::Always,
-            Self::RemoveDenylistedSshTmuxWrapperHost => EnablementState::Always,
-            Self::SshInteractiveSessionDetected => EnablementState::Always,
-            Self::SshTmuxWarpifyBlockAccepted => EnablementState::Always,
-            Self::SshTmuxWarpifyBlockDismissed => EnablementState::Always,
             Self::WarpifyFooterShown
             | Self::AgentToolbarDismissed
             | Self::WarpifyFooterAcceptedWarpify => EnablementState::Always,
-            Self::SshTmuxWarpificationSuccess => EnablementState::Always,
-            Self::SshTmuxWarpificationErrorBlock => EnablementState::Always,
-            Self::SshInstallTmuxBlockDisplayed => EnablementState::Always,
-            Self::SshInstallTmuxBlockAccepted => EnablementState::Always,
-            Self::SshInstallTmuxBlockDismissed => EnablementState::Always,
             Self::AddAddedSubshellCommand => EnablementState::Always,
             Self::RemoveAddedSubshellCommand => EnablementState::Always,
             Self::ReceivedSubshellRcFileDcs => EnablementState::Always,
@@ -5434,8 +5655,11 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::SharedObjectLimitHitBannerViewPlansButtonClicked => EnablementState::Always,
             Self::ResourceUsageStats => EnablementState::Always,
             Self::ToggleGlobalAI => EnablementState::Always,
+            Self::SuperGrokSubscriptionConnectInitiated
+            | Self::SuperGrokSubscriptionConnectFinished => {
+                EnablementState::Flag(FeatureFlag::SuperGrok)
+            }
             Self::ToggleActiveAI => EnablementState::Always,
-            Self::AgenticOnboardingBlockSelected => EnablementState::Always,
             Self::MemoryUsageStats => EnablementState::ChannelSpecific {
                 channels: vec![Channel::Local, Channel::Dev],
             },
@@ -5505,6 +5729,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ToggledAgentModeAutoexecuteReadonlyCommandsSetting
             | Self::ChangedAgentModeCodingPermissions
+            | Self::ChangedAgentModeAskUserQuestionPermission
             | Self::AutoexecutedAgentModeRequestedCommand => EnablementState::Always,
             Self::AttachedImagesToAgentModeQuery => {
                 EnablementState::Flag(FeatureFlag::ImageAsContext)
@@ -5514,7 +5739,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::AutoupdateUnableToCloseApplications
             | Self::AutoupdateFileInUse
             | Self::AutoupdateMutexTimeout
-            | Self::AutoupdateForcekillFailed { .. } => EnablementState::Always,
+            | Self::AutoupdateForcekillFailed { .. }
+            | Self::AutoupdateMinidumpCleanupFailed { .. } => EnablementState::Always,
             Self::ToggleCodebaseContext => EnablementState::Always,
             Self::ToggleAutoIndexing => EnablementState::Always,
             Self::AgentModeRatedResponse => {
@@ -5559,7 +5785,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentModeSetupProjectScopedRulesAction { .. } => EnablementState::Always,
             Self::AgentModeSetupCodebaseContextAction { .. } => EnablementState::Always,
             Self::AgentModeSetupCreateEnvironmentAction { .. } => EnablementState::Always,
-            Self::InputBufferSubmitted => EnablementState::Flag(FeatureFlag::NldImprovements),
+            Self::InputBufferSubmitted => EnablementState::Always,
             Self::AgentModeContinueConversationButtonClicked { .. } => EnablementState::Always,
             Self::AgentModeRewindDialogOpened { .. } => {
                 EnablementState::Flag(FeatureFlag::RevertToCheckpoints)
@@ -5622,13 +5848,23 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteServerBinaryCheck
             | Self::RemoteServerInstallation
             | Self::RemoteServerInitialization
+            | Self::RemoteServerDaemonStartup
             | Self::RemoteServerDisconnection
             | Self::RemoteServerClientRequestError
             | Self::RemoteServerMessageDecodingError
             | Self::RemoteServerSetupDuration
-            | Self::RemoteServerHostUnsupported => {
+            | Self::RemoteServerHostUnsupported
+            | Self::RemoteServerReconnection
+            | Self::RemoteServerReconnectExhausted
+            | Self::RemoteCodebaseIndexStatusChanged
+            | Self::RemoteCodebaseAutoIndexRequested => {
                 EnablementState::Flag(FeatureFlag::SshRemoteServer)
             }
+            Self::QueuedPromptEdited
+            | Self::QueuedPromptDeleted
+            | Self::QueuedPromptReordered
+            | Self::QueuedPromptPanelCollapseToggled
+            | Self::QueuedPromptSentNow => EnablementState::Flag(FeatureFlag::QueueSlashCommand),
         }
     }
 
@@ -5783,12 +6019,14 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MoveActiveTab => "Move Active Tab",
             Self::MoveTab => "Move Tab",
             Self::DragAndDropTab => "Drag and Drop Tab",
+            Self::DragAndDropTabGroup => "Drag and Drop Tab Group",
             Self::TabOperations => "Tab Operations",
             Self::EditedInputBeforePrecmd => "Edited Input Before Precmd",
             Self::TriedToExecuteBeforePrecmd => "Tried to Execute Before Precmd",
             Self::ThinStrokesSettingChanged => "Thin Strokes Setting Changed",
             Self::BookmarkBlockToggled => "Toggled Bookmark Block",
             Self::JumpToBookmark => "Jumped to Bookmark Block",
+            Self::JumpToLatestAgentMessage => "Jumped to Latest Agent Message",
             Self::JumpToBottomofBlockButtonClicked => "Jumped to Bottom of Block Button Clicked",
             Self::OpenLink => "Opened Link",
             Self::OpenChangelogLink => "Opened Changelog Link",
@@ -5808,11 +6046,11 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::KeybindingsPageOpened => "Resource Center Keybindings Page Opened",
             Self::GlobalSearchOpened => "Global Search Opened",
             Self::GlobalSearchQueryStarted => "Global Search Query Started",
+            Self::GlobalSearchQueryCompleted => "Global Search Query Completed",
             Self::CommandSearchOpened => "Command Search Opened",
             Self::CommandSearchExited => "Command Search Exited",
             Self::CommandSearchResultAccepted => "Command Search Result Accepted",
             Self::CommandSearchFilterChanged => "Command Search Filter Changed",
-            Self::CommandSearchAsyncQueryCompleted => "Command Search Async Query Completed",
             Self::AICommandSearchOpened => "AI Command Search opened",
             Self::OpenNotebook => "Notebook Opened",
             Self::EditNotebook => "Notebook Edited",
@@ -5857,7 +6095,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleTabIndicators => "Toggle Tab Indicators",
             Self::TogglePreserveActiveTabColor => "Toggle Preserve Active Tab Color",
             Self::ShowSubshellBanner => "Show Subshell Banner",
-            Self::SshTmuxWarpifyBannerDisplayed => "Show Warpify SSH Banner",
             Self::DeclineSubshellBootstrap => "Decline Subshell Bootstrap",
             Self::TriggerSubshellBootstrap => "Trigger Subshell Bootstrap",
             Self::AddDenylistedSubshellCommand => "Add Denylisted Subshell Command",
@@ -5865,25 +6102,14 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AddAddedSubshellCommand => "Add Added Subshell Command",
             Self::RemoveAddedSubshellCommand => "Remove Added Subshell Command",
             Self::ReceivedSubshellRcFileDcs => "Received Subshell RC File DCS",
-            Self::ToggleSshTmuxWrapper => "Toggle SSH Tmux Wrapper",
             Self::ToggleSshWarpification => "Toggle SSH Warpification",
             Self::SetSshExtensionInstallMode => "Set SSH Extension Install Mode",
             Self::SshRemoteServerChoiceDoNotAskAgainToggled => {
                 "SSH Remote Server Choice Do Not Ask Again Toggled"
             }
-            Self::AddDenylistedSshTmuxWrapperHost => "Add Denylisted SSH Tmux Wrapper Host",
-            Self::RemoveDenylistedSshTmuxWrapperHost => "Remove Denylisted SSH Tmux Wrapper Host",
-            Self::SshInteractiveSessionDetected => "SSH Interactive Session Detected",
-            Self::SshTmuxWarpifyBlockAccepted => "SSH Tmux Warpify Block Accepted",
-            Self::SshTmuxWarpifyBlockDismissed => "SSH Tmux Warpify Block Dismissed",
             Self::WarpifyFooterShown => "Warpify Footer Shown",
             Self::AgentToolbarDismissed => "Agent Toolbar Dismissed",
             Self::WarpifyFooterAcceptedWarpify => "Warpify Footer Accepted Warpify",
-            Self::SshTmuxWarpificationSuccess => "SSH Tmux Warpification Succeeded",
-            Self::SshTmuxWarpificationErrorBlock => "SSH Tmux Warpification Error Block",
-            Self::SshInstallTmuxBlockDisplayed => "SSH Install Tmux Block Displayed",
-            Self::SshInstallTmuxBlockAccepted => "SSH Install Tmux Block Accepted",
-            Self::SshInstallTmuxBlockDismissed => "SSH Install Tmux Block Dismissed",
             Self::ShowAliasExpansionBanner => "Show Alias Expansion Banner",
             Self::DismissAliasExpansionBanner => "Dismiss Alias Expansion Banner",
             Self::EnableAliasExpansionFromBanner => "Enable Alias Expansion From Banner",
@@ -6008,6 +6234,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentModeOpenedCitation => "AgentMode.OpenedCitation",
             Self::OpenedSharingDialog => "Opened Sharing Dialog",
             Self::ToggleGlobalAI => "Toggle Global AI Enablement",
+            Self::SuperGrokSubscriptionConnectInitiated => "SuperGrok.Connect.Initiated",
+            Self::SuperGrokSubscriptionConnectFinished => "SuperGrok.Connect.Finished",
             Self::ToggleActiveAI => "Toggle Active AI Enablement",
             Self::ToggleLigatureRendering => "Toggle Ligature Rendering",
             Self::WorkflowAliasAdded => "Added Workflow Alias",
@@ -6021,18 +6249,30 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ChangedAgentModeCodingPermissions => {
                 "AIAutonomy.ChangedAgentModeCodingPermissions"
             }
+            Self::ChangedAgentModeAskUserQuestionPermission => {
+                "AIAutonomy.ChangedAgentModeAskUserQuestionPermission"
+            }
             Self::AutoexecutedAgentModeRequestedCommand => {
                 "AIAutonomy.AutoexecutedRequestedCommand"
             }
-            Self::AgenticOnboardingBlockSelected => "AgenticOnboarding.BlockSelected",
             Self::RemoteServerBinaryCheck => "RemoteServer.BinaryCheck",
             Self::RemoteServerInstallation => "RemoteServer.Installation",
             Self::RemoteServerInitialization => "RemoteServer.Initialization",
+            Self::RemoteServerDaemonStartup => "RemoteServer.DaemonStartup",
             Self::RemoteServerDisconnection => "RemoteServer.Disconnection",
             Self::RemoteServerClientRequestError => "RemoteServer.ClientRequestError",
             Self::RemoteServerMessageDecodingError => "RemoteServer.MessageDecodingError",
             Self::RemoteServerSetupDuration => "RemoteServer.SetupDuration",
             Self::RemoteServerHostUnsupported => "RemoteServer.HostUnsupported",
+            Self::RemoteServerReconnection => "RemoteServer.Reconnection",
+            Self::RemoteServerReconnectExhausted => "RemoteServer.ReconnectExhausted",
+            Self::RemoteCodebaseIndexStatusChanged => "RemoteCodebaseIndex.StatusChanged",
+            Self::RemoteCodebaseAutoIndexRequested => "RemoteCodebaseIndex.AutoIndexRequested",
+            Self::QueuedPromptEdited => "QueuedPrompt.Edited",
+            Self::QueuedPromptDeleted => "QueuedPrompt.Deleted",
+            Self::QueuedPromptReordered => "QueuedPrompt.Reordered",
+            Self::QueuedPromptPanelCollapseToggled => "QueuedPrompt.PanelCollapseToggled",
+            Self::QueuedPromptSentNow => "QueuedPrompt.SentNow",
             #[cfg(windows)]
             Self::WSLRegistryError => "WSL Distribution Registry Error",
             #[cfg(windows)]
@@ -6045,6 +6285,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AutoupdateMutexTimeout => "Windows Autoupdate: Mutex Timeout",
             #[cfg(windows)]
             Self::AutoupdateForcekillFailed { .. } => "Windows Autoupdate: Forcekill Failed",
+            #[cfg(windows)]
+            Self::AutoupdateMinidumpCleanupFailed { .. } => {
+                "Windows Autoupdate: Minidump Cleanup Failed"
+            }
             Self::ToggleCodebaseContext => "Toggle Agent Mode Codebase Context",
             Self::ToggleAutoIndexing => "Toggle Codebase Context Autoindexing",
             Self::ActiveIndexedReposChanged => "Active Indexed Repos Changed",
@@ -6180,7 +6424,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
 
     fn description(&self) -> &'static str {
         match self {
-            Self::AIExecutionProfileContextWindowSelected => {
+            Self::AIExecutionProfileContextWindowSelected { .. } => {
                 "Selected a context window limit for an execution profile's base model"
             }
             Self::AISuggestedAgentModeWorkflowAdded => {
@@ -6384,6 +6628,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MoveActiveTab => "Move active tab left or right",
             Self::MoveTab => "Move tab left or right",
             Self::DragAndDropTab => "Tab dragged and dropped",
+            Self::DragAndDropTabGroup => "Tab group dragged and dropped",
             Self::TabOperations => {
                 "Took operation on a tab: change color, close tab, close adjacent tabs, etc."
             }
@@ -6396,6 +6641,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::BookmarkBlockToggled => "Bookmarked or unbookmarked Block",
             Self::JumpToBookmark => "Jumped to bookmarked Block",
+            Self::JumpToLatestAgentMessage => "Jumped to the latest agent message",
             Self::JumpToBottomofBlockButtonClicked => {
                 "Used the button to jump to the bottom of a Block"
             }
@@ -6439,9 +6685,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::CommandSearchResultAccepted => "Accepted command search result",
             Self::CommandSearchFilterChanged => "Changed command search filter",
-            Self::CommandSearchAsyncQueryCompleted => {
-                "Finished searching for a command in the background"
-            }
             Self::AICommandSearchOpened => {
                 "Opened the modal for AI Command Search, where you can use natural language to search for commands"
             }
@@ -6541,9 +6784,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ShowSubshellBanner => {
                 "Displayed the banner asking whether Warp should Warpify the current session via Warp's subshell wrapper"
             }
-            Self::SshTmuxWarpifyBannerDisplayed => {
-                "Displayed the banner asking whether Warp should Warpify the current SSH session via Warp's SSH Wrapper"
-            }
             Self::DeclineSubshellBootstrap => {
                 "Developer declined the Warp banner to Warpify the current session"
             }
@@ -6563,9 +6803,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Removed a command from the list of commands to automatically Warpify via Warp's subshell wrapper"
             }
             Self::ReceivedSubshellRcFileDcs => "Spawned a subshell to be automatically Warpified",
-            Self::ToggleSshTmuxWrapper => {
-                "Changed the setting for SSH sessions to prompt for Tmux Wrapper"
-            }
             Self::ToggleSshWarpification => "Changed the setting for SSH sessions to be warified",
             Self::SetSshExtensionInstallMode => {
                 "Changed the SSH extension install mode (always ask / always allow / always skip)"
@@ -6573,26 +6810,12 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::SshRemoteServerChoiceDoNotAskAgainToggled => {
                 "Toggled the 'Don't ask me this again' checkbox on the SSH remote-server choice block"
             }
-            Self::AddDenylistedSshTmuxWrapperHost => {
-                "Added a SSH host to the denylist for prompting for Tmux Wrapper"
-            }
-            Self::RemoveDenylistedSshTmuxWrapperHost => {
-                "Removed an SSH host from the denylist from prompting for Tmux Wrapper"
-            }
             Self::AgentModeRatedResponse => "User rated an Agent Mode response",
-            Self::SshInteractiveSessionDetected => "An interactive SSH session was detected",
-            Self::SshTmuxWarpifyBlockAccepted => "User accepted an ssh tmux warpify block",
-            Self::SshTmuxWarpifyBlockDismissed => "User dismissed an ssh tmux warpify block",
             Self::WarpifyFooterShown => {
                 "Displayed the warpify footer for a detected subshell or SSH session"
             }
             Self::AgentToolbarDismissed => "User dismissed the use-agent toolbar",
             Self::WarpifyFooterAcceptedWarpify => "User clicked Warpify in the warpify footer",
-            Self::SshTmuxWarpificationSuccess => "Ssh tmux warpification succeeded",
-            Self::SshTmuxWarpificationErrorBlock => "Ssh tmux warpification errored out",
-            Self::SshInstallTmuxBlockDisplayed => "Displayed an ssh install tmux block",
-            Self::SshInstallTmuxBlockAccepted => "User accepted an ssh install tmux block",
-            Self::SshInstallTmuxBlockDismissed => "User dismissed an ssh install tmux block",
             Self::ShowAliasExpansionBanner => {
                 "Displayed the banner asking whether Warp should automatically expand aliases within the Input Editor"
             }
@@ -6758,6 +6981,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::FileTreeToggled => "Opened the file tree/project explorer",
             Self::GlobalSearchOpened => "Opened the global search view",
             Self::GlobalSearchQueryStarted => "Started a global search (warp_ripgrep) search",
+            Self::GlobalSearchQueryCompleted => {
+                "Completed a global search across local and remote sources"
+            }
             Self::FileTreeItemAttachedAsContext => {
                 "Attached a file or directory as context from the file tree"
             }
@@ -6821,7 +7047,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::OpenedSharingDialog => {
                 "Opened the sharing settings dialog for a session or Warp Drive object"
             }
-            Self::ToggleGlobalAI => "Toggled global AI enablement.",
+			Self::ToggleGlobalAI => "Toggled global AI enablement.",
+			Self::SuperGrokSubscriptionConnectInitiated => "User clicked Connect SuperGrok subscription; OAuth connection attempt initiated.",
+            Self::SuperGrokSubscriptionConnectFinished => "SuperGrok subscription OAuth connection flow finished (success or failure).",
             Self::ToggleActiveAI => "Toggled active AI enablement.",
             Self::ToggleLigatureRendering => "Toggled ligature rendering",
             Self::WorkflowAliasAdded => "Added an alias to a Warp Drive workflow",
@@ -6838,11 +7066,11 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ChangedAgentModeCodingPermissions => {
                 "Changed Agent Mode permissions for coding tasks"
             }
+            Self::ChangedAgentModeAskUserQuestionPermission => {
+                "Changed Agent Mode permission for asking user questions"
+            }
             Self::AutoexecutedAgentModeRequestedCommand => {
                 "Autoexecuted an Agent Mode requested command"
-            }
-            Self::AgenticOnboardingBlockSelected => {
-                "Selected an agentic onboarding block to execute"
             }
             Self::AttachedImagesToAgentModeQuery => "Attached images to an Agent Mode query",
             #[cfg(windows)]
@@ -6864,6 +7092,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             #[cfg(windows)]
             Self::AutoupdateForcekillFailed { .. } => {
                 "The Windows auto-update installer failed to force-kill Warp after the mutex timeout"
+            }
+            #[cfg(windows)]
+            Self::AutoupdateMinidumpCleanupFailed { .. } => {
+                "The Windows auto-update installer failed to clean up the orphaned minidump server process"
             }
             Self::ToggleCodebaseContext => {
                 "Toggled on/off the enablement of codebase context usage for Agent Mode."
@@ -7058,6 +7290,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::RemoteServerInitialization => {
                 "Remote server connection and initialization completed (success or failure)"
             }
+            Self::RemoteServerDaemonStartup => {
+                "Remote server daemon startup completed and socket bound"
+            }
             Self::RemoteServerDisconnection => {
                 "An established remote server connection was dropped"
             }
@@ -7072,7 +7307,30 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::RemoteServerHostUnsupported => {
                 "Preinstall check classified the remote host as unsupported, \
-                 falling back to the legacy SSH flow"
+                 falling back to the wrapper-only SSH flow"
+            }
+            Self::RemoteServerReconnection => {
+                "A reconnection attempt succeeded after a spontaneous disconnect"
+            }
+            Self::RemoteServerReconnectExhausted => {
+                "All reconnection attempts were exhausted after a spontaneous disconnect"
+            }
+            Self::RemoteCodebaseIndexStatusChanged => "The remote codebase index status changed",
+            Self::RemoteCodebaseAutoIndexRequested => {
+                "Remote codebase auto-indexing requested one or more repositories"
+            }
+            Self::QueuedPromptEdited => {
+                "User committed a non-empty edit to a queued prompt row"
+            }
+            Self::QueuedPromptDeleted => "User deleted a queued prompt row",
+            Self::QueuedPromptReordered => {
+                "User reordered a queued prompt row via drag-and-drop"
+            }
+            Self::QueuedPromptPanelCollapseToggled => {
+                "User toggled the queued prompts panel collapse state"
+            }
+            Self::QueuedPromptSentNow => {
+                "User sent a queued prompt row immediately (send-now button or Enter on empty input)"
             }
         }
     }

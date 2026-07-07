@@ -1,29 +1,44 @@
-use super::{
-    buffer::{Buffer, EditOrigin, EditResult},
-    cursor::BufferSumTree,
-    edit::EditDelta,
-    text::{
-        BlockType, BufferTextStyle, ColorMarker, LinkCount, LinkMarker, MarkerDir, SyntaxColorId,
-        TextStyles, TextStylesWithMetadata,
-    },
-    undo::{ReversibleEditorAction, UndoArg},
-};
-use crate::content::{
-    anchor::{Anchor, AnchorSide, AnchorUpdate},
-    buffer::{StyledBlockBoundaryBehavior, ToBufferByteOffset, ToBufferPoint},
-    cursor::BufferCursor,
-    edit::PreciseDelta,
-    text::{
-        BlockHeaderSize, BlockLineBreakBehavior, BufferBlockItem, BufferBlockStyle, BufferText,
-        StyleSummary,
-    },
-};
+use std::ops::Range;
+
 use enum_iterator::all;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use std::ops::Range;
 use string_offset::CharOffset;
 use sum_tree::SumTree;
-use warpui::elements::ListIndentLevel;
+use warpui_core::elements::ListIndentLevel;
+
+use super::buffer::{Buffer, EditOrigin, EditResult};
+use super::cursor::BufferSumTree;
+use super::edit::EditDelta;
+use super::text::{
+    BlockType, BufferTextStyle, ColorMarker, LinkCount, LinkMarker, MarkerDir, SyntaxColorId,
+    TextStyles, TextStylesWithMetadata,
+};
+use super::undo::{ReversibleEditorAction, UndoArg};
+use crate::content::anchor::{Anchor, AnchorSide, AnchorUpdate};
+use crate::content::buffer::{StyledBlockBoundaryBehavior, ToBufferByteOffset, ToBufferPoint};
+use crate::content::cursor::BufferCursor;
+use crate::content::edit::PreciseDelta;
+use crate::content::text::{
+    BlockHeaderSize, BlockLineBreakBehavior, BufferBlockItem, BufferBlockStyle, BufferText,
+    StyleSummary,
+};
+
+/// Placeholder shown in place of an embedded image whose `data:` payload
+/// exceeds the asset layer's render limit (see
+/// `asset_cache::data_uri_exceeds_limit`).
+const IMAGE_TOO_LARGE_PLACEHOLDER: &str = "Image too large to display";
+fn replace_oversized_data_uri_images(mut text: FormattedText) -> FormattedText {
+    for line in text.lines.iter_mut() {
+        if let FormattedTextLine::Image(image) = line
+            && asset_cache::data_uri_exceeds_limit(&image.source)
+        {
+            *line = FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(
+                IMAGE_TOO_LARGE_PLACEHOLDER,
+            )]);
+        }
+    }
+    text
+}
 
 #[derive(Debug, Clone)]
 pub struct CoreEditorAction {
@@ -544,6 +559,11 @@ impl Buffer {
         // as it is.
         let mut inherit_styling = source.from_user();
 
+        // Replace any embedded `data:` image whose payload exceeds the asset
+        // layer's render limit with a visible placeholder before lowering lines
+        // into the buffer, so an over-limit image surfaces a hint instead of
+        // silently failing to load.
+        let text = replace_oversized_data_uri_images(text);
         for line in text.lines {
             should_override_next_block_style = false;
             match line {
@@ -1636,3 +1656,7 @@ fn maybe_push_new_block_marker(
         });
     }
 }
+
+#[cfg(test)]
+#[path = "core_tests.rs"]
+mod tests;

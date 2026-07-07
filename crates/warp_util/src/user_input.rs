@@ -1,7 +1,5 @@
-use std::{
-    fmt::{self, Debug},
-    ops::{Deref, DerefMut},
-};
+use std::fmt::{self, Debug};
+use std::ops::{Deref, DerefMut};
 
 /// Wrapper type for values which may contain user input.
 ///

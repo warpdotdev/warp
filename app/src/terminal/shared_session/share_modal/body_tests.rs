@@ -1,17 +1,15 @@
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-
 use warpui::App;
 
-use crate::terminal::shared_session::MAX_BYTES_SHAREABLE;
-use crate::terminal::TerminalModel;
-use crate::{
-    terminal::shared_session::{SharedSessionActionSource, SharedSessionScrollbackType},
-    test_util::{add_window_with_terminal, terminal::initialize_app_for_terminal_view},
-};
-
 use super::Body;
+use crate::terminal::shared_session::{
+    SharedSessionActionSource, SharedSessionScrollbackType, MAX_BYTES_SHAREABLE,
+};
+use crate::terminal::TerminalModel;
+use crate::test_util::add_window_with_terminal;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 #[test]
 fn test_open_modal_from_non_block() {

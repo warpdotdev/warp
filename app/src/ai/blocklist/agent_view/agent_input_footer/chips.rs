@@ -1,12 +1,9 @@
-use crate::context_chips::{
-    display_chip::{DisplayChip, GitLineChanges, PromptDisplayChipEvent},
-    git_line_changes_from_chips,
-    prompt_type::PromptType,
-    ChipResult,
-};
 use warpui::{ModelHandle, ViewContext, ViewHandle};
 
 use super::{AgentInputFooter, AgentInputFooterEvent};
+use crate::context_chips::display_chip::{DisplayChip, GitLineChanges, PromptDisplayChipEvent};
+use crate::context_chips::prompt_type::PromptType;
+use crate::context_chips::{git_line_changes_from_chips, ChipResult};
 
 impl AgentInputFooter {
     /// Returns `true` if `DisplayChip`s should be recreated based on updated metadata values.
@@ -22,14 +19,9 @@ impl AgentInputFooter {
             || new_chips.iter().enumerate().any(|(i, chip_result)| {
                 let existing_chip = &existing_chips[i];
                 existing_chip.read(ctx, |chip, _| {
-                    chip.text()
-                        != chip_result
-                            .value()
-                            .map(|v| v.to_string())
-                            .unwrap_or_default()
+                    chip.value() != chip_result.value()
                         || chip.chip_kind() != chip_result.kind()
-                        // For parity with PromptDisplay: compare the first on-click value only.
-                        || chip.first_on_click_value() != chip_result.on_click_values().first()
+                        || chip.on_click_values() != chip_result.on_click_values()
                 })
             })
     }

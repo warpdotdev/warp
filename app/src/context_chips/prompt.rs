@@ -1,16 +1,16 @@
-use crate::{
-    settings::{
-        AISettings, AISettingsChangedEvent, InputSettings, InputSettingsChangedEvent,
-        WarpPromptSeparator,
-    },
-    terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent},
-};
-
-pub use super::ContextChipKind;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use settings::Setting as _;
-use warpui::{Entity, GetSingletonModelHandle, ModelContext, SingletonEntity, UpdateModel};
+use warpui::{
+    Entity, GetSingletonModelHandle, ModelContext, ModelHandle, SingletonEntity, UpdateModel,
+};
+
+pub use super::ContextChipKind;
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, InputSettings, InputSettingsChangedEvent,
+    WarpPromptSeparator,
+};
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 
 #[cfg(test)]
 #[path = "prompt_tests.rs"]
@@ -264,6 +264,7 @@ impl Prompt {
     /// Updates the in-memory prompt configuration to reflect a settings change.
     fn handle_session_settings_change(
         &mut self,
+        _: ModelHandle<SessionSettings>,
         event: &SessionSettingsChangedEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -280,6 +281,7 @@ impl Prompt {
 
     fn handle_input_settings_change(
         &mut self,
+        _: ModelHandle<InputSettings>,
         event: &InputSettingsChangedEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -292,6 +294,7 @@ impl Prompt {
     /// Updates the in-memory prompt configuration to reflect an AI settings change.
     fn handle_ai_settings_change(
         &mut self,
+        _: ModelHandle<AISettings>,
         event: &AISettingsChangedEvent,
         ctx: &mut ModelContext<Self>,
     ) {

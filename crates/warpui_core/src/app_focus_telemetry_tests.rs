@@ -1,6 +1,7 @@
+use chrono::Duration;
+
 use crate::app_focus_telemetry::AppFocusInfo;
 use crate::time::test_offset_time;
-use chrono::Duration;
 
 #[test]
 fn test_daily_app_focus_duration_increase() {

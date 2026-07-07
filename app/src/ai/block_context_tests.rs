@@ -1,5 +1,6 @@
-use super::*;
 use serde_json::Value;
+
+use super::*;
 
 #[test]
 fn block_context_serializes_id_as_block_id() {

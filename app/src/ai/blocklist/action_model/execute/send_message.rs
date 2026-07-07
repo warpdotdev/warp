@@ -1,21 +1,24 @@
 #[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
+
+#[cfg(not(target_family = "wasm"))]
 use anyhow::anyhow;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use futures::future::Either;
-use futures::{future::BoxFuture, FutureExt};
-#[cfg(not(target_family = "wasm"))]
-use std::time::Duration;
+use futures::FutureExt;
+use warp_core::send_telemetry_from_ctx;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::Timer;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
-    conversation::AIConversationId, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
-    SendMessageToAgentResult,
+    AIAgentAction, AIAgentActionResultType, AIAgentActionType, SendMessageToAgentResult,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
-use crate::ai::blocklist::orchestration_events::{OrchestrationEventService, SendMessageResult};
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, TeamAgentCommunicationFailedEvent,
     TeamAgentCommunicationFailureReason, TeamAgentCommunicationKind,
@@ -23,10 +26,6 @@ use crate::ai::blocklist::telemetry::{
 };
 use crate::server::server_api::ai::{SendAgentMessageRequest, SendAgentMessageResponse};
 use crate::server::server_api::ServerApiProvider;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-
-use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 
 #[cfg(not(target_family = "wasm"))]
 const SEND_AGENT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -160,86 +159,67 @@ impl SendMessageToAgentExecutor {
         let subject = subject.clone();
         let message_body = message.clone();
 
-        if FeatureFlag::OrchestrationV2.is_enabled() {
-            let (sender_run_id, task_id, task_resolution) = sender_run_id_and_task_id_for_send(
-                conversation_id,
-                self.ambient_agent_task_id,
-                ctx,
-            );
-            let log_addresses = addresses.clone();
-            let log_subject = subject.clone();
-            let log_sender_run_id = sender_run_id.clone();
-            let log_task_id = task_id.map(|task_id| task_id.to_string());
-            let log_body_len = message_body.chars().count();
-            let server_api = ServerApiProvider::as_ref(ctx).get();
-            let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-            log::info!(
-                "Sending orchestration message: conversation_id={conversation_id:?} resolution={task_resolution:?} sender_run_id={log_sender_run_id:?} task_id={log_task_id:?} target_agent_ids={log_addresses:?} subject={log_subject:?} body_len={log_body_len}"
-            );
-            let request = SendAgentMessageRequest {
-                to: addresses,
-                subject,
-                body: message_body,
-                sender_run_id,
-            };
-            return ActionExecution::new_async(
-                async move {
-                    send_agent_message_with_timeout(server_api, ai_client, task_id, request).await
-                },
-                move |result, ctx| match result {
-                    Ok(response) => {
-                        let message_id =
-                            response.message_ids.into_iter().next().unwrap_or_default();
-                        log::info!(
-                            "Sent orchestration message: conversation_id={conversation_id:?} resolution={task_resolution:?} sender_run_id={log_sender_run_id:?} task_id={log_task_id:?} target_agent_ids={log_addresses:?} subject={log_subject:?} body_len={log_body_len} message_id={message_id:?}"
-                        );
-                        AIAgentActionResultType::SendMessageToAgent(
-                            SendMessageToAgentResult::Success { message_id },
-                        )
-                    }
-                    Err(err) => {
-                        let error_message = err.to_string();
-                        send_telemetry_from_ctx!(
-                            BlocklistOrchestrationTelemetryEvent::TeamAgentCommunicationFailed(
-                                TeamAgentCommunicationFailedEvent {
-                                    communication_kind: TeamAgentCommunicationKind::Message,
-                                    transport: TeamAgentCommunicationTransport::ServerApi,
-                                    orchestration_version: TeamAgentOrchestrationVersion::V2,
-                                    failure_reason:
-                                        TeamAgentCommunicationFailureReason::RequestFailed,
-                                    source_conversation_id: conversation_id,
-                                    source_run_id: (!log_sender_run_id.is_empty())
-                                        .then(|| log_sender_run_id.clone()),
-                                    target_count: Some(log_addresses.len()),
-                                    lifecycle_event_type: None,
-                                    error_message: Some(error_message.clone()),
-                                }
-                            ),
-                            ctx
-                        );
-                        log::warn!(
-                            "Failed to send child-agent message via server API: conversation_id={conversation_id:?} resolution={task_resolution:?} sender_run_id={log_sender_run_id:?} task_id={log_task_id:?} target_agent_ids={log_addresses:?} subject={log_subject:?} body_len={log_body_len} error={err:#}"
-                        );
-                        AIAgentActionResultType::SendMessageToAgent(
-                            SendMessageToAgentResult::Error(error_message),
-                        )
-                    }
-                },
-            )
-            .into();
-        }
-
-        let result = OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
-            svc.send_message(conversation_id, &addresses, subject, message_body, ctx)
-        });
-        let result = match result {
-            SendMessageResult::MessageSent { message_id } => {
-                SendMessageToAgentResult::Success { message_id }
-            }
-            SendMessageResult::Error(error) => SendMessageToAgentResult::Error(error),
+        let (sender_run_id, task_id, task_resolution) =
+            sender_run_id_and_task_id_for_send(conversation_id, self.ambient_agent_task_id, ctx);
+        let log_addresses = addresses.clone();
+        let log_subject = subject.clone();
+        let log_sender_run_id = sender_run_id.clone();
+        let log_task_id = task_id.map(|task_id| task_id.to_string());
+        let log_body_len = message_body.chars().count();
+        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        log::info!(
+            "Sending orchestration message: conversation_id={conversation_id:?} resolution={task_resolution:?} sender_run_id={log_sender_run_id:?} task_id={log_task_id:?} target_agent_ids={log_addresses:?} subject={log_subject:?} body_len={log_body_len}"
+        );
+        let request = SendAgentMessageRequest {
+            to: addresses,
+            subject,
+            body: message_body,
+            sender_run_id,
         };
-
-        ActionExecution::<()>::Sync(AIAgentActionResultType::SendMessageToAgent(result)).into()
+        ActionExecution::new_async(
+            async move {
+                send_agent_message_with_timeout(server_api, ai_client, task_id, request).await
+            },
+            move |result, ctx| match result {
+                Ok(response) => {
+                    let message_id = response.message_ids.into_iter().next().unwrap_or_default();
+                    log::info!(
+                        "Sent orchestration message: conversation_id={conversation_id:?} resolution={task_resolution:?} sender_run_id={log_sender_run_id:?} task_id={log_task_id:?} target_agent_ids={log_addresses:?} subject={log_subject:?} body_len={log_body_len} message_id={message_id:?}"
+                    );
+                    AIAgentActionResultType::SendMessageToAgent(
+                        SendMessageToAgentResult::Success { message_id },
+                    )
+                }
+                Err(err) => {
+                    let error_message = err.to_string();
+                    send_telemetry_from_ctx!(
+                        BlocklistOrchestrationTelemetryEvent::TeamAgentCommunicationFailed(
+                            TeamAgentCommunicationFailedEvent {
+                                communication_kind: TeamAgentCommunicationKind::Message,
+                                transport: TeamAgentCommunicationTransport::ServerApi,
+                                orchestration_version: TeamAgentOrchestrationVersion::V2,
+                                failure_reason: TeamAgentCommunicationFailureReason::RequestFailed,
+                                source_conversation_id: conversation_id,
+                                source_run_id: (!log_sender_run_id.is_empty())
+                                    .then(|| log_sender_run_id.clone()),
+                                target_count: Some(log_addresses.len()),
+                                lifecycle_event_type: None,
+                                error_message: Some(error_message.clone()),
+                            }
+                        ),
+                        ctx
+                    );
+                    log::warn!(
+                        "Failed to send child-agent message via server API: conversation_id={conversation_id:?} resolution={task_resolution:?} sender_run_id={log_sender_run_id:?} task_id={log_task_id:?} target_agent_ids={log_addresses:?} subject={log_subject:?} body_len={log_body_len} error={err:#}"
+                    );
+                    AIAgentActionResultType::SendMessageToAgent(
+                        SendMessageToAgentResult::Error(error_message),
+                    )
+                }
+            },
+        )
+        .into()
     }
 
     pub(super) fn preprocess_action(

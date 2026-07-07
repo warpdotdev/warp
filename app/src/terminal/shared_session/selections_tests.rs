@@ -1,19 +1,15 @@
 use warp_core::semantic_selection::SemanticSelection;
+use warpui::text::SelectionType;
 use warpui::App;
 
-use crate::terminal::{
-    block_filter::BlockFilterQuery,
-    event_listener::ChannelEventListener,
-    model::{
-        block::SerializedBlock,
-        blocks::BlockListPoint,
-        index::{Point, Side},
-        terminal_model::WithinBlock,
-    },
-    shared_session::tests::terminal_model_for_viewer,
-    GridType, SizeInfo, SizeUpdate, SizeUpdateReason, TerminalModel,
-};
-use warpui::text::SelectionType;
+use crate::terminal::block_filter::BlockFilterQuery;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::block::SerializedBlock;
+use crate::terminal::model::blocks::BlockListPoint;
+use crate::terminal::model::index::{Point, Side};
+use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::shared_session::tests::terminal_model_for_viewer;
+use crate::terminal::{GridType, SizeInfo, SizeUpdate, SizeUpdateReason, TerminalModel};
 
 /// Creates a [`SelectionType::Simple`], left-to-right text selection
 /// from `start` to `end` in the `model`'s blocklist.

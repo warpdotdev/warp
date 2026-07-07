@@ -1,15 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
 
 use handlebars::{get_arguments, render_template};
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use std::hash::{Hash, Hasher};
+use siphasher::sip::SipHasher;
 use uuid::Uuid;
 use warp_managed_secrets::ManagedSecretValue;
 
 use crate::ai::mcp::{TemplatableMCPServer, TemplateVariable};
-use siphasher::sip::SipHasher;
-use std::collections::BTreeMap;
 
 lazy_static! {
     static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);

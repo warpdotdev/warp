@@ -21,6 +21,8 @@ NSWindowStyleMask warpWindowMask = NSWindowStyleMaskClosable | NSWindowStyleMask
 
 // The default macOS titlebar height (in points).
 static const CGFloat DEFAULT_TITLEBAR_HEIGHT = 28.0;
+static const NSSize MIN_WINDOW_SIZE = {480.0, 192.0};
+static const NSSize TEST_MIN_WINDOW_SIZE = {124.0, 34.0};
 
 // A back-to-front ordered array of windows, identified by their `windowNumber`
 // property.
@@ -141,12 +143,20 @@ NSNumber *previouslyActiveAppPID;
     // we explicitly force callbacks to be synchronous if it's caused by the user instead
     // of another system call (such as the active screen changing)
     [warp_view setAsyncCallback:NO];
+
+    // While the user is dragging to resize the window, we want to present frames
+    // within transactions to ensure the resize is visually smooth and there is no
+    // stuttering resulting from asynchronous presentation.
+    [warp_view setPresentsWithTransaction:YES];
 }
 
 - (void)windowDidEndLiveResize:(NSNotification *)notification {
     WarpWindow *warp_window = notification.object;
     WarpHostView *warp_view = warp_window.contentView;
+
+    // Reset state changed in `windowWillStartLiveResize`.
     [warp_view setAsyncCallback:YES];
+    [warp_view setPresentsWithTransaction:NO];
 }
 
 - (void)setForceTermination {
@@ -285,6 +295,7 @@ static NSLayoutConstraint *configure_titlebar_height(NSWindow *window, CGFloat h
 void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, bool hideTitleBar) {
     window.testMode = testMode;
     window.hideTitleBar = hideTitleBar;
+    NSSize minWindowSize = testMode ? TEST_MIN_WINDOW_SIZE : MIN_WINDOW_SIZE;
 
     // Set the background color to clear to support window background transparency. When this is set
     // to NSColor.clearColor with alpha = 0 and window drop shadows are enabled, MacOS renders a
@@ -298,7 +309,21 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     window.acceptsMouseMovedEvents = YES;
     window.titlebarAppearsTransparent = hideTitleBar;
     window.titleVisibility = hideTitleBar ? NSWindowTitleHidden : NSWindowTitleVisible;
+    window.minSize = minWindowSize;
+    window.contentMinSize = minWindowSize;
+    if ([window respondsToSelector:@selector(setMinFullScreenContentSize:)]) {
+        window.minFullScreenContentSize = minWindowSize;
+    }
 }
+
+@interface NSWindow (PrivateAPI)
+- (NSInteger)_resizeDirectionForMouseLocation:(NSPoint)location;
+@end
+
+@interface WarpWindow ()
+- (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event;
+- (BOOL)eventIsOverResizeEdge:(NSEvent *)event;
+@end
 
 @implementation WarpWindow {
     // The windowState is managed on the Rust side.
@@ -316,6 +341,7 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     // macOS from cascading or clamping the window position while a tab-drag preview window is
     // being created and positioned under the cursor.
     BOOL _suppressFrameConstraintsDuringDrag;
+    BOOL _leftMouseDownStartedInNativeWindowChrome;
 }
 
 @synthesize testMode;
@@ -385,8 +411,50 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     return [super constrainFrameRect:frameRect toScreen:screen];
 }
 
+- (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event {
+    NSWindowButton buttons[] = {
+        NSWindowCloseButton,
+        NSWindowMiniaturizeButton,
+        NSWindowZoomButton,
+    };
+
+    for (NSUInteger i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+        NSButton *button = [self standardWindowButton:buttons[i]];
+        if (button && !button.hidden) {
+            NSPoint point = [button convertPoint:event.locationInWindow fromView:nil];
+            if (NSPointInRect(point, button.bounds)) {
+                return button;
+            }
+        }
+    }
+
+    return nil;
+}
+
+- (BOOL)eventIsOverResizeEdge:(NSEvent *)event {
+    if ((self.styleMask & NSWindowStyleMaskResizable) == 0) {
+        return NO;
+    }
+    if ([self respondsToSelector:@selector(_resizeDirectionForMouseLocation:)]) {
+        return [self _resizeDirectionForMouseLocation:event.locationInWindow] != -1;
+    }
+    return NO;
+}
+
 - (void)sendEvent:(NSEvent *)event {
     switch (event.type) {
+        case NSEventTypeLeftMouseDown: {
+            NSButton *windowButton = [self standardWindowButtonAtEvent:event];
+            if (windowButton) {
+                _leftMouseDownStartedInNativeWindowChrome = NO;
+                [windowButton mouseDown:event];
+                break;
+            }
+            _leftMouseDownStartedInNativeWindowChrome = [self eventIsOverResizeEdge:event];
+            [super sendEvent:event];
+            break;
+        }
+
         // In some cases, NSWindow's default sendEvent: implementation will dispatch a MouseDown
         // event and subsequent MouseDragged events to the content view, but then dispatch the
         // remaining MouseDragged events and MouseUp event elsewhere.
@@ -396,10 +464,27 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         // This breaks drag-and-drop for panes and tabs (see CLD-2581), so we work around it with
         // custom dispatching.
         case NSEventTypeLeftMouseUp:
-            [self.contentView mouseUp:event];
+            if (@available(macOS 27, *)) {
+                if (_leftMouseDownStartedInNativeWindowChrome) {
+                    [super sendEvent:event];
+                } else {
+                    [self.contentView mouseUp:event];
+                }
+            } else {
+                [self.contentView mouseUp:event];
+            }
+            _leftMouseDownStartedInNativeWindowChrome = NO;
             break;
         case NSEventTypeLeftMouseDragged:
-            [self.contentView mouseDragged:event];
+            if (@available(macOS 27, *)) {
+                if (_leftMouseDownStartedInNativeWindowChrome) {
+                    [super sendEvent:event];
+                } else {
+                    [self.contentView mouseDragged:event];
+                }
+            } else {
+                [self.contentView mouseDragged:event];
+            }
             break;
 
         // The NSWindow's default sendEvent: implementation does not propagate RightMouseDown events

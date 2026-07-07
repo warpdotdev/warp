@@ -1,6 +1,7 @@
+use std::borrow::Cow;
+
 use anyhow::{anyhow, Result};
 use root_view::RootView;
-use std::borrow::Cow;
 pub mod root_view;
 
 extern crate warpui;

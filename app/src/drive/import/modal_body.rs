@@ -1,38 +1,31 @@
+use std::path::PathBuf;
+
 use futures_util::stream::AbortHandle;
 use pathfinder_geometry::vector::vec2f;
-use std::path::PathBuf;
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius,
+};
+use warpui::platform::file_picker::FilePickerError;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
-    },
-    platform::{file_picker::FilePickerError, Cursor},
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    appearance::Appearance,
-    cloud_object::Owner,
-    server::{
-        ids::{ClientId, SyncId},
-        sync_queue::SyncQueue,
-    },
-    ui_components::icons::Icon,
-    view_components::DismissibleToast,
-    workspace::ToastStack,
+use super::modal::BODY_HEIGHT;
+use super::nodes::{
+    expand_dirs, parse_file, FileContent, FileId, FileUploadState, FolderId, UploadResult,
 };
-
-use super::{
-    modal::BODY_HEIGHT,
-    nodes::{
-        expand_dirs, parse_file, FileContent, FileId, FileUploadState, FolderId, UploadResult,
-    },
-    queue::{ImportQueue, ImportQueueArgs, ImportQueueEvent, ParentId, RequestContent},
-};
+use super::queue::{ImportQueue, ImportQueueArgs, ImportQueueEvent, ParentId, RequestContent};
+use crate::appearance::Appearance;
+use crate::cloud_object::Owner;
+use crate::server::ids::{ClientId, SyncId};
+use crate::server::sync_queue::SyncQueue;
+use crate::ui_components::icons::Icon;
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
 
 const FILE_PICKER_BUTTON_WIDTH: f32 = 250.;
 const BUTTON_FONT_SIZE: f32 = 14.;

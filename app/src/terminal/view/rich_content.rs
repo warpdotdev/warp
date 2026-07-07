@@ -1,30 +1,25 @@
-use warpui::{prelude::ChildView, Element, EntityId, View, ViewContext, ViewHandle};
-
-use crate::{
-    ai::{
-        agent::{conversation::AIConversationId, AIAgentExchangeId},
-        blocklist::{agent_view::AgentViewEntryOrigin, telemetry_banner::TelemetryBanner, AIBlock},
-    },
-    env_vars::env_var_collection_block::EnvVarCollectionBlock,
-    terminal::{
-        block_list_viewport::ScrollPositionUpdate,
-        model::{
-            blocks::RichContentItem, rich_content::RichContentType, terminal_model::BlockIndex,
-        },
-        ssh::{error::SshErrorBlock, install_tmux::SshInstallTmuxBlock, warpify::SshWarpifyBlock},
-        view::{
-            ambient_agent::AmbientAgentEntryBlock,
-            block_onboarding::onboarding_agentic_suggestions_block::OnboardingAgenticSuggestionsBlock,
-            init_environment::InitEnvironmentBlock,
-            ssh_remote_server_choice_view::SshRemoteServerChoiceView,
-            ssh_remote_server_failed_banner::SshRemoteServerFailedBanner,
-        },
-        warpify::success_block::WarpifySuccessBlock,
-        TerminalView,
-    },
-};
+use warpui::prelude::ChildView;
+use warpui::{Element, EntityId, View, ViewContext, ViewHandle};
 
 use super::{InitStepBlock, InitStepKind};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::block::PendingUserQueryBlock;
+use crate::ai::blocklist::telemetry_banner::TelemetryBanner;
+use crate::ai::blocklist::AIBlock;
+use crate::env_vars::env_var_collection_block::EnvVarCollectionBlock;
+use crate::terminal::block_list_viewport::ScrollPositionUpdate;
+use crate::terminal::model::blocks::{RemovableBlocklistItem, RichContentItem};
+use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::view::ambient_agent::AmbientAgentEntryBlock;
+use crate::terminal::view::init_environment::InitEnvironmentBlock;
+use crate::terminal::view::ssh_remote_server_choice_view::SshRemoteServerChoiceView;
+use crate::terminal::view::ssh_remote_server_failed_banner::SshRemoteServerFailedBanner;
+use crate::terminal::view::ssh_tmux_deprecation_banner::SshTmuxDeprecationBanner;
+use crate::terminal::warpify::success_block::WarpifySuccessBlock;
+use crate::terminal::TerminalView;
 
 /// Specifies where to insert rich content in the blocklist.
 #[derive(Clone, Copy, Debug)]
@@ -36,6 +31,9 @@ pub enum RichContentInsertionPosition {
     },
     /// Insert before the block at the given index.
     BeforeBlockIndex(BlockIndex),
+    /// Insert after the rich content item with the given view ID, falling back to appending if it
+    /// is no longer present.
+    AfterRichContent(EntityId),
     /// Pin to the bottom of the blocklist. The BlockList will automatically
     /// keep this item at the end by reordering it after any subsequent insertions.
     /// Only one item can be pinned at a time.
@@ -178,7 +176,10 @@ impl RichContent {
     }
 
     pub fn is_pending_user_query(&self) -> bool {
-        matches!(self.metadata, Some(RichContentMetadata::PendingUserQuery))
+        matches!(
+            self.metadata,
+            Some(RichContentMetadata::PendingUserQuery { .. })
+        )
     }
 
     pub fn is_init_step(&self) -> bool {
@@ -236,26 +237,17 @@ pub enum RichContentMetadata {
     InitEnvironment {
         block_handle: ViewHandle<InitEnvironmentBlock>,
     },
-    OnboardingAgenticSuggestions {
-        agentic_suggestions_block_handle: ViewHandle<OnboardingAgenticSuggestionsBlock>,
-    },
     EnvVarCollectionBlock {
         env_var_collection_block_handle: ViewHandle<EnvVarCollectionBlock>,
-    },
-    SshWarpifyBlock {
-        ssh_warpify_block_handle: ViewHandle<SshWarpifyBlock>,
-    },
-    SshInstallTmuxBlock {
-        ssh_install_tmux_block_handle: ViewHandle<SshInstallTmuxBlock>,
-    },
-    SshErrorBlock {
-        ssh_error_block_handle: ViewHandle<SshErrorBlock>,
     },
     SshRemoteServerChoiceBlock {
         handle: ViewHandle<SshRemoteServerChoiceView>,
     },
     SshRemoteServerFailedBanner {
         handle: ViewHandle<SshRemoteServerFailedBanner>,
+    },
+    SshTmuxDeprecationBanner {
+        handle: ViewHandle<SshTmuxDeprecationBanner>,
     },
     WarpifySuccessBlock {
         bootstrap_success_block_handle: ViewHandle<WarpifySuccessBlock>,
@@ -271,7 +263,9 @@ pub enum RichContentMetadata {
     AgentViewZeroState,
     TerminalViewZeroState,
     PluginInstructionsBlock,
-    PendingUserQuery,
+    PendingUserQuery {
+        pending_user_query_block_handle: ViewHandle<PendingUserQueryBlock>,
+    },
     HarnessSessionHeader,
 }
 
@@ -346,6 +340,16 @@ impl TerminalView {
                     .lock()
                     .block_list_mut()
                     .insert_rich_content_before_block_index(item, block_index);
+            }
+            RichContentInsertionPosition::AfterRichContent(view_id) => {
+                let mut model = self.model.lock();
+                let inserted = model.block_list_mut().insert_rich_content_after_item(
+                    RemovableBlocklistItem::RichContent(view_id),
+                    item,
+                );
+                if !inserted {
+                    model.block_list_mut().append_rich_content(item, true);
+                }
             }
             RichContentInsertionPosition::PinToBottom => {
                 self.model

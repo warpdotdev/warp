@@ -7,35 +7,32 @@ mod mac;
 #[cfg(windows)]
 mod windows;
 
-use crate::features::FeatureFlag;
-use crate::send_telemetry_sync_from_app_ctx;
-use crate::server::server_api::ServerApi;
-use crate::server::telemetry::TelemetryEvent;
-use crate::workspace::Workspace;
-use crate::{
-    channel::Channel, report_if_error, send_telemetry_from_ctx, server::datetime_ext::DateTimeExt,
-    ChannelState,
-};
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::Duration;
+
 use ::channel_versions::{ParsedVersion, VersionInfo};
 use anyhow::{anyhow, Context as _, Result};
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use rand::Rng as _;
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::time::Duration;
 use warp_core::execution_mode::AppExecutionMode;
+use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::platform::TerminationMode;
 use warpui::r#async::Timer;
 use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::{self, WindowManager};
-use warpui::{
-    accessibility::{AccessibilityContent, WarpA11yRole},
-    AppContext,
-};
-use warpui::{Entity, ModelContext, SingletonEntity, ViewContext};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, ViewContext};
 
 pub use self::changelog::get_current_changelog;
 use self::channel_versions::fetch_channel_versions;
+use crate::channel::Channel;
+use crate::features::FeatureFlag;
+use crate::server::server_api::ServerApi;
+use crate::server::telemetry::TelemetryEvent;
+use crate::workspace::Workspace;
+use crate::{
+    report_if_error, send_telemetry_from_ctx, send_telemetry_sync_from_app_ctx, ChannelState,
+};
 
 /// A successfully downloaded and unpacked target update.
 #[derive(Clone, Debug)]
@@ -149,7 +146,7 @@ impl AutoupdateState {
             self.poll_for_update(ctx);
             // Queue a possible update check when the app gets activated, i.e. focused.
             let state_handle = WindowManager::handle(ctx);
-            ctx.subscribe_to_model(&state_handle, |me, event, ctx| {
+            ctx.subscribe_to_model(&state_handle, |me, _, event, ctx| {
                 let windowing::StateEvent::ValueChanged { current, previous } = event;
                 if previous.stage == ApplicationStage::Inactive
                     && current.stage == ApplicationStage::Active
@@ -251,7 +248,7 @@ impl AutoupdateState {
     /// The caller is responsible for checking that we _should_ check for an update. Generally, the
     /// only caller should be [`Self::try_execute_request`].
     fn check_for_update(&mut self, request_type: RequestType, ctx: &mut ModelContext<Self>) {
-        let current_date = DateTime::now().date_naive();
+        let current_date = chrono::Local::now().date_naive();
         let is_daily = self.should_make_daily_request(
             request_type,
             &current_date,
@@ -396,7 +393,7 @@ impl AutoupdateState {
         ctx: &mut ModelContext<AutoupdateState>,
     ) {
         if is_daily && version.is_ok() {
-            self.last_successful_daily_update_check = Some(DateTime::now());
+            self.last_successful_daily_update_check = Some(chrono::Local::now().fixed_offset());
         }
 
         // If one update was already applied, we cannot apply another.

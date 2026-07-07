@@ -1,8 +1,6 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use warp_util::path::ShellFamily;
 use warp_workflows::workflows as global_workflows;
@@ -10,11 +8,12 @@ use warp_workflows::workflows as global_workflows;
 use warpui::platform::OperatingSystem;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+use super::workflow::Workflow;
+use super::WorkflowSource;
+use crate::terminal::model::session::Session;
 #[cfg(feature = "local_fs")]
 use crate::user_config::load_workflows;
-use crate::{terminal::model::session::Session, user_config::WarpConfig};
-
-use super::{workflow::Workflow, WorkflowSource};
+use crate::user_config::WarpConfig;
 
 pub fn workflows_dir(base_dir: impl AsRef<Path>) -> PathBuf {
     base_dir.as_ref().join("workflows")

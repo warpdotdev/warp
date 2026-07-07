@@ -1,6 +1,6 @@
-use crate::env_vars::{view::command_dialog::EnvVarSecretCommand, EnvVar};
-
 use super::*;
+use crate::env_vars::view::command_dialog::EnvVarSecretCommand;
+use crate::env_vars::EnvVar;
 
 #[test]
 fn test_is_command_copied_from_notebook() {

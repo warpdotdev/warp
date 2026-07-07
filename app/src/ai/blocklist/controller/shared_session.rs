@@ -6,11 +6,13 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
 use warp_core::features::FeatureFlag;
+use warp_multi_agent_api::client_action::Action;
+use warp_multi_agent_api::message::Message;
 use warp_multi_agent_api::response_event::{stream_finished, ClientActions};
-use warp_multi_agent_api::{client_action::Action, message::Message};
+use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
-use super::{BlocklistAIController, RequestInput};
+use super::{BlocklistAIController, RequestInput, SessionContext};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
 use crate::ai::attachment_utils::{
@@ -20,7 +22,6 @@ use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
-use warpui::{AppContext, ModelContext, SingletonEntity};
 
 #[derive(Default)]
 pub(super) struct SharedSessionState {
@@ -115,7 +116,7 @@ impl BlocklistAIController {
         self.shared_session_state.current_response_id = None;
         self.shared_session_state
             .should_skip_current_replayed_response = false;
-        let terminal_view_id = self.terminal_view_id;
+        let terminal_surface_id = self.terminal_surface_id;
         let history = BlocklistAIHistoryModel::handle(ctx);
 
         // If the server conversation already exists locally (matched by server_conversation_token), reuse it.
@@ -160,7 +161,7 @@ impl BlocklistAIController {
             })
             .unwrap_or_else(|| {
                 history.update(ctx, |h, ctx| {
-                    h.start_new_conversation(terminal_view_id, false, true, ctx)
+                    h.start_new_conversation(terminal_surface_id, false, true, false, ctx)
                 })
             });
         if self.should_skip_replayed_response_for_existing_conversation(
@@ -204,30 +205,34 @@ impl BlocklistAIController {
                     &self.active_session,
                     self.get_current_response_initiator(),
                     conversation_id,
-                    self.terminal_view_id,
+                    self.terminal_surface_id,
                     ctx,
                 ),
                 stream_id.clone(),
-                self.terminal_view_id,
+                self.terminal_surface_id,
                 ctx,
             );
 
             history_model.initialize_output_for_response_stream(
                 &stream_id,
                 conversation_id,
-                self.terminal_view_id,
+                self.terminal_surface_id,
                 init_event.clone(),
                 ctx,
             );
 
             // Mark conversation as in progress and active/selected
             history_model.update_conversation_status(
-                self.terminal_view_id,
+                self.terminal_surface_id,
                 conversation_id,
                 ConversationStatus::InProgress,
                 ctx,
             );
-            history_model.set_active_conversation_id(conversation_id, self.terminal_view_id, ctx);
+            history_model.set_active_conversation_id(
+                conversation_id,
+                self.terminal_surface_id,
+                ctx,
+            );
         });
         self.context_model.update(ctx, |context_model, ctx| {
             context_model.set_pending_query_state_for_existing_conversation(
@@ -247,40 +252,42 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let Some(conversation_id) = existing_conversation_id else {
+            log::info!(
+                "should_skip_replayed_response: no existing conversation id, not skipping \
+                 (request_id={init_request_id})"
+            );
             return false;
         };
-        let model = self.terminal_model.lock();
-        if !model.is_receiving_agent_conversation_replay()
-            || !self
-                .shared_session_state
-                .should_suppress_replayed_response_for_existing_conversation
-        {
+        let is_receiving_replay = self
+            .terminal_model
+            .lock()
+            .is_receiving_agent_conversation_replay();
+        let suppress_enabled = self
+            .shared_session_state
+            .should_suppress_replayed_response_for_existing_conversation;
+        if !is_receiving_replay || !suppress_enabled {
+            log::info!(
+                "should_skip_replayed_response: not skipping \
+                 (request_id={init_request_id}, conversation_id={conversation_id:?}, \
+                 is_receiving_replay={is_receiving_replay}, suppress_enabled={suppress_enabled})"
+            );
             return false;
         }
-        drop(model);
 
-        // Only skip the replayed response when we already have a local exchange whose
-        // `server_output_id` matches `request_id`. New exchanges (e.g. the user's first
-        // post-handoff prompt) carry unseen request_ids and must flow through normally.
+        // Only skip the replayed response when our local task already has the given request_id.
+        // New exchanges (e.g. the user's first post-handoff prompt) carry unseen request_ids and must flow through normally.
         let history = BlocklistAIHistoryModel::as_ref(ctx);
-        let known_server_output_ids: Vec<String> = history
-            .conversation(&conversation_id)
-            .map(|conversation| {
-                conversation
-                    .all_exchanges()
-                    .into_iter()
-                    .filter_map(|exchange| {
-                        exchange
-                            .output_status
-                            .server_output_id()
-                            .map(|sid| sid.to_string())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        known_server_output_ids
-            .iter()
-            .any(|sid| sid == init_request_id)
+        let found = history.conversation(&conversation_id).is_some_and(|conv| {
+            conv.all_tasks()
+                .any(|task| task.messages().any(|msg| msg.request_id == init_request_id))
+        });
+        if !found {
+            log::info!(
+                "should_skip_replayed_response: not skipping, request_id not found in local \
+                 conversation (request_id={init_request_id}, conversation_id={conversation_id:?})"
+            );
+        }
+        found
     }
 
     fn on_shared_client_actions(
@@ -309,13 +316,16 @@ impl BlocklistAIController {
         };
 
         self.update_directory_context_from_client_actions(&actions, ctx);
+        let skill_path_origin =
+            SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         history_model.update(ctx, |history_model, ctx| {
             if let Err(e) = history_model.apply_client_actions(
                 &stream_id,
                 actions.actions,
                 conversation_id,
-                self.terminal_view_id,
+                self.terminal_surface_id,
+                &skill_path_origin,
                 ctx,
             ) {
                 log::error!(
@@ -461,7 +471,7 @@ impl BlocklistAIController {
     }
 
     /// Finds an existing client conversation whose server_conversation_token matches `server_token`.
-    /// Searches only live conversations for this terminal view. Returns None if no match is found.
+    /// Searches only live conversations for this terminal surface. Returns None if no match is found.
     pub fn find_existing_conversation_by_server_token(
         &self,
         server_token: &str,
@@ -470,7 +480,7 @@ impl BlocklistAIController {
         let history = BlocklistAIHistoryModel::handle(ctx);
         history
             .as_ref(ctx)
-            .all_live_conversations_for_terminal_view(self.terminal_view_id)
+            .all_live_conversations_for_terminal_surface(self.terminal_surface_id)
             .find_map(|conv| {
                 conv.server_conversation_token()
                     .and_then(|t| (t.as_str() == server_token).then_some(conv.id()))
@@ -496,8 +506,10 @@ impl BlocklistAIController {
                 .conversation(&conv_id)
                 .map(|conversation| stream_finished::ConversationUsageMetadata {
                     context_window_usage: conversation.context_window_usage(),
-                    credits_spent: conversation.credits_spent(),
+                    credits_spent: conversation.inference_credits_spent(),
+                    platform_credits_spent: conversation.platform_credits_spent(),
                     summarized: conversation.was_summarized(),
+                    total_input_tokens: 0,
                     #[allow(deprecated)]
                     token_usage: conversation
                         .token_usage()
@@ -514,6 +526,16 @@ impl BlocklistAIController {
                         .token_usage()
                         .iter()
                         .filter_map(|u| u.to_proto_byok_usage())
+                        .collect(),
+                    custom_endpoint_token_usage: conversation
+                        .token_usage()
+                        .iter()
+                        .filter_map(|u| u.to_proto_custom_endpoint_usage())
+                        .collect(),
+                    context_window_segments: conversation
+                        .context_window_segments()
+                        .iter()
+                        .map(Into::into)
                         .collect(),
                 })
         });
@@ -836,9 +858,7 @@ impl BlocklistAIController {
                     })
                     .or_else(|| {
                         self.context_model.update(ctx, |context_model, ctx| {
-                            context_model
-                                .try_enter_agent_view_for_new_conversation(origin, ctx)
-                                .ok()
+                            context_model.try_start_new_conversation(origin, ctx).ok()
                         })
                     })
                 else {

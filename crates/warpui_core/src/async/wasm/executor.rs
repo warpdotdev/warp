@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
-use futures::{future::LocalBoxFuture, Future, FutureExt};
+use futures::future::LocalBoxFuture;
+use futures::{Future, FutureExt};
 use futures_util::future::{AbortHandle, Abortable};
+use tracing::Instrument as _;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{platform, r#async::executor::Error};
+use crate::platform;
+use crate::r#async::executor::Error;
 
 /// A handle to a task that will run on the main thread.
 pub struct ForegroundTask;
@@ -51,7 +54,7 @@ impl Foreground {
     /// less code than a generic implementation, with no noticeable performance
     /// impact.
     pub fn spawn_boxed(&self, future: LocalBoxFuture<'static, ()>) -> ForegroundTask {
-        spawn_local(future);
+        spawn_local(future.instrument(tracing::Span::current()));
         ForegroundTask
     }
 
@@ -104,7 +107,7 @@ impl Background {
     /// less code than a generic implementation, with no noticeable performance
     /// impact.
     pub fn spawn_boxed(&self, future: LocalBoxFuture<'static, ()>) -> BackgroundTask {
-        spawn_local(future);
+        spawn_local(future.instrument(tracing::Span::current()));
         BackgroundTask
     }
 

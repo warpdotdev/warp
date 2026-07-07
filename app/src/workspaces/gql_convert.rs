@@ -1,88 +1,78 @@
-use super::{
-    team::{DiscoverableTeam, MembershipRole, Team, TeamMember},
-    user_profiles::UserProfileWithUID,
-    user_workspaces::WorkspacesMetadataResponse,
-    workspace::{
-        AIAutonomyPolicy, AddonCreditsSettings, AdminEnablementSetting, AiAutonomySettings,
-        AiPermissionsSettings, AmbientAgentsPolicy, BillingMetadata,
-        CloudConversationStorageSettings, CodebaseContextSettings, CustomerType, DelinquencyStatus,
-        EmailInvite, EnterpriseSecretRegex, HostEnablementSetting, InstanceShape,
-        InviteLinkDomainRestriction, LinkSharingSettings, LlmSettings, SandboxedAgentSettings,
-        SecretRedactionSettings, SessionSharingPolicy, SharedNotebooksPolicy,
-        SharedWorkflowsPolicy, TelemetryDataCollectionPolicy, TelemetrySettings, Tier,
-        UgcCollectionEnablementSetting, UgcCollectionSettings, UgcDataCollectionPolicy,
-        UsageBasedPricingPolicy, WarpAiPolicy, Workspace, WorkspaceInviteCode, WorkspaceMember,
-        WorkspaceMemberUsageInfo, WorkspaceSettings, WorkspaceSizePolicy,
-    },
-};
-use crate::{
-    ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo,
-    ai::execution_profiles::{ActionPermission, ComputerUsePermission, WriteToPtyPermission},
-    ai::{BonusGrant, BonusGrantScope},
-    auth::UserUid,
-    cloud_object::{ServerAIExecutionProfile, ServerAIFact},
-    report_error,
-    server::experiments::ServerExperiment,
-    server::ids::ServerId,
-    settings::AgentModeCommandExecutionPredicate,
-    workspaces::workspace::{
-        AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, CodebaseContextPolicy,
-        EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, MultiAdminPolicy,
-        PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
-    },
-};
-use crate::{
-    cloud_object::{
-        ServerAmbientAgentEnvironment, ServerCloudAgentConfig, ServerCloudObject,
-        ServerEnvVarCollection, ServerFolder, ServerMCPServer, ServerNotebook, ServerPreference,
-        ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflow,
-        ServerWorkflowEnum,
-    },
-    convert_to_server_experiment,
-    server::cloud_objects::listener::ObjectUpdateMessage,
-};
-use anyhow::{anyhow, bail};
-use regex::Regex;
 use std::path::PathBuf;
-use warp_graphql::workspace::AddonCreditsSettings as GqlAddonCreditsSettings;
-use warp_graphql::{
-    billing::{
-        AiAutonomyPolicy as GqlAiAutonomyPolicy, AmbientAgentsPolicy as GqlAmbientAgentsPolicy,
-        BillingMetadata as GqlBillingMetadata, BonusGrant as GqlBonusGrant,
-        ByoApiKeyPolicy as GqlByoApiKeyPolicy, CodebaseContextPolicy as GqlCodebaseContextPolicy,
-        CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
-        EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
-        EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy,
-        InstanceShape as GqlInstanceShape, MultiAdminPolicy as GqlMultiAdminPolicy,
-        PurchaseAddOnCreditsPolicy as GqlPurchaseAddOnCreditsPolicy, ServiceAgreementType,
-        SessionSharingPolicy as GqlSessionSharingPolicy,
-        SharedNotebooksPolicy as GqlSharedNotebooksPolicy,
-        SharedWorkflowsPolicy as GqlSharedWorkflowsPolicy, StripeSubscriptionPlan,
-        TeamSizePolicy as GqlTeamSizePolicy,
-        TelemetryDataCollectionPolicy as GqlTelemetryDataCollectionPolicy, Tier as GqlTier,
-        UgcDataCollectionPolicy as GqlUgcDataCollectionPolicy,
-        UsageBasedPricingPolicy as GqlUsageBasedPricingPolicy, WarpAiPolicy as GqlWarpAiPolicy,
-    },
-    object::CloudObjectWithDescendants,
-    queries::{
-        get_conversation_usage as gql_usage, get_workspaces_metadata_for_user::User as GqlUser,
-    },
-    subscriptions::get_warp_drive_updates::WarpDriveUpdate,
-    user::{DiscoverableTeamData as GqlDiscoverableTeamData, PublicUserProfile},
-    workspace::{
-        AdminEnablementSetting as GqlAdminEnablementSetting, AiAutonomyValue as GqlAiAutonomyValue,
-        AiPermissionsSettings as GqlAiPermissionsSettings,
-        ComputerUseAutonomyValue as GqlComputerUseAutonomyValue, EmailInvite as GqlEmailInvite,
-        HostEnablementSetting as GqlHostEnablementSetting,
-        InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
-        MembershipRole as GqlMembershipRole, Team as GqlTeam, TeamMember as GqlTeamMember,
-        UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting,
-        Workspace as GqlWorkspace, WorkspaceMember as GqlWorkspaceMember,
-        WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
-        WorkspaceSettings as GqlWorkspaceSettings,
-        WriteToPtyAutonomyValue as GqlWriteToPtyAutonomyValue,
-    },
+
+use anyhow::{anyhow, bail, Result};
+use regex::Regex;
+use warp_graphql::billing::{
+    AiAutonomyPolicy as GqlAiAutonomyPolicy, AmbientAgentsPolicy as GqlAmbientAgentsPolicy,
+    BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
+    BonusGrant as GqlBonusGrant, ByoApiKeyPolicy as GqlByoApiKeyPolicy,
+    ByoEndpointPolicy as GqlByoEndpointPolicy, CodebaseContextPolicy as GqlCodebaseContextPolicy,
+    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
+    EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
+    EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
+    MultiAdminPolicy as GqlMultiAdminPolicy,
+    PurchaseAddOnCreditsPolicy as GqlPurchaseAddOnCreditsPolicy, ServiceAgreementType,
+    SessionSharingPolicy as GqlSessionSharingPolicy,
+    SharedNotebooksPolicy as GqlSharedNotebooksPolicy,
+    SharedWorkflowsPolicy as GqlSharedWorkflowsPolicy, StripeSubscriptionPlan,
+    TeamSizePolicy as GqlTeamSizePolicy,
+    TelemetryDataCollectionPolicy as GqlTelemetryDataCollectionPolicy, Tier as GqlTier,
+    UgcDataCollectionPolicy as GqlUgcDataCollectionPolicy,
+    UsageBasedPricingPolicy as GqlUsageBasedPricingPolicy,
+    UsageVisibilityGranularity as GqlUsageVisibilityGranularity,
+    UsageVisibilityPolicy as GqlUsageVisibilityPolicy, WarpAiPolicy as GqlWarpAiPolicy,
 };
+use warp_graphql::queries::get_conversation_usage as gql_usage;
+use warp_graphql::queries::get_workspaces_metadata_for_user::User as GqlUser;
+use warp_graphql::subscriptions::get_warp_drive_updates::WarpDriveUpdate;
+use warp_graphql::user::DiscoverableTeamData as GqlDiscoverableTeamData;
+use warp_graphql::workspace::{
+    AddonCreditsSettings as GqlAddonCreditsSettings,
+    AdminEnablementSetting as GqlAdminEnablementSetting, AiAutonomyValue as GqlAiAutonomyValue,
+    AiPermissionsSettings as GqlAiPermissionsSettings,
+    ComputerUseAutonomyValue as GqlComputerUseAutonomyValue, EmailInvite as GqlEmailInvite,
+    HostEnablementSetting as GqlHostEnablementSetting,
+    InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
+    MembershipRole as GqlMembershipRole, Team as GqlTeam, TeamMember as GqlTeamMember,
+    UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting, Workspace as GqlWorkspace,
+    WorkspaceMember as GqlWorkspaceMember, WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
+    WorkspaceSettings as GqlWorkspaceSettings,
+    WriteToPtyAutonomyValue as GqlWriteToPtyAutonomyValue,
+};
+
+use super::team::{DiscoverableTeam, MembershipRole, Team, TeamMember};
+use super::user_workspaces::WorkspacesMetadataResponse;
+use super::workspace::{
+    AIAutonomyPolicy, AddonCreditsSettings, AdminEnablementSetting, AiAutonomySettings,
+    AiPermissionsSettings, AmbientAgentsPolicy, BillingCycleUsageData, BillingCycleUsageEntry,
+    BillingCycleUsageSummary, BillingMetadata, CloudConversationStorageSettings,
+    CodebaseContextSettings, CustomerType, DelinquencyStatus, EmailInvite, EnterpriseSecretRegex,
+    HostEnablementSetting, InstanceShape, InviteLinkDomainRestriction, LinkSharingSettings,
+    LlmSettings, MaxPriorCycles, SandboxedAgentSettings, SecretRedactionSettings,
+    SessionSharingPolicy, SharedNotebooksPolicy, SharedWorkflowsPolicy,
+    TelemetryDataCollectionPolicy, TelemetrySettings, Tier, UgcCollectionEnablementSetting,
+    UgcCollectionSettings, UgcDataCollectionPolicy, UsageBasedPricingPolicy,
+    UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy, Workspace,
+    WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
+    WorkspaceSizePolicy,
+};
+use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
+use crate::ai::execution_profiles::{
+    ActionPermission, ComputerUsePermission, WriteToPtyPermission,
+};
+use crate::ai::{BonusGrant, BonusGrantScope};
+use crate::auth::UserUid;
+use crate::server::cloud_objects::listener::ObjectUpdateMessage;
+use crate::server::experiments::ServerExperiment;
+use crate::server::graphql::schema::object_action_history_from_gql;
+use crate::server::ids::ServerId;
+use crate::settings::AgentModeCommandExecutionPredicate;
+use crate::workspaces::workspace::{
+    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
+    EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, MultiAdminPolicy,
+    PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
+};
+use crate::{convert_to_server_experiment, report_error};
 
 pub const PLACEHOLDER_WORKSPACE_UID: &str = "NOT_A_REAL_WORKSPACE_UID";
 
@@ -237,9 +227,12 @@ impl From<GqlUgcCollectionEnablementSetting> for UgcCollectionEnablementSetting 
                 UgcCollectionEnablementSetting::RespectUserSetting
             }
             GqlUgcCollectionEnablementSetting::Other(value) => {
-                report_error!(anyhow!(
-                    "Invalid UgcCollectionEnablementSetting '{value}'. Make sure to update client GraphQL types!"
-                ));
+                report_error!(
+                    anyhow!(
+                        "Invalid UgcCollectionEnablementSetting '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
                 UgcCollectionEnablementSetting::RespectUserSetting
             }
         }
@@ -250,17 +243,21 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
     fn from(gql: &gql_usage::ConversationUsage) -> Self {
         let persistence::model::ConversationUsageMetadata {
             credits_spent,
+            platform_credits_spent,
             token_usage: models,
             tool_usage_metadata: tool,
             context_window_usage,
+            context_window_segments,
             ..
         } = (&gql.usage_metadata).into();
         ConversationUsageInfo {
             credits_spent,
+            platform_credits_spent,
             credits_spent_for_last_block: None,
             tool_calls: tool.total_tool_calls(),
             models,
             context_window_usage,
+            context_window_segments,
             files_changed: tool.apply_file_diff_stats.files_changed,
             lines_added: tool.apply_file_diff_stats.lines_added,
             lines_removed: tool.apply_file_diff_stats.lines_removed,
@@ -278,9 +275,12 @@ impl From<GqlAdminEnablementSetting> for AdminEnablementSetting {
                 AdminEnablementSetting::RespectUserSetting
             }
             GqlAdminEnablementSetting::Other(value) => {
-                report_error!(anyhow!(
-                    "Invalid AdminEnablementSetting '{value}'. Make sure to update client GraphQL types!"
-                ));
+                report_error!(
+                    anyhow!(
+                        "Invalid AdminEnablementSetting '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
                 AdminEnablementSetting::RespectUserSetting
             }
         }
@@ -295,9 +295,12 @@ impl From<GqlHostEnablementSetting> for HostEnablementSetting {
                 HostEnablementSetting::RespectUserSetting
             }
             GqlHostEnablementSetting::Other(value) => {
-                report_error!(anyhow!(
-                    "Invalid HostEnablementSetting '{value}'. Make sure to update client GraphQL types!"
-                ));
+                report_error!(
+                    anyhow!(
+                        "Invalid HostEnablementSetting '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
                 HostEnablementSetting::RespectUserSetting
             }
         }
@@ -388,6 +391,14 @@ impl From<GqlByoApiKeyPolicy> for ByoApiKeyPolicy {
     }
 }
 
+impl From<GqlByoEndpointPolicy> for ByoEndpointPolicy {
+    fn from(gql_byo_endpoint_policy: GqlByoEndpointPolicy) -> ByoEndpointPolicy {
+        Self {
+            enabled: gql_byo_endpoint_policy.enabled,
+        }
+    }
+}
+
 impl From<GqlPurchaseAddOnCreditsPolicy> for PurchaseAddOnCreditsPolicy {
     fn from(
         gql_purchase_add_on_credits_policy: GqlPurchaseAddOnCreditsPolicy,
@@ -440,6 +451,85 @@ impl From<GqlAmbientAgentsPolicy> for AmbientAgentsPolicy {
     }
 }
 
+impl From<GqlUsageVisibilityGranularity> for UsageVisibilityGranularity {
+    fn from(gql_granularity: GqlUsageVisibilityGranularity) -> UsageVisibilityGranularity {
+        match gql_granularity {
+            GqlUsageVisibilityGranularity::OwnOnly => UsageVisibilityGranularity::OwnOnly,
+            GqlUsageVisibilityGranularity::TeamAggregate => {
+                UsageVisibilityGranularity::TeamAggregate
+            }
+            GqlUsageVisibilityGranularity::PerUserTotals => {
+                UsageVisibilityGranularity::PerUserTotals
+            }
+            GqlUsageVisibilityGranularity::FullBreakdown => {
+                UsageVisibilityGranularity::FullBreakdown
+            }
+            GqlUsageVisibilityGranularity::Other(value) => {
+                report_error!(
+                    anyhow!(
+                        "Invalid UsageVisibilityGranularity '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
+                // Fail closed to the most restrictive granularity.
+                UsageVisibilityGranularity::OwnOnly
+            }
+        }
+    }
+}
+
+fn from_gql_max_prior_cycles(value: i32) -> MaxPriorCycles {
+    match value {
+        0 => MaxPriorCycles::None,
+        n if n > 0 => MaxPriorCycles::Limited(n as u32),
+        -1 => MaxPriorCycles::Unlimited,
+        other => {
+            report_error!(anyhow!(
+                "Unexpected maxPriorCycles value '{other}' from server; treating as unlimited"
+            ));
+            MaxPriorCycles::None
+        }
+    }
+}
+
+impl From<GqlUsageVisibilityPolicy> for UsageVisibilityPolicy {
+    fn from(gql_policy: GqlUsageVisibilityPolicy) -> UsageVisibilityPolicy {
+        Self {
+            admin_granularity: gql_policy.admin_granularity.into(),
+            max_prior_cycles: from_gql_max_prior_cycles(gql_policy.max_prior_cycles),
+        }
+    }
+}
+
+fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingCycleUsageData {
+    BillingCycleUsageData {
+        current_period_start: history.current_period_start.utc(),
+        current_period_end: history.current_period_end.utc(),
+        summaries: history
+            .summaries
+            .into_iter()
+            .map(|summary| BillingCycleUsageSummary {
+                period_start: summary.period_start.utc(),
+                period_end: summary.period_end.utc(),
+                entries: summary
+                    .entries
+                    .into_iter()
+                    .map(|entry| BillingCycleUsageEntry {
+                        subject_type: entry.subject_type,
+                        subject_uid: entry.subject_uid,
+                        subject_display_name: entry.subject_display_name,
+                        cost_type: entry.cost_type,
+                        usage_bucket: entry.usage_bucket,
+                        usage_source: entry.usage_source,
+                        credits_used: entry.credits_used,
+                        cost_cents: entry.cost_cents,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 impl From<GqlTier> for Tier {
     fn from(gql_tier: GqlTier) -> Tier {
         Self {
@@ -458,6 +548,7 @@ impl From<GqlTier> for Tier {
             usage_based_pricing_policy: gql_tier.usage_based_pricing_policy.map(From::from),
             codebase_context_policy: gql_tier.codebase_context_policy.map(From::from),
             byo_api_key_policy: gql_tier.byo_api_key_policy.map(From::from),
+            byo_endpoint_policy: gql_tier.byo_endpoint_policy.map(From::from),
             purchase_add_on_credits_policy: gql_tier.purchase_add_on_credits_policy.map(From::from),
             enterprise_pay_as_you_go_policy: gql_tier
                 .enterprise_pay_as_you_go_policy
@@ -467,6 +558,7 @@ impl From<GqlTier> for Tier {
                 .map(From::from),
             multi_admin_policy: gql_tier.multi_admin_policy.map(From::from),
             ambient_agents_policy: gql_tier.ambient_agents_policy.map(From::from),
+            usage_visibility_policy: gql_tier.usage_visibility_policy.map(From::from),
         }
     }
 }
@@ -578,9 +670,12 @@ fn convert_gql_ai_autonomy_value_to_action_permission(
         GqlAiAutonomyValue::AlwaysAsk => Some(ActionPermission::AlwaysAsk),
         GqlAiAutonomyValue::RespectUserSetting => None,
         GqlAiAutonomyValue::Other(value) => {
-            report_error!(anyhow!(
-                "Invalid AiAutonomyValue '{value}'. Make sure to update client GraphQL types!"
-            ));
+            report_error!(
+                anyhow!(
+                    "Invalid AiAutonomyValue '{value}'. Make sure to update client GraphQL types!"
+                ),
+                warp_core::errors::ReportErrorLogMode::OncePerRun
+            );
             None
         }
     }
@@ -595,9 +690,12 @@ fn convert_gql_write_to_pty_autonomy_value_to_write_to_pty_permission(
         GqlWriteToPtyAutonomyValue::AskOnFirstWrite => Some(WriteToPtyPermission::AskOnFirstWrite),
         GqlWriteToPtyAutonomyValue::RespectUserSetting => None,
         GqlWriteToPtyAutonomyValue::Other(value) => {
-            report_error!(anyhow!(
-                "Invalid WriteToPtyAutonomyValue '{value}'. Make sure to update client GraphQL types!"
-            ));
+            report_error!(
+                anyhow!(
+                    "Invalid WriteToPtyAutonomyValue '{value}'. Make sure to update client GraphQL types!"
+                ),
+                warp_core::errors::ReportErrorLogMode::OncePerRun
+            );
             None
         }
     }
@@ -612,9 +710,12 @@ fn convert_gql_computer_use_autonomy_value_to_computer_use_permission(
         GqlComputerUseAutonomyValue::AlwaysAllow => Some(ComputerUsePermission::AlwaysAllow),
         GqlComputerUseAutonomyValue::RespectUserSetting => None,
         GqlComputerUseAutonomyValue::Other(value) => {
-            report_error!(anyhow!(
-                "Invalid ComputerUseAutonomyValue '{value}'. Make sure to update client GraphQL types!"
-            ));
+            report_error!(
+                anyhow!(
+                    "Invalid ComputerUseAutonomyValue '{value}'. Make sure to update client GraphQL types!"
+                ),
+                warp_core::errors::ReportErrorLogMode::OncePerRun
+            );
             None
         }
     }
@@ -657,10 +758,12 @@ impl From<warp_graphql::workspace::LlmModelHost> for crate::ai::llms::LLMModelHo
         match gql_host {
             GqlLlmModelHost::DirectApi => Self::DirectApi,
             GqlLlmModelHost::AwsBedrock => Self::AwsBedrock,
+            GqlLlmModelHost::CustomEndpoint => Self::CustomEndpoint,
+            GqlLlmModelHost::GeminiEnterprise => Self::GeminiEnterprise,
             GqlLlmModelHost::Other(value) => {
-                report_error!(anyhow!(
+                log::warn!(
                     "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
-                ));
+                );
                 Self::Unknown
             }
         }
@@ -675,6 +778,8 @@ impl From<warp_graphql::workspace::LlmHostSettings> for super::workspace::LlmHos
                 .enablement_setting
                 .map(Into::into)
                 .unwrap_or_default(),
+            gcp_audience: gql_settings.gcp_audience,
+            gcp_sa_email: gql_settings.gcp_sa_email,
         }
     }
 }
@@ -912,6 +1017,9 @@ impl From<GqlWorkspace> for Workspace {
                     cents_spent: info.current_month_spend_cents,
                 })
                 .unwrap_or_default(),
+            billing_cycle_usage: gql_workspace
+                .billing_cycle_usage_history
+                .map(convert_billing_cycle_usage),
             has_billing_history: gql_workspace.has_billing_history,
             settings: gql_workspace.settings.clone().into(),
             invite_code: gql_workspace
@@ -983,366 +1091,51 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
     }
 }
 
-impl From<PublicUserProfile> for UserProfileWithUID {
-    fn from(value: PublicUserProfile) -> Self {
-        UserProfileWithUID {
-            firebase_uid: UserUid::new(&value.uid),
-            display_name: value.display_name,
-            email: value.email.unwrap_or_default(),
-            photo_url: value.photo_url.unwrap_or_default(),
+pub fn object_update_message_from_gql(value: WarpDriveUpdate) -> Result<ObjectUpdateMessage> {
+    match value {
+        WarpDriveUpdate::ObjectActionOccurred(message) => {
+            Ok(ObjectUpdateMessage::ObjectActionOccurred {
+                history: object_action_history_from_gql(message.history)?,
+            })
         }
-    }
-}
-
-impl TryFrom<WarpDriveUpdate> for ObjectUpdateMessage {
-    type Error = anyhow::Error;
-
-    fn try_from(value: WarpDriveUpdate) -> Result<Self, Self::Error> {
-        match value {
-            WarpDriveUpdate::ObjectActionOccurred(message) => {
-                Ok(ObjectUpdateMessage::ObjectActionOccurred {
-                    history: message.history.try_into()?,
-                })
-            }
-            WarpDriveUpdate::ObjectContentUpdated(message) => {
-                let server_object = message.object.try_into()?;
-                let last_editor = message.last_editor.map(|e| e.into());
-                Ok(ObjectUpdateMessage::ObjectContentChanged {
-                    server_object: Box::new(server_object),
-                    last_editor,
-                })
-            }
-            WarpDriveUpdate::ObjectDeleted(message) => Ok(ObjectUpdateMessage::ObjectDeleted {
+        WarpDriveUpdate::ObjectContentUpdated(message) => {
+            let server_object = message.object.try_into()?;
+            let last_editor = message.last_editor.map(|e| e.into());
+            Ok(ObjectUpdateMessage::ObjectContentChanged {
+                server_object: Box::new(server_object),
+                last_editor,
+            })
+        }
+        WarpDriveUpdate::ObjectDeleted(message) => Ok(ObjectUpdateMessage::ObjectDeleted {
+            object_uid: ServerId::from_string_lossy(message.object_uid.inner()),
+        }),
+        WarpDriveUpdate::ObjectMetadataUpdated(message) => {
+            Ok(ObjectUpdateMessage::ObjectMetadataChanged {
+                metadata: message.metadata.try_into()?,
+            })
+        }
+        WarpDriveUpdate::ObjectPermissionsUpdated(message) => {
+            Ok(ObjectUpdateMessage::ObjectPermissionsChangedV2 {
                 object_uid: ServerId::from_string_lossy(message.object_uid.inner()),
-            }),
-            WarpDriveUpdate::ObjectMetadataUpdated(message) => {
-                Ok(ObjectUpdateMessage::ObjectMetadataChanged {
-                    metadata: message.metadata.try_into()?,
-                })
-            }
-            WarpDriveUpdate::ObjectPermissionsUpdated(message) => {
-                Ok(ObjectUpdateMessage::ObjectPermissionsChangedV2 {
-                    object_uid: ServerId::from_string_lossy(message.object_uid.inner()),
-                    user_profiles: message
-                        .user_profiles
-                        .into_iter()
-                        .flatten()
-                        .map(Into::into)
-                        .collect(),
-                    permissions: message.permissions.try_into()?,
-                })
-            }
-            WarpDriveUpdate::TeamMembershipsChanged(_) => {
-                Ok(ObjectUpdateMessage::TeamMembershipsChanged)
-            }
-            WarpDriveUpdate::AmbientTaskUpdated(message) => {
-                Ok(ObjectUpdateMessage::AmbientTaskUpdated {
-                    task_id: message.task_id.inner().to_string(),
-                    timestamp: message.task_updated_ts.utc(),
-                })
-            }
-            WarpDriveUpdate::Unknown => bail!("Unexpected WarpDriveUpdate variant"),
+                user_profiles: message
+                    .user_profiles
+                    .into_iter()
+                    .flatten()
+                    .map(Into::into)
+                    .collect(),
+                permissions: message.permissions.try_into()?,
+            })
         }
-    }
-}
-
-impl TryFrom<warp_graphql::folder::Folder> for ServerFolder {
-    type Error = anyhow::Error;
-
-    fn try_from(folder: warp_graphql::folder::Folder) -> Result<Self, Self::Error> {
-        ServerFolder::try_from_graphql_fields(
-            ServerId::from_string_lossy(folder.metadata.uid.inner()),
-            Some(folder.name),
-            folder.metadata.try_into()?,
-            folder.permissions.try_into()?,
-            folder.is_warp_pack,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::notebook::Notebook> for ServerNotebook {
-    type Error = anyhow::Error;
-
-    fn try_from(notebook: warp_graphql::notebook::Notebook) -> Result<Self, Self::Error> {
-        ServerNotebook::try_from_graphql_fields(
-            ServerId::from_string_lossy(notebook.metadata.uid.inner()),
-            Some(notebook.title),
-            Some(notebook.data),
-            notebook.ai_document_id,
-            notebook.metadata.try_into()?,
-            notebook.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::workflow::Workflow> for ServerWorkflow {
-    type Error = anyhow::Error;
-
-    fn try_from(workflow: warp_graphql::workflow::Workflow) -> Result<Self, Self::Error> {
-        ServerWorkflow::try_from_graphql_fields(
-            ServerId::from_string_lossy(workflow.metadata.uid.inner()),
-            workflow.data,
-            workflow.metadata.try_into()?,
-            workflow.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject> for ServerEnvVarCollection {
-    type Error = anyhow::Error;
-
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerEnvVarCollection::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject> for ServerWorkflowEnum {
-    type Error = anyhow::Error;
-
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerWorkflowEnum::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject> for ServerAIFact {
-    type Error = anyhow::Error;
-
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerAIFact::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject>
-    for ServerAIExecutionProfile
-{
-    type Error = anyhow::Error;
-
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerAIExecutionProfile::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject> for ServerMCPServer {
-    type Error = anyhow::Error;
-
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerMCPServer::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject>
-    for ServerTemplatableMCPServer
-{
-    type Error = anyhow::Error;
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerTemplatableMCPServer::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject> for ServerPreference {
-    type Error = anyhow::Error;
-
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerPreference::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject>
-    for ServerAmbientAgentEnvironment
-{
-    type Error = anyhow::Error;
-
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerAmbientAgentEnvironment::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject>
-    for ServerScheduledAmbientAgent
-{
-    type Error = anyhow::Error;
-
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerScheduledAmbientAgent::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::generic_string_object::GenericStringObject> for ServerCloudAgentConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(
-        gso: warp_graphql::generic_string_object::GenericStringObject,
-    ) -> Result<Self, Self::Error> {
-        ServerCloudAgentConfig::try_from_graphql_fields(
-            ServerId::from_string_lossy(gso.metadata.uid.inner()),
-            Some(gso.serialized_model),
-            gso.metadata.try_into()?,
-            gso.permissions.try_into()?,
-        )
-    }
-}
-
-impl TryFrom<warp_graphql::object::CloudObject> for ServerCloudObject {
-    type Error = anyhow::Error;
-
-    fn try_from(value: warp_graphql::object::CloudObject) -> Result<Self, Self::Error> {
-        match value {
-            warp_graphql::object::CloudObject::AIConversation(_) => {
-                Err(anyhow::anyhow!("AIConversation is not a supported object type for this operation"))
-            }
-            warp_graphql::object::CloudObject::Folder(folder) => {
-                Ok(ServerCloudObject::Folder(folder.try_into()?))
-            }
-            warp_graphql::object::CloudObject::GenericStringObject(gso) => {
-                match gso.format {
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
-                        Ok(ServerCloudObject::EnvVarCollection(gso.try_into()?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
-                        Ok(ServerCloudObject::Preference(gso.try_into()?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
-                        Ok(ServerCloudObject::WorkflowEnum(gso.try_into()?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
-                        Ok(ServerCloudObject::AIFact(gso.try_into()?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
-                        Ok(ServerCloudObject::MCPServer(gso.try_into()?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
-                        Ok(ServerCloudObject::AIExecutionProfile(gso.try_into()?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
-                        Ok(ServerCloudObject::TemplatableMCPServer(gso.try_into()?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
-                        Ok(ServerCloudObject::AmbientAgentEnvironment(gso.try_into()?))
-                    }
-                    warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
-                        Ok(ServerCloudObject::ScheduledAmbientAgent(gso.try_into()?))
-                    }
-                }
-            }
-            warp_graphql::object::CloudObject::Notebook(notebook) => {
-                Ok(ServerCloudObject::Notebook(notebook.try_into()?))
-            }
-            warp_graphql::object::CloudObject::Workflow(workflow) => {
-                Ok(ServerCloudObject::Workflow(Box::new(workflow.try_into()?)))
-            }
-            warp_graphql::object::CloudObject::Unknown => {
-                Err(anyhow::anyhow!("Unable to convert cloud object type"))
-            }
+        WarpDriveUpdate::TeamMembershipsChanged(_) => {
+            Ok(ObjectUpdateMessage::TeamMembershipsChanged)
         }
-    }
-}
-
-impl TryFrom<CloudObjectWithDescendants> for ServerCloudObject {
-    type Error = anyhow::Error;
-
-    fn try_from(value: CloudObjectWithDescendants) -> Result<Self, Self::Error> {
-        match value {
-            CloudObjectWithDescendants::AIConversation(_) => {
-                Err(anyhow::anyhow!("AIConversation is not a supported object type for this operation"))
-            }
-            CloudObjectWithDescendants::FolderWithDescendants(fwd) => {
-                Ok(ServerCloudObject::Folder(fwd.folder.try_into()?))
-            }
-            CloudObjectWithDescendants::GenericStringObject(gso) => match gso.format {
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
-                    Ok(ServerCloudObject::EnvVarCollection(gso.try_into()?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
-                    Ok(ServerCloudObject::Preference(gso.try_into()?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
-                    Ok(ServerCloudObject::WorkflowEnum(gso.try_into()?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
-                    Ok(ServerCloudObject::AIFact(gso.try_into()?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
-                    Ok(ServerCloudObject::MCPServer(gso.try_into()?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
-                    Ok(ServerCloudObject::AIExecutionProfile(gso.try_into()?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
-                    Ok(ServerCloudObject::TemplatableMCPServer(gso.try_into()?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
-                    Ok(ServerCloudObject::AmbientAgentEnvironment(gso.try_into()?))
-                }
-                warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
-                    Ok(ServerCloudObject::ScheduledAmbientAgent(gso.try_into()?))
-                }
-            }
-            CloudObjectWithDescendants::Notebook(notebook) => Ok(ServerCloudObject::Notebook(notebook.try_into()?)),
-            CloudObjectWithDescendants::Workflow(workflow) => Ok(ServerCloudObject::Workflow(Box::new(workflow.try_into()?))),
-            CloudObjectWithDescendants::Unknown => Err(anyhow::anyhow!("Unable to convert cloud object with descendants type")),
+        WarpDriveUpdate::AmbientTaskUpdated(message) => {
+            Ok(ObjectUpdateMessage::AmbientTaskUpdated {
+                task_id: message.task_id.inner().to_string(),
+                timestamp: message.task_updated_ts.utc(),
+            })
         }
+        WarpDriveUpdate::Unknown => bail!("Unexpected WarpDriveUpdate variant"),
     }
 }
 

@@ -1,11 +1,8 @@
 //! Module containing helper functions to render the windows traffic lights.
 
-use crate::util::traffic_lights::windows::RendererState;
-use crate::util::traffic_lights::windows_only::WINDOWS_BRIGHT_RED;
-use crate::util::traffic_lights::{TrafficLightData, TrafficLightMouseStates};
-use crate::workspace::TOTAL_TAB_BAR_HEIGHT;
-use pathfinder_color::ColorU;
 use std::sync::Arc;
+
+use pathfinder_color::ColorU;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::{
     Align, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment,
@@ -14,6 +11,11 @@ use warpui::elements::{
 use warpui::fonts::FamilyId;
 use warpui::platform::FullscreenState;
 use warpui::{AppContext, Element, SingletonEntity};
+
+use crate::util::traffic_lights::windows::RendererState;
+use crate::util::traffic_lights::windows_only::WINDOWS_BRIGHT_RED;
+use crate::util::traffic_lights::{TrafficLightData, TrafficLightMouseStates};
+use crate::workspace::TOTAL_TAB_BAR_HEIGHT;
 
 /// Possible window traffic light icons.
 #[derive(Copy, Clone)]

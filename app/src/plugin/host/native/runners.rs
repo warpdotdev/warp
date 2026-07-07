@@ -1,7 +1,5 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use async_channel::Receiver;
 use futures::channel::oneshot;
@@ -9,11 +7,9 @@ use parking_lot::Mutex;
 use warp_js::JsFunctionId;
 use warpui::r#async::executor::Background;
 
-use super::{
-    plugin::{AppServiceCallers, PluginRequest, PluginResponse},
-    plugin_ref::PluginRef,
-    runner::PluginRunner,
-};
+use super::plugin::{AppServiceCallers, PluginRequest, PluginResponse};
+use super::plugin_ref::PluginRef;
+use super::runner::PluginRunner;
 
 /// Message type for messages that may be sent to each `PluginRunner`.
 ///

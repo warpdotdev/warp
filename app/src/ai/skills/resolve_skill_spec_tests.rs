@@ -1,4 +1,5 @@
-use std::{fs, path::Path};
+use std::fs;
+use std::path::Path;
 
 use anyhow::{Context as _, Result};
 use warp_cli::skill::SkillSpec;

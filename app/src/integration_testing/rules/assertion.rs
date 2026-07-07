@@ -1,15 +1,12 @@
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{AssertionCallback, AssertionWithDataCallback},
-    AppContext, SingletonEntity,
-};
+use warpui::integration::{AssertionCallback, AssertionWithDataCallback};
+use warpui::{async_assert, async_assert_eq, AppContext, SingletonEntity};
 
-use crate::{
-    ai::facts::{view::AIFactPage, CloudAIFactModel},
-    cloud_object::model::{generic_string_model::GenericStringObjectId, persistence::CloudModel},
-    integration_testing::view_getters::workspace_view,
-    server::ids::SyncId,
-};
+use crate::ai::facts::view::AIFactPage;
+use crate::ai::facts::CloudAIFactModel;
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::integration_testing::view_getters::workspace_view;
+use crate::server::ids::SyncId;
 
 /// Assert that a specific AI fact exists with the given content
 pub fn assert_rule_exists(

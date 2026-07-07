@@ -3,15 +3,13 @@ use std::sync::Arc;
 use warpui::elements::{ChildView, Flex, ParentElement, SavePosition};
 use warpui::{Action, Element, TypedActionView, View, ViewContext, ViewHandle};
 
-use crate::view_components::action_button::AdjoinedSide;
-use crate::view_components::compactible_action_button::RenderCompactibleActionButton;
-use crate::{
-    ui_components::icons::Icon,
-    view_components::action_button::{
-        ActionButton, ButtonSize, KeystrokeSource, NakedTheme, PrimaryRightBiasedTheme,
-        PrimaryTheme,
-    },
-    view_components::compactible_action_button::CompactibleActionButton,
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme, PrimaryRightBiasedTheme,
+    PrimaryTheme,
+};
+use crate::view_components::compactible_action_button::{
+    CompactibleActionButton, RenderCompactibleActionButton,
 };
 
 /// A split button composed of a primary CompactibleActionButton and a trailing
@@ -106,6 +104,19 @@ impl CompactibleSplitActionButton {
         ctx: &mut ViewContext<T>,
     ) {
         self.primary_button.set_keybinding(keybinding, ctx);
+    }
+
+    /// Sets the disabled state on both the primary and menu buttons.
+    pub fn set_disabled<T: View>(&mut self, disabled: bool, ctx: &mut ViewContext<T>) {
+        self.primary_button.set_disabled(disabled, ctx);
+        self.menu_button.update(ctx, |button, ctx| {
+            button.set_disabled(disabled, ctx);
+        });
+    }
+
+    /// Sets the tooltip on the primary button.
+    pub fn set_tooltip<T: View>(&mut self, tooltip: Option<String>, ctx: &mut ViewContext<T>) {
+        self.primary_button.set_tooltip(tooltip, ctx);
     }
 }
 

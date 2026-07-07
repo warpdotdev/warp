@@ -10,117 +10,96 @@ use std::iter;
 use std::path::Path;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextInline, TableAlignment};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::sync::Arc;
-use warp_core::{
-    features::FeatureFlag,
-    ui::{appearance::Appearance, color::blend::Blend, theme::color::internal_colors},
-};
-use warpui::{
-    assets::asset_cache::{AssetCache, AssetSource, AssetState},
-    elements::{
-        new_scrollable::{ScrollableAppearance, SingleAxisConfig},
-        Align, Axis, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
-        EventHandler, Expanded, Fill, Flex, FormattedTextElement, HeadingFontSizeMultipliers,
-        Hoverable, Image as WarpImage, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        NewScrollable, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-        SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Table,
-        TableColumnWidth, TableConfig, TableHeader, TableVerticalSizing, Text, Wrap,
-    },
-    fonts::{Properties, Weight},
-    image_cache::{CacheOption, ImageType},
-    keymap::Keystroke,
-    platform::Cursor,
-    text_layout::{ClipConfig, TextAlignment, TextStyle},
-    ui_components::{
-        button::Button,
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-    Action, AppContext, Element, EventContext, SingletonEntity, View, ViewHandle,
-};
-
-use super::{add_highlights_to_rich_text, add_highlights_to_text, output::LinkActionConstructors};
-use crate::ai::agent::MessageId;
-use crate::terminal::find::BlockListMatch;
-use crate::terminal::grid_renderer::{FOCUSED_MATCH_COLOR, MATCH_COLOR};
-use crate::{
-    ai::{
-        agent::{conversation::AIConversation, icons, ShellCommandDelay},
-        blocklist::{
-            block::status_bar::BlocklistAIStatusBarAction, history_model::BlocklistAIHistoryModel,
-            BlocklistAIActionModel, ShellCommandExecutor,
-        },
-        loading::shimmering_warp_loading_text,
-    },
-    terminal::{self, TerminalModel},
-    util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState},
-    workspaces::{user_workspaces::UserWorkspaces, workspace::CustomerType},
-};
-use crate::{
-    ai::{
-        agent::{
-            icons::red_stop_icon, AIAgentAction, AIAgentActionType, AIAgentInput,
-            AIAgentOutputMessageType, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
-            AgentOutputMermaidDiagram, AgentOutputTable, AgentOutputTableRendering,
-            ProgrammingLanguage, RenderableAIError, SummarizationType, UserQueryMode,
-            WebSearchStatus,
-        },
-        blocklist::{
-            block::{
-                find::FindState, view_impl::CONTENT_HORIZONTAL_PADDING, AIBlockAction,
-                CollapsibleElementState, CollapsibleExpansionState, EmbeddedCodeEditorView,
-                TableSectionHandles,
-            },
-            code_block::{
-                render_code_block_plain, render_code_block_with_warp_text, CodeBlockOptions,
-                CodeSnippetButtonHandles,
-            },
-            inline_action::{
-                aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView,
-                inline_action_header::{
-                    INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
-                },
-                inline_action_icons::{self, icon_size},
-                requested_action::RenderableAction,
-            },
-            model::{AIBlockModel, AIBlockModelHelper},
-            secret_redaction::{redact_secrets_in_element, SecretRedactionState},
-            view_util::error_color,
-            TextLocation,
-        },
-        AIRequestUsageModel,
-    },
-    code::{editor::view::CodeEditorView, editor_management::CodeSource},
-    notebooks::editor::{markdown_table_appearance, rich_text_styles},
-    settings_view::SettingsSection,
-    terminal::{
-        find::TerminalFindModel, safe_mode_settings::get_secret_obfuscation_mode,
-        view::TerminalAction, ShellLaunchData,
-    },
-    ui_components::{
-        avatar::{Avatar, AvatarContent},
-        blended_colors,
-        buttons::icon_button,
-        icons::Icon,
-    },
-    workspace::WorkspaceAction,
-};
-use crate::{
-    search::slash_command_menu::static_commands::commands,
-    settings::{FontSettings, InputSettings},
-};
 use warp_core::channel::ChannelState;
-use warp_editor::content::{
-    edit::resolve_asset_source_relative_to_directory, mermaid_diagram::mermaid_asset_source,
-};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::blend::Blend;
+use warp_core::ui::theme::color::internal_colors;
+use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
+use warp_editor::content::mermaid_diagram::mermaid_asset_source;
 use warp_util::path::to_relative_path;
+use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
-use warpui::elements::{Highlight, HighlightedRange};
+use warpui::elements::{
+    Align, Axis, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler,
+    Expanded, Fill, Flex, FormattedTextElement, HeadingFontSizeMultipliers, Highlight,
+    HighlightedRange, Hoverable, Image as WarpImage, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
+    Shrinkable, Stack, Table, TableColumnWidth, TableConfig, TableHeader, TableVerticalSizing,
+    Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::image_cache::{CacheOption, ImageType};
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::text_layout::{ClipConfig, TextAlignment, TextStyle};
+use warpui::ui_components::button::Button;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{Action, AppContext, Element, EventContext, SingletonEntity, View, ViewHandle};
+
+use super::output::LinkActionConstructors;
+use super::{add_highlights_to_rich_text, add_highlights_to_text};
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::agent::icons::red_stop_icon;
+use crate::ai::agent::{
+    icons, AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
+    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
+    AgentOutputTable, AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
+    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus,
+};
+use crate::ai::blocklist::block::find::FindState;
+use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBarAction;
+use crate::ai::blocklist::block::view_impl::CONTENT_HORIZONTAL_PADDING;
+use crate::ai::blocklist::block::{
+    AIBlockAction, CollapsibleElementState, CollapsibleExpansionState, EmbeddedCodeEditorView,
+    TableSectionHandles,
+};
+use crate::ai::blocklist::code_block::{
+    render_code_block_plain, render_code_block_with_warp_text, CodeBlockOptions,
+    CodeSnippetButtonHandles,
+};
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
+};
+use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
+use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
+use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
+use crate::ai::blocklist::secret_redaction::{redact_secrets_in_element, SecretRedactionState};
+use crate::ai::blocklist::view_util::error_color;
+use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
+use crate::ai::loading::shimmering_warp_loading_text;
+use crate::ai::AIRequestUsageModel;
+use crate::code::editor::view::CodeEditorView;
+use crate::code::editor_management::CodeSource;
+use crate::notebooks::editor::{markdown_table_appearance, rich_text_styles};
+use crate::search::slash_command_menu::static_commands::commands;
+use crate::settings::{FontSettings, InputSettings};
+use crate::settings_view::SettingsSection;
+use crate::terminal::find::TerminalFindModel;
+use crate::terminal::grid_renderer::{FOCUSED_MATCH_COLOR, MATCH_COLOR};
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::view::TerminalAction;
+use crate::terminal::{self, ShellLaunchData, TerminalModel};
+use crate::ui_components::avatar::{Avatar, AvatarContent};
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::time_format::format_elapsed_seconds;
+use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::CustomerType;
 
 pub const STATUS_ICON_SIZE_DELTA: f32 = 4.;
 pub const STATUS_FOOTER_VERTICAL_PADDING: f32 = 4.;
@@ -163,6 +142,7 @@ pub const BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB: &str =
     "OK if I search the files in this directory?";
 
 const BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER: f32 = 10.0;
+const BLOCKLIST_MERMAID_MAX_HEIGHT_LINE_MULTIPLIER: f32 = 40.0;
 const INLINE_IMAGE_HEIGHT: f32 = 164.;
 const INLINE_IMAGE_MAX_WIDTH: f32 = 218.;
 const INLINE_IMAGE_SPACING: f32 = 32.;
@@ -181,7 +161,7 @@ pub struct WarpingProps<'a, V> {
     pub summarization_start_time: Option<instant::Instant>,
     pub hide_responses_button: Option<(ButtonProps<'a>, bool)>,
     pub take_over_lrc_control_button: Option<ButtonProps<'a>>,
-    pub auto_execute_button: Option<ButtonProps<'a>>,
+    pub auto_execute_button: Option<AutoExecuteButtonProps<'a>>,
     pub queue_next_prompt_button: Option<ButtonProps<'a>>,
     pub stop_button: Option<ButtonProps<'a>>,
     /// Inline `Check now` affordance displayed alongside `Last seen by agent ...`
@@ -200,6 +180,18 @@ pub struct ButtonProps<'a> {
     pub button_handle: &'a MouseStateHandle,
     pub keystroke: Option<&'a Keystroke>,
     pub is_active: bool,
+}
+
+/// Props for the auto-approve / fast-forward button in the warping indicator.
+///
+/// When `is_locked` is set, the button is rendered in its always-on state and
+/// the click handler (plus the action dispatched by the keybinding) are no-ops.
+/// Used for ambient agent conversations where fast-forward is always conceptually on.
+pub struct AutoExecuteButtonProps<'a> {
+    pub button_handle: &'a MouseStateHandle,
+    pub keystroke: Option<&'a Keystroke>,
+    pub is_active: bool,
+    pub is_locked: bool,
 }
 
 pub struct ForceRefreshButtonProps<'a> {
@@ -535,6 +527,23 @@ pub struct WarpingIndicatorProps {
     pub secondary_element: Option<Box<dyn Element>>,
 }
 
+/// Computes the fixed height of the warping-indicator footer.
+///
+/// The warping text occupies a single line. When a secondary element (an agent
+/// tip or fallback-model explanation) is present, it renders on a second line
+/// below the warping text, so the footer must reserve room for that extra line;
+/// otherwise the `Clipped` wrapper — which keeps action chips from overflowing
+/// narrow panes — also clips the secondary line. The extra line accounts for the
+/// secondary element's font size (`monospace_font_size - 3`, see
+/// `render_agent_tip` / `render_fallback_explanation`) plus its 1px top margin.
+fn warping_footer_height(monospace_font_size: f32, has_secondary_element: bool) -> f32 {
+    let mut height = STATUS_FOOTER_VERTICAL_PADDING * 2. + monospace_font_size;
+    if has_secondary_element {
+        height += (monospace_font_size - 3.) + 1.;
+    }
+    height
+}
+
 /// Helper function to render text in the "warping..." footer.
 /// Additional text that does not use the shimmering text animation can be passed in via
 /// `non_shimmering_text` which is useful if you want some part of the text to constantly update
@@ -552,6 +561,10 @@ pub fn render_warping_indicator_base(
         is_passive_code_diff,
         secondary_element,
     } = props;
+    // Whether a secondary element (an agent tip or fallback-model explanation)
+    // will be rendered on a second line below the warping text. Captured before
+    // `secondary_element` is consumed so the container can reserve room for it.
+    let has_secondary_element = secondary_element.is_some();
     // Unicode code point for the Warp glyph that is embedded in the version of Roboto we bundle
     // into the app. This code point MUST be rendered using Roboto (the default ui font) or else the
     // glyph may not be rendered.
@@ -655,7 +668,10 @@ pub fn render_warping_indicator_base(
     } else {
         let mut container = Container::new(
             ConstrainedBox::new(content)
-                .with_height(STATUS_FOOTER_VERTICAL_PADDING * 2. + appearance.monospace_font_size())
+                .with_height(warping_footer_height(
+                    appearance.monospace_font_size(),
+                    has_secondary_element,
+                ))
                 .finish(),
         )
         .with_padding_right(CONTENT_HORIZONTAL_PADDING);
@@ -668,16 +684,6 @@ pub fn render_warping_indicator_base(
         }
 
         container.finish()
-    }
-}
-
-/// Formats elapsed time as a human-readable string with proper singular/plural.
-pub fn format_elapsed_seconds(elapsed: std::time::Duration) -> String {
-    let total_seconds = elapsed.as_secs();
-    if total_seconds == 1 {
-        "1 second".to_string()
-    } else {
-        format!("{total_seconds} seconds")
     }
 }
 
@@ -786,6 +792,7 @@ fn render_hide_responses_button(
         props.keystroke,
         tooltip_text.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(BlocklistAIStatusBarAction::ToggleHideResponses);
         },
@@ -817,6 +824,7 @@ pub fn render_switch_control_to_user_button(
         props.keystroke,
         tooltip.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(TerminalAction::SetInputModeTerminal);
         },
@@ -840,6 +848,7 @@ fn render_stop_button(props: ButtonProps, appearance: &Appearance) -> Box<dyn El
         props.keystroke,
         "Stop agent task".to_string(),
         props.is_active,
+        false,
         |ctx: &mut EventContext<'_>| {
             ctx.dispatch_typed_action(BlocklistAIStatusBarAction::Stop);
         },
@@ -877,14 +886,21 @@ fn render_queue_next_prompt_button(
         props.keystroke,
         tooltip_text.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(TerminalAction::ToggleQueueNextPrompt);
         },
     )
 }
 
-fn render_auto_approve_button(props: ButtonProps, appearance: &Appearance) -> Box<dyn Element> {
-    let icon = if props.is_active {
+fn render_auto_approve_button(
+    props: AutoExecuteButtonProps,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    // In locked mode (ambient/cloud agent conversations), the button is always
+    // rendered in its "on" state regardless of the underlying conversation state.
+    let is_active = props.is_active || props.is_locked;
+    let icon = if is_active {
         Icon::FastForwardFilled
     } else {
         Icon::FastForward
@@ -901,7 +917,9 @@ fn render_auto_approve_button(props: ButtonProps, appearance: &Appearance) -> Bo
     )
     .finish();
 
-    let tooltip_text = if props.is_active {
+    let tooltip_text = if props.is_locked {
+        "Fast forward is always enabled for cloud agent conversations"
+    } else if is_active {
         "Turn off auto-approve all agent actions"
     } else {
         "Auto-approve all agent actions for this task"
@@ -913,8 +931,12 @@ fn render_auto_approve_button(props: ButtonProps, appearance: &Appearance) -> Bo
         icon,
         props.keystroke,
         tooltip_text.to_string(),
-        props.is_active,
-        |ctx| {
+        is_active,
+        props.is_locked,
+        move |ctx| {
+            if props.is_locked {
+                return;
+            }
             ctx.dispatch_typed_action(TerminalAction::ToggleAutoexecuteMode);
         },
     )
@@ -992,6 +1014,7 @@ fn render_force_refresh_inline(
     .finish()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_warping_indicator_button<F>(
     mouse_state: MouseStateHandle,
     appearance: &Appearance,
@@ -999,6 +1022,7 @@ fn render_warping_indicator_button<F>(
     keybinding: Option<&Keystroke>,
     tooltip: String,
     is_active: bool,
+    is_disabled: bool,
     mut on_click: F,
 ) -> Box<dyn Element>
 where
@@ -1045,6 +1069,12 @@ where
         UiComponentStyles::default().set_background(internal_colors::fg_overlay_3(theme).into()),
     );
 
+    let cursor = if is_disabled {
+        Cursor::Arrow
+    } else {
+        Cursor::PointingHand
+    };
+
     let mut button = Button::new(
         mouse_state,
         styles,
@@ -1054,7 +1084,7 @@ where
     )
     .with_custom_label(button_content)
     .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish())
-    .with_cursor(Some(Cursor::PointingHand));
+    .with_cursor(Some(cursor));
 
     if is_active {
         button = button.active();
@@ -1136,11 +1166,11 @@ pub fn render_text_sections<V: View, A: Action>(
                 // Carve off a subslice of the pre-allocated handles for just
                 // this group, and advance the counter so subsequent image
                 // sections pick up handles from later in the slice.
-                let handle_start = *props.starting_image_section_index;
-                let handle_end = (handle_start + image_group.images.len())
-                    .min(props.image_section_tooltip_handles.len());
-                let handles_for_group =
-                    &props.image_section_tooltip_handles[handle_start..handle_end];
+                let handles_for_group = image_tooltip_handles_for_group(
+                    props.image_section_tooltip_handles,
+                    *props.starting_image_section_index,
+                    image_group.images.len(),
+                );
                 *props.starting_image_section_index += image_group.images.len();
                 let render_context = ImageRenderContext {
                     detected_links: props.detected_links,
@@ -1314,6 +1344,17 @@ fn text_sections_with_indices(
         .iter()
         .enumerate()
         .map(move |(offset, section)| (starting_text_section_index + offset, section))
+}
+
+fn image_tooltip_handles_for_group(
+    tooltip_handles: &[MouseStateHandle],
+    starting_image_section_index: usize,
+    image_group_len: usize,
+) -> &[MouseStateHandle] {
+    let available_handles = tooltip_handles
+        .get(starting_image_section_index..)
+        .unwrap_or(&[]);
+    &available_handles[..available_handles.len().min(image_group_len)]
 }
 
 #[derive(Clone, Copy)]
@@ -1728,12 +1769,26 @@ enum VisualMarkdownAlignment {
     Center,
 }
 
+/// How a visual markdown block (image or mermaid diagram) is sized.
+#[derive(Clone, Copy, Debug)]
+enum VisualMarkdownSizing {
+    /// Fixed element height. Width is fixed when `width` is set, otherwise
+    /// bounded by `max_width`, otherwise falls back to a square of `height`.
+    FixedHeight {
+        height: f32,
+        width: Option<f32>,
+        max_width: Option<f32>,
+    },
+    /// Fill the available width, deriving the element height from the
+    /// image's intrinsic aspect ratio, capped at `max_height`. When the cap
+    /// applies, the width shrinks proportionally instead of letterboxing.
+    FitWidth { max_height: f32 },
+}
+
 #[derive(Clone)]
 struct VisualMarkdownBlockOptions<A: 'static> {
-    height: f32,
-    width: Option<f32>,
+    sizing: VisualMarkdownSizing,
     copy_action_factory: Option<CopyCodeActionFactory<A>>,
-    max_width: Option<f32>,
     alignment: VisualMarkdownAlignment,
     lightbox_trigger: Option<VisualMarkdownLightboxTrigger>,
     /// When `Some(non_empty)`, the rendered image is wrapped in the standard
@@ -1809,6 +1864,9 @@ fn load_renderable_image_asset(
 
     #[cfg(not(feature = "local_fs"))]
     let asset_source = blocklist_image_asset_source(&image.source, current_working_directory)?;
+    if !should_load_blocklist_image_asset(&asset_source) {
+        return None;
+    }
     let asset_state = AssetCache::as_ref(app).load_asset::<ImageType>(asset_source.clone());
     if matches!(asset_state, AssetState::FailedToLoad(_)) {
         return None;
@@ -1833,6 +1891,16 @@ fn can_render_blocklist_image(
         app,
     )
     .is_some()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn should_load_blocklist_image_asset(asset_source: &AssetSource) -> bool {
+    !matches!(asset_source, AssetSource::LocalFile { .. })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn should_load_blocklist_image_asset(_: &AssetSource) -> bool {
+    true
 }
 
 fn render_image_section<A: Action>(
@@ -1931,10 +1999,12 @@ fn render_inline_image_group_item<A: Action>(
         asset_source,
         indexed_image.image.markdown_source.clone(),
         VisualMarkdownBlockOptions {
-            height: INLINE_IMAGE_HEIGHT,
-            width: Some(width),
+            sizing: VisualMarkdownSizing::FixedHeight {
+                height: INLINE_IMAGE_HEIGHT,
+                width: Some(width),
+                max_width: None,
+            },
             copy_action_factory: render_context.copy_action_factory,
-            max_width: None,
             alignment: VisualMarkdownAlignment::Left,
             lightbox_trigger: lightbox_trigger_for_section(
                 render_context.lightbox_collection,
@@ -2024,10 +2094,12 @@ fn render_block_image_group_row<A: Action>(
         asset_source,
         indexed_image.image.markdown_source.clone(),
         VisualMarkdownBlockOptions {
-            height: BLOCK_IMAGE_THUMBNAIL_SIZE,
-            width: Some(BLOCK_IMAGE_THUMBNAIL_SIZE),
+            sizing: VisualMarkdownSizing::FixedHeight {
+                height: BLOCK_IMAGE_THUMBNAIL_SIZE,
+                width: Some(BLOCK_IMAGE_THUMBNAIL_SIZE),
+                max_width: None,
+            },
             copy_action_factory: render_context.copy_action_factory,
-            max_width: None,
             alignment: VisualMarkdownAlignment::Center,
             lightbox_trigger: lightbox_trigger_for_section(
                 render_context.lightbox_collection,
@@ -2088,14 +2160,23 @@ fn render_mermaid_diagram_section<A: Action>(
     }
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let sizing = if matches!(asset_state, AssetState::Loaded { .. }) {
+        VisualMarkdownSizing::FitWidth {
+            max_height: mermaid_section_max_height(app),
+        }
+    } else {
+        VisualMarkdownSizing::FixedHeight {
+            height: visual_section_height(app),
+            width: None,
+            max_width: None,
+        }
+    };
     let mermaid_block = render_visual_markdown_block(
         asset_source,
         diagram.markdown_source.clone(),
         VisualMarkdownBlockOptions {
-            height: visual_section_height(app),
-            width: None,
+            sizing,
             copy_action_factory,
-            max_width: visual_section_max_width(&asset_state, visual_section_height(app)),
             alignment: VisualMarkdownAlignment::Center,
             lightbox_trigger: lightbox_trigger_for_section(lightbox_collection, section_index),
             // Mermaid diagrams don't carry CommonMark image titles.
@@ -2156,15 +2237,30 @@ fn render_visual_markdown_block<A: Action>(
         .contain()
         .before_load(placeholder)
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)));
-    let mut content = ConstrainedBox::new(Box::new(image)).with_height(options.height);
-    if let Some(width) = finite_positive_visual_size(options.width) {
-        content = content.with_width(width);
-    } else if let Some(max_width) = finite_positive_visual_size(options.max_width) {
-        content = content.with_max_width(max_width);
-    } else if let Some(fallback_width) = finite_positive_visual_size(Some(options.height)) {
-        content = content.with_width(fallback_width);
-    }
-    let content = content.finish();
+    let content = match options.sizing {
+        VisualMarkdownSizing::FixedHeight {
+            height,
+            width,
+            max_width,
+        } => {
+            let mut content = ConstrainedBox::new(Box::new(image)).with_height(height);
+            if let Some(width) = finite_positive_visual_size(width) {
+                content = content.with_width(width);
+            } else if let Some(max_width) = finite_positive_visual_size(max_width) {
+                content = content.with_max_width(max_width);
+            } else if let Some(fallback_width) = finite_positive_visual_size(Some(height)) {
+                content = content.with_width(fallback_width);
+            }
+            content.finish()
+        }
+        VisualMarkdownSizing::FitWidth { max_height } => {
+            let mut content = ConstrainedBox::new(Box::new(image.layout_using_paint_bounds()));
+            if let Some(max_height) = finite_positive_visual_size(Some(max_height)) {
+                content = content.with_max_height(max_height);
+            }
+            content.finish()
+        }
+    };
     let content = match options.alignment {
         VisualMarkdownAlignment::Left => Align::new(content).left().finish(),
         VisualMarkdownAlignment::Center => Align::new(content).finish(),
@@ -2321,10 +2417,17 @@ fn is_supported_blocklist_image_source(source: &str) -> bool {
 }
 
 fn visual_section_height(app: &AppContext) -> f32 {
+    blocklist_base_line_height(app) * BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER
+}
+
+fn mermaid_section_max_height(app: &AppContext) -> f32 {
+    blocklist_base_line_height(app) * BLOCKLIST_MERMAID_MAX_HEIGHT_LINE_MULTIPLIER
+}
+
+fn blocklist_base_line_height(app: &AppContext) -> f32 {
     rich_text_styles(Appearance::as_ref(app), FontSettings::as_ref(app))
         .base_line_height()
         .as_f32()
-        * BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER
 }
 
 const TABLE_BLOCK_CORNER_RADIUS: f32 = 8.0;
@@ -2872,12 +2975,8 @@ pub fn get_highlight_ranges_for_find_matches(
 ) -> impl Iterator<Item = HighlightedRange> {
     let find_match_locations = find_state.matches_for_location(location);
     let focused_match_location = find_model
-        .block_list_find_run()
-        .and_then(|run| match run.focused_match() {
-            Some(BlockListMatch::RichContent { match_id, .. }) => Some(match_id),
-            _ => None,
-        })
-        .and_then(|match_id| find_state.location_for_match(*match_id));
+        .focused_rich_content_match_id()
+        .and_then(|match_id| find_state.location_for_match(match_id));
     let mut highlighted_ranges = vec![];
     for find_match_location in find_match_locations {
         let is_focused_match =
@@ -2952,17 +3051,33 @@ pub struct FailedOutputProps<'a> {
 pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
 
-    let error_text = match props.error {
-        RenderableAIError::QuotaLimit => {
-            let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
-            let formatted_next_refresh_time = ai_request_usage_model
-                .next_refresh_time()
-                .format("%B %d")
-                .to_string();
+    // While an automatic retry/resume is still in flight, don't surface the underlying
+    // transport failure at all. These are typically transient and recover on their own,
+    // so showing the alarming "Warp lost connection" banner (plus debug info) for every
+    // blip is noisy and misleading. Render nothing during in-flight recovery; the full
+    // error banner is only shown once recovery has actually failed. Dogfood builds
+    // (Local/Dev) opt out so developers still see every transport failure aggressively.
+    if props.error.should_suppress_during_recovery() {
+        return Empty::new().finish();
+    }
 
-            format!(
-                "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
-            )
+    let error_text = match props.error {
+        RenderableAIError::QuotaLimit {
+            user_display_message,
+        } => {
+            if let Some(message) = user_display_message {
+                format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
+            } else {
+                let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
+                let formatted_next_refresh_time = ai_request_usage_model
+                    .next_refresh_time()
+                    .format("%B %d")
+                    .to_string();
+
+                format!(
+                    "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
+                )
+            }
         }
         RenderableAIError::ServerOverloaded => {
             "Warp is currently overloaded. Please try again later.".to_string()
@@ -2970,22 +3085,19 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         RenderableAIError::InternalWarpError => {
             format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_WARP_ERROR}")
         }
-        RenderableAIError::Other {
-            error_message,
-            will_attempt_resume,
-            waiting_for_network,
-        } => {
-            if *will_attempt_resume {
-                if *waiting_for_network {
-                    format!(
-                        "{error_message}\n\nWill resume conversation when network connectivity is restored..."
-                    )
-                } else {
-                    format!("{error_message}\n\nAttempting to resume conversation...")
-                }
-            } else {
-                format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
-            }
+        RenderableAIError::Other { error_message, .. } => {
+            // A still-recovering `Other` error is handled by the early return above; once we
+            // reach here recovery has failed, so surface the error directly.
+            format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
+        }
+        RenderableAIError::AgentExitedShell => {
+            format!("{ERROR_APOLOGY_TEXT}\n\n{}", props.error)
+        }
+        RenderableAIError::TransientNetworkError { .. } => {
+            // Recovering transient errors are handled by the early return above; once we
+            // reach here recovery has failed. These carry their own complete user-facing
+            // copy (plus debug info), so the apology prefix adds nothing.
+            props.error.to_string()
         }
         RenderableAIError::InvalidApiKey {
             provider,

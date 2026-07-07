@@ -1,11 +1,11 @@
 mod glibc;
 
-pub use glibc::{GlibcVersion, RemoteLibc};
-
 use std::time::Duration;
 
 use anyhow::anyhow;
+pub use glibc::{GlibcVersion, RemoteLibc};
 use warp_core::channel::{Channel, ChannelState};
+pub const REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED: &str = "unversioned";
 
 /// State machine for the remote server install → launch → initialize flow.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +63,18 @@ impl RemoteServerSetupState {
     }
 }
 
+impl From<&crate::transport::Error> for RemoteServerSetupState {
+    fn from(error: &crate::transport::Error) -> Self {
+        if let Some(reason) = UnsupportedReason::from_transport_error(error) {
+            Self::Unsupported { reason }
+        } else {
+            Self::Failed {
+                error: error.to_string(),
+            }
+        }
+    }
+}
+
 /// Outcome of [`crate::transport::RemoteTransport::run_preinstall_check`].
 ///
 /// The script runs over the existing SSH socket before any install UI
@@ -100,9 +112,47 @@ pub enum UnsupportedReason {
     NonGlibc {
         name: String,
     },
+    UnsupportedOs {
+        os: String,
+    },
+    UnsupportedArch {
+        arch: String,
+    },
+}
+
+impl UnsupportedReason {
+    pub fn from_transport_error(error: &crate::transport::Error) -> Option<Self> {
+        match error {
+            crate::transport::Error::UnsupportedOs { os } => {
+                Some(Self::UnsupportedOs { os: os.clone() })
+            }
+            crate::transport::Error::UnsupportedArch { arch } => {
+                Some(Self::UnsupportedArch { arch: arch.clone() })
+            }
+            crate::transport::Error::TimedOut
+            | crate::transport::Error::ScriptFailed { .. }
+            | crate::transport::Error::Other(_) => None,
+        }
+    }
+
+    pub fn as_telemetry_reason(&self) -> &'static str {
+        match self {
+            Self::GlibcTooOld { .. } => "glibc_too_old",
+            Self::NonGlibc { .. } => "non_glibc",
+            Self::UnsupportedOs { .. } => "unsupported_os",
+            Self::UnsupportedArch { .. } => "unsupported_arch",
+        }
+    }
 }
 
 impl PreinstallCheckResult {
+    pub fn unsupported(reason: UnsupportedReason) -> Self {
+        Self {
+            status: PreinstallStatus::Unsupported { reason },
+            libc: RemoteLibc::Unknown,
+            raw: String::new(),
+        }
+    }
     /// Whether the host is supported. Both `Supported` and `Unknown`
     /// return true — only positive detection of an incompatible libc
     /// triggers the silent fall-back.
@@ -271,7 +321,7 @@ pub fn parse_uname_output(
 
     let arch = match arch_str {
         "x86_64" | "amd64" => RemoteArch::X86_64,
-        "aarch64" | "arm64" | "armv8l" => RemoteArch::Aarch64,
+        "aarch64" | "arm64" => RemoteArch::Aarch64,
         other => {
             return Err(Error::UnsupportedArch {
                 arch: other.to_string(),
@@ -305,12 +355,29 @@ pub fn remote_server_dir() -> String {
     format!("~/{warp_dir}/remote-server")
 }
 
-/// Returns a filesystem-safe directory name for a remote-server identity key.
+/// Returns a short, deterministic directory name for a remote-server
+/// identity key, used for the daemon socket and PID file paths.
 ///
-/// The identity key is not secret, but it can contain bytes that are unsafe or
-/// ambiguous in paths. Keep ASCII alphanumeric characters plus `-` and `_`;
-/// percent-encode all other UTF-8 bytes.
+/// Hashes the key to 8 hex chars so the socket path stays within the
+/// `sun_path` limit across all channels.
 pub fn remote_server_identity_dir_name(identity_key: &str) -> String {
+    use std::hash::{Hash, Hasher};
+
+    if identity_key.is_empty() {
+        return "empty".to_string();
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    identity_key.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())[..8].to_string()
+}
+
+/// Percent-encodes an identity key for use in filesystem paths.
+///
+/// Keeps ASCII alphanumeric characters plus `-` and `_`; percent-encodes
+/// all other bytes.  Used by [`remote_server_daemon_data_dir`] for
+/// persistent data that must not collide across identities.
+fn percent_encode_identity_key(identity_key: &str) -> String {
     if identity_key.is_empty() {
         return "empty".to_string();
     }
@@ -328,7 +395,8 @@ pub fn remote_server_identity_dir_name(identity_key: &str) -> String {
 }
 
 /// Returns the identity-scoped remote directory used for the daemon socket
-/// and PID file.
+/// and PID file.  Uses the hashed identity dir name so the full socket
+/// path fits within `sun_path`.
 pub fn remote_server_daemon_dir(identity_key: &str) -> String {
     format!(
         "{}/{}",
@@ -338,9 +406,58 @@ pub fn remote_server_daemon_dir(identity_key: &str) -> String {
 }
 
 /// Returns the identity-scoped remote directory used for daemon-owned
-/// per-user data files.
+/// per-user data files (e.g. SQLite databases).
+///
+/// Uses the full percent-encoded identity key (not the hash) so that
+/// persistent data is never shared between distinct identities due to
+/// a hash collision.  The `sun_path` limit does not apply here because
+/// this path is only used for regular file I/O, not Unix sockets.
 pub fn remote_server_daemon_data_dir(identity_key: &str) -> String {
-    format!("{}/data", remote_server_daemon_dir(identity_key))
+    format!(
+        "{}/{}/data",
+        remote_server_dir(),
+        percent_encode_identity_key(identity_key)
+    )
+}
+
+/// Returns a short, deterministic 8-hex-char hash of the app version string.
+///
+/// Used to version-discriminate daemon socket and PID files without
+/// embedding the full version string in the filename, which would push
+/// the Unix domain socket path over the `sun_path` limit (107 bytes on
+/// Linux, 103 on macOS) for users with moderately long identity keys or
+/// home directory paths.
+pub fn version_hash() -> Option<String> {
+    use std::hash::{Hash, Hasher};
+
+    let version = ChannelState::app_version()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    version.hash(&mut hasher);
+    Some(format!("{:016x}", hasher.finish())[..8].to_string())
+}
+
+/// Returns the daemon socket filename, versioned with a short hash when
+/// a release tag is baked in.
+///
+/// - With `GIT_RELEASE_TAG`:    `server-{hash8}.sock`  (e.g. `server-a1b2c3d4.sock`)
+/// - Without (plain cargo run): `server.sock`
+pub fn daemon_socket_name() -> String {
+    match version_hash() {
+        Some(hash) => format!("server-{hash}.sock"),
+        None => "server.sock".to_string(),
+    }
+}
+
+/// Returns the daemon PID filename, versioned with a short hash when a
+/// release tag is baked in.
+///
+/// - With `GIT_RELEASE_TAG`:    `server-{hash8}.pid`
+/// - Without (plain cargo run): `server.pid`
+pub fn daemon_pid_name() -> String {
+    match version_hash() {
+        Some(hash) => format!("server-{hash}.pid"),
+        None => "server.pid".to_string(),
+    }
 }
 
 /// Returns the binary name, keyed by channel.
@@ -389,6 +506,15 @@ pub fn binary_check_command() -> String {
     format!("{} --version", remote_server_binary())
 }
 
+/// Returns the shell command to remove the current remote-server binary.
+///
+/// The global bundled resources directory is deliberately left in place:
+/// the next install overwrites it, and an older daemon that is still
+/// running parsed its skills at startup.
+pub fn remote_server_removal_command() -> String {
+    format!("rm -f {}", remote_server_binary())
+}
+
 /// Returns the version string used to pin remote-server installs on
 /// channels that take the versioned path (i.e. everything except
 /// [`Channel::Local`] and [`Channel::Oss`]). Prefers the baked-in
@@ -400,6 +526,36 @@ pub fn binary_check_command() -> String {
 /// fall through to the unversioned (Local/Oss-only) path.
 fn pinned_version() -> &'static str {
     ChannelState::app_version().unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
+/// Returns the version key used to identify remote-server download artifacts.
+///
+/// This must match the versioning used by [`download_tarball_url`] and
+/// [`install_script`], so versioned download URLs do not reuse stale tarballs
+/// from a previous client version.
+pub fn remote_server_artifact_version() -> &'static str {
+    match ChannelState::channel() {
+        Channel::Local | Channel::Oss => REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED,
+        Channel::Stable | Channel::Preview | Channel::Dev | Channel::Integration => {
+            pinned_version()
+        }
+    }
+}
+
+/// Name of the global, version-independent resources directory inside
+/// [`remote_server_dir`], populated by the install script from the
+/// artifact's `resources/` tree (bundled skills, settings schema).
+pub const BUNDLED_RESOURCES_DIR_NAME: &str = "bundled_resources";
+
+/// Returns the global, version-independent directory where the install
+/// script places the artifact's `resources/` tree. Shell-form path
+/// (`~/...`); the daemon expands it against its own home directory.
+///
+/// Deliberately not version-scoped: the last install wins, and slight
+/// version skew between the resources and a running daemon is accepted
+/// (the daemon parses its skills once at startup).
+pub fn remote_server_bundled_resources_dir() -> String {
+    format!("{}/{}", remote_server_dir(), BUNDLED_RESOURCES_DIR_NAME)
 }
 
 /// The install script template, loaded from a standalone `.sh` file for
@@ -434,6 +590,7 @@ pub fn install_script(staging_tarball_path: Option<&str>) -> String {
         .replace("{binary_name}", binary_name())
         .replace("{version_query}", &vq)
         .replace("{version_suffix}", &version_suffix)
+        .replace("{bundled_resources_dir_name}", BUNDLED_RESOURCES_DIR_NAME)
         .replace(
             "{no_http_client_exit_code}",
             &NO_HTTP_CLIENT_EXIT_CODE.to_string(),

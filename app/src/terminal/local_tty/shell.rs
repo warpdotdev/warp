@@ -1,26 +1,20 @@
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::{io, process};
+
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
-use std::{
-    ffi::OsString,
-    io,
-    path::{Path, PathBuf},
-    process,
-};
 use typed_path::UnixPathBuf;
 use warp_core::channel::{Channel, ChannelState};
+use warp_core::session_id::SessionId;
 use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
 
-use crate::{
-    terminal::{
-        available_shells::AvailableShell,
-        bootstrap::init_shell_script_for_shell,
-        local_tty::docker_sandbox::DockerSandboxShellStarter,
-        shell::{ShellName, ShellType},
-        ShellLaunchData,
-    },
-    util::path::resolve_executable,
-};
-
+use crate::terminal::available_shells::AvailableShell;
+use crate::terminal::bootstrap::{generate_session_id, init_shell_script_for_shell};
+use crate::terminal::local_tty::docker_sandbox::DockerSandboxShellStarter;
+use crate::terminal::shell::{ShellName, ShellType};
+use crate::terminal::ShellLaunchData;
+use crate::util::path::resolve_executable;
 #[cfg(windows)]
 use crate::util::windows::{powershell_5_path, powershell_7_path, wsl_path};
 
@@ -83,6 +77,7 @@ impl ShellStarter {
                     executable_path,
                     shell_type,
                 } => {
+                    let session_id = generate_session_id();
                     if cfg!(windows) {
                         let executable_path = canonicalize_git_bash_path(executable_path.clone());
                         if is_msys2_path(&executable_path) {
@@ -94,20 +89,24 @@ impl ShellStarter {
                                         ),
                                         shell_path: executable_path,
                                         shell_type,
+                                        session_id,
                                     },
                                 ))
                                 .into(),
                             );
                         }
                     }
+                    let args = arguments_for_session_spawning_command(
+                        executable_path.to_string_lossy().as_ref(),
+                        shell_type,
+                        session_id,
+                    );
                     return Some(
                         ShellStarterSource::Override(ShellStarter::Direct(DirectShellStarter {
-                            args: arguments_for_session_spawning_command(
-                                executable_path.to_string_lossy().as_ref(),
-                                shell_type,
-                            ),
+                            args,
                             shell_path: executable_path,
                             shell_type,
+                            session_id,
                         }))
                         .into(),
                     );
@@ -121,14 +120,16 @@ impl ShellStarter {
                     executable_path,
                     shell_type,
                 } => {
+                    let session_id = generate_session_id();
                     return Some(
                         ShellStarterSource::Override(ShellStarter::MSYS2(DirectShellStarter {
                             args: msys2_arguments_for_session_spawning_command(shell_type),
                             shell_path: executable_path,
                             shell_type,
+                            session_id,
                         }))
                         .into(),
-                    )
+                    );
                 }
                 ShellLaunchData::DockerSandbox {
                     sbx_path,
@@ -146,6 +147,7 @@ impl ShellStarter {
                                     args: Vec::new(),
                                     shell_path: sbx_path,
                                     shell_type: ShellType::Bash,
+                                    session_id: generate_session_id(),
                                 },
                                 base_image,
                             ),
@@ -161,14 +163,18 @@ impl ShellStarter {
                 .unwrap_or_else(|| {
                     panic!("Cannot spawn shell; $WARP_SHELL_PATH is invalid: {warp_shell_env_var}")
                 });
+            let session_id = generate_session_id();
+            let args = arguments_for_session_spawning_command(
+                warp_shell_path.as_path().to_string_lossy().as_ref(),
+                shell_type,
+                session_id,
+            );
             return Some(
                 ShellStarterSource::Environment(DirectShellStarter {
-                    args: arguments_for_session_spawning_command(
-                        warp_shell_path.as_path().to_string_lossy().as_ref(),
-                        shell_type,
-                    ),
+                    args,
                     shell_path: warp_shell_path,
                     shell_type,
+                    session_id,
                 })
                 .into(),
             );
@@ -181,24 +187,29 @@ impl ShellStarter {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
                 let pw_shell_path = nix::unistd::User::from_uid(nix::unistd::getuid())
-                    .expect("should not fail to read user information")
-                    .expect("current user should exist")
-                    .shell
-                    .display()
-                    .to_string();
+                    .ok()
+                    .flatten()
+                    .map(|user| user.shell.display().to_string());
+                if pw_shell_path.is_none() {
+                    log::error!("user lookup from nix::unistd::User::from_uid failed");
+                }
                 if let Some((resolved_pw_shell_path, shell_type)) =
-                    supported_shell_path_and_type(&pw_shell_path)
+                    pw_shell_path.as_deref().and_then(supported_shell_path_and_type)
                 {
+                    let session_id = generate_session_id();
+                    let args = arguments_for_session_spawning_command(
+                        resolved_pw_shell_path.as_path().to_string_lossy().as_ref(),
+                        shell_type,
+                        session_id,
+                    );
                     return Some(ShellStarterSource::UserDefault(DirectShellStarter {
-                        args: arguments_for_session_spawning_command(
-                            resolved_pw_shell_path.as_path().to_string_lossy().as_ref(),
-                            shell_type,
-                        ),
+                        args,
                         shell_path: resolved_pw_shell_path,
                         shell_type,
+                        session_id,
                     }));
                 }
-                let unsupported_shell = Some(pw_shell_path);
+                let unsupported_shell = pw_shell_path;
 
                 let (resolved_default_shell_path, shell_type) = if let Some(shell_path_and_type) =
                     supported_shell_path_and_type(ZSH_SHELL_PATH)
@@ -213,15 +224,19 @@ impl ShellStarter {
                     return None;
                 };
 
+                let session_id = generate_session_id();
+                let args = arguments_for_session_spawning_command(
+                    resolved_default_shell_path.as_path().to_string_lossy().as_ref(),
+                    shell_type,
+                    session_id,
+                );
                 Some(ShellStarterSource::Fallback {
                     unsupported_shell,
                     starter: DirectShellStarter {
-                        args: arguments_for_session_spawning_command(
-                            resolved_default_shell_path.as_path().to_string_lossy().as_ref(),
-                            shell_type,
-                        ),
+                        args,
                         shell_path: resolved_default_shell_path,
                         shell_type,
+                        session_id,
                     },
                 })
             } else if #[cfg(target_os = "windows")] {
@@ -237,13 +252,17 @@ impl ShellStarter {
                     return None;
                 };
 
+                let session_id = generate_session_id();
+                let args = arguments_for_session_spawning_command(
+                    resolved_default_shell_path.as_path().to_string_lossy().as_ref(),
+                    shell_type,
+                    session_id,
+                );
                 Some(ShellStarterSource::UserDefault(DirectShellStarter {
-                    args: arguments_for_session_spawning_command(
-                        resolved_default_shell_path.as_path().to_string_lossy().as_ref(),
-                        shell_type,
-                    ),
+                    args,
                     shell_path: resolved_default_shell_path,
                     shell_type,
+                    session_id,
                 }))
             }
         }
@@ -308,6 +327,12 @@ pub struct DirectShellStarter {
     /// Arguments to be passed to the shell binary at [`shell_path`] when spawning a new Warp
     /// session.
     args: Vec<OsString>,
+
+    /// The client-generated session ID for the shell bootstrap. For shells
+    /// whose init script is passed in command args, this ID is already embedded
+    /// in `args`. For zsh and MSYS2 shells, `TerminalManager::enqueue_init_script`
+    /// injects this same ID immediately before PTY creation.
+    session_id: SessionId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -319,6 +344,11 @@ pub struct WslShellStarter {
     /// session.
     args: Vec<OsString>,
     distribution: String,
+
+    /// The client-generated session ID for the WSL shell bootstrap. For WSL zsh,
+    /// `TerminalManager::enqueue_init_script` injects this same ID immediately
+    /// before PTY creation.
+    session_id: SessionId,
 }
 
 #[derive(Debug)]
@@ -418,6 +448,16 @@ impl From<ShellStarterSource> for ShellStarterSourceOrWslName {
 }
 
 impl DirectShellStarter {
+    #[cfg(test)]
+    pub fn new_for_test(shell_type: ShellType, shell_path: PathBuf, args: Vec<OsString>) -> Self {
+        Self {
+            shell_type,
+            shell_path,
+            args,
+            session_id: generate_session_id(),
+        }
+    }
+
     pub fn shell_path(&self) -> &Path {
         &self.shell_path
     }
@@ -434,6 +474,11 @@ impl DirectShellStarter {
 
     pub fn args(&self) -> &Vec<OsString> {
         &self.args
+    }
+
+    /// Returns the client-generated session ID for this shell bootstrap.
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
     pub(super) fn display_name(&self) -> &str {
@@ -482,14 +527,20 @@ impl WslShellStarter {
             return None;
         };
 
-        let args =
-            wsl_arguments_for_session_spawning_command(distribution, &shell_path, shell_type);
+        let session_id = generate_session_id();
+        let args = wsl_arguments_for_session_spawning_command(
+            distribution,
+            &shell_path,
+            shell_type,
+            session_id,
+        );
 
         Some(Self {
             shell_type,
             shell_path,
             args,
             distribution: distribution.to_string(),
+            session_id,
         })
     }
 
@@ -511,6 +562,11 @@ impl WslShellStarter {
 
     pub fn distribution(&self) -> &str {
         &self.distribution
+    }
+
+    /// Returns the client-generated session ID for this WSL shell bootstrap.
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
     /// Gives the Windows path to the WSL home directory (e.g. `\\WSL$\home\user`).
@@ -555,6 +611,7 @@ fn parse_shell_type_from_path(path: &Path) -> Option<(PathBuf, ShellType)> {
 fn arguments_for_session_spawning_command(
     resolved_shell_path: &str,
     shell_type: ShellType,
+    session_id: SessionId,
 ) -> Vec<OsString> {
     // Note we typically go through bash so that we can launch the user's shell
     // with a leading '-', making it a login shell.
@@ -597,7 +654,7 @@ fn arguments_for_session_spawning_command(
                 format!(
                     r#"exec -a bash '{}' --rcfile <(echo '{}')"#,
                     resolved_shell_path,
-                    init_shell_script_for_shell(ShellType::Bash, &crate::ASSETS)
+                    init_shell_script_for_shell(ShellType::Bash, &crate::ASSETS, session_id)
                 )
                 .into(),
             ]
@@ -631,26 +688,29 @@ fn arguments_for_session_spawning_command(
                     // See this issue: https://github.com/warpdotdev/Warp/issues/7588
                     r#"exec '{}' -f no-mark-prompt --login --init-command '{}'"#,
                     resolved_shell_path,
-                    init_shell_script_for_shell(ShellType::Fish, &crate::ASSETS)
+                    init_shell_script_for_shell(ShellType::Fish, &crate::ASSETS, session_id)
                 )
                 .into(),
             ]
         }
-        ShellType::PowerShell => vec![
-            // When PowerShell starts a session, it writes "PowerShell <version>" to the PTY. This
-            // option suppresses that message.
-            "-NoLogo".to_owned().into(),
-            // Skip RC files. We load these manually later.
-            "-NoProfile".to_owned().into(),
-            // Normally, passing the "-Command" option causes the shell to exit after executing
-            // those commands. Passing "-NoExit" suppresses that so PowerShell remains interactive
-            // afterwards.
-            "-NoExit".to_owned().into(),
-            // This arg must be last, as everything positioned after the "-Command" flag is treated
-            // as the value for this arg.
-            "-Command".to_owned().into(),
-            init_shell_script_for_shell(ShellType::PowerShell, &crate::ASSETS).into(),
-        ],
+        ShellType::PowerShell => {
+            vec![
+                // When PowerShell starts a session, it writes "PowerShell <version>" to the PTY. This
+                // option suppresses that message.
+                "-NoLogo".to_owned().into(),
+                // Skip RC files. We load these manually later.
+                "-NoProfile".to_owned().into(),
+                // Normally, passing the "-Command" option causes the shell to exit after executing
+                // those commands. Passing "-NoExit" suppresses that so PowerShell remains interactive
+                // afterwards.
+                "-NoExit".to_owned().into(),
+                // This arg must be last, as everything positioned after the "-Command" flag is treated
+                // as the value for this arg.
+                "-Command".to_owned().into(),
+                init_shell_script_for_shell(ShellType::PowerShell, &crate::ASSETS, session_id)
+                    .into(),
+            ]
+        }
     }
 }
 
@@ -658,6 +718,7 @@ fn wsl_arguments_for_session_spawning_command(
     distribution: &str,
     shell_path: &str,
     shell_type: ShellType,
+    session_id: SessionId,
 ) -> Vec<OsString> {
     let mut args = vec![
         "--distribution".into(),
@@ -671,9 +732,9 @@ fn wsl_arguments_for_session_spawning_command(
     // with a leading '-', making it a login shell.
     match shell_type {
         ShellType::Bash | ShellType::Zsh | ShellType::Fish => {
-            args.extend(arguments_for_session_spawning_command(
-                shell_path, shell_type,
-            ));
+            let spawn_args =
+                arguments_for_session_spawning_command(shell_path, shell_type, session_id);
+            args.extend(spawn_args);
             args
         }
         _ => todo!("We don't yet support bootstrapping {shell_type:?} on WSL"),

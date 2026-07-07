@@ -1,7 +1,8 @@
 pub mod parser;
 
-use parser::{ParsedArgumentResult, ParsedArgumentsIterator};
 use std::collections::{HashMap, HashSet};
+
+use parser::{ParsedArgumentResult, ParsedArgumentsIterator};
 
 pub fn get_arguments(template: &str) -> Vec<String> {
     let mut char_to_byte: Vec<usize> = template

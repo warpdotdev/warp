@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 
+use anyhow::{anyhow, Result};
 use deltae::*;
 use kmeans_colors::{get_kmeans_hamerly, Calculate, CentroidData, Sort};
 use palette::{FromColor, IntoColor, Lab, Pixel, Srgb, Srgba};

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use warp_js::{JsFunctionId, SerializedJsValue, TypedJsFunctionRef};
 
 #[derive(thiserror::Error, Debug)]

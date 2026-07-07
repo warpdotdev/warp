@@ -58,11 +58,12 @@ pub(crate) fn run() -> anyhow::Result<()> {
     {
         use std::ops::Deref as _;
 
+        use settings::Setting as _;
+        use warpui::rendering::GPUPowerPreference;
+
         use crate::settings::{
             init_private_user_preferences, PreferLowPowerGPU, PreferredGraphicsBackend,
         };
-        use settings::Setting as _;
-        use warpui::rendering::GPUPowerPreference;
 
         let user_preferences = init_private_user_preferences();
 

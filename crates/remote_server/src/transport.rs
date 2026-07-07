@@ -16,12 +16,14 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use async_channel::Receiver;
-use warpui::r#async::executor;
+use serde::Serialize;
+use warpui_core::r#async::executor;
 
+#[cfg(not(target_family = "wasm"))]
+use crate::client::RemoteServerLog;
 use crate::client::{ClientEvent, RemoteServerClient};
 use crate::manager::RemoteServerExitStatus;
 use crate::setup::{PreinstallCheckResult, RemotePlatform};
-use serde::Serialize;
 
 /// How the remote server binary was installed. Used for telemetry to
 /// distinguish direct remote downloads from client-side SCP uploads.
@@ -137,6 +139,24 @@ impl Error {
     }
 }
 
+/// The SSH `ControlMaster` socket (if any) behind a connection, tagged
+/// with who owns the master process. Ownership decides teardown
+/// behavior: only `WarpManaged` masters are stopped with `ssh -O exit`
+/// on explicit teardown (see [`crate::ssh::stop_control_master`]);
+/// `UserOwned` masters must be left running.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, Clone)]
+pub enum ControlPath {
+    /// Warp created the ControlMaster at this socket path and is
+    /// responsible for tearing it down on session exit.
+    WarpManaged(PathBuf),
+    /// The SSH wrapper attached to a ControlMaster the user already had
+    /// running at this socket path. Warp must never tear it down.
+    UserOwned(PathBuf),
+    /// No ControlMaster socket (e.g. in-process test transports).
+    None,
+}
+
 /// A successful return from [`RemoteTransport::connect`].
 ///
 /// Bundles the live [`RemoteServerClient`] and its [`ClientEvent`]
@@ -152,6 +172,14 @@ impl Error {
 pub struct Connection {
     pub client: RemoteServerClient,
     pub event_rx: Receiver<ClientEvent>,
+    /// Receiver for request-failure telemetry events. Separate from
+    /// `event_rx` so the failure sender on the client doesn't keep the
+    /// lifecycle event channel alive.
+    pub failure_rx: async_channel::Receiver<crate::client::RequestFailedEvent>,
+    /// Receiver for host-scoped responses whose `request_id` was not in
+    /// this client's `pending_requests`. The manager drains this to match
+    /// against its `pending_host_requests`.
+    pub host_response_rx: async_channel::Receiver<crate::proto::ServerMessage>,
     /// The subprocess whose stdio backs the client (e.g.
     /// `ssh … remote-server-proxy`). Spawned with `kill_on_drop(true)`
     /// by the transport, so dropping this `Child` sends SIGKILL to the
@@ -162,15 +190,16 @@ pub struct Connection {
     #[cfg(not(target_family = "wasm"))]
     pub child: async_process::Child,
     /// For transports that multiplex through a local SSH
-    /// `ControlMaster` socket: the path to that socket, used on
-    /// explicit teardown (after the user's shell exits) to run
-    /// `ssh -O exit` and force the master to terminate without
-    /// waiting for half-closed channels. `None` for transports with
-    /// no separate master process (in-process tests, etc.).
-    ///
-    /// See [`crate::ssh::stop_control_master`] for the exact command.
+    /// `ControlMaster` socket: the socket path tagged with master
+    /// ownership, which decides whether explicit teardown (after the
+    /// user's shell exits) runs `ssh -O exit` against it. See
+    /// [`ControlPath`].
     #[cfg(not(target_family = "wasm"))]
-    pub control_path: Option<PathBuf>,
+    pub control_path: ControlPath,
+    /// Tail buffer of the last N stderr lines from the SSH subprocess.
+    /// Drained on connection failure and attached to telemetry.
+    #[cfg(not(target_family = "wasm"))]
+    pub stderr_tail: RemoteServerLog,
 }
 
 /// Transport abstraction for remote server connections.
@@ -194,7 +223,7 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// This runs **before** any user-visible install affordance (the
     /// install choice block, auto-install, auto-update, or connect) and
     /// is the gate that decides whether to proceed with the install
-    /// pipeline or fall back to the legacy SSH flow.
+    /// pipeline or fall back to the wrapper-only SSH flow.
     ///
     /// Returns `Ok(_)` on success (including when the script reported
     /// `Unknown` — that's a parser-level outcome, not a transport-level

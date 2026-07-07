@@ -1,9 +1,8 @@
-use crate::features::FeatureFlag;
-
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warpui::{AppContext, SingletonEntity};
+
+use crate::features::FeatureFlag;
 
 define_settings_group!(LigatureSettings, settings: [
     ligature_rendering_enabled: LigatureRenderingEnabled {
@@ -11,6 +10,7 @@ define_settings_group!(LigatureSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "appearance.text.ligature_rendering_enabled",
         description: "Whether to render font ligatures in the terminal.",

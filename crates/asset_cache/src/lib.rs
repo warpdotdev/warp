@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_fs::{OpenOptions, create_dir_all};
+use base64::Engine as _;
+use base64::prelude::BASE64_STANDARD;
 use bytes::Bytes;
-use futures::AsyncWriteExt;
 use reqwest::Url;
 use warpui_core::assets::asset_cache::{
     Asset, AssetCache, AssetSource, AssetState, AsyncAssetId, AsyncAssetType,
@@ -14,6 +14,12 @@ use warpui_core::assets::asset_cache::{
 /// Namespace marker for URL-based async asset sources without persistence.
 pub struct UrlAssetWithoutPersistence;
 impl AsyncAssetType for UrlAssetWithoutPersistence {}
+
+/// Namespace marker for inline base64 `data:` URI async asset sources.
+pub struct DataUriAsset;
+impl AsyncAssetType for DataUriAsset {}
+
+pub const MAX_DATA_URI_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
 /// Namespace marker for URL-based async asset sources with persistence.
 ///
@@ -38,6 +44,63 @@ pub fn url_source(url: impl Into<String>) -> AssetSource {
             })
         }),
     }
+}
+
+/// Returns `true` if `source` is a base64 `data:` URI whose encoded payload
+/// exceeds `MAX_DATA_URI_PAYLOAD_BYTES`. Non-`data:` URIs and `data:` URIs
+/// without a `;base64` marker return `false`.
+pub fn data_uri_exceeds_limit(source: &str) -> bool {
+    let Some((header, payload)) = source
+        .strip_prefix("data:")
+        .and_then(|rest| rest.split_once(','))
+    else {
+        return false;
+    };
+    header
+        .split(';')
+        .any(|segment| segment.eq_ignore_ascii_case("base64"))
+        && payload.len() > MAX_DATA_URI_PAYLOAD_BYTES
+}
+
+/// Creates an [`AssetSource::Async`] that decodes an inline base64 `data:` URI
+/// (e.g. `data:image/png;base64,<payload>`) into its raw bytes.
+pub fn data_uri_source(source: &str) -> Option<AssetSource> {
+    // data:[<mediatype>][;base64],<payload>
+    let (header, payload) = source.strip_prefix("data:")?.split_once(',')?;
+    if !header
+        .split(';')
+        .any(|segment| segment.eq_ignore_ascii_case("base64"))
+    {
+        return None;
+    }
+
+    // `source` is untrusted; reject oversized payloads before cloning/decoding
+    if data_uri_exceeds_limit(source) {
+        return None;
+    }
+
+    // Derive a compact, stable cache key from the full URI so identical payloads
+    // dedupe and we don't retain the (potentially large) data URI as the key.
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    let id = format!("{:x}", hasher.finish());
+
+    // base64 payloads may contain embedded whitespace/newlines; strip it before
+    // decoding.
+    let payload: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+
+    Some(AssetSource::Async {
+        id: AsyncAssetId::new::<DataUriAsset>(id),
+        fetch: Arc::new(move || {
+            let payload = payload.clone();
+            Box::pin(async move {
+                BASE64_STANDARD
+                    .decode(payload.as_bytes())
+                    .map(Bytes::from)
+                    .map_err(Into::into)
+            })
+        }),
+    })
 }
 
 /// Creates an [`AssetSource::Async`] that fetches bytes from the given URL,
@@ -89,7 +152,7 @@ async fn fetch_file_to_memory(url: Url) -> Result<Bytes, anyhow::Error> {
             let response = async_compat::Compat::new(async move { reqwest::get(url).await }).await?;
         }
     }
-    let content = response.bytes().await?;
+    let content = response.error_for_status()?.bytes().await?;
     Ok(content)
 }
 
@@ -109,7 +172,11 @@ fn get_file_path_for_asset(url: &Url, cache_dir: &Path) -> PathBuf {
     cache_dir.join(filename)
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn persist_bytes(bytes: &Bytes, file: &Path) {
+    use async_fs::{OpenOptions, create_dir_all};
+    use futures::AsyncWriteExt;
+
     let Some(parent_folder) = file.parent() else {
         log::error!("attempted to write cache file in filesystem root");
         return;
@@ -140,6 +207,11 @@ async fn persist_bytes(bytes: &Bytes, file: &Path) {
     if let Err(e) = file.flush().await {
         log::error!("Error flushing file: {e:#}");
     };
+}
+
+#[cfg(target_family = "wasm")]
+async fn persist_bytes(_bytes: &Bytes, file: &Path) {
+    log::debug!("Cannot persist asset to {} on the web", file.display());
 }
 
 async fn fetch_file_and_persist_bytes(url: Url, file: Option<PathBuf>) -> Result<Bytes> {
@@ -174,3 +246,7 @@ async fn fetch_asset_from_url(url: Url, file: Option<PathBuf>) -> Result<Bytes> 
         _ => fetch_file_and_persist_bytes(url, file).await,
     }
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

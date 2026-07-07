@@ -59,15 +59,16 @@ if [[ "$GIT_BRANCH_NAME" == "$RELEASE_BRANCH_PREFIX/"* ]]; then
 else
     # Creating release branch and new tag and version _00
     date_formatted=$(date +'%Y.%m.%d.%H.%M')
-    tag="v0.$date_formatted.${CHANNEL}_00"
-    echo >&2 "Creating tag $tag"
-    git tag "$tag"
-    git push origin "$tag"
 
     release_branch_name="v0.$date_formatted.${CHANNEL}"
     echo >&2 "Creating release branch $RELEASE_BRANCH_PREFIX/$release_branch_name"
     git checkout -b "$RELEASE_BRANCH_PREFIX/$release_branch_name"
     git push -u origin "$RELEASE_BRANCH_PREFIX/$release_branch_name"
+
+    tag="v0.$date_formatted.${CHANNEL}_00"
+    echo >&2 "Creating tag $tag"
+    git tag "$tag"
+    git push origin "$tag"
     echo "$tag"
 fi
 

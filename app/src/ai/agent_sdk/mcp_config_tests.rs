@@ -270,7 +270,7 @@ fn serializes_mcp_servers_as_object_not_string() {
         .unwrap();
 
     let request = SpawnAgentRequest {
-        prompt: "hello".to_string(),
+        prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {
             mcp_servers: Some(mcp_servers),
@@ -287,6 +287,8 @@ fn serializes_mcp_servers_as_object_not_string() {
         referenced_attachments: vec![],
         conversation_id: None,
         initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let value = serde_json::to_value(&request).unwrap();

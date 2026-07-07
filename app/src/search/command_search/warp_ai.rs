@@ -1,40 +1,33 @@
-use super::workflows::{WorkflowIdentity, WorkflowSearchItem};
-use crate::{
-    ai::AIRequestUsageModel,
-    ai_assistant::{
-        execution_context::WarpAiExecutionContext, GenerateCommandsFromNaturalLanguageError,
-        AI_ASSISTANT_LOGO_COLOR,
-    },
-    appearance::Appearance,
-    features::FeatureFlag,
-    search::{
-        command_search::searcher::CommandSearchItemAction,
-        data_source::{Query, QueryResult},
-        item::SearchItem,
-        mixer::{
-            AsyncDataSource, BoxFuture, DataSourceRunError, DataSourceRunErrorWrapper,
-            SyncDataSource,
-        },
-        result_renderer::ItemHighlightState,
-        workflows::fuzzy_match::FuzzyMatchWorkflowResult,
-    },
-    server::server_api::ai::AIClient,
-    themes::theme::Blend,
-    ui_components::icons::Icon as UIIcon,
-    util::color::{ContrastingColor, MinimumAllowedContrast},
-    workflows::{AIWorkflowOrigin, WorkflowSource, WorkflowType},
-};
+use std::any::Any;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use serde_json::json;
-use std::{any::Any, sync::Arc};
 use warp_core::ui::builder;
-use warpui::{
-    elements::{ConstrainedBox, Container, Text},
-    AppContext, Element, SingletonEntity,
+use warpui::elements::{ConstrainedBox, Container, Text};
+use warpui::{AppContext, Element, SingletonEntity};
+
+use super::workflows::{WorkflowIdentity, WorkflowSearchItem};
+use crate::ai::AIRequestUsageModel;
+use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::ai_assistant::{GenerateCommandsFromNaturalLanguageError, AI_ASSISTANT_LOGO_COLOR};
+use crate::appearance::Appearance;
+use crate::features::FeatureFlag;
+use crate::search::command_search::searcher::CommandSearchItemAction;
+use crate::search::data_source::{Query, QueryResult};
+use crate::search::item::SearchItem;
+use crate::search::mixer::{
+    AsyncDataSource, BoxFuture, DataSourceRunError, DataSourceRunErrorWrapper, SyncDataSource,
 };
+use crate::search::result_renderer::ItemHighlightState;
+use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
+use crate::server::server_api::ai::AIClient;
+use crate::themes::theme::Blend;
+use crate::ui_components::icons::Icon as UIIcon;
+use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
+use crate::workflows::{AIWorkflowOrigin, WorkflowSource, WorkflowType};
 
 const OPEN_WARP_AI_ITEM_BODY_TEXT: &str = "Ask Warp AI for command suggestions";
 const TRANSLATE_WITH_WARP_AI_ITEM_BODY_TEXT: &str = "Translate into shell command using Warp AI";

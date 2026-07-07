@@ -9,13 +9,12 @@ pub(super) mod grapheme_cursor;
 #[cfg(test)]
 mod tests;
 
-pub use warp_terminal::model::grid::row;
-
 pub use displayed_output::RespectDisplayedOutput;
 pub use grid_storage::*;
 pub(super) use indexing::ConvertToAbsolute;
 pub use indexing::IndexRegion;
 pub use selection_cursor::SelectionCursor;
+pub use warp_terminal::model::grid::row;
 
 enum CursorDirection {
     Up,

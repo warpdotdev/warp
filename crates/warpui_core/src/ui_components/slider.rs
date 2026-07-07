@@ -1,22 +1,22 @@
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
+use std::sync::Arc;
 
-use crate::platform::Cursor;
-use crate::{
-    elements::{
-        AnchorPair, ConstrainedBox, Container, CornerRadius, DragAxis, Draggable, DraggableState,
-        DropShadow, Fill, Hoverable, MouseStateHandle, OffsetPositioning, OffsetType,
-        ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds, PositioningAxis, Radius,
-        Rect, SavePosition, Stack, XAxisAnchor, YAxisAnchor,
-    },
-    ui_components::components::UiComponentStyles,
-    AppContext, Element, EventContext,
-};
 use lazy_static::lazy_static;
 use parking_lot::{Mutex, RwLock};
 use pathfinder_color::ColorU;
-use pathfinder_geometry::{rect::RectF, vector::vec2f};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::vec2f;
 
 use super::components::UiComponent;
+use crate::elements::{
+    AnchorPair, ConstrainedBox, Container, CornerRadius, DragAxis, Draggable, DraggableState,
+    DropShadow, Fill, Hoverable, MouseStateHandle, OffsetPositioning, OffsetType, ParentElement,
+    ParentOffsetBounds, PositionedElementOffsetBounds, PositioningAxis, Radius, Rect, SavePosition,
+    Stack, XAxisAnchor, YAxisAnchor,
+};
+use crate::platform::Cursor;
+use crate::ui_components::components::UiComponentStyles;
+use crate::{AppContext, Element, EventContext};
 
 const DEFAULT_THUMB_SIZE: f32 = 18.;
 const DEFAULT_TRACK_HEIGHT: f32 = 4.;

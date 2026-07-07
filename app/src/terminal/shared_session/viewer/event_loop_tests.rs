@@ -1,21 +1,28 @@
-use crate::ai::blocklist::agent_view::AgentViewState;
-use crate::terminal::model::block::{BlockId, SerializedBlock};
-use crate::terminal::shared_session::tests::terminal_model_for_viewer;
-use crate::terminal::TerminalView;
-use crate::terminal::{
-    event_listener::ChannelEventListener,
-    shared_session::viewer::event_loop::{EventLoop, SharedSessionInitialLoadMode},
-};
-use crate::test_util::add_window_with_terminal;
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
     OrderedTerminalEvent, OrderedTerminalEventType, Scrollback, ScrollbackBlock, WindowSize,
 };
-use std::sync::Arc;
+use warp_core::command::ExitCode;
+use warp_core::features::FeatureFlag;
+use warpui::platform::WindowStyle;
 use warpui::units::Lines;
-use warpui::{App, ViewHandle};
+use warpui::{App, SingletonEntity, ViewHandle};
+
+use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::block::{BlockId, BlockState, SerializedBlock};
+use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
+use crate::terminal::shared_session::tests::terminal_model_for_viewer;
+use crate::terminal::shared_session::viewer::event_loop::{
+    EventLoop, SharedSessionInitialLoadMode,
+};
+use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::TerminalView;
+use crate::test_util::add_window_with_terminal;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn ordered_terminal_event_from_bytes(
     bytes: impl Into<Vec<u8>>,
@@ -28,9 +35,28 @@ fn ordered_terminal_event_from_bytes(
     }
 }
 
+fn old_sharer_dcs_bytes(payload: &str) -> Vec<u8> {
+    let mut bytes = b"\x1bP$d".to_vec();
+    bytes.extend(hex::encode(payload).bytes());
+    bytes.push(0x9c);
+    bytes
+}
+
 fn terminal_view(app: &mut App) -> ViewHandle<TerminalView> {
     initialize_app_for_terminal_view(app);
     add_window_with_terminal(app, None)
+}
+
+/// Cloud-mode terminal view counterpart to [`terminal_view`]. Sets up the
+/// singletons and constructs a `TerminalView` with `is_cloud_mode = true` so
+/// `ambient_agent_view_model()` is `Some(..)`.
+fn cloud_mode_terminal_view(app: &mut App) -> ViewHandle<TerminalView> {
+    initialize_app_for_terminal_view(app);
+    let tips_model = app.add_model(|_| Default::default());
+    let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        TerminalView::new_for_test_with_cloud_mode(tips_model, None, true, ctx)
+    });
+    terminal
 }
 
 fn completed_block(command: &str, output: &str) -> SerializedBlock {
@@ -83,6 +109,7 @@ fn test_terminal_model_is_correct() {
                 },
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -145,6 +172,97 @@ fn test_terminal_model_is_correct() {
 }
 
 #[test]
+fn new_viewer_processes_old_sharer_lifecycle_stream() {
+    let _recovery_enabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(true);
+    App::test((), |mut app| async move {
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+        let model = Arc::new(FairMutex::new(terminal_model_for_viewer(
+            channel_event_proxy.clone(),
+        )));
+        let terminal_view = terminal_view(&mut app);
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        let completed_block_id = model.lock().active_block_id().clone();
+        let next_block_id = BlockId::new();
+        let command_finished = old_sharer_dcs_bytes(&format!(
+            r#"{{"hook":"CommandFinished","value":{{"exit_code":47,"next_block_id":"{next_block_id}","session_id":987654321}}}}"#
+        ));
+        let precmd = old_sharer_dcs_bytes(
+            r#"{"hook":"Precmd","value":{"pwd":"/old-sharer","session_id":987654321}}"#,
+        );
+
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::CommandExecutionStarted {
+                        participant_id: Default::default(),
+                        ai_metadata: None,
+                    },
+                },
+                ctx,
+            );
+            event_loop.process_ordered_terminal_event(
+                ordered_terminal_event_from_bytes(command_finished, 1),
+                ctx,
+            );
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 2,
+                    event_type: OrderedTerminalEventType::CommandExecutionFinished {
+                        next_block_id: next_block_id.to_string().into(),
+                    },
+                },
+                ctx,
+            );
+            event_loop
+                .process_ordered_terminal_event(ordered_terminal_event_from_bytes(precmd, 3), ctx);
+        });
+
+        let model = model.lock();
+        let completed_block = model
+            .block_list()
+            .block_with_id(&completed_block_id)
+            .expect("The old sharer's completed block should remain in the block list.");
+        assert_eq!(completed_block.state(), BlockState::DoneWithExecution);
+        assert_eq!(completed_block.exit_code(), ExitCode::from(47));
+        assert_eq!(
+            model
+                .block_list()
+                .blocks()
+                .iter()
+                .filter(|block| block.state() == BlockState::DoneWithExecution)
+                .count(),
+            1
+        );
+        assert_eq!(model.active_block_id(), &next_block_id);
+        assert_eq!(
+            model.block_list().active_block().pwd().map(String::as_str),
+            Some("/old-sharer")
+        );
+        assert_eq!(
+            model.block_list().active_block().state(),
+            BlockState::BeforeExecution
+        );
+    })
+}
+
+#[test]
 fn test_append_followup_scrollback_skips_duplicates() {
     App::test((), |mut app| async move {
         let channel_event_proxy = ChannelEventListener::new_for_test();
@@ -173,6 +291,7 @@ fn test_append_followup_scrollback_skips_duplicates() {
                 },
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -200,6 +319,7 @@ fn test_append_followup_scrollback_skips_duplicates() {
                 },
                 None,
                 SharedSessionInitialLoadMode::AppendFollowupScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -252,6 +372,7 @@ fn test_append_followup_scrollback_skips_duplicates() {
                 },
                 None,
                 SharedSessionInitialLoadMode::AppendFollowupScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -281,6 +402,98 @@ fn test_append_followup_scrollback_skips_duplicates() {
 }
 
 #[test]
+fn test_append_followup_scrollback_with_completed_last_block_creates_active_block() {
+    App::test((), |mut app| async move {
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+        let model = Arc::new(FairMutex::new(terminal_model_for_viewer(
+            channel_event_proxy.clone(),
+        )));
+
+        let terminal_view = terminal_view(&mut app);
+        let initial_completed = completed_block("initial-command", "initial-output");
+        let initial_active = active_block();
+        app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                Scrollback {
+                    blocks: vec![
+                        scrollback_block(&initial_completed),
+                        scrollback_block(&initial_active),
+                    ],
+                    is_alt_screen_active: false,
+                },
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        let followup_completed = completed_block("followup-command", "followup-output");
+        app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                Scrollback {
+                    blocks: vec![
+                        scrollback_block(&initial_completed),
+                        scrollback_block(&followup_completed),
+                    ],
+                    is_alt_screen_active: false,
+                },
+                None,
+                SharedSessionInitialLoadMode::AppendFollowupScrollback,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        let model = model.lock();
+        let commands = model
+            .block_list()
+            .blocks()
+            .iter()
+            .map(|block| block.command_to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(model.block_list().blocks().len(), 5);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.as_str() == "initial-command")
+                .count(),
+            1
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.as_str() == "followup-command")
+                .count(),
+            1
+        );
+        assert_eq!(model.block_list().active_block_index(), 4.into());
+        assert_eq!(
+            model
+                .block_list()
+                .active_block()
+                .height(&AgentViewState::Inactive),
+            Lines::zero()
+        );
+        assert!(!model.block_list().active_block().started());
+    })
+}
+
+#[test]
 fn test_append_followup_replay_marks_existing_conversations_suppressible() {
     App::test((), |mut app| async move {
         let channel_event_proxy = ChannelEventListener::new_for_test();
@@ -301,6 +514,7 @@ fn test_append_followup_replay_marks_existing_conversations_suppressible() {
                 empty_scrollback(),
                 None,
                 SharedSessionInitialLoadMode::AppendFollowupScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -356,6 +570,7 @@ fn test_fresh_session_replay_does_not_suppress_existing_conversations() {
                 empty_scrollback(),
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -402,6 +617,7 @@ fn test_out_of_order_buffering() {
                 },
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -443,6 +659,154 @@ fn test_out_of_order_buffering() {
 }
 
 #[test]
+fn command_execution_finished_defers_queued_command_advance_until_block_completion() {
+    // `CommandExecutionFinished` can arrive before synced block completion reaches input cleanup.
+    // Keep the in-flight flag armed until block completion advances the queue.
+    App::test((), |mut app| async move {
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+        let model = Arc::new(FairMutex::new(terminal_model_for_viewer(
+            channel_event_proxy.clone(),
+        )));
+
+        let terminal_view = terminal_view(&mut app);
+        let terminal_view_id = terminal_view.read(&app, |view, _| view.id());
+
+        // Start a conversation and arm an in-flight queued command for it.
+        let command_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, _| {
+            model.arm_command_in_flight(command_conversation_id);
+        });
+
+        // Switch the pane to another conversation before the command finishes. Block completion
+        // must still clear the queue state for the conversation that dispatched the command.
+        let active_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.has_command_in_flight(command_conversation_id));
+            assert!(!model.has_command_in_flight(active_conversation_id));
+        });
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        for event_no in 0..2 {
+            event_loop.update(&mut app, |event_loop, ctx| {
+                event_loop.process_ordered_terminal_event(
+                    OrderedTerminalEvent {
+                        event_no,
+                        event_type: OrderedTerminalEventType::CommandExecutionFinished {
+                            next_block_id: Default::default(),
+                        },
+                    },
+                    ctx,
+                );
+            });
+        }
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.has_command_in_flight(command_conversation_id));
+            assert!(!model.has_command_in_flight(active_conversation_id));
+        });
+
+        terminal_view.update(&mut app, |view, ctx| {
+            view.on_queued_command_finished(ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(!model.has_command_in_flight(command_conversation_id));
+            assert!(!model.has_command_in_flight(active_conversation_id));
+        });
+    })
+}
+
+#[test]
+fn command_execution_started_preserves_draft_for_queued_command() {
+    App::test((), |mut app| async move {
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+        let model = Arc::new(FairMutex::new(terminal_model_for_viewer(
+            channel_event_proxy.clone(),
+        )));
+
+        let terminal_view = terminal_view(&mut app);
+        let terminal_view_id = terminal_view.read(&app, |view, _| view.id());
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, _| {
+            model.arm_command_in_flight(conversation_id);
+        });
+        terminal_view.update(&mut app, |view, ctx| {
+            view.input().update(ctx, |input, ctx| {
+                input.replace_buffer_content("draft in progress", ctx);
+            });
+        });
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::CommandExecutionStarted {
+                        participant_id: Default::default(),
+                        ai_metadata: None,
+                    },
+                },
+                ctx,
+            );
+        });
+
+        terminal_view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.input().as_ref(ctx).buffer_text(ctx),
+                "draft in progress"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_pty_bytes_buffered_before_command_execution_started() {
     App::test((), |mut app| async move {
         let channel_event_proxy = ChannelEventListener::new_for_test();
@@ -469,6 +833,7 @@ fn test_pty_bytes_buffered_before_command_execution_started() {
                 },
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -512,5 +877,248 @@ fn test_pty_bytes_buffered_before_command_execution_started() {
             .trim()
             .to_string();
         assert_eq!(command_grid, "abc");
+    })
+}
+
+#[test]
+fn test_cloud_mode_setup_phase_ended_clears_setup_state() {
+    App::test((), |mut app| async move {
+        let terminal_view = cloud_mode_terminal_view(&mut app);
+        // Share the view's own `TerminalModel` with the event loop so the
+        // event loop's mutations are observable through both the model and
+        // the view's `ambient_agent_view_model()`.
+        let model = terminal_view.read(&app, |view, _| view.model.clone());
+        // Mark as a viewer so the event loop's scrollback load invariant holds.
+        model
+            .lock()
+            .set_shared_session_status(SharedSessionStatus::ViewPending);
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        // Seed setup state the way the production viewer would: the
+        // BlockList flag is true while setup commands are running, and the
+        // default `SetupCommandState` already has the initial group marked
+        // as running and expanded.
+        model
+            .lock()
+            .block_list_mut()
+            .set_is_executing_oz_environment_startup_commands(true);
+
+        let initial_group_id = terminal_view.read(&app, |view, ctx| {
+            view.ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state()
+                .current_group_id()
+        });
+
+        // Sanity-check the seeded state.
+        assert!(model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+        terminal_view.read(&app, |view, ctx| {
+            let setup_state = view
+                .ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state();
+            assert!(setup_state.is_running(initial_group_id));
+            assert!(setup_state.should_expand(initial_group_id));
+        });
+
+        // Dispatch the new marker; expect the BlockList flag to clear, the
+        // setup group to finish, and the group's expansion to collapse.
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::CloudModeSetupPhaseEnded,
+                },
+                ctx,
+            );
+        });
+
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+        terminal_view.read(&app, |view, ctx| {
+            let setup_state = view
+                .ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state();
+            assert!(!setup_state.is_running(initial_group_id));
+            assert!(!setup_state.should_expand(initial_group_id));
+        });
+    })
+}
+
+#[test]
+fn test_cloud_mode_setup_phase_ended_when_flag_already_false() {
+    App::test((), |mut app| async move {
+        let terminal_view = cloud_mode_terminal_view(&mut app);
+        let model = terminal_view.read(&app, |view, _| view.model.clone());
+        // Mark as a viewer so the event loop's scrollback load invariant holds.
+        model
+            .lock()
+            .set_shared_session_status(SharedSessionStatus::ViewPending);
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        // BlockList flag starts at the default `false`; we intentionally do not
+        // call set_is_executing_oz_environment_startup_commands(true) so the
+        // marker arrives against a tree that never observed setup phase.
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+
+        let initial_group_id = terminal_view.read(&app, |view, ctx| {
+            view.ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state()
+                .current_group_id()
+        });
+
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::CloudModeSetupPhaseEnded,
+                },
+                ctx,
+            );
+        });
+
+        // Flag stays cleared, and the unconditional teardown leaves the
+        // initial setup group finished and collapsed.
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+        terminal_view.read(&app, |view, ctx| {
+            let setup_state = view
+                .ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state();
+            assert!(!setup_state.is_running(initial_group_id));
+            assert!(!setup_state.should_expand(initial_group_id));
+        });
+    })
+}
+
+#[test]
+fn test_cloud_mode_setup_phase_ended_is_idempotent() {
+    App::test((), |mut app| async move {
+        let terminal_view = cloud_mode_terminal_view(&mut app);
+        let model = terminal_view.read(&app, |view, _| view.model.clone());
+        // Mark as a viewer so the event loop's scrollback load invariant holds.
+        model
+            .lock()
+            .set_shared_session_status(SharedSessionStatus::ViewPending);
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        model
+            .lock()
+            .block_list_mut()
+            .set_is_executing_oz_environment_startup_commands(true);
+
+        let initial_group_id = terminal_view.read(&app, |view, ctx| {
+            view.ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state()
+                .current_group_id()
+        });
+
+        // First dispatch tears down the setup state.
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::CloudModeSetupPhaseEnded,
+                },
+                ctx,
+            );
+        });
+
+        // Second dispatch must be a no-op: the BlockList flag stays cleared
+        // and the setup group remains finished + collapsed.
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 1,
+                    event_type: OrderedTerminalEventType::CloudModeSetupPhaseEnded,
+                },
+                ctx,
+            );
+        });
+
+        assert!(!model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands());
+        terminal_view.read(&app, |view, ctx| {
+            let setup_state = view
+                .ambient_agent_view_model()
+                .expect("cloud mode view has ambient agent view model")
+                .as_ref(ctx)
+                .setup_command_state();
+            assert!(!setup_state.is_running(initial_group_id));
+            assert!(!setup_state.should_expand(initial_group_id));
+        });
     })
 }

@@ -1,24 +1,22 @@
 use std::sync::Arc;
 
+use ai::api_keys::{ApiKeyManager, GrokTokens};
 use chrono::Duration;
+use warp_core::features::FeatureFlag;
+use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
 use warpui::{App, ModelHandle};
 
+use super::*;
 use crate::auth::AuthStateProvider;
+use crate::pricing::PricingInfoModel;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
-use crate::workspaces::{
-    user_workspaces::UserWorkspaces,
-    workspace::{
-        AiOverages, ByoApiKeyPolicy, CustomerType, EnterpriseCreditsAutoReloadPolicy,
-        EnterprisePayAsYouGoPolicy, PurchaseAddOnCreditsPolicy, Workspace, WorkspaceUid,
-    },
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{
+    AiOverages, ByoApiKeyPolicy, CustomerType, EnterpriseCreditsAutoReloadPolicy,
+    EnterprisePayAsYouGoPolicy, PurchaseAddOnCreditsPolicy, Workspace, WorkspaceUid,
 };
-
-use ai::api_keys::ApiKeyManager;
-use warp_core::features::FeatureFlag;
-
-use super::*;
 
 fn create_test_workspace() -> (WorkspaceUid, Workspace) {
     let server_id: crate::server::ids::ServerId = 1_i64.into();
@@ -47,16 +45,55 @@ fn add_request_usage_model_for_anonymous_users(app: &mut App) -> ModelHandle<AIR
     app.add_singleton_model(|_| AuthStateProvider::new_anonymous_for_test());
     add_request_usage_model_without_auth(app)
 }
+fn register_user_preferences_for_tests(app: &mut App) {
+    if app
+        .models_of_type::<settings::PrivatePreferences>()
+        .is_empty()
+    {
+        app.update(crate::settings::init_and_register_user_preferences);
+    }
+}
 
 fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    register_user_preferences_for_tests(app);
     app.update(|ctx| {
         warpui_extras::secure_storage::register_noop("test", ctx);
         ctx.add_singleton_model(ApiKeyManager::new);
     });
+    app.add_singleton_model(|_| PricingInfoModel::new());
     app.add_singleton_model(|ctx| {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     })
+}
+
+fn set_addon_credits_pricing_info(app: &mut App) {
+    PricingInfoModel::handle(app).update(app, |model, ctx| {
+        model.update_pricing_info(
+            PricingInfo {
+                plans: vec![],
+                overages: OveragesPricing {
+                    price_per_request_usd_cents: 1,
+                },
+                addon_credits_options: vec![AddonCreditsOption {
+                    credits: 1000,
+                    price_usd_cents: 1000,
+                }],
+            },
+            ctx,
+        );
+    });
+}
+
+fn enable_auto_reload(workspace: &mut Workspace) {
+    workspace
+        .settings
+        .addon_credits_settings
+        .auto_reload_enabled = true;
+    workspace
+        .settings
+        .addon_credits_settings
+        .selected_auto_reload_credit_denomination = Some(1000);
 }
 
 #[test]
@@ -278,6 +315,45 @@ fn test_buy_credits_banner_shows_when_non_ambient_bonus_credits_are_depleted() {
         });
     });
 }
+
+#[test]
+fn test_ambient_credits_banner_dismissal_is_persisted() {
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            assert!(!model.is_ambient_credits_banner_dismissed());
+            model.dismiss_ambient_credits_banner(ctx);
+            assert!(model.is_ambient_credits_banner_dismissed());
+        });
+
+        app.update(|ctx| {
+            let stored_value = ctx
+                .private_user_preferences()
+                .read_value(AMBIENT_CREDITS_BANNER_DISMISSED_KEY)
+                .unwrap();
+            assert_eq!(stored_value, Some("true".to_owned()));
+        });
+    });
+}
+
+#[test]
+fn test_ambient_credits_banner_dismissal_loads_from_preferences() {
+    App::test((), |mut app| async move {
+        register_user_preferences_for_tests(&mut app);
+        app.update(|ctx| {
+            ctx.private_user_preferences()
+                .write_value(AMBIENT_CREDITS_BANNER_DISMISSED_KEY, "true".to_owned())
+                .unwrap();
+        });
+
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, _ctx| {
+            assert!(model.is_ambient_credits_banner_dismissed());
+        });
+    });
+}
 #[test]
 fn test_has_any_ai_remaining_false_when_no_requests_or_bonus() {
     App::test((), |mut app| async move {
@@ -443,6 +519,116 @@ fn test_has_any_ai_remaining_true_with_enterprise_auto_reload() {
 }
 
 #[test]
+fn test_has_any_ai_remaining_false_with_enterprise_auto_reload_policy_on_non_enterprise() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .enterprise_credits_auto_reload_policy =
+            Some(EnterpriseCreditsAutoReloadPolicy { enabled: true });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when enterprise auto-reload policy is enabled for a non-enterprise workspace",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_true_with_self_serve_auto_reload() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        enable_auto_reload(&mut workspace);
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when self-serve auto-reload is enabled",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_true_with_self_serve_auto_reload_and_billing_v2_disabled() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::BillingAndUsagePageV2.override_enabled(false);
+
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        enable_auto_reload(&mut workspace);
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when self-serve auto-reload is enabled without Billing and Usage V2",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_false_with_add_on_credits_policy_when_purchase_would_exceed_limit() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+        enable_auto_reload(&mut workspace);
+        workspace
+            .settings
+            .addon_credits_settings
+            .max_monthly_spend_cents = Some(1000);
+        workspace.bonus_grants_purchased_this_month.cents_spent = 500;
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when add-on credit purchase would exceed the monthly spend limit",
+            );
+        });
+    });
+}
+
+#[test]
 fn test_has_any_ai_remaining_false_with_workspace_no_pricing_no_overages_no_credits() {
     App::test((), |mut app| async move {
         // Create a workspace with no tier pricing (default).
@@ -542,6 +728,74 @@ fn test_has_any_ai_remaining_false_with_byok_enabled_but_no_key() {
             assert!(
                 !model.has_any_ai_remaining(ctx),
                 "expected has_any_ai_remaining to be false when BYOK is enabled but no key is provided",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_true_with_grok_subscription_connected() {
+    App::test((), |mut app| async move {
+        // Workspace with BYO enabled — the policy a connected Grok
+        // subscription's OAuth token rides on.
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace.billing_metadata.tier.byo_api_key_policy =
+            Some(ByoApiKeyPolicy { enabled: true });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        // Connect a Grok subscription but provide no pasted API key.
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_grok_tokens(
+                Some(GrokTokens {
+                    access_token: "grok-test-token".to_string(),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            // No standard requests remaining, no bonus credits.
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when a Grok subscription is connected and BYO is enabled",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_false_with_grok_subscription_but_byo_disabled() {
+    App::test((), |mut app| async move {
+        // No BYO policy: the Grok token can't be sent, so it must not count as
+        // available AI.
+        let (_uid, workspace) = create_test_workspace();
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_grok_tokens(
+                Some(GrokTokens {
+                    access_token: "grok-test-token".to_string(),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when a Grok subscription is connected but BYO is disabled",
             );
         });
     });

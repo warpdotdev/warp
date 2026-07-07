@@ -2,20 +2,17 @@ use std::collections::HashMap;
 
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::{
-    cloud_object::{model::persistence::CloudModel, CloudObjectEventEntrypoint, Owner},
-    drive::folders::FolderId,
-    notebooks::CloudNotebookModel,
-    server::{
-        cloud_objects::update_manager::{
-            InitiatedBy, ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::{ClientId, SyncId},
-    },
-    workflows::{workflow::Workflow, workflow_enum::WorkflowEnum},
-};
-
 use super::nodes::{self, FileId};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectEventEntrypoint, Owner};
+use crate::drive::folders::FolderId;
+use crate::notebooks::CloudNotebookModel;
+use crate::server::cloud_objects::update_manager::{
+    InitiatedBy, ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
+};
+use crate::server::ids::{ClientId, SyncId};
+use crate::workflows::workflow::Workflow;
+use crate::workflows::workflow_enum::WorkflowEnum;
 
 pub(super) enum ImportQueueEvent {
     FileCompleted {
@@ -105,7 +102,7 @@ pub(super) struct ImportQueue {
 impl ImportQueue {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let update_manager = UpdateManager::handle(ctx);
-        ctx.subscribe_to_model(&update_manager, |me, event, ctx| {
+        ctx.subscribe_to_model(&update_manager, |me, _, event, ctx| {
             me.handle_update_manager_event(event, ctx);
         });
 

@@ -7,48 +7,42 @@ pub mod test;
 #[cfg(target_family = "wasm")]
 pub mod wasm;
 
+use std::any::Any;
+use std::collections::HashSet;
+use std::ops::Range;
+use std::path::Path;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use anyhow::Result;
 pub use app::AppCallbacks;
+use async_task::Runnable;
 use derivative::Derivative;
 pub use file_picker::{
     FilePickerCallback, FilePickerConfiguration, FileType, SaveFilePickerCallback,
     SaveFilePickerConfiguration,
 };
+use lazy_static::lazy_static;
+use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::vector::{Vector2F, Vector2I};
 use serde::{Deserialize, Serialize};
 use warp_util::path::ShellFamily;
 
-use crate::fonts::SubpixelAlignment;
+use crate::accessibility::AccessibilityContent;
+use crate::fonts::canvas::RasterFormat;
+use crate::fonts::{
+    FamilyId, FontId, GlyphId, Metrics, Properties, RasterizedGlyph, SubpixelAlignment,
+};
 use crate::keymap::Keystroke;
 use crate::modals::{AlertDialog, ModalId};
-use crate::notification::{NotificationSendError, RequestPermissionsOutcome};
-
+use crate::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
 use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
-use crate::text_layout::{ClipConfig, StyleAndFont, TextAlignment, TextFrame};
-use crate::{
-    accessibility::AccessibilityContent,
-    fonts::{
-        canvas::RasterFormat, FamilyId, FontId, GlyphId, Metrics, Properties, RasterizedGlyph,
-    },
-    notification::UserNotification,
-    text_layout::Line,
-    windowing::WindowCallbacks,
-    Scene, WindowId,
-};
+use crate::text_layout::{ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
+use crate::windowing::WindowCallbacks;
 use crate::{
     geometry, rendering, AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx,
-    OptionalPlatformWindow,
+    OptionalPlatformWindow, Scene, WindowId,
 };
-use anyhow::Result;
-use async_task::Runnable;
-use lazy_static::lazy_static;
-use pathfinder_geometry::vector::Vector2I;
-use pathfinder_geometry::{
-    rect::{RectF, RectI},
-    vector::Vector2F,
-};
-use std::any::Any;
-use std::collections::HashSet;
-use std::path::Path;
-use std::{ops::Range, rc::Rc, sync::Arc};
 
 #[cfg(not(target_family = "wasm"))]
 lazy_static! {
@@ -261,6 +255,10 @@ pub trait Delegate: 'static {
 
     fn register_global_shortcut(&self, shortcut: Keystroke);
     fn unregister_global_shortcut(&self, shortcut: &Keystroke);
+
+    /// Show or hide the application's Dock icon (macOS only).
+    /// Default no-op for platforms without a Dock concept.
+    fn set_dock_icon_visible(&self, _visible: bool) {}
 
     fn terminate_app(&self, termination_mode: TerminationMode);
 
