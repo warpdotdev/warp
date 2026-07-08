@@ -9,7 +9,6 @@ use warpui::elements::{
     ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::keymap::FixedBinding;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -70,7 +69,7 @@ pub const FEATURE_INTROS: &[FeatureIntro] = &[FeatureIntro {
     title: "Build a custom model router for the Warp Agent",
     description: "Custom routers can be complexity-based, where tasks are routed based on how difficult they are, or rule-based, where they are routed based on a set of natural language prompts.",
     cta_label: "Get started",
-    cta_url: Some("https://docs.warp.dev/agents/using-agents/custom-model-routers"),
+    cta_url: Some("https://docs.warp.dev/agent-platform/inference/custom-routers/"),
 }];
 
 /// Looks up a feature-intro descriptor by its id.
@@ -105,14 +104,10 @@ fn modal_terminal_magenta_overlay_1(appearance: &Appearance) -> ColorU {
     appearance.theme().ansi_overlay_1(magenta)
 }
 
-pub fn init(app: &mut AppContext) {
-    use warpui::keymap::macros::*;
-
-    app.register_fixed_bindings([FixedBinding::new(
-        "escape",
-        FeatureIntroModalAction::Close,
-        id!(FeatureIntroModal::ui_name()),
-    )]);
+pub fn init(_app: &mut AppContext) {
+    // Escape is registered on Workspace (gated on FEATURE_INTRO_MODAL_OPEN) because this
+    // popover intentionally never takes focus, so a FeatureIntroModal-scoped binding would
+    // never fire while the terminal keeps focus.
 }
 
 #[derive(Clone, Debug)]

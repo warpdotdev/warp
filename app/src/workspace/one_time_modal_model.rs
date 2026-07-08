@@ -216,7 +216,23 @@ impl OneTimeModalModel {
     }
 
     pub fn mark_feature_intro_dismissed(&mut self, ctx: &mut ModelContext<Self>) {
-        self.set_active_feature_intro(None, ctx);
+        if !self.set_active_feature_intro(None, ctx) {
+            return;
+        }
+        // Feature intros sit ahead of HOA/build-plan in the startup queue and also
+        // suppress free-AI rechecks while open. Resume those deferred paths so
+        // lower-priority notices are not lost for the rest of the session.
+        self.resume_modal_checks_after_feature_intro(ctx);
+    }
+
+    fn resume_modal_checks_after_feature_intro(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.check_and_trigger_free_ai_removal_modal(ctx) {
+            return;
+        }
+        if self.check_and_trigger_hoa_onboarding(ctx) {
+            return;
+        }
+        self.check_and_trigger_build_plan_migration_modal(ctx);
     }
 
     #[cfg(debug_assertions)]

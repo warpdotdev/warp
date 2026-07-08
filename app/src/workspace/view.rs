@@ -23022,6 +23022,14 @@ impl Workspace {
                 .set
                 .insert(flags::SESSION_CONFIG_TAB_CONFIG_CHIP_OPEN);
         }
+        {
+            let one_time = OneTimeModalModel::as_ref(app);
+            if one_time.active_feature_intro().is_some()
+                && one_time.target_window_id() == Some(self.window_id)
+            {
+                context.set.insert(flags::FEATURE_INTRO_MODAL_OPEN);
+            }
+        }
 
         if tab_settings
             .workspace_decoration_visibility
@@ -23806,6 +23814,12 @@ impl TypedActionView for Workspace {
             ShowSessionConfigModal => self.show_session_config_modal(ctx),
             DismissSessionConfigTabConfigChip => {
                 self.dismiss_session_config_tab_config_chip(ctx);
+            }
+            DismissFeatureIntroModal => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.mark_feature_intro_dismissed(ctx);
+                });
+                ctx.notify();
             }
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => self.show_hoa_onboarding_flow(ctx),
