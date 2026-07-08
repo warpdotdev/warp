@@ -26,7 +26,6 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::{
     AppContext, Entity, EntityId, EntityIdMap, ModelHandle, TuiView, ViewContext, ViewHandle,
 };
-use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 
 use super::tui_file_edits_view::TuiFileEditsView;
 use crate::agent_block_sections::{
@@ -34,6 +33,7 @@ use crate::agent_block_sections::{
     render_thinking_section,
 };
 use crate::tool_call_labels::{CommandBlockState, ResolvedCommandBlock};
+use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]

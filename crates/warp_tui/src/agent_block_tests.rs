@@ -509,8 +509,9 @@ fn header_click_records_a_manual_collapse_override() {
             element.layout(TuiConstraint::loose(TuiSize::new(40, 5)), &mut ctx, app_ctx);
 
             // Click the `Thinking...` header row (row 1, below the block's top
-            // padding). The runtime attributes dispatch to a rendered view, so
-            // give the context an origin view for the toggle's `notify()`.
+            // padding): the press arms the header's click and the release fires
+            // it. The runtime attributes dispatch to a rendered view, so give
+            // the context an origin view for the toggle's `notify()`.
             let mut event_ctx = TuiEventContext::default();
             event_ctx.set_origin_view(Some(EntityId::new()));
             let handled = element.dispatch_event(
@@ -525,7 +526,18 @@ fn header_click_records_a_manual_collapse_override() {
                 &mut ctx,
                 app_ctx,
             );
-            assert!(handled);
+            assert!(handled, "the press arming the click must be consumed");
+            let handled = element.dispatch_event(
+                &TuiEvent::LeftMouseUp {
+                    position: TuiPoint::new(0, 1),
+                    modifiers: ModifiersState::default(),
+                },
+                area,
+                &mut event_ctx,
+                &mut ctx,
+                app_ctx,
+            );
+            assert!(handled, "the release completing the click must be consumed");
 
             // The streaming block was expanded, so the click records a collapse
             // override that wins over the expanded-while-streaming default.

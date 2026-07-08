@@ -34,7 +34,7 @@ use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::transcript_view::TuiTranscriptView;
-use crate::transient_hint::{TransientHint, TRANSIENT_HINT_DURATION};
+use crate::transient_hint::TransientHint;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 
@@ -275,19 +275,11 @@ impl TuiTerminalSessionView {
         }
     }
 
-    /// Displays `text` in the footer's hint slot for
-    /// [`TRANSIENT_HINT_DURATION`], then reverts to the persistent content.
+    /// Displays `text` in the footer's hint slot for the transient-hint
+    /// duration, then reverts to the persistent content.
     fn show_transient_hint(&mut self, text: String, ctx: &mut ViewContext<Self>) {
-        let generation = self.transient_hint.show(text);
-        ctx.spawn(
-            Timer::after(TRANSIENT_HINT_DURATION),
-            move |view, _, ctx| {
-                if view.transient_hint.clear_expired(generation) {
-                    ctx.notify();
-                }
-            },
-        );
-        ctx.notify();
+        self.transient_hint
+            .show(text, ctx, |view| &mut view.transient_hint);
     }
 
     /// Handles a ctrl-c press: a second press within [`CTRL_C_EXIT_WINDOW`]
@@ -410,7 +402,7 @@ impl TuiTerminalSessionView {
     /// on the input mode.
     fn handle_submitted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
         if self.is_shell_mode(ctx) {
-            self.execute_user_command(text.trim(), ctx);
+            self.execute_user_command(&text, ctx);
         } else {
             let prompt = text.trim().to_owned();
             self.input_view.update(ctx, |input_view, ctx| {
@@ -431,8 +423,9 @@ impl TuiTerminalSessionView {
     /// cancelled when the command runs. On success the input clears and exits
     /// shell mode back to agent input.
     fn execute_user_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) {
-        // An empty command is a no-op; stay in shell mode.
-        if command.is_empty() {
+        // A whitespace-only command is a no-op; stay in shell mode. The command
+        // itself is sent to the PTY untrimmed, exactly as typed.
+        if command.trim().is_empty() {
             return;
         }
 

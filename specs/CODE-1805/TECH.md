@@ -30,7 +30,7 @@ The shell-mode gutter is composed with existing `warpui_core::elements::tui` pri
 - **Border color**: the input border already uses `TuiContainer::with_border_style` ([container.rs:120](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warpui_core/src/elements/tui/container.rs#L120)); shell mode just swaps the style's fg. Theme-token → `Color` conversion (`CoreFill::from(ThemeFill::from(...)).into()`) already exists in the session view's render.
 - **Esc key**: the runtime already converts `KeyCode::Esc` to keystroke key `"escape"` ([`crates/warpui_core/src/runtime/event_conversion.rs:146`](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warpui_core/src/runtime/event_conversion.rs#L146)); the input key table just gains a binding for it, gated on a shell-mode keymap-context flag. No new `TuiEvent` variants.
 - **Clickable gutter**: the `!` affordance is a `TuiHoverable` (`crates/warpui_core/src/elements/tui/hoverable.rs`), whose clicks use the GUI's press-then-release pairing — an unconsumed mouse-down inside the area arms the click on the shared `MouseState`, and the mouse-up fires the handler only when released inside the area.
-- **New surface area is crate-local to `warp_tui`**: two `TuiInputAction` variants (`ExitShellMode`, `SetCursor`), the footer hint slot, and the `TransientHint` state machine (`crates/warp_tui/src/transient_hint.rs`) driven by a spawned delayed task via the existing view-context spawn APIs.
+- **New surface area is crate-local to `warp_tui`**: two `TuiInputAction` variants (`ExitShellMode`, `SetCursor`), the footer hint slot, and the reusable `TransientHint` notice (`crates/warp_tui/src/transient_hint.rs`) driven by an abortable delayed task via the existing view-context spawn APIs.
 
 ### 1. Exports (`app/src/tui_export.rs`)
 
@@ -66,7 +66,7 @@ Border color: `render` picks `ansi_fg_blue()` when `is_shell_mode`, else the cur
 
 The session view's status footer owns a single left hint slot (the Figma `← for conversations` slot), highest priority first: the ctrl-c exit confirmation while armed, else the transient notice, else the shell-mode callout `shell mode · esc to exit` in the accent color (PRODUCT.md #7). Persistent content is computed from the input mode each render, so exiting shell mode reverts automatically (PRODUCT.md #12).
 
-Transient notices are a `TransientHint` state machine (mirroring `exit_confirmation.rs`): `show(text)` returns a generation, and the session view spawns a 3s `Timer` whose expiry calls `clear_expired(generation)` — an expiry belonging to a superseded notice no-ops instead of clearing the newer one. This is the extensible transient-notice pattern (PRODUCT.md #21); future callers just invoke `show_transient_hint`.
+Transient notices are a reusable view-owned `TransientHint`: `show(text, ctx, projection)` displays the notice and spawns its 3s `Timer` expiry, aborting the superseded notice's timer — at most one live expiry exists and it always belongs to the current notice, so no generation guard is needed. This is the extensible transient-notice pattern (PRODUCT.md #21); future callers just invoke `show_transient_hint`.
 
 ### 5. Transcript block spacing and terminal-block background
 
@@ -88,7 +88,7 @@ Mode-transition semantics (the `{AI, locked}` default sticking, `{Shell, locked}
 - Esc is never consumed by the element (the shell-mode exit is the keymap binding gated on the shell-mode context flag), and the flag is present in the keymap context exactly while in shell mode (#11, #23).
 - Shell-mode gutter geometry (via the composed `shell_element` row): the rendered cursor shifts right by 2 (#2), mouse mapping measures from the editor's slot after the gutter with gutter presses/releases consumed by the affordance's click handler (#8), wrapping happens two columns earlier (#8), and a gutter click places the cursor without arming a drag selection.
 
-`crates/warp_tui/src/transient_hint_tests.rs`: generation-guarded show/expiry semantics (superseded expiries never clear a newer notice).
+`crates/warp_tui/src/transient_hint_tests.rs`: show/supersede display semantics; expiry timing and superseded-timer aborts ride on the framework's `SpawnedFutureHandle::abort`.
 
 `crates/warp_tui/src/agent_block_tests.rs`: updated to pin the one-row top padding block layout (§5).
 

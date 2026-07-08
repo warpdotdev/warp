@@ -22,7 +22,7 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::platform::WindowStyle;
 use warpui_core::{AddWindowOptions, App, AppContext, TuiView, TypedActionView, ViewHandle};
 
-use super::{SHELL_MODE_INPUT_FLAG, TuiInputAction, TuiInputElement, TuiInputView};
+use super::{TuiInputAction, TuiInputElement, TuiInputView, SHELL_MODE_INPUT_FLAG};
 use crate::input_mode_policy::TuiInputModePolicy;
 
 const W: u16 = 80;

@@ -1,4 +1,3 @@
-
 //! [`TuiInputView`] — ratatui-rendered TUI prompt input.
 //!
 //! Implements [`TuiView`] + [`TypedActionView`]. The view:
@@ -1491,7 +1490,7 @@ impl TuiElement for TuiInputElement {
         // Include the "phantom" row the cursor wraps onto when a logical line
         // exactly fills the width (deferred wrap): `max_line` doesn't count it,
         // but the input must grow so the cursor's row is rendered.
-        let (cursor_row, _) = char_cell_cursor_pos(&self.text, self.cursor_offset, terminal_width);
+        let (cursor_row, _) = char_cell_cursor_pos(&self.text, self.cursor_offset, editor_width);
         let total_rows = visual_line_count.max(cursor_row + 1);
         let visible_rows = cmp::min(total_rows, self.max_visible_rows);
 
