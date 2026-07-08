@@ -74,6 +74,14 @@ pub fn should_use_rc_file_bootstrap_method(
     if is_container_subshell(session_info) {
         return false;
     }
+    let is_wsl = session_info.wsl_name.is_some()
+        || session_info
+            .launch_data
+            .as_ref()
+            .is_some_and(|data| matches!(data, ShellLaunchData::WSL { .. }));
+    if is_wsl {
+        return true;
+    }
 
     let session_type = &session_info.session_type;
     match session_type {
