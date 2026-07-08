@@ -218,6 +218,7 @@ tracing-futures = { workspace = true, features = ["futures-03"] }
 ui_components.workspace = true
 unicase = "2.7.0"
 unicode-general-category.workspace = true
+unicode-segmentation = "1.11.0"
 unicode-width.workspace = true
 unindent = "0.1.7"
 url = { workspace = true, features = ["serde"] }

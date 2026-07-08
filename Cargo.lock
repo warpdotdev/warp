@@ -15233,6 +15233,7 @@ dependencies = [
  "ui_components",
  "unicase",
  "unicode-general-category",
+ "unicode-segmentation",
  "unicode-width 0.1.14",
  "unindent 0.1.11",
  "url",

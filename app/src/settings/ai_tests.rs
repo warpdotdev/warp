@@ -3,6 +3,7 @@ use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{App, SingletonEntity};
 
 use super::*;
+use crate::ai::loading::WarpingVerbPack;
 use crate::ai::request_usage_model::{RequestLimitInfo, RequestLimitRefreshDuration};
 use crate::auth::AuthStateProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -384,6 +385,170 @@ fn test_toolbar_command_map_matched_agent() {
     });
 }
 
+#[test]
+fn spinner_verbs_mode_file_value_roundtrip() {
+    use settings_value::SettingsValue;
+
+    let cases = [
+        (SpinnerVerbsMode::Default, "default"),
+        (SpinnerVerbsMode::Cooking, "cooking"),
+        (SpinnerVerbsMode::Custom, "custom"),
+    ];
+
+    for (mode, expected_value) in cases {
+        let file_value = mode.to_file_value();
+        assert_eq!(file_value, serde_json::json!(expected_value));
+        assert_eq!(SpinnerVerbsMode::from_file_value(&file_value), Some(mode));
+    }
+}
+
+#[test]
+fn spinner_verb_list_file_value_normalizes_entries() {
+    use settings_value::SettingsValue;
+
+    let file_value = serde_json::json!([" Braising... ", " ", "...", "Sautéing…",]);
+    let list = SpinnerVerbList::from_file_value(&file_value).unwrap();
+
+    assert_eq!(
+        list.as_strings(),
+        vec!["Braising".to_string(), "Sautéing".to_string()]
+    );
+    assert_eq!(
+        list.to_file_value(),
+        serde_json::json!(["Braising", "Sautéing"])
+    );
+}
+
+#[test]
+fn spinner_verb_list_deserialize_normalizes_entries() {
+    let list: SpinnerVerbList = serde_json::from_value(serde_json::json!([
+        " Braising... ",
+        " ",
+        "...",
+        "Sautéing…",
+    ]))
+    .unwrap();
+
+    assert_eq!(
+        list.as_strings(),
+        vec!["Braising".to_string(), "Sautéing".to_string()]
+    );
+}
+#[test]
+fn set_default_spinner_verbs_preserves_custom_list() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.set_custom_spinner_verbs(vec!["Sautéing".to_string()], ctx);
+            settings.set_default_spinner_verbs(ctx);
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            let expected = vec!["Sautéing".to_string()];
+            assert_eq!(*settings.spinner_verbs.value(), SpinnerVerbsMode::Default);
+            assert_eq!(settings.custom_spinner_verbs.value().as_strings(), expected);
+            assert!(settings.effective_custom_spinner_verbs().is_empty());
+        });
+    });
+}
+
+#[test]
+fn set_spinner_verb_pack_stores_mode_and_preserves_custom_list() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.set_custom_spinner_verbs(vec!["Sautéing".to_string()], ctx);
+            settings.set_spinner_verb_pack(WarpingVerbPack::Cooking, ctx);
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            let expected_custom = vec!["Sautéing".to_string()];
+            assert_eq!(*settings.spinner_verbs.value(), SpinnerVerbsMode::Cooking);
+            assert_eq!(
+                settings.custom_spinner_verbs.value().as_strings(),
+                expected_custom
+            );
+            assert_eq!(
+                settings.effective_custom_spinner_verbs(),
+                WarpingVerbPack::Cooking.verbs_as_vec()
+            );
+        });
+    });
+}
+
+#[test]
+fn use_custom_spinner_verbs_reactivates_preserved_custom_list() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.set_custom_spinner_verbs(vec!["Sautéing".to_string()], ctx);
+            settings.set_spinner_verb_pack(WarpingVerbPack::Cooking, ctx);
+            settings.use_custom_spinner_verbs(ctx);
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            let expected = vec!["Sautéing".to_string()];
+            assert_eq!(*settings.spinner_verbs.value(), SpinnerVerbsMode::Custom);
+            assert_eq!(settings.custom_spinner_verbs.value().as_strings(), expected);
+            assert_eq!(settings.effective_custom_spinner_verbs(), expected);
+        });
+    });
+}
+#[test]
+fn set_custom_spinner_verbs_normalizes_and_stores_custom_mode() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.set_spinner_verb_pack(WarpingVerbPack::Cooking, ctx);
+            settings.set_custom_spinner_verbs(
+                vec![
+                    " Braising... ".to_string(),
+                    " ".to_string(),
+                    "Sautéing…".to_string(),
+                ],
+                ctx,
+            );
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            let expected = vec!["Braising".to_string(), "Sautéing".to_string()];
+            assert_eq!(*settings.spinner_verbs.value(), SpinnerVerbsMode::Custom);
+            assert_eq!(settings.custom_spinner_verbs.value().as_strings(), expected);
+            assert_eq!(settings.effective_custom_spinner_verbs(), expected);
+        });
+    });
+}
+
+#[test]
+fn set_custom_spinner_verb_list_preserving_mode_does_not_switch_mode() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.set_spinner_verb_pack(WarpingVerbPack::Cooking, ctx);
+            settings.set_custom_spinner_verb_list_preserving_mode(
+                SpinnerVerbList::from(vec![" Braising... ".to_string()]),
+                ctx,
+            );
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(*settings.spinner_verbs.value(), SpinnerVerbsMode::Cooking);
+            assert_eq!(
+                settings.custom_spinner_verbs.value().as_strings(),
+                vec!["Braising".to_string()]
+            );
+            assert_eq!(
+                settings.effective_custom_spinner_verbs(),
+                WarpingVerbPack::Cooking.verbs_as_vec()
+            );
+        });
+    });
+}
 #[test]
 fn orchestration_is_enabled_when_ai_is_enabled() {
     App::test((), |mut app| async move {
