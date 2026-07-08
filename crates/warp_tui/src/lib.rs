@@ -16,7 +16,6 @@ pub mod session;
 mod telemetry;
 mod tui_builder;
 mod ui;
-mod usage;
 
 mod conversation_selection;
 mod exit_confirmation;
@@ -32,6 +31,7 @@ mod transient_hint;
 mod tui_block_list_viewport_source;
 mod tui_diff_storage;
 mod tui_file_edits_view;
+mod usage;
 
 pub use root_view::RootTuiView;
 pub use session::run;
