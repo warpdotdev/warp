@@ -74,14 +74,39 @@ impl TaskStore {
         self.tasks.len()
     }
 
-    /// Appends an exchange to a task and rebuilds the index.
+    /// Appends an exchange to a task and updates the index.
     /// Returns true if the task was found and the exchange was appended.
     pub fn append_exchange(&mut self, task_id: &TaskId, exchange: AIAgentExchange) -> bool {
         let Some(task) = self.tasks.get_mut(task_id) else {
             return false;
         };
+        let exchange_index = task.exchanges_len();
+        let exchange_id = exchange.id;
+        let has_subagent_output = exchange.output_status.output().is_some_and(|output| {
+            output
+                .get()
+                .messages
+                .iter()
+                .any(|m| matches!(m.message, AIAgentOutputMessageType::Subagent(_)))
+        });
         task.append_exchange(exchange);
-        self.rebuild_exchange_index();
+        let is_at_dfs_tail = self
+            .exchanges
+            .last()
+            .map_or(true, |(_, r)| r.task_id == *task_id);
+        // If we know this exchange is going at the end, it's faster to just append it.
+        if is_at_dfs_tail && !has_subagent_output {
+            self.exchanges.insert(
+                exchange_id,
+                ExchangeRef {
+                    task_id: task_id.clone(),
+                    exchange_index,
+                },
+            );
+        } else {
+            // Otherwise, we need to rebuild the whole index.
+            self.rebuild_exchange_index();
+        }
         true
     }
 
@@ -278,7 +303,8 @@ impl TaskStore {
 
     pub fn remove(&mut self, task_id: &TaskId) -> Option<Task> {
         let task = self.tasks.remove(task_id)?;
-        self.exchanges.retain(|_, r| self.tasks.contains_key(&r.task_id));
+        self.exchanges
+            .retain(|_, r| self.tasks.contains_key(&r.task_id));
         Some(task)
     }
 
@@ -323,7 +349,8 @@ impl TaskStore {
         for id in &to_remove {
             self.tasks.remove(id);
         }
-        self.exchanges.retain(|_, r| self.tasks.contains_key(&r.task_id));
+        self.exchanges
+            .retain(|_, r| self.tasks.contains_key(&r.task_id));
     }
 
     /// Computes the set of task ids reachable from the root task by following
