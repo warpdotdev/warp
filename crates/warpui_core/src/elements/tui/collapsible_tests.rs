@@ -8,7 +8,7 @@ use crate::elements::tui::{
 };
 use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
-use crate::{App, EntityIdMap};
+use crate::{App, EntityId, EntityIdMap};
 
 #[test]
 fn only_a_header_click_invokes_on_toggle() {
@@ -31,15 +31,26 @@ fn only_a_header_click_invokes_on_toggle() {
             };
             let area = TuiRect::new(0, 0, 20, 4);
             collapsible.layout(TuiConstraint::loose(TuiSize::new(20, 4)), &mut ctx, app_ctx);
+            // A click is a press-then-release pair; the hoverable's arming
+            // notify needs an origin view to attribute the redraw to.
             let mut click = |y| {
-                let event = TuiEvent::LeftMouseDown {
+                let mut event_ctx = TuiEventContext::default();
+                event_ctx.set_origin_view(Some(EntityId::new()));
+                let down = TuiEvent::LeftMouseDown {
                     position: TuiPoint::new(2, y),
                     modifiers: ModifiersState::default(),
                     click_count: 1,
                     is_first_mouse: false,
                 };
-                let mut event_ctx = TuiEventContext::default();
-                collapsible.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx)
+                let pressed =
+                    collapsible.dispatch_event(&down, area, &mut event_ctx, &mut ctx, app_ctx);
+                let up = TuiEvent::LeftMouseUp {
+                    position: TuiPoint::new(2, y),
+                    modifiers: ModifiersState::default(),
+                };
+                let released =
+                    collapsible.dispatch_event(&up, area, &mut event_ctx, &mut ctx, app_ctx);
+                pressed && released
             };
 
             // Row 0 is the header: the click toggles. Row 1 is the body: the
