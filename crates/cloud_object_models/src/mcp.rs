@@ -8,6 +8,7 @@ use cloud_objects::ids::GenericStringObjectId;
 use handlebars::get_arguments;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use warp_core::report_error;
 
 use crate::{JsonModel, JsonSerializer};
 
@@ -194,13 +195,17 @@ impl TemplatableMCPServer {
             // All templates should be valid JSON - this should never fail
             // Ones that are not should not have been saved in the first place
             .unwrap_or_else(|err| {
-                log::error!("Could not parse MCP server template to json: {err:?}");
+                report_error!(
+                    anyhow::Error::new(err).context("Could not parse MCP server template to json")
+                );
                 Default::default()
             });
         serde_json::to_string_pretty(&value)
             // serde_json::to_string_pretty should never fail on this value since we just parsed it as valid json
             .unwrap_or_else(|err| {
-                log::error!("Could not serialize MCP server to user json: {err:?}");
+                report_error!(
+                    anyhow::Error::new(err).context("Could not serialize MCP server to user json")
+                );
                 Default::default()
             })
     }
@@ -217,7 +222,10 @@ impl TemplatableMCPServer {
             Ok(templates) => {
                 if templates.is_empty() {
                     // This should never happen for stored json from the database
-                    log::error!("No templatable MCP servers found in stored json: {uuid}");
+                    report_error!(
+                        "No templatable MCP servers found in stored json",
+                        extra: { "uuid" => %uuid }
+                    );
                     Err(FromStoredJsonError::NoServersFound)
                 } else if templates.len() > 1 {
                     Err(FromStoredJsonError::TooManyServersFound)

@@ -50,8 +50,8 @@ use crate::workspace::{
     WorkspaceRegistry,
 };
 use crate::{
-    quake_mode_window_id, quake_mode_window_is_open, safe_info, send_telemetry_from_app_ctx,
-    ChannelState, OpenPath,
+    quake_mode_window_id, quake_mode_window_is_open, report_error, safe_info,
+    send_telemetry_from_app_ctx, ChannelState, OpenPath,
 };
 
 const DESKTOP_REDIRECT_URI_PATH: &str = "/desktop_redirect";
@@ -492,7 +492,7 @@ impl UriHost {
                     let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx)
                         .update(ctx, |manager, _ctx| manager.handle_oauth_callback(url));
                     if let Err(e) = result {
-                        log::error!("Failed to handle MCP OAuth callback: {e:?}");
+                        report_error!(e.context("Failed to handle MCP OAuth callback"));
                     }
                 }
             }

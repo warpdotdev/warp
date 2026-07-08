@@ -21,6 +21,7 @@ use warpui::{AppContext, EntityId, EventContext, LayoutContext, ViewHandle, Wind
 
 use crate::code::editor::comment_editor::CommentEditor;
 use crate::code_review::comments::CommentId;
+use crate::report_error;
 
 const COMMENT_ID_MAPPING_KEY: &str = "comment_id";
 const ENTITY_ID_MAPPING_KEY: &str = "entity_id";
@@ -54,18 +55,18 @@ impl EmbeddedItem for EmbeddedCommentSpace {
     fn layout(&self, _text_layout: &TextLayout, app: &AppContext) -> Box<dyn LaidOutEmbeddedItem> {
         let comment_editor = self.get_comment_editor(app);
         if comment_editor.is_none() {
-            log::error!(
-                "EmbeddedComment can't layout missing comment editor for comment ID {:?}",
-                self.id_string
+            report_error!(
+                "EmbeddedComment can't layout missing comment editor",
+                extra: { "comment_id" => ?self.id_string }
             );
         };
 
         let size = comment_editor
             .and_then(|editor| editor.read(app, |editor, _ctx| editor.get_laid_out_size()))
             .unwrap_or_else(|| {
-                log::error!(
-                    "Didn't find laid out size for editor ID {:?}",
-                    self.id_string
+                report_error!(
+                    "Didn't find laid out size for editor",
+                    extra: { "editor_id" => ?self.id_string }
                 );
                 Vector2F::new(100.0, 24.0)
             });
@@ -192,42 +193,51 @@ pub(super) fn comment_embedded_item_conversion(
     let Some(Value::String(comment_uuid)) =
         mapping.remove(&Value::String(COMMENT_ID_MAPPING_KEY.to_string()))
     else {
-        log::error!("Unable to deserialize embedded comment ID");
+        report_error!("Unable to deserialize embedded comment ID");
         return None;
     };
     let Some(Value::String(entity_id)) =
         mapping.remove(&Value::String(ENTITY_ID_MAPPING_KEY.to_string()))
     else {
-        log::error!("Unable to deserialize embedded comment entity ID");
+        report_error!("Unable to deserialize embedded comment entity ID");
         return None;
     };
     let Some(Value::String(window_id)) =
         mapping.remove(&Value::String(WINDOW_ID_MAPPING_KEY.to_string()))
     else {
-        log::error!("Unable to deserialize embedded comment window ID");
+        report_error!("Unable to deserialize embedded comment window ID");
         return None;
     };
 
     let comment_id = CommentId::from_uuid(
         Uuid::from_str(&comment_uuid)
-            .inspect_err(|e| {
-                log::error!("Unable to parse comment ID {comment_uuid}: {e:?}");
+            .map_err(|e| {
+                report_error!(
+                    anyhow::Error::new(e).context("Unable to parse comment ID"),
+                    extra: { "comment_id" => %comment_uuid }
+                );
             })
             .ok()?,
     );
     let entity_id = EntityId::from_usize(
         entity_id
             .parse::<usize>()
-            .inspect_err(|e| {
-                log::error!("Unable to parse entity ID {entity_id}: {e:?}");
+            .map_err(|e| {
+                report_error!(
+                    anyhow::Error::new(e).context("Unable to parse entity ID"),
+                    extra: { "entity_id" => %entity_id }
+                );
             })
             .ok()?,
     );
     let window_id = WindowId::from_usize(
         window_id
             .parse::<usize>()
-            .inspect_err(|e| {
-                log::error!("Unable to parse entity ID {window_id}: {e:?}");
+            .map_err(|e| {
+                report_error!(
+                    anyhow::Error::new(e).context("Unable to parse window ID"),
+                    extra: { "window_id" => %window_id }
+                );
             })
             .ok()?,
     );

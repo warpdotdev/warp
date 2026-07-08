@@ -14,6 +14,8 @@ path = "src/bin/use_computer.rs"
 test-util = []
 
 [dependencies]
+anyhow.workspace = true
+warp_errors.workspace = true
 async-trait.workspace = true
 cfg-if.workspace = true
 clap.workspace = true

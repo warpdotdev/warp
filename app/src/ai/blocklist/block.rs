@@ -1793,7 +1793,7 @@ impl AIBlock {
             .unwrap_or(false);
 
         if !conversation_contains_exchange {
-            log::error!(
+            report_error!(
                 "Reassigning AIBlock to a new conversation but the new conversation does not contain the AI exchange"
             );
             return;
@@ -3145,7 +3145,9 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    log::error!("Failed to persist 'Show code suggestion speedbump' setting: {e}");
+                    report_error!(
+                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
+                    );
                 }
             });
         }
@@ -4236,7 +4238,9 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    log::error!("Failed to persist 'Show code suggestion speedbump' setting: {e}");
+                    report_error!(
+                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
+                    );
                 }
             });
         }

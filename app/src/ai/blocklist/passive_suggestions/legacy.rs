@@ -619,9 +619,9 @@ fn build_prompt_suggestions_request(
         let terminal_width = model.block_list().size().columns();
         let Some(current_block) = model.block_list().block_with_id(&block.serialized_block.id)
         else {
-            log::error!(
-                "Failed to fetch prompt suggestions, could not find block with ID: {:?}",
-                block.serialized_block.id
+            report_error!(
+                "Failed to fetch prompt suggestions, could not find block with ID",
+                extra: { "block_id" => ?block.serialized_block.id }
             );
             return None;
         };

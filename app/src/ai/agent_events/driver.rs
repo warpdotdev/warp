@@ -9,6 +9,7 @@ use instant::Instant;
 use warp_core::errors::AnyhowErrorExt as _;
 use warpui::r#async::Timer;
 
+use crate::report_error;
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ai::AgentRunEvent;
 use crate::server::server_api::presigned_upload::HttpStatusError;
@@ -472,8 +473,13 @@ fn log_stream_failure(
 ) {
     let label = filter.log_label();
     if agent_event_failure_should_log_error(err, failures, failures_before_error_log) {
-        log::error!(
-            "Agent event stream failed {failures} consecutive times for {label}, retrying in {backoff:?}: {err:#}"
+        report_error!(
+            err,
+            extra: {
+                "failures" => %failures,
+                "label" => %label,
+                "backoff" => ?backoff
+            }
         );
     } else {
         log::warn!(

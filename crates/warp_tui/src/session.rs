@@ -14,6 +14,7 @@ use warp::tui_export::{
     TerminalManagerTrait, TerminalSurfaceResult,
 };
 use warp::{TuiLoginModel, TuiLoginPhase};
+use warp_core::report_error;
 use warpui::SingletonEntity;
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
@@ -101,8 +102,9 @@ fn init(ctx: &mut AppContext) {
             }
         }
         Err(error) => {
-            log::error!("failed to start transcript TUI: {error}");
-            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error.into())));
+            let error = anyhow::Error::new(error);
+            report_error!(&error);
+            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
         }
     }
 }

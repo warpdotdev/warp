@@ -169,6 +169,7 @@ struct LoadedFileMetadata {
 }
 
 pub use super::diff_viewer::DisplayMode;
+use crate::report_error;
 
 type TerminalTargetFn = dyn Fn(WindowId, &AppContext) -> Option<ViewHandle<TerminalView>>;
 
@@ -532,7 +533,7 @@ impl LocalCodeEditorView {
         {
             Ok(future) => future,
             Err(e) => {
-                log::error!("Failed to call lsp.goto_definition: {e}");
+                report_error!(e.context("Failed to call lsp.goto_definition"));
                 return false;
             }
         };
@@ -1136,7 +1137,7 @@ impl LocalCodeEditorView {
         };
 
         if let Err(err) = result {
-            log::error!("Failed to save file: {err:?}");
+            report_error!(&err);
             ctx.emit(LocalCodeEditorEvent::FailedToSave {
                 error: Arc::new(err),
             });
@@ -1681,7 +1682,7 @@ impl LocalCodeEditorView {
             .update(ctx, move |model, ctx| {
                 model.save(file_id, content, buffer_version, ctx)
             }) {
-            log::error!("Failed to save file to new path: {err:?}");
+            report_error!(&err);
             ctx.emit(LocalCodeEditorEvent::FailedToSave {
                 error: Arc::new(err),
             });
@@ -2093,7 +2094,7 @@ impl DiffViewer for LocalCodeEditorView {
             }
             if let Some(path) = self.file_path().map(|p| p.to_path_buf()) {
                 if let Err(e) = std::fs::remove_file(&path) {
-                    log::error!("Failed to delete file after save: {e}");
+                    report_error!(anyhow::Error::new(e).context("Failed to delete file after save"));
                 } else {
                     // This will close tabs with the file open
                     ctx.dispatch_typed_action(&WorkspaceAction::FileDeleted { path });
@@ -2285,7 +2286,7 @@ impl TypedActionView for LocalCodeEditorView {
             }
             LocalCodeEditorAction::SaveFile => {
                 if let Err(ImmediateSaveError::FailedToSave(err)) = self.save_local(ctx) {
-                    log::error!("Failed to save file {err:?}");
+                    report_error!(&err);
                     ctx.emit(LocalCodeEditorEvent::FailedToSave {
                         error: Arc::new(err),
                     });

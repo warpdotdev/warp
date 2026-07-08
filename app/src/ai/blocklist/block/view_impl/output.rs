@@ -125,7 +125,7 @@ use crate::view_components::compactible_action_button::{
     CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
 };
 use crate::workspace::WorkspaceAction;
-use crate::{AIAgentTodoList, FeatureFlag};
+use crate::{report_error, AIAgentTodoList, FeatureFlag};
 
 const BLOCKED_ACTION_MESSAGE_FOR_UPLOADING_ARTIFACT: &str = "Grant access to upload this artifact?";
 
@@ -2318,9 +2318,9 @@ fn render_suggest_new_conversation(
     let theme = appearance.theme();
     if let AIActionStatus::Finished(result) = status {
         let AIAgentActionResultType::SuggestNewConversation(result) = &result.result else {
-            log::error!(
-                "Unexpected action result type for suggest new conversation action: {:?}",
-                result.result
+            report_error!(
+                "Unexpected action result type for suggest new conversation action",
+                extra: { "result_type" => ?result.result }
             );
             return None;
         };

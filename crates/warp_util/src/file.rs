@@ -2,6 +2,8 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use warp_errors::{register_error, ErrorExt};
+
 #[derive(thiserror::Error, Debug)]
 pub enum FileSaveError {
     #[error("No file path associated with file when saving file {0:?}")]
@@ -19,6 +21,16 @@ pub enum FileSaveError {
     #[error("{0}")]
     Other(String),
 }
+
+impl ErrorExt for FileSaveError {
+    fn is_actionable(&self) -> bool {
+        match self {
+            FileSaveError::NoFilePath(_) | FileSaveError::Other(_) => true,
+            FileSaveError::IOError { .. } | FileSaveError::RemoteError(_) => false,
+        }
+    }
+}
+register_error!(FileSaveError);
 
 #[derive(thiserror::Error, Debug)]
 pub enum FileLoadError {

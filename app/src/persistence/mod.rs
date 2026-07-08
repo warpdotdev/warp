@@ -50,6 +50,7 @@ use crate::cloud_object::{
 };
 use crate::drive::folders::CloudFolder;
 use crate::notebooks::CloudNotebook;
+use crate::report_error;
 use crate::server::experiments::ServerExperiment;
 use crate::server::ids::SyncId;
 use crate::suggestions::ignored_suggestions_model::SuggestionType;
@@ -198,15 +199,17 @@ impl PersistenceWriter {
         if let Some(handle) = self.thread_handle.take() {
             let start = Instant::now();
             let Some(sender) = self.sender() else {
-                log::error!("Model event sender should exist if thread handle is set");
+                report_error!("Model event sender should exist if thread handle is set");
                 return;
             };
             if let Err(err) = sender.send(ModelEvent::Terminate) {
-                log::error!("Could not terminate SQLite writer thread: {err}");
+                report_error!(
+                    anyhow::Error::new(err).context("Could not terminate SQLite writer thread")
+                );
             }
             if handle.join().is_err() {
                 // If crash reporting is enabled, Sentry will have already handled the panic.
-                log::error!("SQLite writer thread panicked");
+                report_error!("SQLite writer thread panicked");
             }
             log::info!("Shut down SQLite writer in {:?}", start.elapsed());
         }

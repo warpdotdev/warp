@@ -27,6 +27,7 @@ use cfg_if::cfg_if;
 use get_size::GetSize;
 use string_offset::ByteOffset;
 use thiserror::Error;
+use warp_core::report_error;
 
 use super::grapheme::Grapheme;
 use crate::model::grid::CellType;
@@ -138,7 +139,7 @@ impl Index {
         entry_builder.append_to_index_if_nonempty(&mut index);
 
         if index.content_len > old_index.content_len {
-            log::error!("somehow ended up with too much flat storage content!");
+            report_error!("somehow ended up with too much flat storage content!");
         }
 
         index
@@ -168,11 +169,9 @@ impl Index {
     pub fn truncate_front(&mut self, count: usize) -> ByteOffset {
         let new_start_offset = self.content_offset_for_row(count).unwrap_or_else(|| {
             if count > self.rows.len() {
-                log::error!(
-                    "should not attempt to truncate more rows than exist in flat storage; \
-                     have {} rows, trying to truncate {}",
-                    self.rows.len(),
-                    count
+                report_error!(
+                    "Attempted to truncate more rows than exist in flat storage",
+                    extra: { "rows" => %self.rows.len(), "truncate_count" => %count }
                 );
             }
             self.content_len.into()
@@ -378,7 +377,7 @@ impl Index {
             GraphemeSizing::NonUniform => self.grapheme_sizing.get(&entry.content_offset),
             GraphemeSizing::EmptyRow => return Some(CellType::RegularChar),
         }) else {
-            log::error!(
+            report_error!(
                 "Found entry with non-uniform grapheme sizing and no grapheme run information!"
             );
             return None;
@@ -509,7 +508,7 @@ impl EntryBuilder {
 
         if info.cell_width == 0 {
             #[cfg(debug_assertions)]
-            log::error!("encountered unexpected grapheme with a computed cell width of zero!");
+            report_error!("encountered unexpected grapheme with a computed cell width of zero!");
             return;
         }
         debug_assert!(

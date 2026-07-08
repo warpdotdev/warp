@@ -3,12 +3,12 @@ use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud}
 use warpui::keymap::Keystroke;
 use warpui::{AppContext, DisplayIdx, ModelContext};
 
-use crate::report_if_error;
 use crate::root_view::{update_quake_window_bounds, QuakeModePinPosition};
 use crate::settings::{
     CtrlTabBehavior, ExtraMetaKeys as ExtraMetaKeysEnum, GlobalHotkeyMode, SizePercentages,
     DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
 };
+use crate::{report_error, report_if_error};
 
 define_settings_group!(KeysSettings, settings: [
     quake_mode_settings: QuakeModeSettings {
@@ -201,7 +201,7 @@ impl KeysSettings {
         }
 
         if *self.quake_mode_enabled && *self.activation_hotkey_enabled {
-            log::error!("Both quake mode AND activation hotkey enabled. Either one or the other should be active.");
+            report_error!("Both quake mode AND activation hotkey enabled. Either one or the other should be active.");
             // Quake mode takes precedence
             selected = GlobalHotkeyMode::QuakeMode;
         } else if *self.quake_mode_enabled {

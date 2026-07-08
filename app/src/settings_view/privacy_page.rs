@@ -57,7 +57,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, CustomerType, UgcCollectionEnablementSetting,
 };
-use crate::{report_if_error, send_telemetry_from_ctx};
+use crate::{report_error, report_if_error, send_telemetry_from_ctx};
 
 const FONT_SIZE: f32 = 12.;
 
@@ -450,11 +450,14 @@ impl PrivacyPageView {
                     .set_value(new_user_secret_regex_list, ctx)
                     .is_err()
                 {
-                    log::error!("Failed to add custom regex to secret regex list");
+                    report_error!("Failed to add custom regex to secret regex list");
                 }
                 ctx.notify();
             } else {
-                log::error!("Invalid regex pattern: {pattern}");
+                report_error!(
+                    "Invalid regex pattern",
+                    extra: { "pattern" => %pattern }
+                );
             }
         });
     }
@@ -552,7 +555,7 @@ impl TypedActionView for PrivacyPageView {
                                 .set_value(new_user_secret_regex_list, ctx)
                                 .is_err()
                             {
-                                log::error!(
+                                report_error!(
                                     "Failed to add recommended regex to custom secret regex list"
                                 );
                             }

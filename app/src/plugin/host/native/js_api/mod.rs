@@ -1,6 +1,7 @@
 use rquickjs::{Ctx, Function, Object};
 
 use super::plugin::PluginHandle;
+use crate::report_error;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "completions_v2")] {
@@ -37,7 +38,7 @@ pub fn console(ctx: Ctx<'_>) -> rquickjs::Result<Object<'_>> {
     console.set(
         "err",
         Function::new(ctx, |message: String| {
-            log::error!("{message}");
+            report_error!("Plugin JS console error", extra: { "message" => %message });
         }),
     )?;
     Ok(console)

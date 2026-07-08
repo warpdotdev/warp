@@ -7,7 +7,7 @@ use ai::index::full_source_code_embedding::manager::{
 };
 use ai::index::full_source_code_embedding::RetrievalID;
 use ai::index::locations::CodeContextLocation;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as _};
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use warp_core::features::FeatureFlag;
@@ -94,10 +94,11 @@ impl RequestHandle {
                 start_time: _,
             } => {
                 CodebaseIndexManager::handle(ctx).update(ctx, |index_manager, ctx| {
-                    if let Err(err) =
-                        index_manager.abort_retrieval_request(repo_path, retrieval_id.clone(), ctx)
+                    if let Err(err) = index_manager
+                        .abort_retrieval_request(repo_path, retrieval_id.clone(), ctx)
+                        .context("Failed to abort file retrieval request")
                     {
-                        log::error!("Failed to abort file retrieval request: {err:?}");
+                        report_error!(err);
                     }
                 });
             }

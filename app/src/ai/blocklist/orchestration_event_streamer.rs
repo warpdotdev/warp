@@ -27,6 +27,7 @@ use crate::ai::agent_events::{
     ServerApiAgentEventSource,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::report_error;
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ai::{AIClient, AgentRunEvent, TaskListFilter};
 use crate::server::server_api::{ServerApi, ServerApiProvider};
@@ -1892,11 +1893,15 @@ impl OrchestrationEventStreamer {
             DesiredSseFilter::Filter(filter) => filter,
             DesiredSseFilter::NoFilter => return,
             DesiredSseFilter::UnsupportedRunIdCount(count) => {
-                log::error!(
-                    "Owner-side SSE delivery blocked for {conversation_id:?}: {count} watched \
-                     run IDs exceed the {MAX_RUN_ID_STREAM_FILTER} explicit-run-id limit and \
-                     parent-family ancestor streaming is disabled; enable \
-                     OwnerOrchestrationAncestorStreamer to deliver events for large orchestrators"
+                report_error!(
+                    "Owner-side SSE delivery blocked: watched run IDs exceed the explicit-run-id \
+                     limit and parent-family ancestor streaming is disabled; enable \
+                     OwnerOrchestrationAncestorStreamer to deliver events for large orchestrators",
+                    extra: {
+                        "conversation_id" => ?conversation_id,
+                        "watched_run_ids" => %count,
+                        "limit" => %MAX_RUN_ID_STREAM_FILTER
+                    }
                 );
                 return;
             }

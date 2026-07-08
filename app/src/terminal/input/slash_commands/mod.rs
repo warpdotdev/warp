@@ -64,7 +64,7 @@ use crate::ui_components::color_dot;
 use crate::view_components::DismissibleToast;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
-use crate::TelemetryEvent;
+use crate::{report_error, TelemetryEvent};
 
 #[derive(Debug, Clone)]
 pub enum AcceptSlashCommandOrSavedPrompt {
@@ -877,7 +877,7 @@ impl Input {
                     .map(|path| path.to_path_buf())
                     .map(|path| path.to_string_lossy().to_string())
                 else {
-                    log::error!("Expected a valid working directory since /pr-comments is only available from the terminal");
+                    report_error!("Expected a valid working directory since /pr-comments is only available from the terminal");
                     return false;
                 };
 
@@ -1092,7 +1092,7 @@ impl Input {
             compact_and if command.name == commands::COMPACT_AND.name => {
                 let conversation_id = if is_queued_prompt {
                     let Some(conversation_id) = queued_conversation_id else {
-                        log::error!("Queued /compact-and missing conversation id");
+                        report_error!("Queued /compact-and missing conversation id");
                         return true;
                     };
                     conversation_id
@@ -1113,7 +1113,7 @@ impl Input {
 
                 if is_queued_prompt {
                     let Some(queued_query_id) = queued_query_id else {
-                        log::error!("Queued /compact-and missing queued query id");
+                        report_error!("Queued /compact-and missing queued query id");
                         return true;
                     };
                     self.execute_queued_compact_and(

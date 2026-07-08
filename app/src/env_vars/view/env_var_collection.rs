@@ -55,7 +55,9 @@ use crate::util::bindings::CustomAction;
 use crate::view_components::alert::AlertConfig;
 use crate::view_components::{Alert, DismissibleToast, ToastType};
 use crate::workspace::ToastStack;
-use crate::{send_telemetry_from_ctx, Appearance, CloudObjectTypeAndId, TelemetryEvent};
+use crate::{
+    report_error, send_telemetry_from_ctx, Appearance, CloudObjectTypeAndId, TelemetryEvent,
+};
 
 // Universal
 pub(super) const CORE_HORIZONATAL_MARGIN: f32 = 24.;
@@ -736,7 +738,7 @@ impl EnvVarCollectionView {
                         Box::new(cloud_env_var.clone()),
                     )));
                 } else {
-                    log::error!("Env var not found and could not be invoked");
+                    report_error!("Env var not found and could not be invoked");
                     let window_id = ctx.window_id();
                     crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
@@ -860,7 +862,7 @@ impl EnvVarCollectionView {
                 }
             }
             ActiveEnvVarCollection::None => {
-                log::error!("Tried to save EVC, but none were active")
+                report_error!("Tried to save EVC, but none were active")
             }
         }
     }

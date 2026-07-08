@@ -41,6 +41,7 @@ use crate::features::FeatureFlag;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::pane_group::pane::DetachType;
 use crate::pane_group::TerminalViewResources;
+use crate::report_error;
 use crate::settings::{InputModeSettings, WarpPromptSeparator};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
@@ -1432,9 +1433,9 @@ impl TerminalManager {
                         });
                     }
                     Err(e) => {
-                        log::error!(
-                            "Failed to deserialize prompt snapshot from shared session server: {e}"
-                        )
+                        report_error!(anyhow::Error::new(e).context(
+                            "Failed to deserialize prompt snapshot from shared session server"
+                        ))
                     }
                 }
             }

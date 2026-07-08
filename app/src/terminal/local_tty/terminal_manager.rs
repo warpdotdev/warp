@@ -33,7 +33,6 @@ use crate::context_chips::prompt::Prompt;
 use crate::context_chips::ContextChipKind;
 use crate::features::FeatureFlag;
 use crate::persistence::ModelEvent;
-use crate::send_telemetry_on_executor;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{DebugSettings, PrivacySettings, SshSettings};
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
@@ -64,6 +63,7 @@ use crate::terminal::{
     terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo,
     TerminalManager as TerminalManagerTrait, TerminalModel, PTY_READS_BROADCAST_CHANNEL_SIZE,
 };
+use crate::{report_error, send_telemetry_on_executor};
 
 type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
 type RemoteServerController =
@@ -477,10 +477,13 @@ impl<S> TerminalManager<S> {
 
         if let Some(join_handle) = self.event_loop_handle.take() {
             if let Err(e) = join_handle.join() {
-                log::error!("Failed to join event loop handle {e:?}");
+                report_error!(
+                    "Failed to join event loop handle",
+                    extra: { "error" => ?e }
+                );
             }
         } else {
-            log::error!("No event loop handle to join when dropping terminal manager.")
+            report_error!("No event loop handle to join when dropping terminal manager.")
         }
 
         self.inactive_pty_reads_rx.close();
@@ -519,7 +522,7 @@ fn on_shell_determined<S: TerminalSurface>(
     let shell_starter = match shell_starter {
         Some(shell_starter) => shell_starter,
         None => {
-            log::error!("Could not compute fallback shell");
+            report_error!("Could not compute fallback shell");
             manager.view.update(ctx, |surface, ctx| {
                 surface.on_pty_spawn_failed(
                     anyhow::Error::msg("Could not find a fallback shell. If you have PowerShell or WSL installed, please file an issue."),
@@ -620,7 +623,7 @@ fn on_shell_determined<S: TerminalSurface>(
         }) {
         Ok(pty) => pty,
         Err(err) => {
-            log::error!("Failed to spawn pty: {err:#}");
+            report_error!(&err);
             manager.view.update(ctx, |surface, ctx| {
                 surface.on_pty_spawn_failed(err, ctx);
             });

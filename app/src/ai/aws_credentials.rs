@@ -13,6 +13,7 @@ use warp_managed_secrets::client::IdentityTokenOptions;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
+use crate::report_error;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, UserBlockCompleted};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
@@ -359,12 +360,13 @@ fn refresh_aws_credentials_oidc(
                 .send()
                 .await
                 .map_err(|err| {
-                    log::error!("Bedrock OIDC: STS AssumeRoleWithWebIdentity SDK error: {err:#?}");
                     // Surface the AWS service error message for a user-friendly error.
                     let detail = err
                         .as_service_error()
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| err.to_string());
+                    report_error!(anyhow::Error::new(err)
+                        .context("Bedrock OIDC: STS AssumeRoleWithWebIdentity SDK error"));
                     anyhow::anyhow!("STS AssumeRoleWithWebIdentity failed: {detail}")
                 })?
                 .credentials
@@ -390,8 +392,8 @@ fn refresh_aws_credentials_oidc(
                     )
                 }
                 Err(e) => {
-                    log::error!("Bedrock OIDC: failed to load credentials: {e:#}");
                     let message = e.to_string();
+                    report_error!(e.context("Bedrock OIDC: failed to load credentials"));
                     (
                         AwsCredentialsState::Failed {
                             message: message.clone(),

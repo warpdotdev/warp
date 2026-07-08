@@ -31,6 +31,7 @@ use super::model::grid::grid_handler::{ContainsPoint, GridHandler, Link};
 use super::model::grid::RespectDisplayedOutput;
 use super::model::image_map::{ImagePlacementData, StoredImageMetadata};
 use super::model::terminal_model::RangeInModel;
+use crate::report_error;
 use crate::settings::EnforceMinimumContrast;
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
 use crate::terminal::model::ansi::{Color, CursorShape, CursorStyle};
@@ -615,7 +616,7 @@ fn render_grid_without_ligatures<'a>(
 
         let Some(row) = grid.row(row_idx) else {
             #[cfg(debug_assertions)]
-            log::error!("grid_renderer should not try to render an out-of-bounds row");
+            report_error!("grid_renderer should not try to render an out-of-bounds row");
             continue;
         };
 
@@ -1115,7 +1116,7 @@ fn render_grid_with_ligatures<'a>(
             AttributedStringBuilder::new(font_family, font_family, grid.columns());
 
         let Some(row) = grid.row(row_idx) else {
-            log::error!("grid_renderer should not try to render an out-of-bounds row");
+            report_error!("grid_renderer should not try to render an out-of-bounds row");
             continue;
         };
 

@@ -60,7 +60,7 @@ use crate::word_block_editor::{
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
 
 mod inheritance;
 
@@ -1088,7 +1088,7 @@ impl SharingDialog {
         };
 
         let Some(handle) = handle.upgrade(ctx) else {
-            log::error!(
+            report_error!(
                 "Unable to upgrade handle to TerminalView when removing guest from session"
             );
             return;
@@ -1193,7 +1193,7 @@ impl SharingDialog {
         };
 
         let Some(handle) = handle.upgrade(ctx) else {
-            log::error!(
+            report_error!(
                 "Unable to upgrade handle to TerminalView when setting guest ACL for session"
             );
             return;
@@ -1621,7 +1621,7 @@ impl SharingDialog {
             }
             Some(ShareableObject::Session { handle, .. }) => {
                 let Some(handle) = handle.upgrade(ctx) else {
-                    log::error!("Unable to upgrade handle to TerminalView when sending email invitations for session");
+                    report_error!("Unable to upgrade handle to TerminalView when sending email invitations for session");
                     return;
                 };
 

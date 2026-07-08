@@ -28,6 +28,8 @@ mod non_mac {
 #[cfg(not(target_os = "macos"))]
 use non_mac::*;
 
+use crate::report_error;
+
 pub struct DefaultTerminal {
     /// Whether the OS will treat Warp as the default app for scripts/executables.
     is_warp_default: bool,
@@ -97,7 +99,10 @@ impl DefaultTerminal {
     /// "unset" it unless we pick a new default terminal. Picking a new default is complicated.
     pub fn make_warp_default(&mut self, ctx: &mut ModelContext<Self>) {
         if let Err(e) = set_warp_as_default_terminal() {
-            log::error!("Error setting Warp as default terminal: {e:#}");
+            report_error!(
+                "Error setting Warp as default terminal",
+                extra: { "error" => %e }
+            );
         } else {
             self.set_is_warp_default(true, ctx);
         }

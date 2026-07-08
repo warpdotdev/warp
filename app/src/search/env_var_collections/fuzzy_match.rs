@@ -2,6 +2,7 @@ use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
 
 use crate::env_vars::EnvVarCollection;
+use crate::report_error;
 
 #[derive(Clone, Debug)]
 /// Result of fuzzy matching an [`EnvVarCollection`].
@@ -117,7 +118,7 @@ impl FuzzyMatchEnvVarCollectionResult {
             // This branch should never be executed because a EVC search result should
             // always have some match with the query, otherwise it should not appear as a
             // result.
-            log::error!("EVC has no component which matches the result.");
+            report_error!("EVC has no component which matches the result.");
             OrderedFloat(f64::MIN)
         } else {
             // All attributes have equal weight, so just take the avg score

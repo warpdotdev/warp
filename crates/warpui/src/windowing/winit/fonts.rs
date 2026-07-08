@@ -31,6 +31,7 @@ use pathfinder_geometry::vector::{vec2f, vec2i, Vector2F, Vector2I};
 use resvg::usvg::fontdb;
 use resvg::usvg::fontdb::Query;
 use vec1::Vec1;
+use warp_errors::report_error;
 use warpui_core::fonts::{Style, Weight};
 #[cfg(target_os = "windows")]
 use windows::loader;
@@ -62,14 +63,14 @@ mod loader {
         let manager = match FontconfigLoader::new() {
             Ok(x) => x,
             Err(e) => {
-                log::error!("Failed to load system fonts: {e:?}");
+                report_error!(anyhow::Error::new(e).context("Failed to load system fonts"));
                 return LoadedSystemFonts(vec![]);
             }
         };
         let handles = match manager.get_all_families() {
             Ok(x) => x,
             Err(e) => {
-                log::error!("Failed to load system fonts: {e:?}");
+                report_error!(anyhow::Error::new(e).context("Failed to load system fonts"));
                 return LoadedSystemFonts(vec![]);
             }
         };

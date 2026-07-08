@@ -27,6 +27,7 @@ use crate::code_review::comments::{
     AttachedReviewComment, PendingImportedReviewComment, ReviewCommentBatch,
 };
 use crate::code_review::diff_state::{DiffMode, DiffStateModel};
+use crate::report_error;
 use crate::workspace::view::global_search::view::GlobalSearchView;
 
 /// Type-safe wrapper around the map of `LocalOrRemotePath` → `DiffStateModel`.
@@ -949,9 +950,9 @@ impl WorkingDirectoriesModel {
                 code_review_view.expand_comment_list(ctx);
             })
         } else {
-            log::error!(
-                "WorkingDirectoriesModel did not find CodeReviewView for repo path {:?}",
-                repo_path
+            report_error!(
+                "WorkingDirectoriesModel did not find CodeReviewView for repo path",
+                extra: { "repo_path" => ?repo_path }
             );
         }
 

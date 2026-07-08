@@ -47,6 +47,7 @@ mod renderer;
 pub use event_conversion::crossterm_event_to_tui_event;
 use event_conversion::ClickTracker;
 pub use renderer::TuiFrameRenderer;
+use warp_errors::report_error;
 
 /// The host terminal the runtime draws to and reads input from. Abstracted so
 /// the draw + event loop is testable against an in-memory target.
@@ -134,7 +135,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             {
                 Ok(true) => return true,
                 Ok(false) => {}
-                Err(error) => log::error!("error dispatching keystroke: {error}"),
+                Err(error) => report_error!(error.context("error dispatching keystroke")),
             }
         }
 
@@ -441,7 +442,7 @@ pub fn spawn_tui_driver<T: TuiView>(
         let repaint_timer = repaint_timer.clone();
         ctx.on_window_invalidated(window_id, move |_, ctx| {
             if let Err(error) = draw_and_schedule_repaint(&screen, &repaint_timer, ctx) {
-                log::error!("failed to draw a TUI frame: {error}");
+                report_error!(anyhow::Error::new(error).context("failed to draw a TUI frame"));
             }
         });
     }
@@ -473,7 +474,7 @@ pub fn spawn_tui_driver<T: TuiView>(
                     }
                 }
                 Err(error) => {
-                    log::error!("failed to read a terminal event: {error}");
+                    report_error!("failed to read a terminal event", extra: { "error" => %error });
                     break;
                 }
             }
@@ -544,7 +545,7 @@ fn draw_and_schedule_repaint<T: TuiView, R: TuiTerminal + 'static>(
                 // handle; `async_task` defers destruction, so this in-flight
                 // poll completes normally.
                 if let Err(error) = draw_and_schedule_repaint(&screen, &timer_slot, ctx) {
-                    log::error!("failed to draw a TUI frame: {error}");
+                    report_error!("failed to draw a TUI frame", extra: { "error" => %error });
                 }
             });
         })

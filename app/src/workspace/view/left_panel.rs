@@ -62,7 +62,7 @@ use crate::workspace::view::{
     TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
 use crate::workspace::WorkspaceAction;
-use crate::TelemetryEvent;
+use crate::{report_error, TelemetryEvent};
 
 #[derive(Default)]
 struct MouseStateHandles {
@@ -210,7 +210,7 @@ impl LeftPanelView {
         {
             Some(handle) => handle,
             None => {
-                log::error!("Couldn't retrieve left panel resizable state handle.");
+                report_error!("Couldn't retrieve left panel resizable state handle.");
                 resizable_state_handle(600.0)
             }
         };

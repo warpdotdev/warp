@@ -31,6 +31,7 @@ use super::{
 use crate::editor::soft_wrap::FrameLayouts;
 #[cfg(feature = "voice_input")]
 use crate::editor::view::voice::VoiceInputState;
+use crate::report_error;
 use crate::terminal::grid_size_util::grid_compute_baseline_position_fn;
 
 /// Ratio to calculate font size of cursor avatar.
@@ -415,13 +416,13 @@ impl ViewSnapshot {
                 {
                     Some(point) => point.row() as f32 + top_section_height_lines,
                     None => {
-                        log::error!("Failed to get softwrapped point from display point");
+                        report_error!("Failed to get softwrapped point from display point");
                         return false;
                     }
                 }
             }
             Err(err) => {
-                log::error!("Error trying to turn selection into display point {err:?}");
+                report_error!(err.context("Error trying to turn selection into display point"));
                 return false;
             }
         };
@@ -436,13 +437,13 @@ impl ViewSnapshot {
                 {
                     Some(point) => point.row() as f32 + 1.0 + top_section_height_lines,
                     None => {
-                        log::error!("Failed to get softwrapped point from display point");
+                        report_error!("Failed to get softwrapped point from display point");
                         return false;
                     }
                 }
             }
             Err(err) => {
-                log::error!("Error trying to turn selection into display point {err:?}");
+                report_error!(err.context("Error trying to turn selection into display point"));
                 return false;
             }
         };

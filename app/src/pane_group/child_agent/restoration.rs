@@ -13,6 +13,7 @@ use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::pane_group::{
     AmbientAgentViewModelHandleExt, PaneGroup, PaneId, TerminalPane, TerminalViewResources,
 };
+use crate::report_error;
 use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
@@ -202,9 +203,10 @@ impl PaneGroup {
                 .attach_child_pane_off_tree(Box::new(pane_data), ctx)
                 .is_none()
             {
-                log::error!(
+                report_error!(
                     "create_hidden_child_agent_pane: failed to attach loading placeholder for \
-                     viewer-side child {child_id:?}"
+                     viewer-side child",
+                    extra: { "child_id" => ?child_id }
                 );
                 return;
             }
@@ -289,7 +291,10 @@ impl PaneGroup {
 
             self.child_agent_panes.insert(child_id, new_pane_id.into());
         } else {
-            log::error!("Failed to get terminal view for child agent pane {child_id:?}");
+            report_error!(
+                "Failed to get terminal view for child agent pane",
+                extra: { "child_id" => ?child_id }
+            );
             self.discard_pane(new_pane_id.into(), ctx);
         }
     }
@@ -367,8 +372,9 @@ impl PaneGroup {
             .attach_child_pane_off_tree(Box::new(pane_data), ctx)
             .is_none()
         {
-            log::error!(
-                "ensure_shared_session_viewer_child_pane: failed to attach pane for conv={child_conversation_id:?}"
+            report_error!(
+                "ensure_shared_session_viewer_child_pane: failed to attach pane",
+                extra: { "child_conversation_id" => ?child_conversation_id }
             );
             return;
         }

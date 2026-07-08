@@ -217,7 +217,7 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
         .run(handler, &shutdown, Some(2 * PING_INTERVAL))
         .context("Error running minidump server");
     if let Err(ref err) = result {
-        log::error!("Error running minidump server: {err:#}");
+        report_error!(err);
     }
 
     result

@@ -18,6 +18,7 @@ use warpui::{
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::appearance::Appearance;
+use crate::report_error;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::ui_components::icons::Icon;
 
@@ -255,7 +256,7 @@ impl TypedActionView for RewindConfirmationDialog {
         match action {
             RewindConfirmationAction::Confirm => {
                 let Some(rewind_source) = self.rewind_source.clone() else {
-                    log::error!("Rewind confirm button pressed with no rewind source");
+                    report_error!("Rewind confirm button pressed with no rewind source");
                     return;
                 };
                 ctx.emit(RewindConfirmationEvent::Confirm { rewind_source });

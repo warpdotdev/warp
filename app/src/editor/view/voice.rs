@@ -14,6 +14,7 @@ use super::{EditorAction, EditorView, VoiceTranscriber, VoiceTranscriptionOption
 use crate::ai::blocklist::InputType;
 use crate::appearance::Appearance;
 use crate::editor::EditorElement;
+use crate::report_error;
 use crate::server::server_api::TranscribeError;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{AISettings, VoiceInputToggleKey};
@@ -168,7 +169,7 @@ impl EditorView {
                 if cancel_transcription {
                     voice_input.abort_listening();
                 } else if let Err(e) = voice_input.stop_listening(ctx) {
-                    log::error!("Failed to stop voice input: {e:?}");
+                    report_error!(e.context("Failed to stop voice input"));
                 }
             });
         }
@@ -283,7 +284,8 @@ impl EditorView {
                                     Self::show_microphone_access_toast(ctx);
                                 }
                                 _ => {
-                                    log::error!("Failed to start voice input: {e:?}");
+                                    report_error!(anyhow::Error::new(e)
+                                        .context("Failed to start voice input"));
                                 }
                             }
                             ctx.notify();
@@ -500,7 +502,7 @@ impl EditorView {
                     self.voice_error_toast(super::VOICE_LIMIT_HIT_TOAST_TEXT, ctx)
                 }
                 _ => {
-                    log::error!("Failed to transcribe voice input: {e:?}");
+                    report_error!(anyhow::Error::new(e).context("Failed to transcribe voice input"));
                     self.voice_error_toast(super::VOICE_ERROR_TOAST_TEXT, ctx)
                 }
             },

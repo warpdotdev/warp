@@ -22,6 +22,7 @@ use super::agent_sdk::driver::AgentDriver;
 use super::aws_credentials::{
     aws_role_session_name, sts_client, AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION,
 };
+use crate::report_error;
 
 /// How long to wait between Bedrock credential refresh attempts — well ahead of the
 /// 1-hour STS temporary credential expiry, matching the approach used for git credentials.
@@ -72,11 +73,12 @@ async fn try_refresh(
         .send()
         .await
         .map_err(|err| {
-            log::error!("Bedrock OIDC refresh: STS AssumeRoleWithWebIdentity error: {err:#?}");
             let detail = err
                 .as_service_error()
                 .map(|e| e.to_string())
                 .unwrap_or_else(|| err.to_string());
+            report_error!(anyhow::Error::new(err)
+                .context("Bedrock OIDC refresh: STS AssumeRoleWithWebIdentity error"));
             anyhow::anyhow!("STS AssumeRoleWithWebIdentity failed: {detail}")
         })?
         .credentials

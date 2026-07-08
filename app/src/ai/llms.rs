@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock};
 
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
 pub use ai::LLMId;
+use anyhow::Context as _;
 use parking_lot::FairMutex;
 use serde::{de, Deserialize, Serialize};
 use settings::Setting as _;
@@ -391,10 +392,12 @@ impl AvailableLLMs {
             let fallback_default = choices
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("Choices should not be empty"))?;
-            log::error!(
-                "Default LLM ID {} not present in choices, falling back to first choice {}",
-                default_id,
-                fallback_default.display_name
+            report_error!(
+                "Default LLM ID not present in choices, falling back to first choice",
+                extra: {
+                    "default_id" => %default_id,
+                    "fallback_choice" => %fallback_default.display_name
+                }
             );
             default_id = fallback_default.id.clone();
         }
@@ -438,10 +441,12 @@ impl AvailableLLMs {
             .choices
             .first()
             .expect("AvailableLLMs must have at least one choice");
-        log::error!(
-            "Default LLM ID {} not present in choices, falling back to first choice {}",
-            self.default_id,
-            fallback.display_name
+        report_error!(
+            "Default LLM ID not present in choices, falling back to first choice",
+            extra: {
+                "default_id" => %self.default_id,
+                "fallback_choice" => %fallback.display_name
+            }
         );
         fallback
     }
@@ -1549,17 +1554,20 @@ impl LLMPreferences {
 
         let old = std::mem::replace(&mut self.models_by_feature, update);
 
-        match serde_json::to_string(&self.models_by_feature) {
+        match serde_json::to_string(&self.models_by_feature)
+            .context("Failed to serialize LLMs for cache")
+        {
             Ok(serialized_update) => {
                 if let Err(e) = ctx
                     .private_user_preferences()
                     .write_value(MODELS_BY_FEATURE_CACHE_KEY, serialized_update)
+                    .context("Failed to cache LLMs")
                 {
-                    log::error!("Failed to cache LLMs: {e}");
+                    report_error!(e);
                 }
             }
             Err(e) => {
-                log::error!("Failed to serialize LLMs for cache: {e}");
+                report_error!(e);
             }
         }
 

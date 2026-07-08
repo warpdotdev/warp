@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use std::boxed::Box;
 
 use itertools::Itertools;
+use warp_errors::report_error;
 
 use super::button::ButtonTooltipPosition;
 use crate::color::ColorU;
@@ -159,7 +160,7 @@ impl<T: SegmentedControlOption> SegmentedControl<T> {
             "Cannot pass empty options to SegmentedControl"
         );
         if updated_options.is_empty() {
-            log::error!("Attempted to update SegmentedControl with empty options");
+            report_error!("Attempted to update SegmentedControl with empty options");
             return;
         }
 

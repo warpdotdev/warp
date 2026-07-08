@@ -67,7 +67,7 @@ use crate::terminal::view::{
 };
 use crate::terminal::TerminalModel;
 use crate::view_components::{DismissibleToast, ToastFlavor};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
 
 impl TerminalView {
     pub fn sharer_session_kind(&self) -> Option<&Kind> {
@@ -1133,11 +1133,11 @@ impl TerminalView {
             .text_selection_range(semantic_selection, input_mode.is_inverted_blocklist())
         {
             let Some(start) = start.to_session_sharing_block_point(model_lock.block_list()) else {
-                log::error!("Failed convert start of selection range to BlockPoint");
+                report_error!("Failed convert start of selection range to BlockPoint");
                 return session_sharing_protocol::common::Selection::None;
             };
             let Some(end) = end.to_session_sharing_block_point(model_lock.block_list()) else {
-                log::error!("Failed convert end of selection range to BlockPoint");
+                report_error!("Failed convert end of selection range to BlockPoint");
                 return session_sharing_protocol::common::Selection::None;
             };
             return session_sharing_protocol::common::Selection::BlockText {

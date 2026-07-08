@@ -323,9 +323,9 @@ unsafe fn init_logging() {
         );
 
         if status != sqlite3::SQLITE_OK {
-            log::error!(
-                "Error setting up SQLite logging: {}",
-                sqlite3::code_to_str(status)
+            report_error!(
+                "Error setting up SQLite logging",
+                extra: { "status" => %sqlite3::code_to_str(status) }
             );
         }
     });

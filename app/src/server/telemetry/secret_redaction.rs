@@ -24,6 +24,7 @@ use parking_lot::RwLock;
 use regex_automata::meta::Regex;
 use serde_json::Value;
 
+use crate::report_error;
 use crate::terminal::model::secrets::regexes::DEFAULT_REGEXES_WITH_NAMES;
 const REDACTION_REPLACEMENT_CHARACTER: &str = "*";
 lazy_static! {
@@ -57,7 +58,9 @@ where
     );
     match Regex::new_many(&patterns) {
         Ok(regex) => *TELEMETRY_SECRETS_REGEX.write() = regex,
-        Err(err) => log::error!("Failed to build telemetry secrets regex: {err:?}"),
+        Err(err) => {
+            report_error!(anyhow::Error::new(err).context("Failed to build telemetry secrets regex"))
+        }
     }
 }
 /// Composes the full list of patterns to compile into the telemetry regex,

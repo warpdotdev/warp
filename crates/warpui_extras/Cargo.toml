@@ -15,6 +15,7 @@ user_preferences-file = ["user_preferences", "dep:serde", "dep:serde_json"]
 user_preferences-toml = ["user_preferences", "dep:serde", "dep:serde_json", "dep:toml_edit"]
 
 [dependencies]
+warp_errors.workspace = true
 anyhow.workspace = true
 log.workspace = true
 async-channel.workspace = true

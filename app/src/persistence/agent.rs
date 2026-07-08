@@ -12,6 +12,7 @@ use super::model::{AgentConversation, AgentConversationData, AgentConversationSu
 use super::ConversationSummaryBackfill;
 use crate::persistence::model::{AgentConversationRecord, AgentTaskRecord};
 use crate::persistence::schema::{self, agent_conversations, agent_tasks};
+use crate::report_error;
 
 #[derive(Debug, Insertable, AsChangeset)]
 #[diesel(table_name = agent_conversations)]
@@ -270,7 +271,7 @@ pub(super) fn read_agent_conversation_metadata(
                 match api::Task::decode(&task_record.task[..]) {
                     Ok(task) => decoded_tasks.push(task),
                     Err(e) => {
-                        log::error!("Failed to decode task protobuf: {e}");
+                        report_error!(anyhow::Error::new(e).context("Failed to decode task protobuf"));
                         decode_failed = true;
                         break;
                     }
@@ -376,7 +377,7 @@ pub(crate) fn read_agent_conversation_by_id(
         match api::Task::decode(&task_record.task[..]) {
             Ok(task) => decoded_tasks.push(task),
             Err(e) => {
-                log::error!("Failed to decode task protobuf: {e}");
+                report_error!(anyhow::Error::new(e).context("Failed to decode task protobuf"));
             }
         }
     }

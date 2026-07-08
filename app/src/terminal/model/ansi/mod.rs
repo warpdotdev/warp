@@ -39,7 +39,7 @@ use crate::terminal::model::completions::{
 use crate::terminal::model::escape_sequences::C0;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::parse_iterm_image_metadata;
-use crate::{safe_debug, safe_error};
+use crate::{report_error, safe_debug, safe_error};
 
 /// Marks an OSC as one that is sent by Warp logic registered in the shell.
 ///
@@ -606,7 +606,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
                 // shell without hex encoding. The RC file snippet given to
                 // users is not hex-encoded for the sake of transparency and
                 // debugability.
-                log::error!("Received hex-encoded SourcedRcFileForWarp escape sequence.");
+                report_error!("Received hex-encoded SourcedRcFileForWarp escape sequence.");
             }
             Ok(DProtoHook::FinishUpdate { value }) => self.handler.finish_update(value),
             Ok(DProtoHook::ExitShell { value }) => self.handler.exit_shell(value),
@@ -640,7 +640,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
                 self.handler.sourced_rc_file(value);
             }
             Ok(_) => {
-                log::error!("Received non hex-encoded hook that is not SourcedRcFileForWarp");
+                report_error!("Received non hex-encoded hook that is not SourcedRcFileForWarp");
             }
             Err(err) => {
                 log::warn!("Received malformed SourcedRcFileForWarp hook {err:#}");
@@ -675,7 +675,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
         match params.get(2) {
             Some(&WARP_KV_START_BYTE) => {
                 let Some(hook) = params.get(3).map(|data| String::from_utf8_lossy(data)) else {
-                    log::error!("Start pending hook OSC did not contain shell hook");
+                    report_error!("Start pending hook OSC did not contain shell hook");
                     return;
                 };
                 self.handler.start_receiving_hook(hook.into());
@@ -699,7 +699,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
             }
             Some(&WARP_KV_ENTRY_BYTE) => {
                 let Some(key) = params.get(3) else {
-                    log::error!("Pending hook update OSC did not contain key");
+                    report_error!("Pending hook update OSC did not contain key");
                     return;
                 };
                 let key = String::from_utf8_lossy(key);
@@ -713,8 +713,9 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
                 self.handler.update_hook(key.to_string(), value);
             }
             invalid_marker => {
-                log::error!(
-                    "Invalid marker {invalid_marker:?} received for pending shell hook OSC"
+                report_error!(
+                    "Invalid marker received for pending shell hook OSC",
+                    extra: { "marker" => ?invalid_marker }
                 );
             }
         }
@@ -1094,7 +1095,7 @@ where
                     .map(|json_marker_bytes| String::from_utf8_lossy(json_marker_bytes))
                     .and_then(|json_marker_str| json_marker_str.chars().next())
                 else {
-                    log::error!("Could not retrieve OSC JSON marker");
+                    report_error!("Could not retrieve OSC JSON marker");
                     return;
                 };
 
@@ -1105,7 +1106,7 @@ where
                             .get(2)
                             .map(|osc_data| String::from_utf8_lossy(osc_data))
                         else {
-                            log::error!("Warp OSC marker did not contain payload");
+                            report_error!("Warp OSC marker did not contain payload");
                             return;
                         };
                         safe_debug!(
@@ -1121,7 +1122,7 @@ where
                             .get(2)
                             .map(|osc_data| String::from_utf8_lossy(osc_data))
                         else {
-                            log::error!("Warp OSC marker did not contain payload");
+                            report_error!("Warp OSC marker did not contain payload");
                             return;
                         };
                         safe_debug!(
@@ -1133,7 +1134,10 @@ where
                     }
                     UNENCODED_KV_MARKER => self.handle_kv_marker(params),
                     _ => {
-                        log::error!("Invalid OSC JSON marker found: {json_marker_char}");
+                        report_error!(
+                            "Invalid OSC JSON marker found",
+                            extra: { "marker" => %json_marker_char }
+                        );
                     }
                 }
             }
@@ -1219,9 +1223,9 @@ where
 
             // This is a totally random OSC identifier to test how often we parse unexpected OSCs.
             b"781378" => {
-                log::error!(
-                    "Received unexpected OSC identifier (781378) with parameters: [{}]",
-                    format_params(params)
+                report_error!(
+                    "Received unexpected OSC identifier (781378)",
+                    extra: { "parameters" => %format_params(params) }
                 );
             }
 

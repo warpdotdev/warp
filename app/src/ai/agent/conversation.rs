@@ -4,6 +4,7 @@ use std::fmt::Display;
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::document::AIDocumentId;
 use ai::skills::SkillPathOrigin;
+use anyhow::Context as _;
 use chrono::{DateTime, Local, TimeZone};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
@@ -73,7 +74,7 @@ use crate::terminal::model::block::{
 };
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfileWithUID;
-use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
+use crate::{report_error, BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoStatus {
@@ -463,10 +464,9 @@ impl AIConversation {
                             Task::new_restored_subtask(task, parent_task, exchanges),
                         );
                     } else {
-                        log::error!(
-                            "Could not find parent task (id: {}) for task (id: {})",
-                            parent_id,
-                            task.id
+                        report_error!(
+                            "Could not find parent task for task",
+                            extra: { "parent_id" => %parent_id, "task_id" => %task.id }
                         );
                     }
                 } else {
@@ -530,14 +530,17 @@ impl AIConversation {
             let forked_from_server_conversation_token = data
                 .forked_from_server_conversation_token
                 .map(ServerConversationToken::new);
-            let artifacts: Vec<Artifact> = data
-                .artifacts_json
-                .and_then(|json| {
-                    serde_json::from_str(&json)
-                        .map_err(|e| log::error!("Failed to deserialize artifacts: {e}"))
-                        .ok()
-                })
-                .unwrap_or_default();
+            let artifacts: Vec<Artifact> =
+                data.artifacts_json
+                    .and_then(|json| {
+                        serde_json::from_str(&json)
+                            .map_err(|e| {
+                                report_error!(anyhow::Error::new(e)
+                                    .context("Failed to deserialize artifacts"))
+                            })
+                            .ok()
+                    })
+                    .unwrap_or_default();
             let parent_conversation_id = data
                 .parent_conversation_id
                 .and_then(|id| AIConversationId::try_from(id).ok());
@@ -1752,8 +1755,9 @@ impl AIConversation {
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         if let Some(request_info) = self.added_exchanges_by_response.remove(&stream_id) {
-            log::error!(
-                "Existing response stream info for stream id {stream_id:?}: {request_info:?}"
+            report_error!(
+                "Existing response stream info for stream id",
+                extra: { "stream_id" => ?stream_id, "request_info" => ?request_info }
             );
         }
 
@@ -2040,7 +2044,7 @@ impl AIConversation {
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         let Some(new_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
-            log::error!("No pending request info for completed request.");
+            report_error!("No pending request info for completed request.");
             return Err(UpdateConversationError::NoPendingRequest);
         };
 
@@ -2145,7 +2149,7 @@ impl AIConversation {
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         let Some(added_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
-            log::error!("No pending request info for completed request.");
+            report_error!("No pending request info for completed request.");
             return Err(UpdateConversationError::NoPendingRequest);
         };
         if self.transaction.is_some() {
@@ -2254,7 +2258,7 @@ impl AIConversation {
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         let Some(added_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
-            log::error!("No pending request info for completed request.");
+            report_error!("No pending request info for completed request.");
             return Err(UpdateConversationError::NoPendingRequest);
         };
         if self.transaction.is_some() {
@@ -2461,8 +2465,9 @@ impl AIConversation {
                         .and_then(|id| self.task_store.remove(id));
                     let Some(parent_task) = self.task_store.get(&TaskId::new(parent_id.to_owned()))
                     else {
-                        log::error!(
-                            "Attempted to create task with parent id {parent_id} but no parent task found"
+                        report_error!(
+                            "Attempted to create task but no parent task found",
+                            extra: { "parent_id" => %parent_id }
                         );
                         return Err(UpdateConversationError::TaskNotFound);
                     };
@@ -2669,7 +2674,7 @@ impl AIConversation {
                                         );
                                     }
                                 } else {
-                                    log::error!(
+                                    report_error!(
                                         "Received an UpdateReviewComments message but there's no active code review state"
                                     );
                                 }
@@ -3143,7 +3148,7 @@ impl AIConversation {
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> TaskId {
         if self.optimistic_cli_subagent_subtask_id.take().is_some() {
-            log::error!(
+            report_error!(
                 "Tried to optimistically create new subtask for CLI agent when one exists already."
             );
         }
@@ -3276,7 +3281,7 @@ impl AIConversation {
 
     pub fn begin_transaction(&mut self) {
         if self.transaction.is_some() {
-            log::error!("Transaction already in progress.");
+            report_error!("Transaction already in progress.");
             return;
         }
         self.transaction = Some(Transaction::new());
@@ -3285,7 +3290,7 @@ impl AIConversation {
     fn commit_transaction(&mut self) {
         // Clear the transaction if it exists.
         if self.transaction.take().is_none() {
-            log::error!("No transaction in progress.");
+            report_error!("No transaction in progress.");
         }
     }
 
@@ -3328,12 +3333,12 @@ impl AIConversation {
         let artifacts_json = if self.artifacts.is_empty() {
             None
         } else {
-            match serde_json::to_string(&self.artifacts) {
+            match serde_json::to_string(&self.artifacts)
+                .context("Failed to serialize artifacts when persisting conversation data")
+            {
                 Ok(json) => Some(json),
                 Err(e) => {
-                    log::error!(
-                        "Failed to serialize artifacts when persisting conversation data: {e}"
-                    );
+                    report_error!(e);
                     None
                 }
             }
@@ -3385,7 +3390,7 @@ impl AIConversation {
 
     pub fn rollback_transaction(&mut self, response_stream_id: &ResponseStreamId) {
         let Some(transaction) = self.transaction.take() else {
-            log::error!("No transaction in progress.");
+            report_error!("No transaction in progress.");
             return;
         };
         let mut deleted_tasks = Vec::new();
@@ -3648,8 +3653,9 @@ impl AIConversation {
                                     })
                                 });
                             if start_ts.is_none() {
-                                log::error!(
-                                    "RunShellCommand tool call message has no timestamp (message_id: {message_id})"
+                                report_error!(
+                                    "RunShellCommand tool call message has no timestamp",
+                                    extra: { "message_id" => %message_id }
                                 );
                             }
 

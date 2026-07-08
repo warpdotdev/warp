@@ -15,6 +15,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::history_model;
 use crate::ai::blocklist::model::{AIRequestType, PassiveRequestType};
 use crate::ai::llms::LLMId;
+use crate::report_error;
 
 /// Standard [`AIBlock`] impl for live outputs corresponding to an `OutputStream`.
 pub struct AIBlockModelImpl<V> {
@@ -140,7 +141,7 @@ where
         match exchange {
             Ok(exchange) => Some(Local::now().signed_duration_since(exchange.start_time)),
             Err(err) => {
-                log::error!("Failed to get time since request start. {err}");
+                report_error!(err.context("Failed to get time since request start"));
                 None
             }
         }
@@ -151,7 +152,7 @@ where
         match exchange {
             Ok(exchange) => Some(&exchange.model_id),
             Err(err) => {
-                log::error!("Failed to get base model. {err}");
+                report_error!(err.context("Failed to get base model"));
                 None
             }
         }

@@ -15,6 +15,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
+use crate::report_error;
 
 /// Per-request outcome of a StartAgent dispatch.
 #[derive(Debug, Clone)]
@@ -184,8 +185,9 @@ impl StartAgentExecutor {
                 });
             }
             None => {
-                log::error!(
-                    "No agent identifier found for child conversation {child_conversation_id:?}"
+                report_error!(
+                    "No agent identifier found for child conversation",
+                    extra: { "child_conversation_id" => ?child_conversation_id }
                 );
                 let _ = pending.sender.try_send(StartAgentOutcome::Error(
                     "Server did not assign an agent identifier".to_string(),

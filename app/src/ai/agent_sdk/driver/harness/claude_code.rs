@@ -60,6 +60,7 @@ use wake_driver::{ClaudeWakeRemoteContext, CLAUDE_WAKE_PROMPT_FILE_NAME};
 
 #[cfg(test)]
 use super::super::OZ_MESSAGE_LISTENER_STATE_ROOT_ENV;
+use crate::report_error;
 
 pub(crate) struct ClaudeHarness;
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -459,7 +460,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
                             .create_external_conversation(CLAUDE_CODE_FORMAT)
                             .await
                             .map_err(|e| {
-                                log::error!("Failed to create external conversation: {e}");
+                                report_error!(&e);
                                 AgentDriverError::ConfigBuildFailed(e)
                             })
                     })

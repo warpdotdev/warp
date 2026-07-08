@@ -38,7 +38,7 @@ use crate::server::telemetry::{
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
 
 const ONBOARDING_TEXT: &str = "Great - let's begin setting up this project! Would you like to give me permission to index this codebase? It allows me to quickly understand context and provide more targeted solutions when working in this codebase. No code is stored on Warp servers.";
 const ALREADY_SETUP_TEXT: &str = "It looks like this project has already been initialized. You can re-generate the AGENTS.md for this codebase by clicking the button below.";
@@ -1199,7 +1199,8 @@ impl TypedActionView for InitStepBlock {
                         async move { Self::create_symlink_to_agents_md(&path_clone, &root_path).await },
                         |_me, result, _ctx| {
                             if let Err(e) = result {
-                                log::error!("Failed to create symlink to AGENTS.md: {e}");
+                                report_error!(anyhow::Error::new(e)
+                                    .context("Failed to create symlink to AGENTS.md"));
                             }
                         },
                     );

@@ -20,6 +20,7 @@ use crate::appearance::Appearance;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
 use crate::notebooks::file::is_markdown_file;
+use crate::report_error;
 use crate::server::ids::ClientId;
 use crate::themes::theme::Fill;
 use crate::ui_components::icons::Icon;
@@ -720,7 +721,7 @@ impl FileUploadState {
         match self.folder_id_to_node.get(&folder_id) {
             Some(folder_node) => Some(folder_node.cloud_id()),
             None => {
-                log::error!("Provided folder id should exist");
+                report_error!("Provided folder id should exist");
                 None
             }
         }

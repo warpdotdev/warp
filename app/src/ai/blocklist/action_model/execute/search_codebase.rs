@@ -23,7 +23,7 @@ use crate::ai::get_relevant_files::controller::{
 };
 use crate::features::FeatureFlag;
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
 
 pub struct SearchCodebaseExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -484,7 +484,7 @@ impl SearchCodebaseExecutor {
             ..
         } = input.action
         else {
-            log::error!("Expected a SearchCodebase action when preprocessing action");
+            report_error!("Expected a SearchCodebase action when preprocessing action");
             return futures::future::ready(()).boxed();
         };
 

@@ -162,18 +162,19 @@ impl Log for WasmLogger {
                     console::warn_4(&s, &JsValue::from(&style.lvl_warn), &tgt_style, &args_style)
                 }
                 Level::Error => {
-                    let error = format!(
-                        "ERROR: {}\n\n{}:{}",
-                        record.args(),
-                        record.file().unwrap_or_else(|| record.target()),
-                        record
-                            .line()
-                            .map_or_else(|| "[Unknown]".to_string(), |line| line.to_string()),
-                    );
-                    // Send error logs to Sentry.
-                    warp_web_event_bus::emit_event(warp_web_event_bus::WarpEvent::ErrorLogged {
-                        error,
-                    });
+                    if record.target() == warp_core::errors::LOG_TARGET {
+                        let error = format!(
+                            "ERROR: {}\n\n{}:{}",
+                            record.args(),
+                            record.file().unwrap_or_else(|| record.target()),
+                            record
+                                .line()
+                                .map_or_else(|| "[Unknown]".to_string(), |line| line.to_string()),
+                        );
+                        warp_web_event_bus::emit_event(
+                            warp_web_event_bus::WarpEvent::ErrorLogged { error },
+                        );
+                    }
 
                     console::error_4(
                         &s,

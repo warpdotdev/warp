@@ -27,6 +27,7 @@ cfg_if::cfg_if! {
 }
 
 use super::{FindLinkArg, TerminalEditor};
+use crate::report_error;
 
 // "a/" and "b/" are prefixes specific to Git Diff
 #[cfg(feature = "local_fs")]
@@ -499,7 +500,7 @@ impl super::TerminalView {
                         let _ = tx.send(paths);
                     })
                     .map_err(|e| {
-                        log::error!("Unable to spawn thread {e:?}");
+                        report_error!(anyhow::Error::new(e).context("Unable to spawn thread"));
                     })
                     .ok();
 

@@ -205,6 +205,7 @@ pub use working_directories::{WorkingDirectoriesEvent, WorkingDirectoriesModel};
 
 use self::pane::{DetachType, PaneViewEvent};
 pub use crate::code_review::CodeReviewPanelArg;
+use crate::report_error;
 
 /// Binding name for the action that toggles maximizing the active pane. Shared so
 /// the pane header menu item can surface the same shortcut the binding resolves to.
@@ -1047,7 +1048,7 @@ impl InitialFocus {
     fn merge(&mut self, other: InitialFocus) {
         if self.focused_pane.is_some() {
             if other.focused_pane.is_some() {
-                log::error!("Restored pane tree has more than one focused pane");
+                report_error!("Restored pane tree has more than one focused pane");
             }
         } else {
             self.focused_pane = other.focused_pane;
@@ -1055,7 +1056,7 @@ impl InitialFocus {
 
         if self.active_session.is_some() {
             if other.active_session.is_some() {
-                log::error!("Restored pane tree has more than one active session");
+                report_error!("Restored pane tree has more than one active session");
             }
         } else {
             self.active_session = other.active_session;
@@ -2145,7 +2146,7 @@ impl PaneGroup {
                         // Create a new pane uuid if we have a bug where we didn't save it
                         // properly. This approach will allow us to keep the uniqueness constraints
                         // intact so we don't fail to save the snapshot.
-                        log::error!("Failed to get session data for pane, so used a new uuid");
+                        report_error!("Failed to get session data for pane, so used a new uuid");
                         LeafContents::Terminal(TerminalPaneSnapshot {
                             uuid: Uuid::new_v4().as_bytes().to_vec(),
                             cwd: None,
@@ -2940,16 +2941,16 @@ impl PaneGroup {
                             .should_confirm_shared_session_edit_access
                             .set_value(false, ctx)
                     }) {
-                        log::error!(
-                            "Failed to set should_confirm_shared_session_edit_access setting to false: {e}"
-                        );
+                        report_error!(e.context(
+                            "Failed to set should_confirm_shared_session_edit_access setting to false"
+                        ));
                     }
                     send_telemetry_from_ctx!(TelemetryEvent::SharerGrantModalDontShowAgain, ctx);
                 }
 
                 let Some(terminal_view) = self.terminal_view_from_pane_id(*terminal_pane_id, ctx)
                 else {
-                    log::error!("Tried to grant role for non existent terminal pane");
+                    report_error!("Tried to grant role for non existent terminal pane");
                     return;
                 };
 
@@ -3658,7 +3659,7 @@ impl PaneGroup {
     ) {
         // Get the active terminal view
         let Some(terminal_view) = self.active_session_view(ctx) else {
-            log::error!("No active terminal view to load conversation into");
+            report_error!("No active terminal view to load conversation into");
             return;
         };
         self.load_data_into_transcript_viewer(
@@ -4324,11 +4325,11 @@ impl PaneGroup {
                 let pane = data.as_pane();
                 pane.detach(self, DetachType::Moved, ctx);
             }
-            None => log::error!("Could not find data for pane id: {pane_id:?}"),
+            None => report_error!("Could not find data for pane", extra: { "pane_id" => ?pane_id }),
         };
 
         if !self.panes.remove(*pane_id) {
-            log::error!("Pane not found");
+            report_error!("Pane not found");
         }
 
         let pane_content = self.pane_contents.remove(pane_id);
@@ -4560,7 +4561,7 @@ impl PaneGroup {
                     self.focus_pane(id, pane_removal_reason == PaneRemovalReason::Close, ctx);
                 }
                 None => {
-                    log::error!("[PaneGroup] Unable to locate a panel to activate after close");
+                    report_error!("[PaneGroup] Unable to locate a panel to activate after close");
                 }
             };
         } else {
@@ -4701,7 +4702,7 @@ impl PaneGroup {
             }
             // Or remove the child from the tree if it was split off.
             else if self.panes.is_pane_in_tree(pane_id) && !self.panes.remove(pane_id) {
-                log::error!("close_pane: failed to remove split-off child pane from tree");
+                report_error!("close_pane: failed to remove split-off child pane from tree");
             }
             // Drop any leftover swap entry recording this child as the
             // original side. Otherwise a later revert of the surviving
@@ -4823,7 +4824,7 @@ impl PaneGroup {
             // We should only remove the session id from the tree after we queried
             // and got the previous session id.
             if !self.panes.remove(pane_id) {
-                log::error!("Pane not found");
+                report_error!("Pane not found");
             }
 
             // Mirror cleanup_closed_pane's transitive-share map cleanup so
@@ -4925,15 +4926,17 @@ impl PaneGroup {
     ) -> bool {
         // Ensure original pane exists before attempting replacement
         if !self.pane_contents.contains_key(&original_pane_id) {
-            log::error!(
-                "Attempted to replace pane {original_pane_id:?} that doesn't exist in contents"
+            report_error!(
+                "Attempted to replace pane that doesn't exist in contents",
+                extra: { "original_pane_id" => ?original_pane_id }
             );
             return false;
         }
 
         let Some(replacement_pane_id) = self.add_pane_for_replacement(replacement_pane, ctx) else {
-            log::error!(
-                "Failed to create replacement pane for {original_pane_id:?} because attachment was prevented"
+            report_error!(
+                "Failed to create replacement pane because attachment was prevented",
+                extra: { "original_pane_id" => ?original_pane_id }
             );
             return false;
         };
@@ -4956,8 +4959,12 @@ impl PaneGroup {
             self.focus_pane_by_id(replacement_pane_id, ctx);
         } else {
             // If tree replacement failed, clean up the replacement pane we just created
-            log::error!(
-                "Failed to replace pane {original_pane_id:?} with {replacement_pane_id:?} in tree structure"
+            report_error!(
+                "Failed to replace pane in tree structure",
+                extra: {
+                    "original_pane_id" => ?original_pane_id,
+                    "replacement_pane_id" => ?replacement_pane_id
+                }
             );
             self.clean_up_pane(replacement_pane_id, ctx);
             self.pane_contents.remove(&replacement_pane_id);
@@ -5003,7 +5010,10 @@ impl PaneGroup {
         let success = self.replace_pane(file_pane_id, code_pane, false, ctx);
 
         if !success {
-            log::error!("Failed to replace file pane {file_pane_id:?} with code pane");
+            report_error!(
+                "Failed to replace file pane with code pane",
+                extra: { "file_pane_id" => ?file_pane_id }
+            );
         }
     }
 
@@ -5032,7 +5042,10 @@ impl PaneGroup {
         let success = self.replace_pane(code_pane_id, file_pane, false, ctx);
 
         if !success {
-            log::error!("Failed to replace code pane {code_pane_id:?} with file pane");
+            report_error!(
+                "Failed to replace code pane with file pane",
+                extra: { "code_pane_id" => ?code_pane_id }
+            );
         }
     }
 
@@ -5495,7 +5508,7 @@ impl PaneGroup {
         self.clear_hidden_closed_panes(ctx);
 
         if !self.panes.remove(id) {
-            log::error!("Pane not found when attempting to move");
+            report_error!("Pane not found when attempting to move");
             return;
         }
 
@@ -6616,10 +6629,9 @@ impl PaneGroup {
         };
 
         if !split_succeeded {
-            log::error!(
-                "Failed to split pane tree when adding pane {:?} relative to {:?}",
-                pane_id,
-                options.base_pane_id
+            report_error!(
+                "Failed to split pane tree when adding pane",
+                extra: { "pane_id" => ?pane_id, "base_pane_id" => ?options.base_pane_id }
             );
             self.panes.remove_hidden_pane(pane_id);
             self.clean_up_pane(pane_id, ctx);
@@ -6852,7 +6864,7 @@ impl PaneGroup {
                     }
                     Err(crate::pane_group::pane::ShareableLinkError::Expected) => {}
                     Err(crate::pane_group::pane::ShareableLinkError::Unexpected(message)) => {
-                        log::error!("Failed to updated browser url. {message}")
+                        report_error!("Failed to update browser url", extra: { "message" => %message })
                     }
                 }
             }
@@ -7216,7 +7228,7 @@ impl PaneGroup {
 
         // Remove the child from the tree if it was a real sibling.
         if self.panes.is_pane_in_tree(child_pane_id) && !self.panes.remove(child_pane_id) {
-            log::error!("take_child_agent_pane_for_split_off: failed to remove pane from tree");
+            report_error!("take_child_agent_pane_for_split_off: failed to remove pane from tree");
         }
 
         // Drop any leftover swap entry naming this child as the original
@@ -7285,7 +7297,10 @@ impl PaneGroup {
             debug_assert_eq!(returned_pane_id, pane_id);
             self.child_agent_panes.insert(conversation_id, pane_id);
         } else {
-            log::error!("re_adopt_child_agent_pane: failed to attach pane {pane_id:?}");
+            report_error!(
+                "re_adopt_child_agent_pane: failed to attach pane",
+                extra: { "pane_id" => ?pane_id }
+            );
             return;
         }
 
@@ -7540,7 +7555,7 @@ impl PaneGroup {
                 let pane = data.as_pane();
                 pane.detach(self, DetachType::Closed, ctx);
             }
-            None => log::error!("Could not find data for pane id: {pane_id:?}"),
+            None => report_error!("Could not find data for pane", extra: { "pane_id" => ?pane_id }),
         };
     }
 

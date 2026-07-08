@@ -34,6 +34,7 @@ use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::report_error;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -1379,10 +1380,9 @@ impl AmbientAgentViewModel {
                     ctx.spawn(
                         async move {
                             if let Err(e) = ai_client.cancel_ambient_agent_task(&task_id).await {
-                                log::error!(
-                                    "Failed to cancel ambient agent task {}: {:?}",
-                                    task_id,
-                                    e
+                                report_error!(
+                                    e.context("Failed to cancel ambient agent task"),
+                                    extra: { "task_id" => %task_id }
                                 );
                             }
                         },
@@ -1790,7 +1790,7 @@ impl AmbientAgentViewModel {
                 async move { ai_client.cancel_ambient_agent_task(&task_id).await },
                 |_me, result, _ctx| {
                     if let Err(err) = result {
-                        log::error!("Failed to cancel ambient agent task: {err}");
+                        report_error!(err.context("Failed to cancel ambient agent task"));
                     }
                 },
             );

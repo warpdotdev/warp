@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use string_offset::CharOffset;
 use temporary_block::RenderableTemporaryBlock;
 use vim::vim::VimMode;
+use warp_core::report_error;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui_core::color::ColorU;
 use warpui_core::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
@@ -825,7 +826,7 @@ impl<V: EditorView> RichTextElement<V> {
         let parent = match self.parent_view.upgrade(ctx) {
             Some(handle) => handle.as_ref(ctx),
             None => {
-                log::error!("Parent rich-text editor view dropped before layout");
+                report_error!("Parent rich-text editor view dropped before layout");
                 return;
             }
         };
@@ -1022,7 +1023,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
                     block.layout(model, ctx, app);
                 }
             }
-            None => log::error!("Rich-text blocks missing for layout"),
+            None => report_error!("Rich-text blocks missing for layout"),
         }
 
         size
@@ -1035,7 +1036,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
                     block.after_layout(ctx, app);
                 }
             }
-            None => log::error!("Rich-text blocks missing after layout"),
+            None => report_error!("Rich-text blocks missing after layout"),
         }
 
         // Even though this state is calculated in Self::layout, don't submit it until after all
@@ -1052,7 +1053,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
         let parent = match self.parent_view.upgrade(app) {
             Some(handle) => handle.as_ref(app),
             None => {
-                log::error!("Parent rich-text editor view dropped before layout");
+                report_error!("Parent rich-text editor view dropped before layout");
                 return;
             }
         };
@@ -1149,7 +1150,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
                     }
                 }
             }
-            None => log::error!("Rich-text blocks missing after layout"),
+            None => report_error!("Rich-text blocks missing after layout"),
         }
 
         ctx.paint.scene.stop_layer();
@@ -1184,7 +1185,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
                     block_handled |= block.dispatch_event(self.model.as_ref(app), event, ctx, app);
                 }
             }
-            None => log::error!("Rich-text blocks missing for event dispatching"),
+            None => report_error!("Rich-text blocks missing for event dispatching"),
         }
 
         match event.at_z_index(z_index, ctx) {

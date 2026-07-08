@@ -43,6 +43,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::blocklist::agent_view::{AgentViewDisplayMode, AgentViewState};
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
+use crate::report_error;
 use crate::server::block::DisplaySetting;
 use crate::server::ids::SyncId;
 use crate::terminal::block_filter::BlockFilterQuery;
@@ -3088,7 +3089,7 @@ macro_rules! delegate_image_completion {
 
 impl ansi::Handler for Block {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method Block::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method Block::set_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
@@ -3331,11 +3332,11 @@ impl ansi::Handler for Block {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method Block::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method Block::push_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method Block::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method Block::pop_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn prompt_marker(&mut self, marker: ansi::PromptMarker) {

@@ -1127,7 +1127,9 @@ impl AppearanceSettingsPageView {
                 .iter()
                 .position(|val| *val == current_value)
                 .unwrap_or_else(|| {
-                    log::error!("Could not find current ThinStrokes value in dropdown option list");
+                    report_error!(
+                        "Could not find current ThinStrokes value in dropdown option list"
+                    );
                     0
                 });
 
@@ -1163,7 +1165,7 @@ impl AppearanceSettingsPageView {
                 .iter()
                 .position(|val| *val == current_value)
                 .unwrap_or_else(|| {
-                    log::error!("Could not find current InputMode value in dropdown option list");
+                    report_error!("Could not find current InputMode value in dropdown option list");
                     0
                 });
 
@@ -1198,7 +1200,7 @@ impl AppearanceSettingsPageView {
                 .iter()
                 .position(|val| *val == current_value)
                 .unwrap_or_else(|| {
-                    log::error!("Could not find current AppIcon value in dropdown option list");
+                    report_error!("Could not find current AppIcon value in dropdown option list");
                     0
                 });
 
@@ -1230,7 +1232,7 @@ impl AppearanceSettingsPageView {
             let current_value = *FontSettings::as_ref(ctx)
                 .enforce_minimum_contrast;
             let selected_index = values.iter().position(|val| *val == current_value).unwrap_or_else(|| {
-                log::error!("Could not find current EnforceMinimumContrast value in dropdown option list");
+                report_error!("Could not find current EnforceMinimumContrast value in dropdown option list");
                 0
             });
 
@@ -2495,7 +2497,7 @@ impl AppearanceSettingsPageView {
 
             let current_value = TabSettings::as_ref(ctx).workspace_decoration_visibility;
             let selected_index = values.iter().position(|val| *val == current_value).unwrap_or_else(|| {
-                log::error!("Could not find current WorkspaceDecorationVisibility value in dropdown option list");
+                report_error!("Could not find current WorkspaceDecorationVisibility value in dropdown option list");
                 0
             });
 
@@ -2521,7 +2523,7 @@ impl AppearanceSettingsPageView {
 
             let current_value = TabSettings::as_ref(ctx).close_button_position;
             let selected_index = values.iter().position(|val| *val == current_value).unwrap_or_else(|| {
-                log::error!("Could not find current TabCloseButtonPosition value in dropdown option list");
+                report_error!("Could not find current TabCloseButtonPosition value in dropdown option list");
                 0
             });
 
@@ -5048,7 +5050,10 @@ impl SettingsWidget for DirectoryTabColorsWidget {
             dirs::home_dir().and_then(|home_dir| home_dir.to_str().map(|s| s.to_owned()));
         for (idx, (dir_path, current_color)) in directory_tab_colors(app).into_iter().enumerate() {
             let Some(dot_mouse_states) = view.color_picker_dot_states.get(idx).cloned() else {
-                log::error!("Missing color picker dot states for directory index {idx}");
+                report_error!(
+                    "Missing color picker dot states for directory",
+                    extra: { "index" => %idx }
+                );
                 continue;
             };
 

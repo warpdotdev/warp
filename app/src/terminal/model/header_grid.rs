@@ -19,6 +19,7 @@ use super::grid::{Cursor, Dimensions as _, RespectDisplayedOutput};
 use super::index::{Point, VisibleRow};
 use super::selection::ScrollDelta;
 use super::{ObfuscateSecrets, RespectObfuscatedSecrets};
+use crate::report_error;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::SizeInfo;
@@ -930,7 +931,7 @@ impl HeaderGrid {
 
 impl ansi::Handler for HeaderGrid {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method HeaderGrid::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method HeaderGrid::set_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
@@ -1157,11 +1158,11 @@ impl ansi::Handler for HeaderGrid {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method HeaderGrid::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method HeaderGrid::push_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method HeaderGrid::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method HeaderGrid::pop_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn prompt_marker(&mut self, marker: ansi::PromptMarker) {
@@ -1192,7 +1193,7 @@ impl ansi::Handler for HeaderGrid {
                         }
                     }
                     ansi::PromptKind::Right => {
-                        log::error!("Right prompt marker should be handled by Block.");
+                        report_error!("Right prompt marker should be handled by Block.");
                     }
                 };
                 self.receiving_chars_for_prompt = Some(kind);
@@ -1221,7 +1222,7 @@ impl ansi::Handler for HeaderGrid {
                         }
                     }
                     ansi::PromptKind::Right => {
-                        log::error!("Right prompt marker should be handled by Block.");
+                        report_error!("Right prompt marker should be handled by Block.");
                     }
                 }
             }

@@ -20,12 +20,12 @@ use crate::ai::execution_profiles::{
 use crate::ai::mcp::mcp_provider_from_file_path;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::report_if_error;
 use crate::settings::{
     AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AiAutonomySettings;
+use crate::{report_error, report_if_error};
 
 /// Whether or not a command can be auto-executed, along with a detailed reason.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize)]
@@ -152,7 +152,8 @@ impl BlocklistAIPermissions {
                 .private_user_preferences()
                 .remove_value("AgentModeAutoReadFiles")
             {
-                log::error!("Failed to remove old AgentModeAutoReadFiles user pref: {e}");
+                report_error!(anyhow::Error::new(e)
+                    .context("Failed to remove old AgentModeAutoReadFiles user pref"));
             }
             if can_read_files {
                 report_if_error!(AISettings::handle(ctx).update(ctx, |settings, ctx| {

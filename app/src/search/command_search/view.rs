@@ -45,7 +45,6 @@ use crate::search::mixer::AddAsyncSourceOptions;
 use crate::search::result_renderer::{QueryResultRenderer, QueryResultRendererStyles};
 use crate::search::search_bar::{SearchBar, SearchBarEvent, SearchBarState, SearchResultOrdering};
 use crate::search::QueryFilter;
-use crate::send_telemetry_from_ctx;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ai::AIClient;
 use crate::server::telemetry::TelemetryEvent;
@@ -55,6 +54,7 @@ use crate::terminal::model::session::SessionId;
 use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_UNIVERSAL_SEARCH_WIDTH};
 use crate::terminal::{History, HistoryEvent};
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{report_error, send_telemetry_from_ctx};
 
 const DEFAULT_PLACEHOLDER_TEXT: &str = "Search your history, workflows, and more";
 const PANEL_POSITION_ID: &str = "CommandSearchViewPanel";
@@ -189,7 +189,7 @@ impl CommandSearchView {
             .as_ref(ctx)
             .get_handle(ctx.window_id(), ModalType::UniversalSearchWidth)
             .unwrap_or_else(|| {
-                log::error!("Couldn't retrieve universal search resizable state handle.");
+                report_error!("Couldn't retrieve universal search resizable state handle.");
                 resizable_state_handle(DEFAULT_UNIVERSAL_SEARCH_WIDTH)
             });
 

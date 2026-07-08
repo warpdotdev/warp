@@ -9,6 +9,7 @@ use crate::ai::agent_conversations_model::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{PaneGroup, PaneId, TerminalPane, TerminalViewResources};
+use crate::report_error;
 use crate::terminal::TerminalView;
 use crate::workspace::WorkspaceAction;
 
@@ -186,7 +187,7 @@ impl PaneGroup {
             } else if let Some(pane_id) =
                 group.find_pane_id_for_terminal_view(target_view.id(), ctx)
             {
-                log::error!(
+                report_error!(
                     "Failed to restore ambient agent pane, replacing with new cloud conversation"
                 );
                 group.replace_pane_with_new_cloud_conversation(pane_id, ctx);

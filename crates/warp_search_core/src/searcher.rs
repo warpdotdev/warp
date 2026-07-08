@@ -25,6 +25,7 @@ use tantivy::schema::{
 use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
+use warp_core::report_error;
 use warpui_core::r#async::executor::Background;
 use warpui_core::r#async::{Timer, block_on};
 
@@ -540,7 +541,7 @@ impl SearcherWriterWrapper {
         }
 
         if let Err(e) = writer.commit() {
-            log::error!("Failed to commit index writer: {e}");
+            report_error!(anyhow::Error::new(e).context("Failed to commit index writer"));
             writer.rollback()?;
             anyhow::bail!("Failed to commit bulk modification to index");
         }
@@ -756,7 +757,7 @@ impl<C: SearchSchemaConfig> SimpleFullTextSearcher<C> {
             .filter_map(|doc_values| {
                 let result = C::SearchDocEntry::from_match_result_values(doc_values);
                 if result.is_none() {
-                    log::error!("Failed to convert search result values into structured data");
+                    report_error!("Failed to convert search result values into structured data");
                 }
                 result
             })
@@ -773,7 +774,7 @@ impl<C: SearchSchemaConfig> SimpleFullTextSearcher<C> {
             .filter_map(|doc_values| {
                 let result = C::SearchIdEntry::from_match_result_values(doc_values);
                 if result.is_none() {
-                    log::error!("Failed to convert search result values into structured data");
+                    report_error!("Failed to convert search result values into structured data");
                 }
                 result
             })
@@ -792,13 +793,15 @@ impl<C: SearchSchemaConfig> SimpleFullTextSearcher<C> {
             .filter_map(|search_match| {
                 let Some(values) = C::SearchIdEntry::from_match_result_values(search_match.values)
                 else {
-                    log::error!("Failed to convert search result values into structured data");
+                    report_error!("Failed to convert search result values into structured data");
                     return None;
                 };
                 let Some(highlights) =
                     C::SearchHighlight::from_match_result_highlights(search_match.highlights)
                 else {
-                    log::error!("Failed to convert search result highlights into structured data");
+                    report_error!(
+                        "Failed to convert search result highlights into structured data"
+                    );
                     return None;
                 };
                 Some(FullTextSearchMatch {
@@ -822,13 +825,15 @@ impl<C: SearchSchemaConfig> SimpleFullTextSearcher<C> {
             .filter_map(|search_match| {
                 let Some(values) = C::SearchDocEntry::from_match_result_values(search_match.values)
                 else {
-                    log::error!("Failed to convert search result values into structured data");
+                    report_error!("Failed to convert search result values into structured data");
                     return None;
                 };
                 let Some(highlights) =
                     C::SearchHighlight::from_match_result_highlights(search_match.highlights)
                 else {
-                    log::error!("Failed to convert search result highlights into structured data");
+                    report_error!(
+                        "Failed to convert search result highlights into structured data"
+                    );
                     return None;
                 };
                 Some(FullTextSearchMatch {
@@ -1220,7 +1225,7 @@ async fn process_searcher_events(
                     // If we hit the idle timeout, and the batch is empty, join with the index writer
                     // threads and terminate them.
                     if batch.is_empty() && let Err(e) = writer_handle.lock().wait_on_and_drop_indexing_threads() {
-                        log::error!("Failed to wait on Tantivy indexing threads: {e:#}");
+                        report_error!(e.context("Failed to wait on Tantivy indexing threads"));
                     }
                     break;
                 }
@@ -1231,7 +1236,7 @@ async fn process_searcher_events(
             continue;
         }
         if let Err(e) = writer_handle.lock().execute_operations(batch) {
-            log::error!("Failed to execute search events: {e}");
+            report_error!(e.context("Failed to execute search events"));
         }
     }
 }

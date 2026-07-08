@@ -25,7 +25,7 @@ use crate::terminal::view::LINEFEED_REGEX;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::writeable_pty::bootstrap_file::{permanent_bootstrap_file, TempBootstrapFile};
 use crate::terminal::{bootstrap, SizeUpdate, TerminalModel};
-use crate::SessionSettings;
+use crate::{report_error, SessionSettings};
 
 /// Byte sequence to emulate the user pressing ENTER, used to execute a command in the shell.
 const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::LF];
@@ -427,7 +427,7 @@ impl<T: EventLoopSender> PtyController<T> {
                     self.source_bootstrap_script(path, shell_type, ctx);
                 } else {
                     self.write_terminating_bootstrap_bytes(ctx);
-                    log::error!("Could not convert bootstrap script file path to str");
+                    report_error!("Could not convert bootstrap script file path to str");
                 }
 
                 self.bootstrap_file = Some(file);

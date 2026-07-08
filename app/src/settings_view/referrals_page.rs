@@ -32,7 +32,7 @@ use crate::server::server_api::referral::{ReferralInfo, ReferralsClient};
 use crate::server::telemetry::TelemetryEvent;
 use crate::ui_components::blended_colors;
 use crate::view_components::ToastFlavor;
-use crate::{safe_info, send_telemetry_from_ctx};
+use crate::{report_error, safe_info, send_telemetry_from_ctx};
 
 const HEADER_FONT_SIZE: f32 = 18.;
 const HEADER_MARGIN_BOTTOM: f32 = 32.;
@@ -339,7 +339,7 @@ impl ReferralsPageView {
                 });
             }
             Err(err) => {
-                log::error!("Error sending referral emails: {err}");
+                report_error!(err.context("Error sending referral emails"));
                 ctx.emit(ReferralsPageEvent::ShowToast {
                     message: EMAIL_FAILURE_TOAST.to_owned(),
                     flavor: ToastFlavor::Error,

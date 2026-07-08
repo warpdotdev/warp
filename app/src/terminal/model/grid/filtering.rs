@@ -5,6 +5,7 @@ use std::sync::Arc;
 use itertools::Itertools as _;
 
 use super::GridHandler;
+use crate::report_error;
 use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::grid::displayed_output::{
     DisplaySource, DisplayedOutput, DisplayedRows,
@@ -70,7 +71,7 @@ impl FilterState {
             .iter()
             .position(|m| *dirty_range.end() >= m.start().row)
         else {
-            log::error!("Could not find replacement start when updating dirty matches");
+            report_error!("Could not find replacement start when updating dirty matches");
             return;
         };
 
@@ -79,7 +80,7 @@ impl FilterState {
             .iter()
             .rposition(|m| m.end().row >= *dirty_range.start())
         else {
-            log::error!("Could not find replacement end when updating dirty matches");
+            report_error!("Could not find replacement end when updating dirty matches");
             return;
         };
 
@@ -709,13 +710,13 @@ impl GridHandler {
         let Some((replace_start_idx, replace_start)) =
             displayed_output.first_rows_greater_than_or_contained_in(*dirty_range.start())
         else {
-            log::error!("Could not find replacement start when updating dirty filtered lines.");
+            report_error!("Could not find replacement start when updating dirty filtered lines.");
             return Vec::new();
         };
         let Some((replace_end_idx, replace_end)) =
             displayed_output.last_rows_less_than_or_contained_in(*dirty_range.end())
         else {
-            log::error!("Could not find replacement end when updating dirty filtered lines.");
+            report_error!("Could not find replacement end when updating dirty filtered lines.");
             return Vec::new();
         };
 

@@ -60,7 +60,7 @@ use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::{settings_view, ChannelState};
+use crate::{report_error, settings_view, ChannelState};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
@@ -853,11 +853,14 @@ impl ServerApi {
 
                 let response = request.send().await;
                 if let Err(err) = response {
-                    log::error!("Failed to send POST request to /client/login: {err:?}");
+                    report_error!(anyhow::Error::new(err)
+                        .context("Failed to send POST request to /client/login"));
                 }
             }
             Err(err) => {
-                log::error!("Could not retrieve access token for notifying user login: {err:?}");
+                report_error!(
+                    err.context("Could not retrieve access token for notifying user login")
+                );
             }
         }
     }

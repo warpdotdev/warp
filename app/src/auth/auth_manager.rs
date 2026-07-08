@@ -422,7 +422,8 @@ impl AuthManager {
                             },
                         })
                     {
-                        log::error!("Error persisting user information to database: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error persisting user information to database"));
                     };
                 }
 
@@ -729,9 +730,9 @@ impl AuthManager {
                         ctx.open_url(&url);
                     }
                     Err(e) => {
-                        report_error!(anyhow!(
-                        "Failed to fetch custom token for authenticating anonymous user in browser: {e:?}"
-                    ))
+                        report_error!(anyhow::Error::new(e).context(
+                            "Failed to fetch custom token for authenticating anonymous user in browser"
+                        ))
                 }
                 };
             },

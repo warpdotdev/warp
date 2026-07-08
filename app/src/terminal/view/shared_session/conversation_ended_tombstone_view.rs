@@ -665,13 +665,16 @@ impl TypedActionView for ConversationEndedTombstoneView {
                         if let Ok(url) = url::Url::parse(&url_string) {
                             ctx.dispatch_typed_action(&WorkspaceAction::OpenLinkOnDesktop(url));
                         } else {
-                            log::error!("Failed to parse conversation URL: {}", url_string);
+                            crate::report_error!(
+                                "Failed to parse conversation URL",
+                                extra: { "url" => %url_string }
+                            );
                         }
                     } else {
                         log::warn!("No server conversation token available for conversation");
                     }
                 } else {
-                    log::error!("Conversation not found in history model");
+                    crate::report_error!("Conversation not found in history model");
                 }
             }
         }

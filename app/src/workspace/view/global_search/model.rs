@@ -19,6 +19,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
+use crate::report_error;
 use crate::workspace::view::global_search::view::GlobalSearchEvent;
 use crate::workspace::view::global_search::{GlobalSearchMatch, SearchConfig};
 
@@ -238,8 +239,8 @@ impl GlobalSearch {
                         capped: false,
                     }),
                     Err(err) => {
-                        log::error!(
-                            "GlobalSearch: warp_ripgrep CLI search failed or aborted: {err}"
+                        report_error!(
+                            err.context("GlobalSearch: warp_ripgrep CLI search failed or aborted")
                         );
                         None
                     }

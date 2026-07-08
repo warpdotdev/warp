@@ -16,6 +16,7 @@ use crate::ai::mcp::{
 use crate::appearance::Appearance;
 use crate::cloud_object::Space;
 use crate::modal::{Modal, ModalViewState};
+use crate::report_error;
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::settings_view::mcp_servers::edit_page::{
     MCPServersEditPageView, MCPServersEditPageViewEvent,
@@ -153,7 +154,7 @@ impl MCPServersSettingsPageView {
         };
         match item_id {
             ServerCardItemId::TemplatableMCP(_) => {
-                log::error!("Logging out is not supported for template MCP servers.");
+                report_error!("Logging out is not supported for template MCP servers.");
             }
             ServerCardItemId::TemplatableMCPInstallation(uuid) => {
                 TemplatableMCPServerManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -163,7 +164,7 @@ impl MCPServersSettingsPageView {
                 self.add_toast(&message, ctx);
             }
             ServerCardItemId::GalleryMCP(_) => {
-                log::error!("Logging out is not supported for gallery MCP servers.");
+                report_error!("Logging out is not supported for gallery MCP servers.");
             }
             ServerCardItemId::FileBasedMCP(uuid) => {
                 if let Some(installation) =

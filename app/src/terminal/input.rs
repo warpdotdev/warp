@@ -236,6 +236,7 @@ use crate::pane_group::PaneGroupAction;
 use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
 use crate::prefix::longest_common_prefix;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
+use crate::report_error;
 use crate::resource_center::{
     mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipHint, TipsCompleted,
 };
@@ -4461,7 +4462,10 @@ impl Input {
                     });
                 }
                 Err(e) => {
-                    log::error!("Failed to read file {}: {e}", file.file_path.display());
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to read file"),
+                        extra: { "path" => %file.file_path.display() }
+                    );
                 }
             }
         }
@@ -5385,7 +5389,7 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         if !self.suggestions_mode_model.as_ref(ctx).is_user_query_menu() {
-            log::error!("handle_user_query_menu_event called when mode is not UserQueryMenu");
+            report_error!("handle_user_query_menu_event called when mode is not UserQueryMenu");
             return;
         }
 
@@ -5404,7 +5408,7 @@ impl Input {
                     .as_ref(ctx)
                     .user_query_conversation_id()
                 else {
-                    log::error!("No conversation_id in UserQueryMenu mode when accepting");
+                    report_error!("No conversation_id in UserQueryMenu mode when accepting");
                     return;
                 };
 
@@ -5685,7 +5689,7 @@ impl Input {
 
     fn handle_rewind_menu_event(&mut self, event: &RewindMenuEvent, ctx: &mut ViewContext<Self>) {
         if !self.suggestions_mode_model.as_ref(ctx).is_rewind_menu() {
-            log::error!("handle_rewind_menu_event called when mode is not RewindMenu");
+            report_error!("handle_rewind_menu_event called when mode is not RewindMenu");
             return;
         }
 
@@ -5712,7 +5716,7 @@ impl Input {
                     .as_ref(ctx)
                     .rewind_conversation_id()
                 else {
-                    log::error!("No conversation_id in RewindMenu mode when accepting");
+                    report_error!("No conversation_id in RewindMenu mode when accepting");
                     return;
                 };
 
@@ -6017,10 +6021,9 @@ impl Input {
                     }
                 };
 
-                log::error!(
-                    "Failed to write conversation to file {}: {}",
-                    file_path.display(),
-                    e
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to write conversation to file"),
+                    extra: { "path" => %file_path.display() }
                 );
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
@@ -11574,7 +11577,9 @@ impl Input {
         if let Err(e) = self.agent_view_controller.update(ctx, |controller, ctx| {
             controller.try_enter_agent_view(None, AgentViewEntryOrigin::ImageAdded, ctx)
         }) {
-            log::error!("Failed to enter agent view when adding images: {e:?}");
+            report_error!(
+                anyhow::Error::new(e).context("Failed to enter agent view when adding images")
+            );
         }
     }
 
@@ -12720,9 +12725,9 @@ impl Input {
     ) -> (Option<WorkflowArgumentIndex>, Vec<Range<ByteOffset>>) {
         // If we aren't in a workflow, return
         let Some(workflow_state) = &self.workflows_state.selected_workflow_state else {
-            log::error!(
+            report_error!(anyhow::anyhow!(
                 "Tried to get the current argument when no workflow is loaded into the input",
-            );
+            ));
             return (None, Vec::new());
         };
 
@@ -13137,7 +13142,7 @@ impl Input {
         let current_buffer_text = self.editor.as_ref(app).buffer_text(app);
         selected_item.is_none_or(|selected_item| {
             let Some(replacement) = &current_buffer_text.get(*replacement_start..) else {
-                log::error!("Failed to get replacement range in current buffer text");
+                report_error!("Failed to get replacement range in current buffer text");
                 return true;
             };
             if replacement == &selected_item {
@@ -13863,9 +13868,9 @@ impl Input {
                     number_of_bottom_lines_per_grid,
                 )
             } else {
-                log::error!(
-                    "Failed to fetch predicted queries, could not find block with ID: {:?}",
-                    block.serialized_block.id
+                report_error!(
+                    "Failed to fetch predicted queries, could not find block with ID",
+                    extra: { "block_id" => ?block.serialized_block.id }
                 );
                 return;
             }
@@ -13897,7 +13902,9 @@ impl Input {
                 match server_api.predict_am_queries(&request).await {
                     Ok(resp) => Some(resp.suggestion),
                     Err(err) => {
-                        log::error!("Failed to fetch predicted queries: {err:?}");
+                        report_error!(
+                            anyhow::Error::new(err).context("Failed to fetch predicted queries")
+                        );
                         None
                     }
                 }
@@ -14672,7 +14679,10 @@ impl Input {
                     .decode(&img.data)
                     .map(|bytes| (img.file_name.clone(), img.mime_type.clone(), bytes))
                     .map_err(|e| {
-                        log::error!("Failed to decode base64 image {}: {e}", img.file_name)
+                        report_error!(
+                            anyhow::Error::new(e).context("Failed to decode base64 image"),
+                            extra: { "file_name" => %img.file_name }
+                        )
                     })
                     .ok()
             })
@@ -14693,7 +14703,10 @@ impl Input {
                     files_to_upload.push((file.file_name.clone(), file.mime_type.clone(), bytes));
                 }
                 Err(e) => {
-                    log::error!("Failed to read file {}: {e}", file.file_path.display());
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to read file"),
+                        extra: { "path" => %file.file_path.display() }
+                    );
                 }
             }
         }
@@ -14714,8 +14727,9 @@ impl Input {
                 {
                     Ok(resp) => resp,
                     Err(e) => {
-                        log::error!(
-                            "Failed to prepare attachment uploads for task {task_id}: {e:?}"
+                        report_error!(
+                            e.context("Failed to prepare attachment uploads for task"),
+                            extra: { "task_id" => %task_id }
                         );
                         return None;
                     }
@@ -14741,14 +14755,16 @@ impl Input {
                             });
                         }
                         Ok(resp) => {
-                            log::error!(
-                                "Failed to upload attachment {}: HTTP {}",
-                                file_name,
-                                resp.status()
+                            report_error!(
+                                "Failed to upload attachment: unexpected HTTP status",
+                                extra: { "file_name" => %file_name, "status" => %resp.status() }
                             );
                         }
                         Err(e) => {
-                            log::error!("Failed to upload attachment {file_name}: {e:?}");
+                            report_error!(
+                                anyhow::Error::new(e).context("Failed to upload attachment"),
+                                extra: { "file_name" => %file_name }
+                            );
                         }
                     }
                 }
