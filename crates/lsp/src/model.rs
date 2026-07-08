@@ -16,6 +16,7 @@ use lsp_types::{
 use simple_logger::manager::LogManager;
 #[cfg(not(target_arch = "wasm32"))]
 use warp_core::features::FeatureFlag;
+#[cfg(not(target_arch = "wasm32"))]
 use warp_core::report_error;
 use warpui_core::r#async::executor::Background;
 #[cfg(not(target_arch = "wasm32"))]
