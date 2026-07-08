@@ -74,8 +74,6 @@ pub fn first_party_key_source_for_provider(
     None
 }
 
-/// Returns true when inference for a first-party provider will use either an
-/// allowed member-provided key or a team-managed key configured by an admin.
 pub fn is_using_first_party_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
     first_party_key_source_for_provider(provider, app).is_some()
 }
