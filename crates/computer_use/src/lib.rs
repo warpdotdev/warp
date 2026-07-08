@@ -342,6 +342,18 @@ pub enum Action {
     },
 }
 
+impl Action {
+    /// Whether this action is a no-op placeholder rather than a real
+    /// interaction. Agents that only want the post-actions screenshot emit a
+    /// zero-duration wait, since `use_computer` requires at least one action.
+    /// This cannot catch every semantically inert batch (e.g. a mouse move to
+    /// the current position), but the zero-wait idiom is the documented
+    /// screenshot pattern.
+    pub fn is_no_op(&self) -> bool {
+        matches!(self, Action::Wait(duration) if duration.is_zero())
+    }
+}
+
 /// The direction of a scroll action.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ScrollDirection {

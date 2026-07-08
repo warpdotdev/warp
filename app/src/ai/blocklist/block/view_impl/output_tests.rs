@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use ai::agent::action::{UploadArtifactRequest, UseComputerRequest};
 use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
-use computer_use::{ScreenshotParams, Target};
+use computer_use::{Action, ScreenshotParams, Target, TargetedAction};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
 use warp_util::host_id::HostId;
@@ -106,9 +106,11 @@ fn stop_recording_card_text_includes_partial_duration_without_raw_reason() {
 
 #[test]
 fn use_computer_decoration_skips_screenshot_only_rows() {
-    let request = UseComputerRequest {
+    // Agents that only want a screenshot emit a zero-duration wait plus
+    // screenshot params; a real wait is a captured interaction.
+    let mut request = UseComputerRequest {
         action_summary: "Screenshot".to_string(),
-        actions: vec![],
+        actions: vec![TargetedAction::screen(Action::Wait(Duration::ZERO))],
         screenshot_params: Some(ScreenshotParams {
             max_long_edge_px: None,
             max_total_px: None,
@@ -116,8 +118,10 @@ fn use_computer_decoration_skips_screenshot_only_rows() {
             target: Target::Screen,
         }),
     };
-
     assert!(!should_decorate_recorded_use_computer(&request));
+
+    request.actions = vec![TargetedAction::screen(Action::Wait(Duration::from_secs(1)))];
+    assert!(should_decorate_recorded_use_computer(&request));
 }
 
 fn make_skill(name: &str) -> ParsedSkill {

@@ -205,11 +205,15 @@ pub(crate) struct Props<'a> {
     pub(super) is_cloud_agent_pre_first_exchange: bool,
 }
 
-/// A `UseComputer` call with no actions is a screenshot-only capture rather
-/// than a user-visible interaction, so it shouldn't be labeled as captured in
-/// a recording.
+/// A `UseComputer` call whose actions are all no-ops (typically a single
+/// zero-duration wait alongside screenshot params) is a screenshot-only
+/// capture rather than a user-visible interaction, so it shouldn't be labeled
+/// as captured in a recording.
 fn should_decorate_recorded_use_computer(request: &UseComputerRequest) -> bool {
-    !request.actions.is_empty()
+    request
+        .actions
+        .iter()
+        .any(|action| !action.action.is_no_op())
 }
 
 pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
