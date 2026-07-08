@@ -54,6 +54,7 @@ struct FontFamily {
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod loader {
     use anyhow::Result;
+    use warp_errors::report_error;
 
     use super::*;
     use crate::windowing::winit::fonts::linux::{Error, FontconfigLoader};

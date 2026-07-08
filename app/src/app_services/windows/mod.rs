@@ -7,6 +7,7 @@ use {
     warp_core::channel::ChannelState,
 };
 
+#[cfg(feature = "release_bundle")]
 use crate::report_error;
 
 mod registry;

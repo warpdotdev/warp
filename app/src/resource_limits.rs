@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use crate::report_error;
 /// Adjusts resource limits applied to the Warp process (e.g.: the limit on open
 /// file descriptors) to ensure proper behavior.
