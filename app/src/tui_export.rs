@@ -56,6 +56,7 @@ pub use crate::code::DiffResult;
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::event::AfterBlockCompletedEvent;
+pub use crate::terminal::input::slash_command_model::slash_command_composition_filter;
 pub use crate::terminal::input::slash_commands::{
     build_slash_command_mixer, slash_command_query, AcceptSlashCommandOrSavedPrompt, InlineItem,
     SlashCommandDataSource, SlashCommandMixer, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,

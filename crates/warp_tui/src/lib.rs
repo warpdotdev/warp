@@ -22,6 +22,7 @@ mod editor_element;
 mod exit_confirmation;
 mod input_mode_policy;
 mod keybindings;
+mod slash_commands;
 mod terminal_background;
 mod terminal_block;
 mod terminal_session_view;
