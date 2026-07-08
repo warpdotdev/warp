@@ -121,9 +121,10 @@ use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::focus_env::add_session_focus_env_vars;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
 use crate::terminal::local_tty::{
-    create_terminal_view_surface, terminal_view_restored_blocks,
-    TerminalManager as LocalTtyTerminalManager, TerminalViewSurfaceConfig,
+    create_terminal_view_surface, terminal_view_restored_blocks, TerminalViewSurfaceConfig,
 };
 use crate::terminal::model::session::Session;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;

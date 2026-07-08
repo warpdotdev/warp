@@ -93,7 +93,7 @@ impl TaskStore {
         let is_at_dfs_tail = self
             .exchanges
             .last()
-            .map_or(true, |(_, r)| r.task_id == *task_id);
+            .is_none_or(|(_, r)| r.task_id == *task_id);
         // If we know this exchange is going at the end, it's faster to just append it.
         if is_at_dfs_tail && !has_subagent_output {
             self.exchanges.insert(
@@ -303,8 +303,7 @@ impl TaskStore {
 
     pub fn remove(&mut self, task_id: &TaskId) -> Option<Task> {
         let task = self.tasks.remove(task_id)?;
-        self.exchanges
-            .retain(|_, r| self.tasks.contains_key(&r.task_id));
+        self.rebuild_exchange_index();
         Some(task)
     }
 
