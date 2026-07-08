@@ -18,15 +18,15 @@ use chrono::Duration;
 use parking_lot::FairMutex;
 use settings::Setting as _;
 use warpui::r#async::executor::Background;
-use warpui::{App, AppContext, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{App, AppContext, EntityId, ModelHandle, SingletonEntity};
 
 use super::*;
-use crate::ai::agent::conversation::{AIConversationAutoexecuteMode, AIConversationId};
-use crate::ai::blocklist::agent_view::{AgentViewEntryOrigin, EnterAgentViewError};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,
+    MockConversationSelection,
 };
-use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::input_mode_policy::{InputModePolicy, PolicyConfigUpdate};
 use crate::ai::blocklist::BlocklistAIContextModel;
 use crate::settings::{AISettings, AISettingsChangedEvent};
@@ -234,64 +234,6 @@ impl InputModePolicy for StubPolicy {
     }
 }
 
-/// Conversation-selection stub with no selection; tests emit selection events
-/// directly on the handle.
-struct StaticConversationSelection;
-
-impl ConversationSelection for StaticConversationSelection {
-    fn selected_conversation_id(&self, _: &AppContext) -> Option<AIConversationId> {
-        None
-    }
-
-    fn is_conversation_active(&self, _: &AppContext) -> bool {
-        false
-    }
-
-    fn is_conversation_fullscreen(&self, _: &AppContext) -> bool {
-        false
-    }
-
-    fn select_existing_conversation(
-        &mut self,
-        _: AIConversationId,
-        _: AgentViewEntryOrigin,
-        _: &mut ModelContext<Box<dyn ConversationSelection>>,
-    ) {
-    }
-
-    fn select_new_conversation(
-        &mut self,
-        _: AgentViewEntryOrigin,
-        _: &mut ModelContext<Box<dyn ConversationSelection>>,
-    ) {
-    }
-
-    fn try_start_new_conversation(
-        &mut self,
-        _: AgentViewEntryOrigin,
-        _: &mut ModelContext<Box<dyn ConversationSelection>>,
-    ) -> Result<AIConversationId, EnterAgentViewError> {
-        Ok(AIConversationId::new())
-    }
-
-    fn pending_query_autoexecute_override(&self, _: &AppContext) -> AIConversationAutoexecuteMode {
-        AIConversationAutoexecuteMode::default()
-    }
-
-    fn toggle_pending_query_autoexecute(
-        &mut self,
-        _: &mut ModelContext<Box<dyn ConversationSelection>>,
-    ) {
-    }
-
-    fn handle_history_event(
-        &mut self,
-        _: &BlocklistAIHistoryEvent,
-        _: &mut ModelContext<Box<dyn ConversationSelection>>,
-    ) {
-    }
-}
-
 /// Builds an input model driven by `policy`, returning the conversation
 /// selection handle so tests can emit selection events.
 fn build_input_model(
@@ -317,7 +259,7 @@ fn build_input_model(
     )));
     let terminal_surface_id = EntityId::new();
     let conversation_selection =
-        app.add_model(|_| Box::new(StaticConversationSelection) as Box<dyn ConversationSelection>);
+        app.add_model(|_| Box::new(MockConversationSelection) as Box<dyn ConversationSelection>);
     let context_model = app.add_model(|_| {
         BlocklistAIContextModel::new_for_test(
             terminal_model.clone(),

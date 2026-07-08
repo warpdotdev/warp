@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{Block, BlockGrid, BlockId, BlockList, TerminalColorList, TerminalModel};
-use warp_terminal::model::ansi::Color;
+use warp_terminal::model::ansi::{Color, NamedColor};
 use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
 use warpui_core::elements::tui::{
@@ -194,9 +194,14 @@ fn cell_to_color(color: &Color, colors: &TerminalColorList) -> TuiColor {
 }
 
 fn cell_to_style(cell: &Cell, colors: &TerminalColorList) -> TuiStyle {
-    let mut style = TuiStyle::default()
-        .fg(cell_to_color(&cell.fg, colors))
-        .bg(cell_to_color(&cell.bg, colors));
+    let mut style = TuiStyle::default().fg(cell_to_color(&cell.fg, colors));
+    // Cells with the default background are left bg-unset so they inherit the
+    // TUI's own background instead of painting the theme's background color;
+    // explicitly-set backgrounds still paint.
+    if cell.bg != Color::Named(NamedColor::Background) {
+        style = style.bg(cell_to_color(&cell.bg, colors));
+    }
+
     if cell.flags.contains(Flags::BOLD) {
         style = style.add_modifier(Modifier::BOLD);
     }

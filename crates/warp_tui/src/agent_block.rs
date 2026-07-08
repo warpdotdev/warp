@@ -33,6 +33,7 @@ use crate::agent_block_sections::{
     render_thinking_section,
 };
 use crate::tool_call_labels::{CommandBlockState, ResolvedCommandBlock};
+use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -401,7 +402,9 @@ impl TuiAIBlock {
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let output_streaming = self.block_model.status(app).is_streaming();
         let mut column = TuiFlex::column();
-        for section in &self.sections(app) {
+        let sections = self.sections(app);
+        let last_index = sections.len().saturating_sub(1);
+        for (index, section) in sections.iter().enumerate() {
             let element = match section {
                 TuiAIBlockSection::Input(text) => render_input_section(text, app),
                 TuiAIBlockSection::PlainText(text) => render_plain_text_section(text, app),
@@ -434,11 +437,21 @@ impl TuiAIBlock {
                 ),
             };
 
-            // One row of bottom padding gives uniform spacing between sections
-            // and after the last one.
-            column.add_child(TuiContainer::new(element).with_padding_bottom(1).finish());
+            // One row of bottom padding separates sections; the last section
+            // ends flush so blocks don't stack trailing and leading spacing.
+            if index < last_index {
+                column.add_child(TuiContainer::new(element).with_padding_bottom(1).finish());
+            } else {
+                column.add_child(element);
+            }
         }
-        column.finish()
+        // Blocks space themselves with blank rows on top — the same
+        // `BLOCK_TOP_PADDING_ROWS` baked into terminal block heights — so
+        // every adjacent block pair (terminal or agent) is separated by
+        // exactly that many rows.
+        TuiContainer::new(column.finish())
+            .with_padding_top(BLOCK_TOP_PADDING_ROWS)
+            .finish()
     }
 }
 

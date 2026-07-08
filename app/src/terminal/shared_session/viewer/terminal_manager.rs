@@ -41,7 +41,7 @@ use crate::features::FeatureFlag;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::pane_group::pane::DetachType;
 use crate::pane_group::TerminalViewResources;
-use crate::settings::{DebugSettings, InputModeSettings, WarpPromptSeparator};
+use crate::settings::{InputModeSettings, WarpPromptSeparator};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
@@ -59,7 +59,7 @@ use crate::terminal::shared_session::shared_handlers::{
     build_selected_conversation_update, ActiveRemoteUpdate, RemoteUpdateGuard,
 };
 use crate::terminal::shared_session::SharedSessionStatus;
-use crate::terminal::terminal_manager::{compute_block_size, terminal_colors_list};
+use crate::terminal::terminal_manager::{compute_block_size, terminal_colors_list, BlockSpacing};
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::view::ExecuteCommandEvent;
 use crate::terminal::{
@@ -220,7 +220,8 @@ impl TerminalManager {
 
         let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
 
-        let show_memory_stats = DebugSettings::as_ref(ctx).should_show_memory_stats();
+        let block_spacing = BlockSpacing::for_gui(ctx);
+        let show_memory_stats = block_spacing.show_memory_stats;
 
         // TODO: we have to figure out what prompt the viewer will see.
         // For now, just respect the viewer's settings.
@@ -229,7 +230,7 @@ impl TerminalManager {
         let is_inverted = input_mode.is_inverted_blocklist();
 
         // TODO: use the sharer's size.
-        let sizes = compute_block_size(initial_size, ctx);
+        let sizes = compute_block_size(initial_size, &block_spacing, ctx);
 
         let model = if is_ambient_agent {
             TerminalModel::new_for_cloud_mode_shared_session_viewer(

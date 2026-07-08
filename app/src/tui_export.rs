@@ -63,11 +63,12 @@ pub use crate::terminal::model::session::Sessions;
 pub use crate::terminal::model::terminal_model::BlockIndex;
 pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
+pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::ExecuteCommandEvent;
 pub use crate::terminal::{
-    PtyIntent, PtyIntentEvent, ShellLaunchData, TerminalManager as TerminalManagerTrait,
-    TerminalModel, TerminalSurface,
+    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData,
+    TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::dark_theme;
 pub use crate::util::time_format::format_elapsed_seconds;

@@ -95,6 +95,12 @@ impl TuiUiBuilder {
         )))
     }
 
+    /// Style in the shell-mode accent color (the same blue the GUI uses for
+    /// `!` shell mode).
+    pub(crate) fn shell_mode_accent_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
+    }
+
     /// Collapsible-header style while the pointer hovers it.
     fn hovered_header_style(&self) -> TuiStyle {
         self.primary_text_style().add_modifier(Modifier::BOLD)

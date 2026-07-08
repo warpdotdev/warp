@@ -57,18 +57,18 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["≫ hello", "", "one", "two", "three", ""],
+                vec!["", "≫ hello", "", "one", "two", "three"],
             );
-            assert_eq!(frame.buffer[(0, 0)].fg, expected_prompt_text_color(app_ctx));
-            assert_eq!(frame.buffer[(0, 0)].bg, expected_input_background(app_ctx));
-            assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
-            assert_eq!(frame.buffer[(2, 0)].fg, expected_prompt_text_color(app_ctx));
-            assert_eq!(frame.buffer[(19, 0)].bg, expected_input_background(app_ctx));
-            assert_eq!(frame.buffer[(0, 2)].fg, expected_output_text_color(app_ctx));
+            assert_eq!(frame.buffer[(0, 1)].fg, expected_prompt_text_color(app_ctx));
+            assert_eq!(frame.buffer[(0, 1)].bg, expected_input_background(app_ctx));
+            assert!(frame.buffer[(0, 1)].modifier.contains(Modifier::BOLD));
+            assert_eq!(frame.buffer[(2, 1)].fg, expected_prompt_text_color(app_ctx));
+            assert_eq!(frame.buffer[(19, 1)].bg, expected_input_background(app_ctx));
+            assert_eq!(frame.buffer[(0, 3)].fg, expected_output_text_color(app_ctx));
             // The block paints no background of its own, so output rows show the
             // terminal's own background.
-            assert_eq!(frame.buffer[(0, 2)].bg, Color::Reset);
-            assert_eq!(frame.buffer[(19, 2)].bg, Color::Reset);
+            assert_eq!(frame.buffer[(0, 3)].bg, Color::Reset);
+            assert_eq!(frame.buffer[(19, 3)].bg, Color::Reset);
         });
     });
 }
@@ -180,7 +180,8 @@ fn agent_block_renders_tool_calls_in_message_order() {
                 TuiRect::new(0, 0, 40, 6),
                 app_ctx,
             );
-            // Each section carries its own bottom padding, so a blank row follows every section.
+            // The block starts with one row of top padding, and a blank row
+            // separates adjacent sections.
             assert_eq!(
                 frame
                     .buffer
@@ -188,19 +189,19 @@ fn agent_block_renders_tool_calls_in_message_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["before", "", "○ Init project", "", "after", ""],
+                vec!["", "before", "", "○ Init project", "", "after"],
             );
             // A pending tool call renders a dim grey glyph and a dim label.
             assert_eq!(
-                frame.buffer[(0, 2)].fg,
+                frame.buffer[(0, 3)].fg,
                 expected_tool_call_text_color(app_ctx)
             );
-            assert!(frame.buffer[(0, 2)].modifier.contains(Modifier::DIM));
+            assert!(frame.buffer[(0, 3)].modifier.contains(Modifier::DIM));
             assert_eq!(
-                frame.buffer[(2, 2)].fg,
+                frame.buffer[(2, 3)].fg,
                 expected_tool_call_text_color(app_ctx)
             );
-            assert!(frame.buffer[(2, 2)].modifier.contains(Modifier::DIM));
+            assert!(frame.buffer[(2, 3)].modifier.contains(Modifier::DIM));
         });
     });
 }
@@ -244,7 +245,7 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["○ Init project", "", "○ Init project", ""],
+                vec!["", "○ Init project", "", "○ Init project"],
             );
         });
     });
@@ -347,7 +348,7 @@ fn agent_block_desired_height_accounts_for_tool_call_stub() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            // One tool-call stub line plus the section's bottom padding row.
+            // One tool-call stub line plus the block's top padding row.
             assert_eq!(block.desired_height(40, app_ctx), 2);
         });
     });
@@ -507,14 +508,15 @@ fn header_click_records_a_manual_collapse_override() {
             let area = TuiRect::new(0, 0, 40, 5);
             element.layout(TuiConstraint::loose(TuiSize::new(40, 5)), &mut ctx, app_ctx);
 
-            // Click the `Thinking...` header row. The runtime attributes
-            // dispatch to a rendered view, so give the context an origin view
-            // for the toggle's `notify()`.
+            // Click the `Thinking...` header row (row 1, below the block's top
+            // padding): the press arms the header's click and the release fires
+            // it. The runtime attributes dispatch to a rendered view, so give
+            // the context an origin view for the toggle's `notify()`.
             let mut event_ctx = TuiEventContext::default();
             event_ctx.set_origin_view(Some(EntityId::new()));
             let handled = element.dispatch_event(
                 &TuiEvent::LeftMouseDown {
-                    position: TuiPoint::new(0, 0),
+                    position: TuiPoint::new(0, 1),
                     modifiers: ModifiersState::default(),
                     click_count: 1,
                     is_first_mouse: false,
@@ -524,7 +526,18 @@ fn header_click_records_a_manual_collapse_override() {
                 &mut ctx,
                 app_ctx,
             );
-            assert!(handled);
+            assert!(handled, "the press arming the click must be consumed");
+            let handled = element.dispatch_event(
+                &TuiEvent::LeftMouseUp {
+                    position: TuiPoint::new(0, 1),
+                    modifiers: ModifiersState::default(),
+                },
+                area,
+                &mut event_ctx,
+                &mut ctx,
+                app_ctx,
+            );
+            assert!(handled, "the release completing the click must be consumed");
 
             // The streaming block was expanded, so the click records a collapse
             // override that wins over the expanded-while-streaming default.
