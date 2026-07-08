@@ -3,7 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use super::TuiText;
 use crate::elements::tui::test_support::{render_to_lines, with_paint_context};
 use crate::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize,
 };
 use crate::{App, EntityIdMap};
 
@@ -113,11 +113,7 @@ fn spans_flow_as_one_paragraph_with_per_span_styles() {
     .with_style(Style::default().fg(Color::White));
 
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 6, 1));
-    let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    text.render(TuiRect::new(0, 0, 6, 1), &mut buffer, &mut ctx);
+    with_paint_context(|ctx| text.render(TuiRect::new(0, 0, 6, 1), &mut buffer, ctx));
 
     assert_eq!(buffer.to_lines(), vec!["✓ done"]);
     // The span's style patches over the base style.
