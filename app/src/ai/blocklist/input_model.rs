@@ -849,11 +849,6 @@ impl Entity for BlocklistAIInputModel {
     type Event = BlocklistAIInputEvent;
 }
 
-/// The outcome of matching the input buffer against a single history source
-/// (command history or agent prompt history) via [`most_recent_close_match`].
-///
-/// This replaces a nested `Option<Option<DateTime<Local>>>`, making the three
-/// distinct states explicit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HistoryMatch {
     /// No entry in this source closely matched the input.
@@ -869,12 +864,6 @@ enum HistoryMatch {
 /// the provided word, using the given similarity threshold, or
 /// [`HistoryMatch::NoMatch`] if no entry matches. The possibilities must be
 /// ordered newest-first.
-///
-/// Adapted from [`difflib::get_close_matches`], but an async function with
-/// periodic yields such that the operation can be aborted if necessary.  Also,
-/// unlike the original function, this returns as soon as it finds any match
-/// above the threshold, instead of finding _all_ matches above the threshold
-/// and returning the top N matches.
 async fn most_recent_close_match<'a>(
     word: &str,
     possibilities: impl Iterator<Item = (&'a str, Option<DateTime<Local>>)>,
