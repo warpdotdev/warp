@@ -13,7 +13,9 @@ use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
 use crate::search::slash_command_menu::static_commands::Availability;
 use crate::search::SyncDataSource;
-use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
+use crate::terminal::input::slash_commands::{
+    slash_command_is_supported_in_tui, AcceptSlashCommandOrSavedPrompt,
+};
 use crate::terminal::model::session::active_session::ActiveSession;
 
 pub struct TuiDataSourceArgs {
@@ -69,7 +71,8 @@ impl TuiSlashCommandDataSource {
             COMMAND_REGISTRY
                 .all_commands_by_id()
                 .filter(|(_, command)| {
-                    self.command_passes_common_gates(command, availability, &gates)
+                    slash_command_is_supported_in_tui(command)
+                        && self.command_passes_common_gates(command, availability, &gates)
                 })
                 .map(|(id, command)| (id, command.clone())),
         );

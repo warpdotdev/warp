@@ -7,14 +7,12 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use crate::ai::blocklist::{
     BlocklistAIInputEvent, BlocklistAIInputModel, InputTypeAutoDetectionSource,
 };
-use crate::ai::skills::SkillManager;
 use crate::search::slash_command_menu::StaticCommand;
 use crate::settings::InputSettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::slash_commands::{
     GuiSlashCommandDataSource, SlashCommandDataSource as _,
 };
-use crate::terminal::model::session::active_session::ActiveSession;
 
 /// Event emitted by the slash command model when its entry state is updated.
 #[derive(Debug, Clone)]
@@ -45,6 +43,22 @@ pub struct DetectedSkillCommand {
 
     /// The space-delimited argument to the skill command (the user's prompt).
     pub argument: Option<String>,
+}
+
+/// Surface-neutral classification of the current slash command input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedSlashCommandInput {
+    /// The input is not slash command composition.
+    None,
+    /// A slash command, saved prompt, or skill is being searched for.
+    Composing {
+        /// The suffix in the input after '/'.
+        filter: String,
+    },
+    /// A valid static slash command is entered in the input.
+    SlashCommand(DetectedCommand),
+    /// A valid skill command is entered in the input.
+    SkillCommand(DetectedSkillCommand),
 }
 
 #[derive(Debug, Clone)]
@@ -130,10 +144,10 @@ pub fn slash_command_composition_filter(input: &str) -> Option<&str> {
         Some(pending_command)
     }
 }
+
 pub struct SlashCommandModel {
     input_buffer_model: ModelHandle<InputBufferModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
-    active_session: ModelHandle<ActiveSession>,
     state: SlashCommandEntryState,
     data_source: ModelHandle<GuiSlashCommandDataSource>,
 }
@@ -142,7 +156,6 @@ impl SlashCommandModel {
     pub fn new(
         buffer_model: &ModelHandle<InputBufferModel>,
         ai_input_model: &ModelHandle<BlocklistAIInputModel>,
-        active_session: ModelHandle<ActiveSession>,
         data_source: ModelHandle<GuiSlashCommandDataSource>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
@@ -180,7 +193,6 @@ impl SlashCommandModel {
         Self {
             input_buffer_model: buffer_model.clone(),
             ai_input_model: ai_input_model.clone(),
-            active_session,
             data_source,
             state: SlashCommandEntryState::None,
         }
@@ -237,43 +249,17 @@ impl SlashCommandModel {
     /// Use this when you have a prompt string and need to know whether it is
     /// a slash command, skill command, or plain text.
     pub fn detect_command(&self, text: &str, ctx: &AppContext) -> SlashCommandEntryState {
-        if !text.starts_with('/') {
-            return SlashCommandEntryState::None;
+        match self.data_source.as_ref(ctx).parse_input(text, ctx) {
+            ParsedSlashCommandInput::SlashCommand(detected) => {
+                SlashCommandEntryState::SlashCommand(detected)
+            }
+            ParsedSlashCommandInput::SkillCommand(detected) => {
+                SlashCommandEntryState::SkillCommand(detected)
+            }
+            ParsedSlashCommandInput::None | ParsedSlashCommandInput::Composing { .. } => {
+                SlashCommandEntryState::None
+            }
         }
-        if let Some(detected) = self.data_source.as_ref(ctx).parse_slash_command(text) {
-            return SlashCommandEntryState::SlashCommand(detected);
-        }
-        if let Some(detected) = self.detect_skill_command(text, ctx) {
-            return SlashCommandEntryState::SkillCommand(detected);
-        }
-        SlashCommandEntryState::None
-    }
-
-    /// Detects whether `buffer` matches a known skill command.
-    /// Accepts `&AppContext` so it can be called outside a model update.
-    fn detect_skill_command(&self, buffer: &str, ctx: &AppContext) -> Option<DetectedSkillCommand> {
-        let (possible_command, possible_argument) =
-            if let Some((command, argument)) = buffer.split_once(" ") {
-                (command, Some(argument.to_owned()))
-            } else {
-                (buffer, None)
-            };
-
-        let skill_name = possible_command.strip_prefix('/')?;
-
-        let active_session = self.active_session.as_ref(ctx);
-        let cwd_path = active_session.current_working_directory_location(ctx);
-        let skills = SkillManager::handle(ctx)
-            .as_ref(ctx)
-            .get_skills_for_working_directory(cwd_path.as_ref(), ctx);
-
-        let matched_skill = skills.into_iter().find(|skill| skill.name == skill_name)?;
-
-        Some(DetectedSkillCommand {
-            reference: matched_skill.reference,
-            name: matched_skill.name,
-            argument: possible_argument,
-        })
     }
 
     fn handle_input_buffer_update(
@@ -332,8 +318,8 @@ impl SlashCommandModel {
         }
 
         let old_state = self.state.clone();
-        match self.detect_command(new, ctx) {
-            SlashCommandEntryState::SlashCommand(detected_command) => {
+        match self.data_source.as_ref(ctx).parse_input(new, ctx) {
+            ParsedSlashCommandInput::SlashCommand(detected_command) => {
                 if let SlashCommandEntryState::SlashCommand(old_detected_command) = &self.state {
                     if *old_detected_command == detected_command {
                         return;
@@ -360,7 +346,7 @@ impl SlashCommandModel {
                 }
                 self.state = SlashCommandEntryState::SlashCommand(detected_command);
             }
-            SlashCommandEntryState::SkillCommand(detected_skill) => {
+            ParsedSlashCommandInput::SkillCommand(detected_skill) => {
                 if let SlashCommandEntryState::SkillCommand(old_detected_skill) = &self.state {
                     if *old_detected_skill == detected_skill {
                         return;
@@ -377,47 +363,42 @@ impl SlashCommandModel {
                 });
                 self.state = SlashCommandEntryState::SkillCommand(detected_skill);
             }
-            _ if new.starts_with('/') => {
-                let pending_command = slash_command_composition_filter(new);
-                if let Some(pending_command) = pending_command {
-                    if self
-                        .state
-                        .pending_command()
-                        .is_some_and(|command| command == pending_command)
-                    {
-                        return;
-                    }
-
-                    if !FeatureFlag::AgentView.is_enabled() {
-                        // In the old modality, when composing a slash command, the input _must_ be in
-                        // AI mode; we don't respect `StaticCommand::auto_enter_ai_mode = false`. That
-                        // field is only used in the new modality.
-                        //
-                        // We don't even rely on the fact that the input is in AI mode while a slash
-                        // command is being composed, its solely used to disable error underlining.
-                        //
-                        // In the new modality, slash commands declare whether or not they are
-                        // available in terminal mode, and syntax highlighting/error underlining is
-                        // handled appropriately. I am just making this change to preserve the existing
-                        // product behavior (agent icon in NLD toggle becomes yellow).
-                        self.ai_input_model.update(ctx, |input_model, ctx| {
-                            input_model.set_input_type(
-                                InputType::AI,
-                                Some(InputTypeAutoDetectionSource::SlashCommand),
-                                ctx,
-                            );
-                        });
-                    }
-                    self.state = SlashCommandEntryState::Composing {
-                        filter: pending_command.to_owned(),
-                    };
-                } else {
-                    // If the user typed a second '/' in the command token (e.g., /foo/bar),
-                    // the user is likely not trying to enter or find a slash command.
-                    self.state = SlashCommandEntryState::None;
+            ParsedSlashCommandInput::Composing {
+                filter: pending_command,
+            } => {
+                if self
+                    .state
+                    .pending_command()
+                    .is_some_and(|command| command == &pending_command)
+                {
+                    return;
                 }
+
+                if !FeatureFlag::AgentView.is_enabled() {
+                    // In the old modality, when composing a slash command, the input _must_ be in
+                    // AI mode; we don't respect `StaticCommand::auto_enter_ai_mode = false`. That
+                    // field is only used in the new modality.
+                    //
+                    // We don't even rely on the fact that the input is in AI mode while a slash
+                    // command is being composed, its solely used to disable error underlining.
+                    //
+                    // In the new modality, slash commands declare whether or not they are
+                    // available in terminal mode, and syntax highlighting/error underlining is
+                    // handled appropriately. I am just making this change to preserve the existing
+                    // product behavior (agent icon in NLD toggle becomes yellow).
+                    self.ai_input_model.update(ctx, |input_model, ctx| {
+                        input_model.set_input_type(
+                            InputType::AI,
+                            Some(InputTypeAutoDetectionSource::SlashCommand),
+                            ctx,
+                        );
+                    });
+                }
+                self.state = SlashCommandEntryState::Composing {
+                    filter: pending_command,
+                };
             }
-            _ => {
+            ParsedSlashCommandInput::None => {
                 self.state = SlashCommandEntryState::None;
             }
         }
@@ -428,51 +409,6 @@ impl SlashCommandModel {
 
 impl Entity for SlashCommandModel {
     type Event = UpdatedSlashCommandModel;
-}
-
-impl GuiSlashCommandDataSource {
-    // Matches `buffer` against active slash commands, returning the detected command and
-    // space-delimited argument (if provided).
-    //
-    // If a slash command has no argument, it matches only if its an exact match or the
-    // suffix is all whitespace.
-    //
-    // If the slash command has an argument, it matches only if its an exact match, or if the argument
-    // is space-delimited.
-    fn parse_slash_command(&self, buffer: &str) -> Option<DetectedCommand> {
-        let (possible_command, possible_argument) =
-            if let Some((command, argument)) = buffer.split_once(" ") {
-                (command, Some(argument.to_owned()))
-            } else {
-                (buffer, None)
-            };
-
-        let is_matching_command = |command: &StaticCommand| -> bool {
-            if command.name != possible_command {
-                return false;
-            }
-
-            if let Some(argument) = command.argument.as_ref() {
-                argument.is_optional || possible_argument.as_ref().is_some()
-            } else {
-                possible_argument
-                    .as_ref()
-                    .is_none_or(|arg| arg.trim().is_empty())
-            }
-        };
-        let matched_command = self.active_commands().find_map(|(_, command)| {
-            if is_matching_command(command) {
-                Some(command.clone())
-            } else {
-                None
-            }
-        })?;
-
-        Some(DetectedCommand {
-            command: matched_command,
-            argument: possible_argument,
-        })
-    }
 }
 
 #[cfg(test)]

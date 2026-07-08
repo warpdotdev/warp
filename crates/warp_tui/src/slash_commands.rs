@@ -9,8 +9,9 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
 use warp::tui_export::{
-    slash_command_composition_filter, slash_command_query, AcceptSlashCommandOrSavedPrompt,
-    SlashCommandMixer, TuiSlashCommandDataSource, UpdatedActiveCommands,
+    slash_command_query, slash_command_selection_behavior, AcceptSlashCommandOrSavedPrompt,
+    ParsedSlashCommandInput, SlashCommandDataSource as _, SlashCommandMixer,
+    SlashCommandSelectionBehavior, TuiSlashCommandDataSource, UpdatedActiveCommands,
 };
 use warp_editor::model::CoreEditorModel;
 use warp_search_core::inline_menu::{InitialSelection, InlineMenuSelection};
@@ -50,6 +51,7 @@ pub(crate) struct TuiSlashCommandModelEvent;
 
 pub(crate) struct TuiSlashCommandModel {
     input_editor: ModelHandle<CodeEditorModel>,
+    slash_commands_source: Option<ModelHandle<TuiSlashCommandDataSource>>,
     mixer: ModelHandle<SlashCommandMixer>,
     state: TuiSlashCommandState,
 }
@@ -82,6 +84,7 @@ impl TuiSlashCommandModel {
 
         let mut model = Self {
             input_editor,
+            slash_commands_source: Some(slash_commands_source),
             mixer,
             state: TuiSlashCommandState::Closed,
         };
@@ -100,6 +103,7 @@ impl TuiSlashCommandModel {
         selection.select(selected_index, rows.len(), |_| true);
         Self {
             input_editor,
+            slash_commands_source: None,
             mixer,
             state: TuiSlashCommandState::Open {
                 query: String::new(),
@@ -211,7 +215,11 @@ impl TuiSlashCommandModel {
 
     fn update_from_input(&mut self, ctx: &mut ModelContext<Self>) {
         let input = input_text(&self.input_editor, ctx);
-        let Some(query) = slash_command_composition_filter(&input).map(str::to_owned) else {
+        let Some(slash_commands_source) = &self.slash_commands_source else {
+            return;
+        };
+        let parsed_input = slash_commands_source.as_ref(ctx).parse_input(&input, ctx);
+        let Some(query) = menu_query_for_parsed_input(&parsed_input) else {
             self.close(ctx);
             return;
         };
@@ -219,16 +227,24 @@ impl TuiSlashCommandModel {
     }
 
     fn run_query(&mut self, query: String, force: bool, ctx: &mut ModelContext<Self>) {
-        let (previous_query_matches, previous_selection, previous_scroll_offset) = match &self.state
-        {
-            TuiSlashCommandState::Closed => (false, InlineMenuSelection::default(), 0),
-            TuiSlashCommandState::Open {
-                query: previous_query,
-                selection,
-                scroll_offset,
-                ..
-            } => (previous_query == &query, *selection, *scroll_offset),
-        };
+        let (previous_query_matches, previous_rows, previous_selection, previous_scroll_offset) =
+            match &self.state {
+                TuiSlashCommandState::Closed => {
+                    (false, Vec::new(), InlineMenuSelection::default(), 0)
+                }
+                TuiSlashCommandState::Open {
+                    query: previous_query,
+                    rows,
+                    selection,
+                    scroll_offset,
+                    ..
+                } => (
+                    previous_query == &query,
+                    rows.clone(),
+                    *selection,
+                    *scroll_offset,
+                ),
+            };
         let select_last_result_on_refresh = query.is_empty() && !previous_query_matches;
         let scroll_offset = if select_last_result_on_refresh {
             0
@@ -237,7 +253,7 @@ impl TuiSlashCommandModel {
         };
         self.state = TuiSlashCommandState::Open {
             query: query.clone(),
-            rows: Vec::new(),
+            rows: previous_rows,
             selection: previous_selection,
             scroll_offset,
             select_last_result_on_refresh,
@@ -266,8 +282,16 @@ impl TuiSlashCommandModel {
         };
 
         let mixer = self.mixer.as_ref(ctx);
-        *rows = mixer.results().iter().filter_map(row_from_result).collect();
         *is_loading = mixer.is_loading();
+        if *is_loading {
+            return;
+        }
+
+        let previously_selected_action = selection
+            .selected_index()
+            .and_then(|index| rows.get(index))
+            .map(|row| row.action.clone());
+        *rows = mixer.results().iter().filter_map(row_from_result).collect();
         if rows.is_empty() {
             selection.clear();
             *scroll_offset = 0;
@@ -275,6 +299,10 @@ impl TuiSlashCommandModel {
             if *select_last_result_on_refresh {
                 selection.reset(rows.len(), InitialSelection::Last, |_| true);
                 *select_last_result_on_refresh = false;
+            } else if let Some(selected_index) = previously_selected_action
+                .and_then(|action| rows.iter().position(|row| row.action == action))
+            {
+                selection.select(selected_index, rows.len(), |_| true);
             } else if let Some(selected_index) = selection.selected_index() {
                 selection.select(selected_index.min(rows.len() - 1), rows.len(), |_| true);
             } else {
@@ -313,6 +341,36 @@ fn input_text(input_editor: &ModelHandle<CodeEditorModel>, ctx: &AppContext) -> 
     }
 }
 
+fn menu_query_for_parsed_input(parsed_input: &ParsedSlashCommandInput) -> Option<String> {
+    match parsed_input {
+        ParsedSlashCommandInput::None => None,
+        ParsedSlashCommandInput::Composing { filter } => Some(filter.clone()),
+        ParsedSlashCommandInput::SlashCommand(detected_command) => {
+            let is_argument_entry = detected_command.argument.is_some();
+            let executes_on_selection = matches!(
+                slash_command_selection_behavior(&detected_command.command),
+                SlashCommandSelectionBehavior::Execute
+            );
+            if is_argument_entry || executes_on_selection {
+                None
+            } else {
+                Some(
+                    detected_command
+                        .command
+                        .name
+                        .strip_prefix('/')
+                        .unwrap_or(detected_command.command.name)
+                        .to_owned(),
+                )
+            }
+        }
+        ParsedSlashCommandInput::SkillCommand(detected_skill) => detected_skill
+            .argument
+            .is_none()
+            .then(|| detected_skill.name.clone()),
+    }
+}
+
 fn row_from_result(
     result: &QueryResult<AcceptSlashCommandOrSavedPrompt>,
 ) -> Option<TuiSlashCommandRow> {
@@ -326,3 +384,7 @@ fn row_from_result(
         action: result.accept_result(),
     })
 }
+
+#[cfg(test)]
+#[path = "slash_commands_tests.rs"]
+mod tests;

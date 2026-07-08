@@ -658,6 +658,14 @@ impl TuiInputView {
     fn render_input(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         Box::new(self.render_element(ctx))
     }
+    pub(crate) fn set_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |m, ctx| {
+            m.clear_buffer(ctx);
+            m.user_insert(text, ctx);
+        });
+        self.scroll_offset = 0;
+        ctx.notify();
+    }
 
     /// Composes the shell-mode input row: the accent-styled `!` affordance in a
     /// two-column gutter (glyph plus one column of right padding), then the

@@ -3478,7 +3478,6 @@ impl Input {
             SlashCommandModel::new(
                 &buffer_model,
                 &ai_input_model,
-                active_session.clone(),
                 slash_command_data_source.clone(),
                 ctx,
             )
