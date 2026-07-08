@@ -15309,6 +15309,18 @@ impl Workspace {
             return;
         };
 
+        // Carry the source conversation's selected model (and execution
+        // profile) onto the fresh cloud pane so an explicit cloud-runnable pick
+        // is honored instead of silently reverting to the profile default. The
+        // new pane has its own terminal_view_id, so without this it would
+        // resolve to the profile default. `build_default_spawn_config` still
+        // guards non-cloud-runnable ids (Part A).
+        Self::copy_model_and_profile_to_terminal_view(
+            source_view.id(),
+            model_handle.as_ref(ctx).terminal_view_id(),
+            ctx,
+        );
+
         if let Some(environment_id) = environment_id {
             model_handle.update(ctx, |model, ctx| {
                 model.set_environment_id(Some(environment_id), ctx);
@@ -15725,6 +15737,19 @@ impl Workspace {
             Self::record_automatic_handoff_failed(intent, ctx);
             return;
         };
+
+        // Carry the source conversation's selected model (and execution
+        // profile) onto the new cloud pane so an explicit cloud-runnable pick
+        // is honored instead of silently reverting to the profile default. The
+        // new pane has its own terminal_view_id, so without this it would
+        // resolve to the profile default. `build_default_spawn_config` still
+        // guards non-cloud-runnable ids (Part A).
+        Self::copy_model_and_profile_to_terminal_view(
+            source_view.id(),
+            model_handle.as_ref(ctx).terminal_view_id(),
+            ctx,
+        );
+
         // Restore the forked conversation into the newly-created pane.
         new_pane_view.update(ctx, |terminal_view, view_ctx| {
             terminal_view.restore_conversation_after_view_creation(

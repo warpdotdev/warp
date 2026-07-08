@@ -3,7 +3,10 @@ use warpui::{App, EntityId};
 
 use super::*;
 use crate::ai::blocklist::handoff::HandoffLaunchAttachments;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{
+    AvailableLLMs, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
+    ModelsByFeature,
+};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn attachment() -> AttachmentInput {
@@ -522,6 +525,198 @@ fn handoff_request_carries_universal_orchestration_handoff_marker() {
                 json.get("orchestration_handoff")
                     .and_then(serde_json::Value::as_bool),
                 Some(true)
+            );
+        });
+    });
+}
+
+/// Builds a minimal Agent Mode `LLMInfo` with the given id/display for tests.
+fn agent_mode_model(id: &str, display_name: &str, description: Option<&str>) -> LLMInfo {
+    LLMInfo {
+        display_name: display_name.to_owned(),
+        base_model_name: display_name.to_owned(),
+        id: id.into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: description.map(str::to_owned),
+        disable_reason: None,
+        vision_supported: true,
+        spec: None,
+        provider: LLMProvider::Unknown,
+        host_configs: Default::default(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
+/// Installs a single-model Agent Mode catalog (also used as the default) so
+/// `get_active_base_model` resolves to it via the profile-default fallback.
+fn install_default_agent_mode_model(
+    model: &warpui::ModelHandle<AmbientAgentViewModel>,
+    app: &mut App,
+    info: LLMInfo,
+) {
+    let default_id = info.id.clone();
+    model.update(app, |_model, ctx| {
+        let models = ModelsByFeature {
+            agent_mode: AvailableLLMs::new(default_id, vec![info], None)
+                .expect("valid available llms"),
+            ..Default::default()
+        };
+        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+            prefs.update_feature_model_choices(Ok(models), ctx);
+        });
+    });
+}
+
+/// The local→cloud handoff "invalid model_id" regression: when the pane's
+/// active Agent Mode model is not cloud-runnable (custom-endpoint/BYOK model or
+/// local custom router), `build_default_spawn_config` must fall back to the
+/// `auto` slug instead of forwarding the unsupported id (which the cloud
+/// `start_agent` endpoint rejects). A local custom-router id exercises the same
+/// `is_cloud_runnable_oz_model_id` guard as a custom-endpoint UUID without
+/// requiring `ApiKeyManager` setup; the custom-endpoint UUID case is covered by
+/// the `is_cloud_runnable_oz_model_id` unit tests in `llms_tests.rs`.
+#[test]
+fn handoff_falls_back_to_auto_for_non_cloud_runnable_model() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        install_default_agent_mode_model(
+            &model,
+            &mut app,
+            agent_mode_model("custom-router:local:byok", "My BYOK router", None),
+        );
+
+        // Put the pane in local→cloud handoff mode so `selected_harness()` == Oz
+        // and the Oz model-id branch of `build_default_spawn_config` runs.
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff()), ctx);
+        });
+
+        model.read(&app, |model, app| {
+            let config = model.build_default_spawn_config(app);
+            assert_eq!(
+                config.model_id.as_deref(),
+                Some("auto"),
+                "a non-cloud-runnable model must fall back to the `auto` slug"
+            );
+        });
+    });
+}
+
+/// The Part A fallback also protects the regular (non-handoff) cloud spawn
+/// path, since `spawn_agent` shares `build_default_spawn_config`.
+#[test]
+fn spawn_agent_falls_back_to_auto_for_non_cloud_runnable_model() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        install_default_agent_mode_model(
+            &model,
+            &mut app,
+            agent_mode_model("custom-router:local:byok", "My BYOK router", None),
+        );
+
+        model.update(&mut app, |model, ctx| {
+            model.spawn_agent("do work".to_owned(), vec![], ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            let config = request.config.as_ref().expect("config should be present");
+            assert_eq!(config.model_id.as_deref(), Some("auto"));
+        });
+    });
+}
+
+/// Positive control for the handoff model_id path: when the active Agent Mode
+/// model's id IS a server-accepted Oz slug (e.g. `auto-genius`), the slug is
+/// forwarded verbatim as the cloud `config.model_id` and the spawn is valid.
+#[test]
+fn handoff_forwards_slug_model_id_for_builtin_model() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        install_default_agent_mode_model(
+            &model,
+            &mut app,
+            agent_mode_model("auto-genius", "auto", Some("genius")),
+        );
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff()), ctx);
+        });
+
+        model.read(&app, |model, app| {
+            let config = model.build_default_spawn_config(app);
+            assert_eq!(
+                config.model_id.as_deref(),
+                Some("auto-genius"),
+                "a server-accepted Oz slug should be forwarded unchanged"
+            );
+        });
+    });
+}
+
+/// Part B mechanism: the handoff carries the source conversation's selected
+/// model onto the new pane by seeding a per-pane override on the new pane's
+/// `terminal_view_id` (via `update_preferred_agent_mode_llm`). This verifies
+/// that such a per-pane override is honored by `build_default_spawn_config`
+/// (instead of reverting to the profile default).
+#[test]
+fn handoff_honors_pane_model_override() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let terminal_view_id = model.read(&app, |model, _| model.terminal_view_id);
+
+        // Catalog with two slug models; `auto` is the profile default.
+        model.update(&mut app, |_model, ctx| {
+            let models = ModelsByFeature {
+                agent_mode: AvailableLLMs::new(
+                    "auto".into(),
+                    vec![
+                        agent_mode_model("auto", "auto", None),
+                        agent_mode_model("auto-genius", "auto", Some("genius")),
+                    ],
+                    None,
+                )
+                .expect("valid available llms"),
+                ..Default::default()
+            };
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                prefs.update_feature_model_choices(Ok(models), ctx);
+            });
+        });
+
+        // Seed the source selection onto this pane, as the handoff open path does.
+        model.update(&mut app, |_model, ctx| {
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                prefs.update_preferred_agent_mode_llm(
+                    &LLMId::from("auto-genius"),
+                    terminal_view_id,
+                    ctx,
+                );
+            });
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff()), ctx);
+        });
+
+        model.read(&app, |model, app| {
+            let config = model.build_default_spawn_config(app);
+            assert_eq!(
+                config.model_id.as_deref(),
+                Some("auto-genius"),
+                "the carried per-pane model override must be honored over the profile default"
             );
         });
     });
