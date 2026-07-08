@@ -100,7 +100,7 @@ impl PseudoConsoleChild {
         match descendant_process_ids(self.id()) {
             Ok(descendant_process_ids) => {
                 for pid in descendant_process_ids.iter().rev() {
-                    if let Err(err) = terminate_process_by_pid(*pid) {
+                    if let Err(err) = terminate_process_by_pid(self.id(), *pid) {
                         log::warn!("Failed to terminate PTY descendant process {pid}: {err:#}");
                     }
                 }
@@ -144,50 +144,107 @@ impl Drop for PseudoConsoleChild {
     }
 }
 
-fn terminate_process_by_pid(pid: u32) -> windows::core::Result<()> {
+struct OwnedHandle(HANDLE);
+
+impl OwnedHandle {
+    fn get(&self) -> HANDLE {
+        self.0
+    }
+}
+
+impl Drop for OwnedHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+struct ProcessTreeSnapshot {
+    child_processes_by_parent: HashMap<u32, Vec<u32>>,
+    parent_process_by_child: HashMap<u32, u32>,
+}
+
+fn terminate_process_by_pid(root_pid: u32, pid: u32) -> windows::core::Result<()> {
     unsafe {
-        let process = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid)?;
-        let result = TerminateProcess(process, 1);
+        let process = OwnedHandle(OpenProcess(
+            PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+            false,
+            pid,
+        )?);
+        // Holding the handle while re-reading the process tree prevents PID reuse
+        // between descendant verification and termination.
+        if !is_descendant_process(root_pid, pid)? {
+            log::debug!(
+                "Skipping PTY descendant process {pid}; it no longer belongs to PTY root {root_pid}"
+            );
+            return Ok(());
+        }
+
+        let result = TerminateProcess(process.get(), 1);
         if result.is_ok() {
-            let wait_result = WaitForSingleObject(process, PseudoConsoleChild::TERMINATE_WAIT_MS);
+            let wait_result =
+                WaitForSingleObject(process.get(), PseudoConsoleChild::TERMINATE_WAIT_MS);
             if wait_result == WAIT_TIMEOUT {
                 log::warn!("Timed out waiting for PTY descendant process {pid} to exit");
             }
         }
-        let _ = CloseHandle(process);
         result
     }
 }
 
 fn descendant_process_ids(root_pid: u32) -> windows::core::Result<Vec<u32>> {
+    let process_tree = process_tree_snapshot()?;
+
+    Ok(collect_descendant_process_ids(
+        root_pid,
+        &process_tree.child_processes_by_parent,
+    ))
+}
+
+fn is_descendant_process(root_pid: u32, pid: u32) -> windows::core::Result<bool> {
+    let process_tree = process_tree_snapshot()?;
+
+    Ok(process_is_descendant_of_root(
+        pid,
+        root_pid,
+        &process_tree.parent_process_by_child,
+    ))
+}
+
+fn process_tree_snapshot() -> windows::core::Result<ProcessTreeSnapshot> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)? };
+    let snapshot = OwnedHandle(snapshot);
     let mut process_entry = PROCESSENTRY32W {
         dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
         ..Default::default()
     };
     let mut child_processes_by_parent = HashMap::<u32, Vec<u32>>::new();
+    let mut parent_process_by_child = HashMap::<u32, u32>::new();
 
     unsafe {
-        if Process32FirstW(snapshot, &mut process_entry).is_ok() {
+        if Process32FirstW(snapshot.get(), &mut process_entry).is_ok() {
             loop {
                 child_processes_by_parent
                     .entry(process_entry.th32ParentProcessID)
                     .or_default()
                     .push(process_entry.th32ProcessID);
+                parent_process_by_child.insert(
+                    process_entry.th32ProcessID,
+                    process_entry.th32ParentProcessID,
+                );
 
-                if Process32NextW(snapshot, &mut process_entry).is_err() {
+                if Process32NextW(snapshot.get(), &mut process_entry).is_err() {
                     break;
                 }
             }
         }
-
-        let _ = CloseHandle(snapshot);
     }
 
-    Ok(collect_descendant_process_ids(
-        root_pid,
-        &child_processes_by_parent,
-    ))
+    Ok(ProcessTreeSnapshot {
+        child_processes_by_parent,
+        parent_process_by_child,
+    })
 }
 
 fn collect_descendant_process_ids(
@@ -214,6 +271,29 @@ fn collect_descendant_process_ids(
     }
 
     descendants
+}
+
+fn process_is_descendant_of_root(
+    pid: u32,
+    root_pid: u32,
+    parent_process_by_child: &HashMap<u32, u32>,
+) -> bool {
+    let mut visited = HashSet::new();
+    let mut current_pid = pid;
+
+    while let Some(parent_pid) = parent_process_by_child.get(&current_pid) {
+        if *parent_pid == root_pid {
+            return true;
+        }
+
+        if *parent_pid == current_pid || !visited.insert(*parent_pid) {
+            return false;
+        }
+
+        current_pid = *parent_pid;
+    }
+
+    false
 }
 
 #[derive(Error, Debug)]

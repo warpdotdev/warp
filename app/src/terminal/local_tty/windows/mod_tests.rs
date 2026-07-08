@@ -27,3 +27,36 @@ fn collect_descendant_process_ids_handles_cycles_defensively() {
 
     assert_eq!(descendants, vec![11, 12]);
 }
+
+#[test]
+fn process_is_descendant_of_root_accepts_transitive_descendants() {
+    let parent_process_by_child = HashMap::from([(11, 10), (12, 11), (13, 12)]);
+
+    assert!(process_is_descendant_of_root(
+        13,
+        10,
+        &parent_process_by_child
+    ));
+}
+
+#[test]
+fn process_is_descendant_of_root_rejects_reused_unrelated_pid() {
+    let parent_process_by_child = HashMap::from([(11, 10), (12, 11), (42, 99)]);
+
+    assert!(!process_is_descendant_of_root(
+        42,
+        10,
+        &parent_process_by_child
+    ));
+}
+
+#[test]
+fn process_is_descendant_of_root_handles_cycles_defensively() {
+    let parent_process_by_child = HashMap::from([(11, 12), (12, 11)]);
+
+    assert!(!process_is_descendant_of_root(
+        11,
+        10,
+        &parent_process_by_child
+    ));
+}
