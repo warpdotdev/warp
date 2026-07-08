@@ -246,12 +246,14 @@ impl ResponseStream {
         Self::spawn_request(request_id, self.params.clone(), cancellation_rx, ctx);
     }
 
-    /// Sends the request for `request_id`, first refreshing the connected Grok
-    /// subscription's OAuth token when it is (nearly) expired so the request
-    /// doesn't go out with a stale token. The refresh is bounded by
-    /// [`GROK_REFRESH_REQUEST_TIMEOUT`]; on timeout or failure we fall through
-    /// and send with the currently stored token (the server is the authority on
-    /// validity). When no refresh is needed the request is sent directly.
+    /// Sends the request for `request_id`. When the connected Grok
+    /// subscription's OAuth token is already past its hard expiry, this first
+    /// blocks on a single shared refresh (owned by `ApiKeyManager`, so only one
+    /// runs at a time) before sending. The wait is bounded by
+    /// [`GROK_REFRESH_REQUEST_TIMEOUT`]; on timeout or failure we send with the
+    /// currently stored token (the server is the authority on validity).
+    /// Near-expiry-but-valid tokens are left to the background proactive
+    /// refresh and sent immediately.
     fn spawn_request(
         request_id: Uuid,
         params: api::RequestParams,
@@ -267,38 +269,36 @@ impl ResponseStream {
             use crate::workspaces::user_workspaces::UserWorkspaces;
 
             let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
-            if let Some(refresh_token) =
-                ApiKeyManager::as_ref(ctx).grok_refresh_token_if_stale(byo_allowed)
-            {
+            // Reserve + start the shared refresh on `ApiKeyManager`'s context;
+            // the in-flight guard is released there even if this stream is
+            // dropped mid-refresh. `None` means no blocking refresh is needed.
+            let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.begin_expired_grok_refresh(byo_allowed, ctx)
+            });
+            if let Some(refresh_rx) = refresh_rx {
                 let _ = ctx.spawn(
                     async move {
-                        ::ai::grok_subscription::refresh_grok_access_token(refresh_token)
-                            .with_timeout(GROK_REFRESH_REQUEST_TIMEOUT)
-                            .await
+                        // Block on the shared refresh, bounded so a hung refresh
+                        // can't stall the request.
+                        let _ = refresh_rx.with_timeout(GROK_REFRESH_REQUEST_TIMEOUT).await;
                     },
-                    move |me, result, ctx| {
+                    move |me, _result, ctx| {
                         // Cancelled or superseded while refreshing — drop this attempt.
                         if me.current_request_id != Some(request_id) {
                             return;
                         }
-                        let mut params = params;
-                        // On timeout (outer `Err`) or refresh failure (inner `Err`),
-                        // fall through and send with the existing token.
-                        if let Ok(Ok(response)) = result {
-                            let access_token = response.access_token.clone();
-                            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                                manager.store_grok_tokens(response, ctx);
-                            });
-                            // Use the fresh token for this request, and persist it
-                            // to `params` so any retry reuses it.
-                            if let Some(keys) = params.api_keys.as_mut() {
-                                keys.grok_oauth_access_token = access_token.clone();
-                            }
+                        // Send with whatever token is now stored: refreshed on
+                        // success, unchanged on failure/timeout.
+                        if let Some(access_token) = ApiKeyManager::as_ref(ctx)
+                            .grok_tokens()
+                            .and_then(|tokens| tokens.access_token_for_request())
+                            .map(str::to_owned)
+                        {
                             if let Some(keys) = me.params.api_keys.as_mut() {
                                 keys.grok_oauth_access_token = access_token;
                             }
                         }
-                        Self::spawn_generate(request_id, params, cancellation_rx, ctx);
+                        Self::spawn_generate(request_id, me.params.clone(), cancellation_rx, ctx);
                     },
                 );
                 return;

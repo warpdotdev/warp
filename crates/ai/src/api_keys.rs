@@ -141,6 +141,14 @@ impl GrokTokens {
             None => false,
         }
     }
+
+    /// Returns `true` when the token is known to be at or past its hard expiry.
+    /// Unlike [`Self::needs_refresh`] there is no lead time: a token expiring
+    /// soon but still valid reports `false`. Tokens with an unknown expiry are
+    /// never considered expired.
+    pub fn is_expired(&self) -> bool {
+        self.needs_refresh(Duration::ZERO)
+    }
 }
 
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
@@ -172,8 +180,9 @@ pub struct ApiKeyManager {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_allowed: bool,
     /// Guards against overlapping Grok token refreshes: the proactive refresh
-    /// timer and the request-time safety net
-    /// (`ApiKeyManager::refresh_grok_tokens_if_needed`) can otherwise race.
+    /// timer and the request-time blocking refresh
+    /// (`ApiKeyManager::begin_expired_grok_refresh`) share this so only one
+    /// refresh runs at a time.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_in_flight: bool,
     pub(crate) aws_credentials_state: AwsCredentialsState,

@@ -695,74 +695,87 @@ fn api_keys_for_request_omits_geap_token_when_previous_binding_mismatches() {
     assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
 }
 
-// ── grok_refresh_token_if_stale ─────────────────────────────────
+// ── grok expiry + blocking-refresh eligibility ──────────────────
+
+#[cfg(not(target_family = "wasm"))]
+fn expired_grok_tokens() -> GrokTokens {
+    // Already past hard expiry, with a refresh token available.
+    GrokTokens {
+        access_token: "stale-access".into(),
+        refresh_token: Some("refresh".into()),
+        expires_at: Some(SystemTime::now() - Duration::from_secs(60)),
+        connected_at: None,
+    }
+}
+
+#[test]
+fn grok_is_expired_semantics() {
+    // Past hard expiry.
+    assert!(GrokTokens {
+        expires_at: Some(SystemTime::now() - Duration::from_secs(1)),
+        ..Default::default()
+    }
+    .is_expired());
+    // Still valid, even if near expiry (within the proactive lead window).
+    assert!(!grok_tokens("tok", Some(60)).is_expired());
+    // Unknown expiry is never considered expired.
+    assert!(!grok_tokens("tok", None).is_expired());
+}
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn grok_refresh_token_if_stale_returns_token_when_near_expiry() {
-    // Expires within the refresh lead window, with a refresh token available.
-    let mgr = make_manager_with_grok(
-        ApiKeys::default(),
-        Some(grok_tokens("stale-access", Some(1))),
-    );
+fn grok_expired_refresh_token_returns_token_when_expired() {
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(expired_grok_tokens()));
     assert_eq!(
-        mgr.grok_refresh_token_if_stale(true),
+        mgr.grok_expired_refresh_token(true),
         Some("refresh".to_string())
     );
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn grok_refresh_token_if_stale_none_when_byo_disabled() {
-    let mgr = make_manager_with_grok(
-        ApiKeys::default(),
-        Some(grok_tokens("stale-access", Some(1))),
-    );
-    assert_eq!(mgr.grok_refresh_token_if_stale(false), None);
+fn grok_expired_refresh_token_none_when_byo_disabled() {
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(expired_grok_tokens()));
+    assert_eq!(mgr.grok_expired_refresh_token(false), None);
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn grok_refresh_token_if_stale_none_when_fresh() {
-    // Expires well beyond the lead window.
-    let mgr = make_manager_with_grok(
-        ApiKeys::default(),
-        Some(grok_tokens("fresh-access", Some(60 * 60))),
-    );
-    assert_eq!(mgr.grok_refresh_token_if_stale(true), None);
+fn grok_expired_refresh_token_none_when_near_expiry_but_valid() {
+    // Within the proactive lead window but not yet expired: the background timer
+    // handles this, so the blocking path stays out of it.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("near", Some(60))));
+    assert_eq!(mgr.grok_expired_refresh_token(true), None);
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn grok_refresh_token_if_stale_none_when_no_tokens() {
+fn grok_expired_refresh_token_none_when_no_tokens() {
     let mgr = make_manager_with_grok(ApiKeys::default(), None);
-    assert_eq!(mgr.grok_refresh_token_if_stale(true), None);
+    assert_eq!(mgr.grok_expired_refresh_token(true), None);
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn grok_refresh_token_if_stale_none_when_no_refresh_token() {
-    let mut tokens = grok_tokens("stale-access", Some(1));
+fn grok_expired_refresh_token_none_when_no_refresh_token() {
+    let mut tokens = expired_grok_tokens();
     tokens.refresh_token = None;
     let mgr = make_manager_with_grok(ApiKeys::default(), Some(tokens));
-    assert_eq!(mgr.grok_refresh_token_if_stale(true), None);
+    assert_eq!(mgr.grok_expired_refresh_token(true), None);
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn grok_refresh_token_if_stale_none_when_no_expiry() {
-    // A token with no known expiry never reports as needing a refresh.
+fn grok_expired_refresh_token_none_when_no_expiry() {
+    // A token with no known expiry is never considered expired.
     let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("no-expiry", None)));
-    assert_eq!(mgr.grok_refresh_token_if_stale(true), None);
+    assert_eq!(mgr.grok_expired_refresh_token(true), None);
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn grok_refresh_token_if_stale_none_when_refresh_in_flight() {
-    let mut mgr = make_manager_with_grok(
-        ApiKeys::default(),
-        Some(grok_tokens("stale-access", Some(1))),
-    );
+fn grok_expired_refresh_token_none_when_refresh_in_flight() {
+    let mut mgr = make_manager_with_grok(ApiKeys::default(), Some(expired_grok_tokens()));
     mgr.grok_refresh_in_flight = true;
-    assert_eq!(mgr.grok_refresh_token_if_stale(true), None);
+    assert_eq!(mgr.grok_expired_refresh_token(true), None);
 }
