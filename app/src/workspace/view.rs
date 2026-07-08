@@ -13758,27 +13758,42 @@ impl Workspace {
         });
     }
 
-    /// Copy the model selection and execution profile from the source terminal view to a new terminal view.
-    fn copy_model_and_profile_to_terminal_view(
+    /// Copy the model selection and execution profile from the source terminal
+    /// view to a new terminal view, reproducing the source pane's model
+    /// resolution on the new pane.
+    ///
+    /// Order matters: the execution profile is copied FIRST, then the per-pane
+    /// model override. `update_preferred_agent_mode_llm` only stores an override
+    /// when the id differs from the pane's *current* profile default (and
+    /// removes it otherwise). Copying the profile first makes that comparison
+    /// evaluate against the SOURCE profile's default — matching how the source
+    /// pane itself resolves — so an explicit selection is preserved. Setting the
+    /// override first would compare against the new pane's prior default and
+    /// could silently drop the carried selection (re-introducing the handoff
+    /// invalid-model-id bug when the source profile default is a custom
+    /// endpoint).
+    pub(crate) fn copy_model_and_profile_to_terminal_view(
         source_terminal_view_id: EntityId,
         new_terminal_view_id: EntityId,
-        ctx: &mut ViewContext<Self>,
+        ctx: &mut AppContext,
     ) {
-        // Copy the LLM preference from source to new terminal view
+        // Resolve the source pane's active model and execution profile up front.
         let source_llm_id = LLMPreferences::as_ref(ctx)
             .get_active_base_model(ctx, Some(source_terminal_view_id))
             .id
             .clone();
-        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-            prefs.update_preferred_agent_mode_llm(&source_llm_id, new_terminal_view_id, ctx);
-        });
-
-        // Copy the execution profile from source to new terminal view
         let source_profile_id = *AIExecutionProfilesModel::as_ref(ctx)
             .active_profile(Some(source_terminal_view_id), ctx)
             .id();
+
+        // Copy the execution profile FIRST (see doc comment for why order matters).
         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
             profiles.set_active_profile(new_terminal_view_id, source_profile_id, ctx);
+        });
+
+        // Then set the per-pane model override.
+        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+            prefs.update_preferred_agent_mode_llm(&source_llm_id, new_terminal_view_id, ctx);
         });
     }
 

@@ -362,6 +362,11 @@ impl AmbientAgentViewModel {
 
     /// The terminal view this model belongs to. Used by the handoff open path
     /// to seed the source conversation's selected model onto this pane.
+    ///
+    /// Only the local→cloud handoff callers use this, and they are gated to
+    /// non-wasm targets; gate the getter the same way so it isn't flagged as
+    /// dead code on the wasm build.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     pub(crate) fn terminal_view_id(&self) -> EntityId {
         self.terminal_view_id
     }
