@@ -112,6 +112,12 @@ impl MouseState {
         self.click_count
     }
 
+    /// Sets or clears the pressed state used for press-then-release click
+    /// pairing (the TUI hoverable arms this on mouse-down).
+    pub(crate) fn set_click_count(&mut self, click_count: Option<u32>) {
+        self.click_count = click_count;
+    }
+
     /// True iff the element is considered hovered.
     ///
     /// This does not necessarily imply that the mouse

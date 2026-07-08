@@ -6,6 +6,7 @@
 
 use std::rc::Rc;
 
+use string_offset::CharOffset;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp::tui_export::BlocklistAIInputModel;
@@ -895,8 +896,9 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             // Screen column 5 = content column 3 = gap offset 4 (1-based).
             assert_eq!(offset.as_usize(), 4);
 
-            // A press on the gutter is consumed by the `!` affordance (its
-            // click handler moves the cursor to the buffer start).
+            // A press on the gutter arms the `!` affordance's click, and the
+            // release inside it fires the handler (which moves the cursor to
+            // the buffer start); both halves are consumed.
             let (mut row, area) = laid_out_shell_row(&view, ctx);
             let mut rendered_views = EntityIdMap::default();
             let mut lctx = TuiLayoutContext {
@@ -912,8 +914,41 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
                     &mut lctx,
                     ctx
                 ),
-                "gutter clicks must be consumed"
+                "gutter presses must be consumed"
             );
+            assert!(
+                row.dispatch_event(&left_up(0, 0), area, &mut event_ctx, &mut lctx, ctx),
+                "the release completing a gutter click must be consumed"
+            );
+        });
+    });
+}
+
+/// The gutter click places the cursor without starting a drag selection
+/// (`SetCursor`), so a later drag cannot extend a stale selection anchored at
+/// the buffer start.
+#[test]
+fn gutter_click_places_cursor_without_selecting() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello");
+            // The gutter's click handler dispatches `SetCursor` at the start.
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::SetCursor {
+                    offset: CharOffset::from(1),
+                }],
+            );
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+            assert!(!view.as_ref(ctx).is_selecting);
+            assert_eq!(selected_text(&view, ctx), None);
+
+            // With no press on the editor itself, a drag maps to no action and
+            // selects nothing.
+            assert!(!mouse(&view, ctx, &left_drag(3, 0)));
+            assert_eq!(selected_text(&view, ctx), None);
         });
     });
 }

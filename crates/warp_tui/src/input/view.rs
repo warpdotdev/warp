@@ -546,6 +546,9 @@ pub enum TuiInputAction {
     SelectionUpdateTo { offset: CharOffset },
     /// Finish the in-progress drag selection (mouse up).
     SelectionEnd,
+    /// Place the cursor at `offset` without starting a drag selection
+    /// (the `!` gutter click).
+    SetCursor { offset: CharOffset },
     /// Scroll the viewport by `rows` visual rows without moving the cursor
     /// (negative scrolls toward the top). Driven by the mouse wheel.
     Scroll { rows: isize },
@@ -653,7 +656,7 @@ impl TuiInputView {
                 .finish(),
         )
         .on_click(|event_ctx, _| {
-            event_ctx.dispatch_typed_action(TuiInputAction::SelectionStartAt {
+            event_ctx.dispatch_typed_action(TuiInputAction::SetCursor {
                 offset: CharOffset::from(1),
             });
         });
@@ -857,6 +860,12 @@ impl TypedActionView for TuiInputView {
                     self.is_selecting = false;
                     self.model.update(ctx, |m, ctx| m.end_selection(ctx));
                 }
+            }
+            TuiInputAction::SetCursor { offset } => {
+                self.model.update(ctx, |m, ctx| {
+                    m.select_at(*offset, false, ctx);
+                    m.end_selection(ctx);
+                });
             }
             TuiInputAction::Scroll { rows } => {
                 // Wheel scrolling moves the viewport only; it must NOT snap back
