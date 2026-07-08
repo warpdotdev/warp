@@ -197,7 +197,7 @@ directory = "{directory}"
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn test_load_tab_configs_rejects_nonexistent_literal_directory() {
+fn test_load_tab_configs_allows_nonexistent_literal_directory() {
     let dir = tempfile::tempdir().unwrap();
     let nonexistent_dir = dir.path().join("does-not-exist");
     write_tab_config_toml_with_directory(
@@ -209,18 +209,14 @@ fn test_load_tab_configs_rejects_nonexistent_literal_directory() {
 
     let (configs, errors) = load_tab_configs(dir.path());
 
-    assert!(configs.is_empty());
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].file_name, "invalid.toml");
-    assert!(errors[0].file_path.ends_with("invalid.toml"));
-    assert!(errors[0].error_message.contains("pane 'main'"));
-    assert!(errors[0].error_message.contains("does-not-exist"));
-    assert!(errors[0].error_message.contains("directory does not exist"));
+    assert!(errors.is_empty());
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].name, "Invalid");
 }
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn test_load_tab_configs_rejects_literal_directory_that_is_file() {
+fn test_load_tab_configs_allows_literal_directory_that_is_file() {
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("not-a-directory");
     std::fs::write(&file_path, "not a directory").unwrap();
@@ -233,15 +229,9 @@ fn test_load_tab_configs_rejects_literal_directory_that_is_file() {
 
     let (configs, errors) = load_tab_configs(dir.path());
 
-    assert!(configs.is_empty());
-    assert_eq!(errors.len(), 1);
-    assert!(errors[0].error_message.contains("pane 'main'"));
-    assert!(errors[0].error_message.contains("not-a-directory"));
-    assert!(
-        errors[0]
-            .error_message
-            .contains("path exists but is not a directory")
-    );
+    assert!(errors.is_empty());
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].name, "Invalid");
 }
 
 #[cfg(feature = "local_fs")]

@@ -13,7 +13,6 @@ use crate::ai::custom_model_routers::{
     parse_model_config_yaml, CustomModelRouter, ModelConfigError,
 };
 use crate::launch_configs::launch_config::LaunchConfig;
-use crate::tab_configs::tab_config::validate_load_time_tab_config_directories;
 use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::{ThemeKind, WarpTheme, WarpThemeConfig};
 use crate::workflows::workflow::Workflow;
@@ -181,11 +180,6 @@ pub(super) fn parse_tab_config_dir_entry(
             .map(|mut config| {
                 config.source_path = Some(item.path().into());
                 config
-            })
-            .and_then(|config| {
-                validate_load_time_tab_config_directories(&config)
-                    .map_err(anyhow::Error::msg)
-                    .map(|()| config)
             })
             .map_err(|e| TabConfigError {
                 file_name,

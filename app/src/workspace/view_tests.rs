@@ -3220,69 +3220,20 @@ fn test_open_tab_config_with_params_uses_explicit_title_template() {
             workspace.open_tab_config_with_params(tab_config, HashMap::new(), None, ctx);
         });
 
-        workspace.read(&app, |workspace, _| {
-            assert_eq!(workspace.tab_count(), 1);
-            assert_eq!(workspace.get_tab_color(0), None);
-        });
         workspace.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(workspace.get_tab_color(1), Some(AnsiColorIdentifier::Magenta));
+
+            let active_pane_group = workspace.active_tab_pane_group();
+            active_pane_group.read(ctx, |pane_group, ctx| {
+                let terminal_view = pane_group.terminal_view_at_pane_index(0, ctx).unwrap();
+                let model = terminal_view.as_ref(ctx).model.lock();
+                assert_eq!(model.session_startup_path(), dirs::home_dir());
+            });
+
             assert_eq!(workspace.toast_stack.as_ref(ctx).toast_count(), 1);
         });
         });
-        }
-
-        #[test]
-        fn test_find_invalid_tab_config_cwd_checks_nested_panes() {
-        use crate::launch_configs::launch_config::{PaneMode, PaneTemplateType, SplitDirection};
-
-        let valid_cwd = std::env::temp_dir();
-        let invalid_cwd = valid_cwd.join(format!(
-        "warp-tab-config-nested-nonexistent-cwd-{}",
-        uuid::Uuid::new_v4()
-        ));
-        assert!(!invalid_cwd.exists());
-
-        let pane_template = PaneTemplateType::PaneBranchTemplate {
-        split_direction: SplitDirection::Horizontal,
-        panes: vec![
-            PaneTemplateType::PaneTemplate {
-                cwd: valid_cwd,
-                commands: vec![],
-                is_focused: Some(true),
-                pane_mode: PaneMode::Terminal,
-                shell: None,
-            },
-            PaneTemplateType::PaneBranchTemplate {
-                split_direction: SplitDirection::Vertical,
-                panes: vec![PaneTemplateType::PaneTemplate {
-                    cwd: invalid_cwd.clone(),
-                    commands: vec![],
-                    is_focused: Some(false),
-                    pane_mode: PaneMode::Terminal,
-                    shell: None,
-                }],
-            },
-        ],
-        };
-
-        assert_eq!(
-        find_invalid_tab_config_cwd(&pane_template),
-        Some(invalid_cwd.as_path())
-        );
-        }
-
-        #[test]
-        fn test_find_invalid_tab_config_cwd_allows_empty_cwd() {
-        use crate::launch_configs::launch_config::{PaneMode, PaneTemplateType};
-
-        let pane_template = PaneTemplateType::PaneTemplate {
-        cwd: std::path::PathBuf::new(),
-        commands: vec![],
-        is_focused: Some(true),
-        pane_mode: PaneMode::Terminal,
-        shell: None,
-        };
-
-        assert_eq!(find_invalid_tab_config_cwd(&pane_template), None);
         }
 
         #[test]
