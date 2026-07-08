@@ -4,7 +4,7 @@ pub use repo_metadata::repositories::RepoDetectionSource;
 
 pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
-    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
+    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, ConversationUsageTotals,
 };
 pub use crate::ai::agent::task::TaskId;
 pub use crate::ai::agent::{
@@ -37,6 +37,7 @@ pub use crate::ai::blocklist::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
 };
+pub use crate::ai::blocklist::view_util::format_credits;
 pub use crate::ai::blocklist::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel,
     BlocklistAIController, BlocklistAIInputModel, InputConfig, InputModePolicy,

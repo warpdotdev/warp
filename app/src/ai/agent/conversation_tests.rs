@@ -7,8 +7,8 @@ use warpui::{App, SingletonEntity};
 
 use super::{
     artifact_from_fork_proto, footer_model_token_usage, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, RecordingSpanStatus,
-    RestoreConversationError,
+    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, ConversationUsageTotals,
+    RecordingSpanStatus, RestoreConversationError,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
@@ -668,6 +668,84 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
                 .get("primary_agent"),
             Some(&9)
         );
+    });
+}
+
+fn stream_token_usage(
+    model_id: &str,
+    total_input: u32,
+    output: u32,
+    cost_in_cents: f32,
+) -> api::response_event::stream_finished::TokenUsage {
+    api::response_event::stream_finished::TokenUsage {
+        model_id: model_id.to_string(),
+        total_input,
+        output,
+        input_cache_read: 0,
+        input_cache_write: 0,
+        cost_in_cents,
+    }
+}
+
+#[allow(deprecated)]
+fn credits_usage_metadata(
+    credits_spent: f32,
+    platform_credits_spent: f32,
+) -> api::response_event::stream_finished::ConversationUsageMetadata {
+    api::response_event::stream_finished::ConversationUsageMetadata {
+        context_window_usage: 0.0,
+        credits_spent,
+        platform_credits_spent,
+        summarized: false,
+        token_usage: vec![],
+        tool_usage_metadata: None,
+        total_input_tokens: 0,
+        warp_token_usage: HashMap::new(),
+        byok_token_usage: HashMap::new(),
+        context_window_segments: Vec::new(),
+        custom_endpoint_token_usage: HashMap::new(),
+    }
+}
+
+#[test]
+fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        assert_eq!(
+            conversation.usage_totals(),
+            ConversationUsageTotals::default()
+        );
+
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![stream_token_usage("model-a", 100, 20, 1.5)],
+                    Some(credits_usage_metadata(2.0, 0.5)),
+                    false,
+                    ctx,
+                )
+                .expect("usage should update");
+            // The server's usage metadata is cumulative per conversation: the
+            // newest snapshot replaces the previous credits rather than
+            // summing, while provider cost accumulates per request.
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![stream_token_usage("model-a", 50, 10, 1.2)],
+                    Some(credits_usage_metadata(3.0, 0.5)),
+                    false,
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        let totals = conversation.usage_totals();
+        assert!((totals.credits_spent - 3.5).abs() < 1e-6);
+        assert!((totals.cost_in_cents - 2.7).abs() < 1e-6);
     });
 }
 

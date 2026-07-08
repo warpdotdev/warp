@@ -1848,9 +1848,11 @@ impl BlocklistAIHistoryModel {
     ) {
         // Track whether this update changes any state derived by
         // `BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated`
-        // subscribers (e.g. the orchestration credit rollup). We emit the
-        // event only when there's actual data to react to.
-        let emits_usage_event = request_cost.is_some() || usage_metadata.is_some();
+        // subscribers (e.g. the orchestration credit rollup or the TUI
+        // footer's usage entry). We emit the event only when there's actual
+        // data to react to.
+        let emits_usage_event =
+            request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
                 request_cost,

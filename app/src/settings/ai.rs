@@ -436,6 +436,52 @@ settings::macros::implement_setting_for_enum!(
     description: "Controls how child-agent messages are displayed.",
 );
 
+/// Which unit the TUI's usage entry displays.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Which unit the TUI's usage entry displays.",
+    rename_all = "snake_case"
+)]
+pub enum TuiUsageDisplayMode {
+    /// Credits spent — the same number the GUI's usage footer shows (default).
+    #[default]
+    Credits,
+    /// Provider dollar cost.
+    Cost,
+}
+
+settings::macros::implement_setting_for_enum!(
+    TuiUsageDisplayMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Never,
+    surface: settings::SettingSurfaces::TUI,
+    private: false,
+    toml_path: "agents.usage_display_mode",
+    description: "Which unit the TUI's usage entry displays: credits or provider cost.",
+);
+
+impl TuiUsageDisplayMode {
+    /// The other unit — clicking the usage entry flips to this.
+    pub fn toggled(self) -> Self {
+        match self {
+            TuiUsageDisplayMode::Credits => TuiUsageDisplayMode::Cost,
+            TuiUsageDisplayMode::Cost => TuiUsageDisplayMode::Credits,
+        }
+    }
+}
+
 impl OrchestrationMessageDisplayMode {
     /// Display name for the settings dropdown.
     pub fn display_name(&self) -> &'static str {
@@ -1066,6 +1112,12 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.model",
         description: "The default model the TUI agent uses.",
     }
+    // Which unit the TUI footer's usage entry displays (credits or provider
+    // cost), flipped by clicking the entry.
+    //
+    // TUI-only (`surface: Tui`), like `agent_model` above: modeled as a
+    // file-backed setting so the choice persists across TUI sessions.
+    usage_display_mode: TuiUsageDisplayMode,
     // Whether or not the profile-level command autoexecution speedbump has been shown.
     //
     // Not a user-visible setting - we model it as a setting so we can track how often

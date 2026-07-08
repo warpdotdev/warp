@@ -171,6 +171,25 @@ fn footer_model_token_usage(
         .collect()
 }
 
+/// Conversation usage totals for compact displays (e.g. the TUI footer's
+/// usage entry).
+///
+/// A projection computed on demand from existing conversation state — named
+/// so the underlying types don't leak through `tui_export`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ConversationUsageTotals {
+    /// Total credits spent (inference + platform), from the server's
+    /// cumulative usage metadata — the same number the GUI's usage footer
+    /// shows as "Credits spent (total)" and the conversation details panel
+    /// shows as "Credits used".
+    pub credits_spent: f32,
+    /// Total provider cost across all models, in US cents. Fractional —
+    /// per-request provider costs are routinely sub-cent — and `f32` to match
+    /// both the upstream `TokenUsage.cost_in_cents` proto float it sums and
+    /// `credits_spent` above.
+    pub cost_in_cents: f32,
+}
+
 // basic info for creating a dummy command block based on an exchange's inputs
 pub(crate) struct CommandBlockInfo {
     pub(crate) command: String,
@@ -3657,6 +3676,20 @@ impl AIConversation {
     #[allow(dead_code)]
     pub fn total_token_usage(&self) -> Vec<TokenUsage> {
         self.total_token_usage_by_model.values().cloned().collect()
+    }
+
+    /// Compact usage totals for lightweight displays (e.g. the TUI footer's
+    /// usage entry): the GUI-consistent credits total plus the accumulated
+    /// provider dollar cost from the per-request `StreamFinished` usage rows.
+    pub fn usage_totals(&self) -> ConversationUsageTotals {
+        let mut totals = ConversationUsageTotals {
+            credits_spent: self.inference_credits_spent() + self.platform_credits_spent(),
+            cost_in_cents: 0.0,
+        };
+        for usage in self.total_token_usage_by_model.values() {
+            totals.cost_in_cents += usage.cost_in_cents;
+        }
+        totals
     }
 
     /// Normalize all newlines to CRLF so restored blocks render lines starting at column 0,

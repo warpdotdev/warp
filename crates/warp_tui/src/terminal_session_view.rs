@@ -12,11 +12,13 @@ use warp::tui_export::{
     AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, CommandExecutionSource,
-    ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
-    GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
-    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
-    TerminalModel, TerminalSurface, TerminalSurfaceInit, WAKEUP_THROTTLE_PERIOD,
+    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
+    ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent,
+    ModelEvent, PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
+    ShellCommandExecutorEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    WAKEUP_THROTTLE_PERIOD,
 };
+use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
 use warpui::SingletonEntity;
@@ -40,6 +42,7 @@ use crate::transcript_view::TuiTranscriptView;
 use crate::transient_hint::TransientHint;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
+use crate::usage::UsageToggle;
 use crate::warping_indicator::render_warping_indicator;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
@@ -84,6 +87,9 @@ pub(crate) enum TuiTerminalSessionAction {
     /// conversation, else clear the input; a second press within
     /// [`CTRL_C_EXIT_WINDOW`] exits the TUI.
     Interrupt,
+    /// Click on the footer's usage entry: flips the persisted credits⇄cost
+    /// display-mode setting.
+    ToggleUsageDisplay,
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -100,6 +106,8 @@ pub(crate) struct TuiTerminalSessionView {
     /// Armed by a ctrl-c press; a second press while armed exits the TUI.
     /// The footer shows [`CTRL_C_EXIT_HINT`] while armed.
     exit_confirmation: ExitConfirmation,
+    /// Credits⇄cost display state for the footer's clickable usage entry.
+    usage_toggle: UsageToggle,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
@@ -249,12 +257,17 @@ impl TuiTerminalSessionView {
             | ModelEvent::FinishUpdate(_) => ctx.notify(),
             _ => {}
         });
-        // The footer shows the active model and working directory: re-render
-        // when the TUI model setting changes (e.g. settings-file hot reload),
-        // when model display names arrive from the server post-login, or when
-        // the session's working directory changes.
+        // The footer shows the active model, working directory, and usage
+        // entry: re-render when the TUI model or usage-display-mode settings
+        // change (click or settings-file hot reload), when model display
+        // names arrive from the server post-login, or when the session's
+        // working directory changes.
         ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
-            if let AISettingsChangedEvent::TuiAgentModel { .. } = event {
+            if matches!(
+                event,
+                AISettingsChangedEvent::TuiAgentModel { .. }
+                    | AISettingsChangedEvent::TuiUsageDisplayMode { .. }
+            ) {
                 ctx.notify();
             }
         });
@@ -289,6 +302,25 @@ impl TuiTerminalSessionView {
             }
             ActiveSessionEvent::Bootstrapped => {}
         });
+        // The footer's usage entry shows the selected conversation's token/cost
+        // totals: re-render when that conversation's usage metadata updates.
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |view, _, event, ctx| {
+                if let BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                    conversation_id,
+                } = event
+                {
+                    let selected = view
+                        .conversation_selection
+                        .as_ref(ctx)
+                        .selected_conversation_id(ctx);
+                    if selected == Some(*conversation_id) {
+                        ctx.notify();
+                    }
+                }
+            },
+        );
 
         // A wakeup is also how a running block becomes visible: its height is 0
         // until the long-running render-delay timer fires and sends a wakeup
@@ -326,6 +358,7 @@ impl TuiTerminalSessionView {
             active_session,
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
+            usage_toggle: UsageToggle::default(),
             ai_input_model,
             terminal_model: model,
             transient_hint: TransientHint::default(),
@@ -470,7 +503,50 @@ impl TuiTerminalSessionView {
                     .finish(),
             );
         }
+        // Usage entry: the selected conversation's credits/cost totals,
+        // hidden until any usage has been reported. The displayed unit is the
+        // persisted `agents.usage_display_mode` setting; a click dispatches
+        // the toggle action (the element pass cannot write settings
+        // directly).
+        if let Some(totals) = self.selected_conversation_usage_totals(ctx) {
+            let mode = AISettings::as_ref(ctx).usage_display_mode;
+            footer = footer
+                .child(TuiText::new(" • ").with_style(dim).truncate().finish())
+                .child(
+                    self.usage_toggle
+                        .render_entry(mode, totals, |event_ctx, _| {
+                            event_ctx.dispatch_typed_action(
+                                TuiTerminalSessionAction::ToggleUsageDisplay,
+                            );
+                        }),
+                );
+        }
         footer
+    }
+
+    /// Flips the footer usage entry's persisted credits⇄cost display mode.
+    /// The settings-changed event re-renders every subscribed surface.
+    fn toggle_usage_display(&mut self, ctx: &mut ViewContext<Self>) {
+        let next = AISettings::as_ref(ctx).usage_display_mode.toggled();
+        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            if let Err(error) = settings.usage_display_mode.set_value(next, ctx) {
+                report_error!("failed to persist the TUI usage display mode: {error:#}");
+            }
+        });
+    }
+
+    /// The selected conversation's accumulated usage totals, or `None` (entry
+    /// hidden) until any usage has been reported.
+    fn selected_conversation_usage_totals(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ConversationUsageTotals> {
+        let totals = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation(ctx)?
+            .usage_totals();
+        (totals != ConversationUsageTotals::default()).then_some(totals)
     }
 
     /// Whether the input is in `!` shell mode (locked shell input).
@@ -725,6 +801,7 @@ impl TypedActionView for TuiTerminalSessionView {
     fn handle_action(&mut self, action: &TuiTerminalSessionAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
+            TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
         }
     }
 }
