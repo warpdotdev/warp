@@ -30,7 +30,7 @@ Data plumbing that already exists app-side (unused by the TUI):
 - `format_credits` (the GUI's formatter in `app/src/ai/blocklist/view_util.rs`) is exported through `tui_export.rs` so the TUI renders credits identically to the GUI.
 - `update_conversation_cost_and_usage_for_request` now also emits `ConversationUsageMetadataUpdated` for token-only updates (previously only for request-cost/metadata updates).
 - Export `ConversationUsageTotals` through `tui_export.rs` — `BlocklistAIHistoryEvent` is already exported.
-- Per-exchange capture (`token_usage`/`cost_in_cents` on `AIAgentExchange`, mirroring `time_to_first_token_ms`) is **deferred to PR 2** with its consumer: it touches ~14 `AIAgentExchange` construction sites and its request→exchange attribution semantics are best decided alongside the summary row.
+- No per-exchange capture is needed: the summary row consumes the existing block-level accessors (`credits_spent_for_last_block()`, `wall_to_wall_response_time_since_last_query()` — the same sources as the GUI footer's "Credits spent (last response)" and `TimingInfo`).
 
 ### 2. Shared TUI component (`crates/warp_tui/src/usage.rs`, new)
 
@@ -47,27 +47,28 @@ The reusable piece both sub-issues consume:
 - In `new`: subscribe to `BlocklistAIHistoryModel`; on `ConversationUsageMetadataUpdated` for this surface's selected conversation (`conversation_selection.selected_conversation_id`), `ctx.notify()`. Add the new event arm explicitly — no wildcard matches (repo convention).
 - In `render_footer`: after the cwd, render `• ` + the toggle component using the selected conversation's totals; hide the entry until the first usage event (mock shows it only with data). A click dispatches a typed action (`ToggleUsageDisplay`) whose handler flips the persisted display-mode setting — the element pass only holds an immutable `AppContext`, so settings writes go through the view's action handler. Branch (`↬ main`) and `+31 -12` diff stats remain out of scope.
 
-### 4. Transcript row + streaming counter (CODE-1832, after PR #13442 lands)
+### 4. Last-response summary in the indicator slot (CODE-1832, stacked PR)
 
-- App-side per-exchange capture moves here (deferred from PR 1): add `token_usage: Option<u64>` / `cost_in_cents: Option<f64>` to `AIAgentExchange`, populated from each request's `stream_finished` usage (attribution decided with the row's semantics).
-- New `TuiAIBlockSection::UsageSummary { duration, tokens }` in `agent_block.rs`, extracted when the exchange output is `Finished` and `token_usage` is present; rendered by a new function in `agent_block_sections.rs` as `∷ {duration} • {N} tokens` using the long-form formatter (static text, not clickable, per mocks). Duration from exchange start→finished timestamps (`format_elapsed_seconds` is already exported).
-- Streaming: append `• {N} tokens` to the Warping indicator row using the same formatter, updating as usage events arrive mid-stream. Integration point is the indicator element #13442 adds between transcript and input; defer wiring details until it merges.
+- Mock re-read (frames `323:17216` streaming, `323:17499` completed): usage is **hidden while streaming** (the `4 tok • +14 -54` element is `opacity: 0` next to the live `⋮ Warping (1s)` row) and appears only in the completed state as `∷ 1s • …` — the indicator's resting form in the same slot. So the Warping row ships unchanged, and on completion the slot swaps to a static summary row.
+- `render_response_summary(duration, block_credits, app)` in `warping_indicator.rs` (the row is the indicator family's resting form): `∷ {N}s • {credits}` in `muted_text_style` (mock `#8e8e8e`), credits via the GUI's `format_credits`, the credits segment omitted until any are reported (> 0).
+- Wired in `TuiTerminalSessionView::render`: in-progress → Warping row (unchanged); otherwise, when `wall_to_wall_response_time_since_last_query()` is available (requires a finished exchange, so new conversations stay clean), render the summary with `credits_spent_for_last_block()`. Repaints reuse CODE-1831's `ConversationUsageMetadataUpdated` subscription plus the status-change repaint that already removes the Warping row.
+- The mock's per-exchange transcript rows for *historical* blocks would need per-block stamping app-side; deferred as a follow-up if product wants history parity (data exists only for the last block today).
 
 ## Testing and validation
 
-- Unit tests in sibling `_tests.rs` files per repo convention (`usage_tests.rs`, extend `terminal_session_view` and `agent_block_tests.rs`): cost formatting edge cases, credits text parity with the GUI's `format_credits`, footer hidden before first usage event, footer entry renders credits form then cost form after a click event dispatch, summary section extracted only for finished exchanges with usage, dim styling sourced from theme.
+- Unit tests in sibling `_tests.rs` files per repo convention: `usage_tests.rs` (cost formatting edge cases, credits text parity with the GUI's `format_credits`, credits⇄cost toggle, shared clone state) and `warping_indicator_tests.rs` (summary row renders `∷ 5s • 2.5 credits` with no repaint scheduling; credits segment omitted for `None`/zero).
 - App-side tests in `conversation_tests.rs`: `usage_totals` reads the cumulative server credits snapshot (replace, not sum) and accumulates provider cost across requests.
 - Commands: `cargo nextest run -p warp_tui`, `cargo nextest run -p warp` (touched test files), `cargo clippy -p warp_tui --all-targets -- -D warnings`, `./script/format` — all must pass before each PR (presubmit requirement).
 - Manual: `./script/run-tui`; send a prompt; verify the footer credits entry appears and updates, click toggles `2.5 credits` ⇄ `$0.03` and back, summary row appears after completion; compare against Figma frames `323:17499`/`323:17607` (noting the deliberate tok→credits deviation).
 
 ## Parallelization
 
-Parallel child agents are not proposed: CODE-1832 is hard-blocked on PR #13442, both surfaces share the new `usage.rs` component and the app-side capture, and the touched files overlap heavily (`terminal_session_view.rs`, `tui_export.rs`). Sequential, stacked delivery is cleaner:
+Parallel child agents are not proposed for implementation: both surfaces share the usage plumbing and the touched files overlap heavily (`terminal_session_view.rs`, `tui_export.rs`), so sequential, stacked delivery is cleaner (child agents are used for verification instead — PTY byte-level checks and computer-use recordings):
 
-1. PR 1 (now): app-side conversation totals + exports + `usage.rs` + footer entry (CODE-1831), branch `ian/code-1831-tui-footer-token-usage-entry-with-click-to-toggle-cost`.
-2. PR 2 (after #13442 merges): per-exchange usage capture + transcript summary row + streaming counter (CODE-1832), branch `ian/code-1832-tui-token-usage-next-to-the-loading-indicator-end-of`, stacked on PR 1 with graphite.
+1. PR 1: app-side conversation totals + exports + `usage.rs` + footer entry (CODE-1831), branch `ian/code-1831-tui-footer-token-usage-entry-with-click-to-toggle-cost`.
+2. PR 2 (#13442 has merged): last-response summary row in the indicator slot (CODE-1832), branch `ian/code-1832-tui-credits-next-to-the-loading-indicator`, stacked on PR 1 with graphite.
 
 ## Risks and mitigations
 
-- Restored/persisted conversations predate per-exchange capture, so old exchanges have no summary row — acceptable; render nothing when `token_usage` is `None`. Persisting per-exchange usage is a follow-up if product wants history parity.
+- The summary row covers only the last response block (block-level data is all that exists); historical per-block rows in the transcript are a follow-up if product wants history parity. Restored conversations show the row once their accessors resolve from restored exchanges/metadata, and render nothing otherwise.
 - Footer click is the TUI's first mouse-interactive footer element; keep the hit target to the entry's cells only so text selection elsewhere in the footer is unaffected.

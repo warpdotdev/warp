@@ -2,6 +2,7 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use instant::Instant;
@@ -44,7 +45,7 @@ use crate::transient_hint::TransientHint;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 use crate::usage::UsageToggle;
-use crate::warping_indicator::render_warping_indicator;
+use crate::warping_indicator::{render_response_summary, render_warping_indicator};
 use crate::zero_state::render_zero_state;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
@@ -809,18 +810,39 @@ impl TuiView for TuiTerminalSessionView {
             .and_then(|conversation_id| {
                 BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
             });
-        if let Some(in_progress_conversation) =
-            selected_conversation.filter(|conversation| conversation.status().is_in_progress())
-        {
-            let warping_elapsed = in_progress_conversation
-                .latest_exchange()
-                .and_then(|exchange| exchange.time_since_start());
-            if let Some(elapsed) = warping_elapsed {
-                column = column.child(
-                    TuiContainer::new(render_warping_indicator(elapsed, ctx))
+        if let Some(conversation) = selected_conversation {
+            if conversation.status().is_in_progress() {
+                let warping_elapsed = conversation
+                    .latest_exchange()
+                    .and_then(|exchange| exchange.time_since_start());
+                if let Some(elapsed) = warping_elapsed {
+                    column = column.child(
+                        TuiContainer::new(render_warping_indicator(elapsed, ctx))
+                            .with_padding_top(1)
+                            .finish(),
+                    );
+                }
+            } else {
+                // Once the response completes, the indicator's slot rests on
+                // the last response's summary: `∷ {duration} • {credits}`.
+                // Wall-to-wall duration is only available once the block's
+                // final exchange finished, which also keeps the row hidden
+                // for brand-new conversations.
+                let wall_to_wall = conversation
+                    .wall_to_wall_response_time_since_last_query()
+                    .and_then(|ms| u64::try_from(ms).ok())
+                    .map(Duration::from_millis);
+                if let Some(duration) = wall_to_wall {
+                    column = column.child(
+                        TuiContainer::new(render_response_summary(
+                            duration,
+                            conversation.credits_spent_for_last_block(),
+                            ctx,
+                        ))
                         .with_padding_top(1)
                         .finish(),
-                );
+                    );
+                }
             }
         }
 
