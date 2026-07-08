@@ -8417,7 +8417,11 @@ impl ApiKeysWidget {
             .finish()
     }
 
-    fn render_custom_inference_info_icon(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_custom_inference_info_icon(
+        &self,
+        appearance: &Appearance,
+        managed_byok_byoe_enabled: bool,
+    ) -> Box<dyn Element> {
         let icon = Container::new(
             ConstrainedBox::new(
                 Icon::Info
@@ -8430,15 +8434,23 @@ impl ApiKeysWidget {
         )
         .finish();
 
-        let tooltip_text = FormattedText::new([FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text(
-                "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
-            ),
-            FormattedTextFragment::hyperlink("Warp's Terms of Service", CUSTOM_INFERENCE_TERMS_URL),
-            FormattedTextFragment::plain_text(
-                ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
-            ),
-        ])]);
+        let tooltip_text = if managed_byok_byoe_enabled {
+            FormattedText::new([FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text(
+                    "Custom inference settings are managed by your organization.",
+                ),
+            ])])
+        } else {
+            FormattedText::new([FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text(
+                    "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
+                ),
+                FormattedTextFragment::hyperlink("Warp's Terms of Service", CUSTOM_INFERENCE_TERMS_URL),
+                FormattedTextFragment::plain_text(
+                    ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
+                ),
+            ])])
+        };
         let tooltip_background = appearance.theme().tooltip_background();
 
         let info_button =
@@ -8771,6 +8783,9 @@ impl SettingsWidget for ApiKeysWidget {
         let show_custom_inference_section = show_provider_keys || show_custom_inference;
         let custom_inference_section_enabled =
             provider_keys_enabled || custom_inference_controls_enabled;
+        let managed_byok_byoe_enabled = UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| workspace.billing_metadata.is_managed_byok_byoe_enabled());
 
         let mut column = Flex::column().with_child(render_separator(appearance));
 
@@ -8790,7 +8805,9 @@ impl SettingsWidget for ApiKeysWidget {
                     .with_margin_bottom(0.)
                     .finish(),
                 )
-                .with_child(self.render_custom_inference_info_icon(appearance))
+                .with_child(
+                    self.render_custom_inference_info_icon(appearance, managed_byok_byoe_enabled),
+                )
                 .finish();
 
             let header_row = Flex::row()
