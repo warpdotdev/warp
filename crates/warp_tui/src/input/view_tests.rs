@@ -379,6 +379,51 @@ fn cursor_accounts_for_zero_width_chars() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Soft-wrap growth
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Typing until the first line exactly fills the terminal width wraps the
+/// cursor to the next visual row (deferred-wrap terminal behavior), so the
+/// input must grow to show that row — and must not scroll the first row away.
+#[test]
+fn input_grows_when_line_exactly_fills_width() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, &"a".repeat(W as usize));
+            assert_eq!(
+                view.as_ref(ctx).scroll_offset,
+                0,
+                "first row must stay visible"
+            );
+            let (cursor, height) = cursor_and_height(&view, ctx);
+            assert_eq!(height, 2, "wrapped cursor row must be shown");
+            assert_eq!(cursor, Some((0, 1)), "cursor wraps to start of next row");
+        });
+    });
+}
+
+/// Once the first line soft-wraps past the terminal width, the input must be
+/// two rows tall with both rows visible.
+#[test]
+fn input_grows_when_first_line_softwraps() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, &"a".repeat(W as usize + 5));
+            assert_eq!(
+                view.as_ref(ctx).scroll_offset,
+                0,
+                "first row must stay visible"
+            );
+            let (cursor, height) = cursor_and_height(&view, ctx);
+            assert_eq!(height, 2, "two visual rows expected");
+            assert_eq!(cursor, Some((5, 1)), "cursor on second row after wrap");
+        });
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Mouse selection
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -470,6 +515,31 @@ fn single_click_places_cursor() {
             assert!(mouse(&view, ctx, &left_down(3, 0, 1, false)));
             assert!(mouse(&view, ctx, &left_up(3, 0)));
             assert_eq!(cursor_and_height(&view, ctx).0, Some((3, 0)));
+            assert_eq!(selected_text(&view, ctx), None);
+        });
+    });
+}
+
+/// Clicking the phantom deferred-wrap row (rendered when a logical line
+/// exactly fills the width) must resolve to the end-of-buffer gap — where the
+/// cursor visibly sits — not clamp into the preceding full row and teleport
+/// the cursor to its start.
+#[test]
+fn click_on_phantom_wrap_row_keeps_cursor_at_end() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, &"a".repeat(W as usize));
+            // The exactly-full line renders two rows: the text row and the
+            // phantom cursor row below it.
+            assert_eq!(cursor_and_height(&view, ctx), (Some((0, 1)), 2));
+
+            // Click the phantom row at its left edge.
+            assert!(mouse(&view, ctx, &left_down(0, 1, 1, false)));
+            assert!(mouse(&view, ctx, &left_up(0, 1)));
+
+            // The cursor stays at the buffer end (and the row stays rendered).
+            assert_eq!(cursor_and_height(&view, ctx), (Some((0, 1)), 2));
             assert_eq!(selected_text(&view, ctx), None);
         });
     });

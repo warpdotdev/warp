@@ -797,8 +797,9 @@ impl TypedActionView for TuiInputView {
             }
         }
 
-        let visible_rows = cmp::min(self.visual_line_count(ctx), self.max_visible_rows);
-        self.scroll_to_cursor(visible_rows.max(1), ctx);
+        let total_rows = self.total_visual_rows(ctx);
+        let visible_rows = cmp::min(total_rows, self.max_visible_rows);
+        self.scroll_to_cursor(total_rows, visible_rows.max(1), ctx);
         ctx.notify();
     }
 }
@@ -867,17 +868,39 @@ impl TuiInputView {
             .max(1)
     }
 
-    // ── Scroll ────────────────────────────────────────────────────────────────
-
-    fn scroll_to_cursor(&mut self, visible_rows: u32, ctx: &AppContext) {
+    /// The cursor's visual row in the char-cell soft-wrap map (0-based).
+    fn cursor_visual_row(&self, ctx: &AppContext) -> u32 {
         let cursor_offset = self.cursor_offset(ctx);
         let inner = self.model.as_ref(ctx);
         let render = inner.render_state().as_ref(ctx);
         // `offset_to_softwrap_point` is 0-based (see `char_cell_offset_to_softwrap_point`),
         // while the cursor is a 1-based `CharOffset`, so convert by subtracting 1.
         let cursor_char_index = CharOffset::from(cursor_offset.as_usize().saturating_sub(1));
-        let pt = render.offset_to_softwrap_point(cursor_char_index);
-        let cursor_row = pt.row();
+        render.offset_to_softwrap_point(cursor_char_index).row()
+    }
+
+    /// Total visual rows the input occupies, including the "phantom" row the
+    /// cursor wraps onto when a logical line exactly fills the terminal width
+    /// (deferred wrap). [`Self::visual_line_count`] never counts that row — the
+    /// soft-wrap map only adds a row once a character actually overflows — but
+    /// the cursor legitimately sits there, so sizing and scrolling must include
+    /// it or the viewport scrolls to a row that is never rendered.
+    fn total_visual_rows(&self, ctx: &AppContext) -> u32 {
+        self.visual_line_count(ctx)
+            .max(self.cursor_visual_row(ctx) + 1)
+    }
+
+    // ── Scroll ────────────────────────────────────────────────────────────────────
+
+    fn scroll_to_cursor(&mut self, total_rows: u32, visible_rows: u32, ctx: &AppContext) {
+        let cursor_row = self.cursor_visual_row(ctx);
+
+        // A stale offset can point past the last remaining row (e.g. after a
+        // deletion shrank the content); clamp it so the visible window always
+        // overlaps real rows before following the cursor.
+        self.scroll_offset = self
+            .scroll_offset
+            .min(total_rows.saturating_sub(visible_rows));
 
         if cursor_row < self.scroll_offset {
             self.scroll_offset = cursor_row;
@@ -890,7 +913,7 @@ impl TuiInputView {
     /// top), clamped to `[0, max_scroll]`. Independent of the cursor, so callers
     /// must not follow it with `scroll_to_cursor`.
     fn scroll_by(&mut self, rows: isize, ctx: &AppContext) {
-        let lines = self.visual_line_count(ctx);
+        let lines = self.total_visual_rows(ctx);
         let visible_rows = cmp::min(lines, self.max_visible_rows).max(1);
         let max_scroll = lines.saturating_sub(visible_rows) as isize;
         let new_offset = (self.scroll_offset as isize + rows).clamp(0, max_scroll);
@@ -1128,14 +1151,28 @@ impl TuiInputElement {
             && cursor_visual_row < self.scroll_offset + visible_rows;
 
         let rows_with_offsets = build_visual_rows_with_offsets(&self.text, terminal_width);
+        // The cursor sits one row past the last text row when a logical line
+        // exactly fills the width (deferred wrap); that phantom row is part of
+        // the layout, so include it when windowing the visible rows.
+        let total_rows = rows_with_offsets.len().max(cursor_visual_row as usize + 1);
         let visible_start = self.scroll_offset as usize;
-        let visible_end =
-            (self.scroll_offset as usize + visible_rows as usize).min(rows_with_offsets.len());
-        let visible_rows_slice: Vec<(String, usize)> = if visible_start < rows_with_offsets.len() {
-            rows_with_offsets[visible_start..visible_end].to_vec()
+        let visible_end = (visible_start + visible_rows as usize).min(total_rows);
+        let text_rows_end = visible_end.min(rows_with_offsets.len());
+        let mut visible_rows_slice: Vec<(String, usize)> = if visible_start < text_rows_end {
+            rows_with_offsets[visible_start..text_rows_end].to_vec()
         } else {
-            vec![(String::new(), 0)]
+            Vec::new()
         };
+        // Pad any phantom rows in the window with empty text at the buffer's
+        // end offset, so the cursor's row renders and selection math stays
+        // in bounds.
+        let end_char_offset = self.text.chars().count();
+        while visible_rows_slice.len() < visible_end.saturating_sub(visible_start) {
+            visible_rows_slice.push((String::new(), end_char_offset));
+        }
+        if visible_rows_slice.is_empty() {
+            visible_rows_slice.push((String::new(), 0));
+        }
 
         // Selection spans per visible row. Selection offsets are char indices;
         // terminal highlighting works in display columns, so convert via each
@@ -1209,9 +1246,22 @@ impl TuiInputElement {
         // so the buffer row under the pointer is `scroll_offset + row_in_view`
         // (floored at the first row).
         let visual_row = (i64::from(self.scroll_offset) + row_in_view).max(0) as u32;
-        // ...and capped at the last real visual row, so a drag below the text
-        // resolves to the buffer's end rather than past it.
+        // The rendered layout can include a "phantom" row one past the soft-wrap
+        // map's last row when the final logical line exactly fills the terminal
+        // width (deferred wrap; see `build`). The map has no entry for it —
+        // every cell on it is the end-of-buffer gap — so resolve it directly
+        // instead of clamping into the preceding real row (which would map the
+        // click near that row's start).
         let last_row = render.max_line().as_u32().max(1).saturating_sub(1);
+        let end_char_count = self.text.chars().count();
+        let end_gap_row = render
+            .offset_to_softwrap_point(CharOffset::from(end_char_count))
+            .row();
+        if visual_row > last_row && end_gap_row > last_row {
+            return CharOffset::from(end_char_count + 1);
+        }
+        // ...otherwise cap at the last real visual row, so a drag below the
+        // text resolves to the buffer's end rather than past it.
         let visual_row = visual_row.min(last_row);
 
         // Column within that row, in display cells (0 is the input's left edge).
@@ -1296,7 +1346,12 @@ impl TuiElement for TuiInputElement {
             cc.set_terminal_width(terminal_width);
         }
         let visual_line_count = render_state.as_ref(app).max_line().as_u32().max(1);
-        let visible_rows = cmp::min(visual_line_count, self.max_visible_rows);
+        // Include the "phantom" row the cursor wraps onto when a logical line
+        // exactly fills the width (deferred wrap): `max_line` doesn't count it,
+        // but the input must grow so the cursor's row is rendered.
+        let (cursor_row, _) = char_cell_cursor_pos(&self.text, self.cursor_offset, terminal_width);
+        let total_rows = visual_line_count.max(cursor_row + 1);
+        let visible_rows = cmp::min(total_rows, self.max_visible_rows);
 
         self.build(terminal_width, visible_rows);
         let content_size = self.column.layout(constraint, ctx, app);
