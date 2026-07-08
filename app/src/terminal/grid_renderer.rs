@@ -1887,19 +1887,18 @@ fn render_image(
 /// accordingly.  Returns true if the character was rendered here, or false
 /// if it should be rendered with a font glyph.
 fn native_glyph_for_cell(cell: &Cell) -> Option<NativeGlyphType> {
-    // Procedurally render solid box-drawing line glyphs (U+2500..=U+257F) as
-    // cell-filling rects so they tile seamlessly, matching how the block
-    // elements below are already drawn. Block elements (U+2580+) keep their
-    // existing handling in the match below, and unsupported line glyphs
-    // (double/dashed/rounded/diagonal) fall through to the font.
-    if FeatureFlag::BoxDrawingGlyphs.is_enabled()
-        && matches!(cell.c as u32, 0x2500..=0x257F)
-        && warpui::box_drawing::is_supported(cell.c)
-    {
-        return Some(NativeGlyphType::BoxDrawing(cell.c));
-    }
-
     let glyph_type = match cell.c {
+        // Solid box-drawing line glyphs (U+2500..=U+257F) render as cell-filling
+        // rects via `warpui::box_drawing`, so they tile seamlessly like the block
+        // elements below. Block elements (U+2580+) keep their existing handling,
+        // and unsupported line glyphs (double/dashed/rounded/diagonal) fall
+        // through to the font.
+        c if FeatureFlag::BoxDrawingGlyphs.is_enabled()
+            && matches!(c as u32, 0x2500..=0x257F)
+            && warpui::box_drawing::is_supported(c) =>
+        {
+            NativeGlyphType::BoxDrawing(c)
+        }
         // Unicode upper half block (U+2580).
         '▀' => NativeGlyphType::UpperHalfBlock,
         // Unicode bottom-aligned fractional block characters (U+2581 - U+2588).

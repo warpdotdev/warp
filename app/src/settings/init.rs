@@ -190,6 +190,7 @@ pub fn init(
             GPUPowerPreference::default()
         };
         config.backend_preference = backend_preference;
+        config.box_drawing_glyphs = FeatureFlag::BoxDrawingGlyphs.is_enabled();
     });
 
     ctx.subscribe_to_model(&FontSettings::handle(ctx), |font_settings, event, ctx| {

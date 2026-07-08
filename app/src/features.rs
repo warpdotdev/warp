@@ -10,10 +10,6 @@ pub fn init_feature_flags() {
         flag.set_enabled(true);
     }
     mark_initialized();
-
-    // Bridge feature flags that need to be read from `warpui_core` (which does
-    // not depend on the feature-flag crate) into their process-global toggles.
-    warpui_core::box_drawing::set_enabled(FeatureFlag::BoxDrawingGlyphs.is_enabled());
 }
 
 /// Returns all feature flags which should be enabled in the current channel.

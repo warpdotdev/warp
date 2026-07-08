@@ -27,29 +27,15 @@
 //! partitions the cell so the vertical band owns the center and the horizontal
 //! arms are clipped to lie strictly outside it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use smallvec::SmallVec;
 
 use crate::geometry::rect::RectF;
 use crate::geometry::vector::vec2f;
 
-/// Process-global toggle for the procedural box-drawing renderer.
-///
-/// `warpui_core` does not depend on the feature-flag crate, so the app sets this
-/// once at startup from `FeatureFlag::BoxDrawingGlyphs` (see
-/// `app/src/features.rs`). The paint path reads it via [`is_enabled`].
-static ENABLED: AtomicBool = AtomicBool::new(false);
-
-/// Enables or disables procedural box-drawing rendering process-wide.
-pub fn set_enabled(enabled: bool) {
-    ENABLED.store(enabled, Ordering::Relaxed);
-}
-
-/// Whether procedural box-drawing rendering is currently enabled.
-pub fn is_enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
-}
+// Enablement is carried on [`crate::rendering::Config::box_drawing_glyphs`]
+// (set by the app from `FeatureFlag::BoxDrawingGlyphs`) and read at paint time
+// via `scene.rendering_config()`, so this module stays a pure geometry helper
+// with no global state.
 
 /// A cell-local rectangle for a box-drawing/block glyph.
 ///

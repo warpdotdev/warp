@@ -391,6 +391,7 @@ fn layout_line_with_offset(
             create_attributed_string(text, style_runs, font_db, line_style, None);
         let line = CTLine::new_with_attributed_string(attributed_string.as_concrete_TypeRef());
         let utf16_offset_to_char_idx = build_utf16_lookup(text);
+        let chars: Vec<char> = text.chars().collect();
         line_from_ct_line(
             line,
             line_style,
@@ -398,6 +399,7 @@ fn layout_line_with_offset(
             char_offset,
             Some(clip_config),
             &utf16_offset_to_char_idx,
+            &chars,
         )
     }
 }
@@ -661,6 +663,7 @@ pub fn layout_text(
         let num_lines = lines.len();
 
         let utf16_offset_to_char_idx = build_utf16_lookup(text);
+        let frame_chars: Vec<char> = text.chars().collect();
 
         frame_lines.append(
             &mut lines
@@ -726,6 +729,7 @@ pub fn layout_text(
                             // Only apply clipping to the last line in the frame.
                             is_last_line.then_some(ClipConfig::default()),
                             &utf16_offset_to_char_idx,
+                            &frame_chars,
                         )
                     };
 
@@ -742,6 +746,7 @@ pub fn layout_text(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn line_from_ct_line(
     line: CTLine,
     line_style: LineStyle,
@@ -749,6 +754,10 @@ fn line_from_ct_line(
     char_offset: usize,
     clip_config: Option<ClipConfig>,
     utf16_offset_to_char_idx: &[usize],
+    // The characters of the text this `CTLine` was laid out from, indexed by
+    // `char_index`, used to populate `Glyph::character` for procedural
+    // box-drawing rendering.
+    chars: &[char],
 ) -> Line {
     let mut runs = Vec::with_capacity(line.glyph_runs().len() as usize);
     let typographic_bounds = line.get_typographic_bounds();
@@ -783,9 +792,7 @@ fn line_from_ct_line(
                 position_along_baseline: vec2f(position.x as f32, position.y as f32),
                 index: char_offset + char_index,
                 width: advance.width as f32,
-                // TODO(CORE): thread the source char through the CoreText layout
-                // path to enable procedural box-drawing rendering on mac.
-                character: None,
+                character: chars.get(*char_index).copied(),
             }
         })
         .collect_vec();

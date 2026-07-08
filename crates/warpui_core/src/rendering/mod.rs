@@ -73,6 +73,11 @@ pub struct Config {
     pub gpu_power_preference: GPUPowerPreference,
 
     pub backend_preference: Option<GraphicsBackend>,
+
+    /// When `true`, supported box-drawing and block glyphs are rendered
+    /// procedurally as cell-filling rects (see [`crate::box_drawing`]) instead
+    /// of from the font. Set from the `BoxDrawingGlyphs` feature flag.
+    pub box_drawing_glyphs: bool,
 }
 
 #[derive(Clone, Debug, Default)]

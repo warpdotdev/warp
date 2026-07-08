@@ -663,12 +663,12 @@ impl TextLayoutSystem {
 
             // A glyph_id of 0 implies that no glyph was found for this character.
             if glyph.glyph_id == 0 {
-                if let Some(ch) = Self::char_for_glyph(&glyph, text) {
+                if let Some(ch) = Self::char_for_glyph(&glyph, text, line_glyph_start_index) {
                     chars_with_missing_glyphs.push(ch);
                 }
             }
 
-            let character = Self::char_for_glyph(&glyph, text);
+            let character = Self::char_for_glyph(&glyph, text, line_glyph_start_index);
             run_builder.push_glyph(glyph, character, |id| {
                 *self
                     .font_id_map
@@ -702,13 +702,22 @@ impl TextLayoutSystem {
         }
     }
 
-    fn char_for_glyph(glyph: &LayoutGlyph, text: &str) -> Option<char> {
-        if !text.is_char_boundary(glyph.start) {
+    fn char_for_glyph(
+        glyph: &LayoutGlyph,
+        text: &str,
+        paragraph_byte_offset: usize,
+    ) -> Option<char> {
+        // `glyph.start` is a byte offset relative to the paragraph currently
+        // being shaped, while `text` is the full text, so add the paragraph's
+        // starting byte offset before indexing. Without this, glyphs after a
+        // hard newline would resolve to the wrong source character.
+        let byte_index = paragraph_byte_offset + glyph.start;
+        if !text.is_char_boundary(byte_index) {
             log::warn!("Expected glyph start to be a char boundary");
             return None;
         }
 
-        text[glyph.start..].chars().next()
+        text[byte_index..].chars().next()
     }
 
     /// Produces an [`AttrsList`] to layout text given a list of `style_runs` and the `text` the
