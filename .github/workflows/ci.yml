@@ -50,7 +50,7 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       (!startsWith(github.event.pull_request.head.ref, 'repo-sync/') || contains(github.event.pull_request.labels.*.name, 'repo-sync:conflict')) &&
-      github.repository == 'warpdotdev/warp'
+      github.repository_owner == 'warpdotdev'
     outputs:
       affects-database-schema: ${{ github.ref == 'master' || steps.filter.outputs.affects-database-schema }}
       affects-rust-sources: ${{ github.ref == 'master' || steps.filter.outputs.affects-rust-sources }}

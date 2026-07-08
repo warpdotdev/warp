@@ -18,7 +18,7 @@ jobs:
   check:
     name: Verify PR base is the default branch
     runs-on: ubuntu-slim
-    if: github.repository == 'warpdotdev/warp'
+    if: github.repository_owner == 'warpdotdev'
     steps:
       - name: Fail if merging a repo-sync branch into another repo-sync branch
         env:
