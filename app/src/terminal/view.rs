@@ -12718,7 +12718,7 @@ impl TerminalView {
                     // Terminate this shell session so that it doesn't come
                     // back when we restore sessions after the relaunch.
                     self.shutdown_pty(ctx);
-                    autoupdate::initiate_relaunch_for_update(ctx);
+                    autoupdate::initiate_relaunch_for_update_with_warning(ctx);
                 } else {
                     log::warn!("Got a FinishUpdate event with non-matching update id!");
                 }

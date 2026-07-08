@@ -18303,7 +18303,7 @@ impl Workspace {
 
     fn apply_update(&mut self, ctx: &mut ViewContext<Self>) {
         if let Ok(autoupdate::ReadyForRelaunch::Yes) = autoupdate::apply_update(self, ctx) {
-            autoupdate::initiate_relaunch_for_update(ctx);
+            autoupdate::initiate_relaunch_for_update_with_warning(ctx);
         }
         self.close_tab_bar_overflow_menu(ctx);
     }
