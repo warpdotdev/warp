@@ -390,8 +390,8 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
     assert!(
         !preferences.is_cloud_runnable_oz_model_id(&LLMId::from("custom-router:local:my-router"))
     );
-    // Cloud/team custom router — treated as runnable (server-synced) pending
-    // confirmation of the Oz `start_agent` server contract.
+    // Cloud/team custom router — cloud-runnable: the server accepts the
+    // `custom-router:cloud:` prefix at spawn and resolves it server-side.
     assert!(
         preferences.is_cloud_runnable_oz_model_id(&LLMId::from("custom-router:cloud:team-router"))
     );

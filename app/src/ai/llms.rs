@@ -998,9 +998,11 @@ impl LLMPreferences {
     /// are not in the server's accepted Oz model-slug namespace, so forwarding
     /// one makes the cloud `start_agent` reject the spawn.
     ///
-    /// TODO: cloud/team custom routers (`custom-router:cloud:*`) are
-    /// server-synced and may be cloud-runnable; they are treated as runnable
-    /// here pending confirmation of the Oz `start_agent` server contract.
+    /// Cloud/team custom routers (`custom-router:cloud:*`) ARE cloud-runnable:
+    /// the server's spawn-time model_id validation explicitly allows the
+    /// `custom-router:cloud:` prefix, and each cloud AI request re-resolves the
+    /// router entirely server-side (no local config or credentials needed), so
+    /// they are treated as runnable here.
     pub fn is_cloud_runnable_oz_model_id(&self, id: &LLMId) -> bool {
         !(self.custom_llm_info_for_id(id).is_some()
             || custom_model_routers::is_local_custom_router_id(id.as_str()))
