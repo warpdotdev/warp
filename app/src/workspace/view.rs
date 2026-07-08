@@ -6,7 +6,6 @@ pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
 pub(crate) mod free_ai_removal_modal;
-pub(crate) mod free_tier_limit_hit_modal;
 pub mod global_search;
 pub(crate) mod launch_modal;
 pub(crate) mod left_panel;
@@ -208,6 +207,7 @@ use crate::ai::blocklist::{
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 #[cfg(target_family = "wasm")]
 use crate::ai::conversation_details_panel::ConversationDetailsPanel;
+use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
@@ -215,7 +215,6 @@ use crate::ai::facts::view::AIFactPage;
 use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
-use crate::ai::{conversation_utils, AIRequestUsageModel};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
 use crate::ai_assistant::{AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR};
@@ -508,9 +507,6 @@ use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
 use crate::workspace::view::free_ai_removal_modal::{
     FreeAiRemovalModal, FreeAiRemovalModalEvent, FreeAiRemovalModalTelemetryEvent,
     FreeAiRemovalModalVariant,
-};
-use crate::workspace::view::free_tier_limit_hit_modal::{
-    FreeTierLimitHitModal, FreeTierLimitHitModalEvent,
 };
 use crate::workspace::view::global_search::view::GlobalSearchEntryFocus;
 use crate::workspace::view::launch_modal::{LaunchModal, LaunchModalEvent, OzLaunchSlide};
@@ -1092,8 +1088,6 @@ pub struct Workspace {
     build_plan_migration_modal: ViewHandle<BuildPlanMigrationModal>,
     codex_modal: ViewHandle<CodexModal>,
     cloud_agent_capacity_modal: ViewHandle<CloudAgentCapacityModal>,
-    free_tier_limit_hit_modal: ViewHandle<FreeTierLimitHitModal>,
-    free_tier_limit_check_triggered: bool,
     free_ai_removal_modal: ViewHandle<FreeAiRemovalModal>,
     /// Second instance of the free-AI-removal modal, opened on demand when a
     /// Free user activates Prompt Suggestions while out of credits.
@@ -2937,11 +2931,6 @@ impl Workspace {
             me.handle_cloud_agent_capacity_modal_event(event, ctx);
         });
 
-        let free_tier_limit_hit_modal = ctx.add_typed_action_view(FreeTierLimitHitModal::new);
-        ctx.subscribe_to_view(&free_tier_limit_hit_modal, |me, _, event, ctx| {
-            me.handle_free_tier_limit_modal_event(event, ctx);
-        });
-
         let free_ai_removal_modal = ctx.add_typed_action_view(|ctx| {
             FreeAiRemovalModal::new(FreeAiRemovalModalVariant::Notice, ctx)
         });
@@ -3465,8 +3454,6 @@ impl Workspace {
             notification_toast_stack,
             codex_modal,
             cloud_agent_capacity_modal,
-            free_tier_limit_hit_modal,
-            free_tier_limit_check_triggered: false,
             free_ai_removal_modal,
             prompt_suggestions_unavailable_modal,
             lightbox_view: None,
@@ -17045,9 +17032,6 @@ impl Workspace {
             pane_group::Event::ShowCloudAgentCapacityModal { variant } => {
                 self.open_cloud_agent_capacity_modal(*variant, ctx);
             }
-            pane_group::Event::FreeTierLimitCheckTriggered => {
-                self.free_tier_limit_check_triggered = true;
-            }
         }
     }
 
@@ -19220,68 +19204,6 @@ impl Workspace {
         ctx.focus(&self.cloud_agent_capacity_modal);
         ctx.notify();
         send_telemetry_from_ctx!(TelemetryEvent::CloudAgentCapacityModalOpened, ctx);
-    }
-
-    fn handle_free_tier_limit_modal_event(
-        &mut self,
-        event: &FreeTierLimitHitModalEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            FreeTierLimitHitModalEvent::MaybeOpen => {
-                if self.free_tier_limit_check_triggered
-                    && self.check_and_open_free_tier_limit_modal(ctx)
-                {
-                    self.free_tier_limit_check_triggered = false;
-                }
-            }
-            FreeTierLimitHitModalEvent::Close => {
-                self.current_workspace_state
-                    .is_free_tier_limit_hit_modal_open = false;
-                GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    if let Err(e) = settings
-                        .free_tier_limit_hit_modal_dismissed
-                        .set_value(true, ctx)
-                    {
-                        log::warn!("Failed to mark free tier limit hit modal as dismissed: {e}");
-                    }
-                });
-                self.focus_active_tab(ctx);
-                ctx.notify();
-            }
-        }
-    }
-
-    pub fn check_and_open_free_tier_limit_modal(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let is_free_tier = !UserWorkspaces::as_ref(ctx)
-            .current_workspace()
-            .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan());
-
-        if !is_free_tier {
-            return false;
-        }
-
-        if AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx) {
-            return false;
-        }
-
-        if self
-            .current_workspace_state
-            .is_free_tier_limit_hit_modal_open
-            || *GeneralSettings::as_ref(ctx).free_tier_limit_hit_modal_dismissed
-        {
-            return false;
-        }
-
-        self.current_workspace_state
-            .is_free_tier_limit_hit_modal_open = true;
-
-        send_telemetry_from_ctx!(TelemetryEvent::FreeTierLimitHitInterstitialDisplayed, ctx);
-
-        ctx.focus(&self.free_tier_limit_hit_modal);
-        ctx.notify();
-
-        true
     }
 
     fn ask_ai_assistant(&mut self, ask_type: &AskAIType, ctx: &mut ViewContext<Self>) {
@@ -27162,13 +27084,6 @@ impl View for Workspace {
                 .is_cloud_agent_capacity_modal_open
         {
             stack.add_child(ChildView::new(&self.cloud_agent_capacity_modal).finish());
-        }
-
-        if self
-            .current_workspace_state
-            .is_free_tier_limit_hit_modal_open
-        {
-            stack.add_child(ChildView::new(&self.free_tier_limit_hit_modal).finish());
         }
 
         if let Some(lightbox_view) = &self.lightbox_view {
