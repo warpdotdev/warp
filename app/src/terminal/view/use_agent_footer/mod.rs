@@ -47,7 +47,6 @@ use warpui::{
 };
 
 use super::{RichContentInsertionPosition, TerminalAction, TerminalView};
-use crate::ai::blocklist::agent_view::agent_view_bg_fill;
 use crate::ai::blocklist::block::cli_controller::CLISubagentEvent;
 use crate::cmd_or_ctrl_shift;
 use crate::code_review::diff_state::GitDeltaPreference;
@@ -1374,8 +1373,6 @@ impl View for UseAgentToolbar {
             if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
                 container = container.with_background(bg_color);
             }
-        } else if terminal_model.block_list().agent_view_state().is_inline() {
-            container = container.with_background(agent_view_bg_fill(app));
         }
 
         container.finish()

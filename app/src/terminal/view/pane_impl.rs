@@ -22,7 +22,6 @@ use super::{Event, PaneConfiguration, TerminalAction, TerminalViewState, Viewer}
 use crate::ai::agent::conversation::{
     AIConversation, ConversationStatus, ServerAIConversationMetadata,
 };
-use crate::ai::blocklist::agent_view::agent_view_bg_fill;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::parent_conversation_navigation_card;
 use crate::ai::blocklist::orchestration_topology::orchestration_aware_conversation_status;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -586,19 +585,11 @@ impl TerminalView {
             header_ctx.draggable_state.clone(),
             app,
         );
-        let header = self.maybe_add_parent_navigation_card(
+        self.maybe_add_parent_navigation_card(
             draggable_header,
             parent_conversation_header_card,
             app,
-        );
-
-        if is_fullscreen_agent_view {
-            Container::new(header)
-                .with_background(agent_view_bg_fill(app))
-                .finish()
-        } else {
-            header
-        }
+        )
     }
 }
 
