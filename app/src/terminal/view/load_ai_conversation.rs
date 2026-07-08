@@ -157,6 +157,26 @@ impl ConversationRestorationInNewPaneType {
             Self::Startup { .. } => None,
         }
     }
+
+    /// Returns the working directory the newly-created pane's shell should start
+    /// in when restoring this conversation.
+    ///
+    /// For a forked conversation we start the shell in the conversation's
+    /// *current* (latest) working directory so the fork continues where the
+    /// source conversation left off, rather than the directory it was originally
+    /// started in (which is what `initial_working_directory` returns). If no
+    /// later exchange recorded a working directory we fall back to the initial
+    /// one. Other restoration modes keep using the initial working directory.
+    pub fn startup_working_directory(&self) -> Option<String> {
+        match self {
+            Self::Forked { conversation, .. } => conversation
+                .current_working_directory()
+                .or_else(|| conversation.initial_working_directory()),
+            Self::Startup { .. } | Self::Historical { .. } | Self::HistoricalCLIAgent { .. } => {
+                self.initial_working_directory()
+            }
+        }
+    }
 }
 
 /// Parameters needed for creating and inserting AI blocks
@@ -654,7 +674,9 @@ impl TerminalView {
             conversation_restoration.should_show_restore_context_hint();
 
         // Save the target working directory so we can detect when the dir doesn't exist on this machine.
-        let target_dir = conversation_restoration.initial_working_directory();
+        // Use the same directory the new pane's shell starts in (the latest one for forks) so the
+        // "couldn't find original conversation directory" hint stays consistent with the spawned shell.
+        let target_dir = conversation_restoration.startup_working_directory();
 
         // Extract the active conversation ID if agent view was open (only for startup restoration)
         let active_conversation_id_to_restore = match &conversation_restoration {
