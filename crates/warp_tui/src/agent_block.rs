@@ -29,10 +29,10 @@ use warpui_core::{
 
 use super::tui_file_edits_view::TuiFileEditsView;
 use crate::agent_block_sections::{
-    render_input_section, render_plain_text_section, render_thinking_section,
-    render_tool_call_section,
+    render_fallback_tool_call_section, render_input_section, render_plain_text_section,
+    render_thinking_section,
 };
-use crate::tool_call_labels::CommandBlockState;
+use crate::tool_call_labels::{CommandBlockState, ResolvedCommandBlock};
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -248,17 +248,18 @@ impl TuiAIBlock {
         self.action_ids.contains(action_id)
     }
 
-    /// Resolves the ground-truth state of the terminal block backing a
-    /// shell-command tool call. When a block exists it supersedes the stored
-    /// action status/result for execution states (mirroring the GUI's
-    /// `RequestedCommandView`, which derives the row's icon and expandability
-    /// from the block whenever one exists); the stored result only covers
-    /// rows without a local block (e.g. viewers, restored sessions).
-    fn command_block_state(
+    /// Resolves the terminal block backing a shell-command tool call into
+    /// its ground-truth state and executed command. When a block exists it
+    /// supersedes the stored action status/result for execution states
+    /// (mirroring the GUI's `RequestedCommandView`, which derives the row's
+    /// icon and expandability from the block whenever one exists); the
+    /// stored result only covers rows without a local block (e.g. viewers,
+    /// restored sessions).
+    fn resolve_command_block(
         &self,
         action: &AIAgentAction,
         status: Option<&AIActionStatus>,
-    ) -> Option<CommandBlockState> {
+    ) -> Option<ResolvedCommandBlock> {
         if !action.action.is_request_command_output() {
             return None;
         }
@@ -281,12 +282,22 @@ impl TuiAIBlock {
         let block = block_list
             .block_for_ai_action_id(&action.id)
             .or_else(|| snapshot_block_id.and_then(|id| block_list.block_with_id(id)))?;
-        Some(if block.finished() {
+        // The block's command is the one actually executed (the streamed
+        // command can be edited before acceptance), so surface it for display.
+        let command = block
+            .command_with_secrets_obfuscated(false)
+            .trim()
+            .to_owned();
+        let state = if block.finished() {
             CommandBlockState::Finished {
                 exit_code: block.exit_code(),
             }
         } else {
             CommandBlockState::Running
+        };
+        Some(ResolvedCommandBlock {
+            command: (!command.is_empty()).then_some(command),
+            state,
         })
     }
 
@@ -400,12 +411,12 @@ impl TuiAIBlock {
                     Some(view) => TuiContainer::new(Box::new(view.render_child())).finish(),
                     None => {
                         let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        let block_state = self.command_block_state(action, status.as_ref());
-                        render_tool_call_section(
+                        let block = self.resolve_command_block(action, status.as_ref());
+                        render_fallback_tool_call_section(
                             action,
                             status.as_ref(),
                             output_streaming,
-                            block_state,
+                            block.as_ref(),
                             app,
                         )
                     }

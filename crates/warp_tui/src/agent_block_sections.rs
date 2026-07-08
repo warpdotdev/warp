@@ -14,7 +14,7 @@ use warpui_core::AppContext;
 
 use crate::agent_block::ThinkingBlockStates;
 use crate::tool_call_labels::{
-    tool_call_display_state, tool_call_glyph, tool_call_label, CommandBlockState,
+    tool_call_display_state, tool_call_glyph, tool_call_label, ResolvedCommandBlock,
     ToolCallDisplayState,
 };
 use crate::tui_builder::TuiUiBuilder;
@@ -52,24 +52,26 @@ pub(crate) fn render_plain_text_section(text: &str, app: &AppContext) -> Box<dyn
         .finish()
 }
 
-/// Renders a status row for an agent tool call: a colored state glyph in a
-/// two-cell gutter (mirroring the GUI's inline action icons), then per-tool,
-/// per-state label text that wraps with a hanging indent under itself. State
-/// lives in the glyph, so labels keep the normal foreground except in-flight
-/// rows, which stay dim until execution starts. `output_streaming` marks tool
-/// calls whose arguments are still streaming in (see
-/// `ToolCallDisplayState::Constructing`); `block_state` carries the terminal
-/// block's ground truth for shell-command tool calls (see
-/// `CommandBlockState`).
-pub(crate) fn render_tool_call_section(
+/// Renders the fallback plain-text status row for an agent tool call, used
+/// for every tool call without a richer registered child view (the GUI's
+/// view-based action rendering has no TUI equivalent for these yet): a
+/// colored state glyph in a two-cell gutter (mirroring the GUI's inline
+/// action icons), then per-tool, per-state label text that wraps with a
+/// hanging indent under itself. State lives in the glyph, so labels keep the
+/// normal foreground except in-flight rows, which stay dim until execution
+/// starts. `output_streaming` marks tool calls whose arguments are still
+/// streaming in (see `ToolCallDisplayState::Constructing`); `block` carries
+/// the terminal block's ground truth for shell-command tool calls (see
+/// `ResolvedCommandBlock`).
+pub(crate) fn render_fallback_tool_call_section(
     action: &AIAgentAction,
     status: Option<&AIActionStatus>,
     output_streaming: bool,
-    block_state: Option<CommandBlockState>,
+    block: Option<&ResolvedCommandBlock>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    let state = tool_call_display_state(status, output_streaming, block_state);
+    let state = tool_call_display_state(status, output_streaming, block.map(|block| block.state));
     let glyph_style = match state {
         ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
             builder.dim_text_style()
@@ -91,7 +93,7 @@ pub(crate) fn render_tool_call_section(
         | ToolCallDisplayState::Failed
         | ToolCallDisplayState::Cancelled => builder.primary_text_style(),
     };
-    let label = tool_call_label(action, status, output_streaming, block_state);
+    let label = tool_call_label(action, status, output_streaming, block);
     TuiFlex::row()
         .child(
             TuiText::new(format!("{} ", tool_call_glyph(state)))

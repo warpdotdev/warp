@@ -24,7 +24,7 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext, ViewHandle};
 
 use super::{TuiAIBlock, TuiAIBlockSection};
-use crate::agent_block_sections::render_tool_call_section;
+use crate::agent_block_sections::render_fallback_tool_call_section;
 use crate::test_fixtures::{add_test_action_model, TestHostView};
 
 #[test]
@@ -270,7 +270,7 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
             let render = |action: &AIAgentAction, status: Option<&AIActionStatus>| {
                 let mut presenter = TuiPresenter::new();
                 presenter.present_element(
-                    render_tool_call_section(action, status, false, None, app_ctx),
+                    render_fallback_tool_call_section(action, status, false, None, app_ctx),
                     TuiRect::new(0, 0, 40, 1),
                     app_ctx,
                 )

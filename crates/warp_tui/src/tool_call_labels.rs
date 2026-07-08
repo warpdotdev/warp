@@ -26,6 +26,18 @@ pub(crate) enum CommandBlockState {
     Finished { exit_code: ExitCode },
 }
 
+/// A shell-command tool call's terminal block as resolved by the caller: its
+/// execution state plus the command it actually ran. The block's command
+/// supersedes the streamed one, which the user may have edited before
+/// accepting.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedCommandBlock {
+    /// The block's command, when it has one; `None` while the block's
+    /// command grid is still empty.
+    pub(crate) command: Option<String>,
+    pub(crate) state: CommandBlockState,
+}
+
 /// Longest rendered length for interpolated values (commands, queries, paths)
 /// so tool-call rows stay scannable one-liners.
 const MAX_INLINE_LEN: usize = 80;
@@ -116,13 +128,13 @@ pub(crate) fn tool_call_label(
     action: &AIAgentAction,
     status: Option<&AIActionStatus>,
     output_streaming: bool,
-    block_state: Option<CommandBlockState>,
+    block: Option<&ResolvedCommandBlock>,
 ) -> String {
-    let state = tool_call_display_state(status, output_streaming, block_state);
+    let state = tool_call_display_state(status, output_streaming, block.map(|block| block.state));
     let result = status
         .and_then(AIActionStatus::finished_result)
         .map(|result| &result.result);
-    let label = label_for_action(&action.action, state, result, block_state);
+    let label = label_for_action(&action.action, state, result, block);
     match state {
         State::AwaitingApproval => format!("{label} (awaiting approval)"),
         State::Constructing
@@ -145,11 +157,18 @@ fn label_for_action(
     action: &AIAgentActionType,
     state: ToolCallDisplayState,
     result: Option<&AIAgentActionResultType>,
-    block_state: Option<CommandBlockState>,
+    block: Option<&ResolvedCommandBlock>,
 ) -> String {
+    let block_state = block.map(|block| block.state);
     match action {
         AIAgentActionType::RequestCommandOutput { command, .. } => {
-            let cmd = single_line(command);
+            // The streamed command can be edited before acceptance, so
+            // prefer the executed command from the finished result or the
+            // resolved block over the original suggestion.
+            let executed = result
+                .and_then(AIAgentActionResultType::command_str)
+                .or_else(|| block.and_then(|block| block.command.as_deref()));
+            let cmd = single_line(executed.unwrap_or(command));
             match state {
                 State::Constructing => "Generating command…".to_owned(),
                 State::Pending | State::AwaitingApproval => format!("Run `{cmd}`"),
