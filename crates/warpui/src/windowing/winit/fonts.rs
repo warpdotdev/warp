@@ -668,7 +668,8 @@ impl TextLayoutSystem {
                 }
             }
 
-            run_builder.push_glyph(glyph, |id| {
+            let character = Self::char_for_glyph(&glyph, text);
+            run_builder.push_glyph(glyph, character, |id| {
                 *self
                     .font_id_map
                     .read()

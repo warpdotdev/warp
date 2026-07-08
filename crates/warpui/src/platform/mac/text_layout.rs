@@ -783,6 +783,9 @@ fn line_from_ct_line(
                 position_along_baseline: vec2f(position.x as f32, position.y as f32),
                 index: char_offset + char_index,
                 width: advance.width as f32,
+                // TODO(CORE): thread the source char through the CoreText layout
+                // path to enable procedural box-drawing rendering on mac.
+                character: None,
             }
         })
         .collect_vec();

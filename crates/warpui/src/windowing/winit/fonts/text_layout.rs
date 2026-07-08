@@ -61,6 +61,7 @@ impl<'a> RunBuilder<'a> {
     pub(super) fn push_glyph<F: FnOnce(&fontdb::ID) -> FontId>(
         &mut self,
         glyph: LayoutGlyph,
+        character: Option<char>,
         font_id_fn: F,
     ) {
         let font_id = font_id_fn(&glyph.font_id);
@@ -87,6 +88,7 @@ impl<'a> RunBuilder<'a> {
             position_along_baseline: vec2f(glyph.x, glyph.y),
             index: glyph_char_index,
             width: glyph.w,
+            character,
         });
 
         self.current_run_width += glyph.w;

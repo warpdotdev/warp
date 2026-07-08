@@ -1,0 +1,45 @@
+Box-drawing / block-element rendering demo.
+
+Run `cat` on this file inside the Warp terminal (with the `BoxDrawingGlyphs`
+feature enabled) and zoom in: the LIGHT and HEAVY box-drawing strokes and the
+block elements below should render as seamless, cell-filling shapes with no thin
+gaps between vertically-adjacent cells. Double-line, dashed, rounded and diagonal
+glyphs are not yet handled procedurally and fall back to the font.
+
+LIGHT BOX + JOINS
+┌───────┬───────┐   ┌─┬─┬─┬─┬─┬─┐
+│ cell  │ cell  │   ├─┼─┼─┼─┼─┼─┤
+├───────┼───────┤   ├─┼─┼─┼─┼─┼─┤
+│ cell  │ cell  │   └─┴─┴─┴─┴─┴─┘
+└───────┴───────┘
+HEAVY BOX
+┏━━━━━━━┳━━━━━━━┓   ┏━┳━┳━┳━┳━┳━┓
+┃ cell  ┃ cell  ┃   ┣━╋━╋━╋━╋━╋━┫
+┣━━━━━━━╋━━━━━━━┫   ┗━┻━┻━┻━┻━┻━┛
+┗━━━━━━━┻━━━━━━━┛
+MIXED LIGHT/HEAVY JOINS
+┌───┰───┐   ┏━━━┯━━━┓
+┠───╂───┨   ┣━━━┿━━━┫
+└───┸───┘   ┗━━━┷━━━┛
+CONTINUOUS HORIZONTAL LINES
+────────────────────────────────
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VERTICAL RUNS
+│ │ │ │ │      ┃ ┃ ┃ ┃ ┃
+│ │ │ │ │      ┃ ┃ ┃ ┃ ┃
+│ │ │ │ │      ┃ ┃ ┃ ┃ ┃
+BLOCK ELEMENTS
+████████████████████████████████
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌▐▌▐▌▐▌▐▌▐▌▐▌▐▌▐   ░░▒▒▓▓██▓▓▒▒░░
+QUADRANTS
+▖▗▘▙▚▛▜▝▞▟  ▘▀▝ ▌█▐ ▖▄▗
+NESTED BOXES
+┌──────────────┐
+│ ┌──────────┐ │
+│ │ ┌──────┐ │ │
+│ │ │ text │ │ │
+│ │ └──────┘ │ │
+│ └──────────┘ │
+└──────────────┘
