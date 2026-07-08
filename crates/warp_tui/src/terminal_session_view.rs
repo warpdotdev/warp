@@ -8,14 +8,14 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    detect_possible_git_repo, AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent,
+    detect_possible_git_repo, throttle, AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent,
     AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, CommandExecutionSource,
     ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
     GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
     PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
-    TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit, WAKEUP_THROTTLE_PERIOD,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity;
@@ -289,7 +289,29 @@ impl TuiTerminalSessionView {
             ActiveSessionEvent::Bootstrapped => {}
         });
 
-        ctx.spawn_stream_local(wakeups_rx, |_, _, ctx| ctx.notify(), |_, _| {});
+        // A wakeup is also how a running block becomes visible: its height is 0
+        // until the long-running render-delay timer fires and sends a wakeup
+        // (see `Block::wakeup_after_delay`). Heights are otherwise only
+        // recomputed when PTY bytes arrive, so a silent command (e.g. `sleep`)
+        // would stay invisible until it finishes. Mirror the GUI's
+        // `handle_terminal_wakeup` by throttling the stream and refreshing
+        // live block heights here.
+        ctx.spawn_stream_local(
+            throttle(WAKEUP_THROTTLE_PERIOD, wakeups_rx),
+            |view, _, ctx| {
+                {
+                    let mut model = view.terminal_model.lock();
+                    if !model.is_alt_screen_active() {
+                        model.block_list_mut().update_background_block_height();
+                        model.block_list_mut().update_active_block_height();
+                    }
+                }
+
+                ctx.notify();
+            },
+            |_, _| {},
+        );
+
         // Focus the input view so the keymap responder chain is
         // [root, session, input]: input bindings win for keys they define,
         // and unbound keys (ctrl-c) fall through to the session/root bindings.
