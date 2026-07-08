@@ -1585,9 +1585,6 @@ impl View for RequestedCommandView {
         if should_render_mcp_content {
             if FeatureFlag::McpJsonTreeView.is_enabled() {
                 let colors = JsonTreeColors::from_theme(theme);
-                // Match the monospace font used inside `render_json_tree` so the
-                // "Request"/"Response" labels and placeholder/error text align
-                // with the fixed-width tree rows.
                 let font_family = appearance.monospace_font_family();
 
                 let mut tree_column =

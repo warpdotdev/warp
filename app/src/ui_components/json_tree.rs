@@ -261,10 +261,6 @@ pub fn render_json_tree(
     on_copy_json: Arc<CopyJsonFn>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    // Render the JSON tree in the monospace font. The tree displays code-like
-    // structured data (tool-call arguments and results), so a fixed-width font
-    // keeps keys/values aligned and matches the surrounding command content,
-    // which is also rendered monospace.
     let font_family = appearance.monospace_font_family();
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
