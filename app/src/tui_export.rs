@@ -1,5 +1,7 @@
 //! Public app APIs used by the `warp_tui` frontend.
 
+pub use repo_metadata::repositories::RepoDetectionSource;
+
 pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
     AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
@@ -71,4 +73,5 @@ pub use crate::terminal::{
     TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::dark_theme;
+pub use crate::util::repo_detection::detect_local_git_repo_for_directory;
 pub use crate::util::time_format::format_elapsed_seconds;

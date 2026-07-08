@@ -307,13 +307,19 @@ impl PersistedWorkspace {
             });
         }
 
+        // Registered regardless of whether codebase indexing is enabled:
+        // `index_repo` also drives project-rules (and, transitively, project
+        // skills) discovery, which must work in modes that keep codebase
+        // indexing off (e.g. the TUI front-end). The embedding half of
+        // `index_repo` stays behind its own gates, and
+        // `CodebaseIndexManager::index_directory` no-ops when indexing is
+        // disabled.
         #[cfg(feature = "local_fs")]
         if !cfg!(any(
             test,
             feature = "fast_dev",
             feature = "integration_tests"
-        )) && CodebaseIndexManager::as_ref(ctx).is_indexing_enabled()
-        {
+        )) {
             ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
                 let DetectedRepositoriesEvent::DetectedGitRepo { repository, .. } = event;
                 let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();

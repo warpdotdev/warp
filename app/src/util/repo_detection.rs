@@ -17,7 +17,7 @@ use warp_core::SessionId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
-use warpui::{View, ViewContext};
+use warpui::{AppContext, View, ViewContext};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::manager::RemoteServerManager;
@@ -83,4 +83,34 @@ pub fn detect_possible_git_repo<V: View>(
     _ctx: &mut ViewContext<V>,
 ) -> impl Future<Output = Option<LocalOrRemotePath>> {
     ready(None)
+}
+
+/// Kicks off git repository detection for a local working directory without
+/// requiring a view context.
+///
+/// This exists for the TUI front-end, whose sessions are always local: it
+/// only needs the `DetectedRepositoriesEvent::DetectedGitRepo` side effect
+/// (project rules and skills indexing) rather than the resolved repo root,
+/// so the detection-result future is intentionally dropped. Detection itself
+/// runs on a task spawned inside [`DetectedRepositories`], so it completes
+/// regardless.
+#[cfg(not(target_family = "wasm"))]
+pub fn detect_local_git_repo_for_directory(
+    active_directory: &str,
+    source: RepoDetectionSource,
+    ctx: &mut AppContext,
+) {
+    let _detection_result = DetectedRepositories::handle(ctx).update(ctx, |repos, ctx| {
+        repos.detect_possible_local_git_repo(active_directory, source, ctx)
+    });
+}
+
+/// Repository detection is not available in WASM builds because
+/// `DetectedRepositories` is not registered there.
+#[cfg(target_family = "wasm")]
+pub fn detect_local_git_repo_for_directory(
+    _active_directory: &str,
+    _source: RepoDetectionSource,
+    _ctx: &mut AppContext,
+) {
 }
