@@ -2444,13 +2444,12 @@ impl Input {
         // inline model-selector data source, and the inline skill-selector data source.
         // Intentionally NOT wired here (verified safe): the UDI button bar's selectors (not rendered
         // in agent view, so unreachable for a cloud viewer) and per-exchange AI blocks / ambient
-        // setup-command blocks (created after the model exists). Revisit those if they become
-        // viewer-visible.
+        // setup-command blocks (created after the model exists).
         //
         // The host / auth-secret / FTUX selectors are composer-only: a viewer of an existing run
         // does not compose a new run, so they stay `None` for a shared-session viewer.
-        let is_viewer = self.model.lock().shared_session_status().is_viewer();
-        let (host_selector, auth_secret_selector, auth_secret_ftux_view) = if !is_viewer
+        let is_cloud_mode_composer = self.model.lock().is_dummy_cloud_mode_session();
+        let (host_selector, auth_secret_selector, auth_secret_ftux_view) = if is_cloud_mode_composer
             && FeatureFlag::CloudModeInputV2.is_enabled()
         {
             let host_selector = Self::build_host_selector(
@@ -4092,8 +4091,8 @@ impl Input {
                     // The Oz run has a live execution this pane never attached to (a new execution
                     // was started for the run while this pane was open from earlier), so there is
                     // no live shared session to forward the prompt to.
-                    // TODO(remote-2047): instead of blocking, connect to the live shared session
-                    // and submit the prompt to the running remote VM.
+                    // TODO: instead of blocking, connect to the live shared session
+                    // and submit the prompt to the running remote VM. Or, auto close and reopen the link.
                     self.show_ephemeral_error_toast(
                         "This pane is out of date. Reopen the Oz session link in a new pane and try submitting again.",
                         ctx,

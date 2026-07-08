@@ -38,6 +38,7 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::{AIQueryHistory, BlocklistAIPermissions, ResponseStreamId};
+use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
@@ -265,6 +266,7 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(AuthManager::new_for_test);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(HarnessAvailabilityModel::new);
+    app.add_singleton_model(ConnectedSelfHostedWorkersModel::new);
     app.add_singleton_model(SessionPermissionsManager::new);
     app.add_singleton_model(DirectoryWatcher::new);
     app.add_singleton_model(|_| DetectedRepositories::default());
@@ -1399,6 +1401,95 @@ fn maybe_route_ai_query_to_remote_target_forwards_executor_viewer_prompt() {
             ["continue please"],
             "an executor viewer must forward the prompt to the sharer"
         );
+    });
+}
+
+#[test]
+fn attach_ambient_view_model_builds_composer_selectors_for_fresh_cloud_pane_in_view_pending() {
+    // Regression: a fresh cloud-mode composer pane is created in `ViewPending` (see
+    // `TerminalModel::new_for_cloud_mode_shared_session_viewer`), which
+    // `SharedSessionStatus::is_viewer()` reports as a viewer. Such a pane is a dummy cloud-mode
+    // session composing a new run, not an actual shared-session viewer, so the composer-only
+    // host / auth-secret / FTUX selectors must still be built for it.
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        let terminal_view_id = terminal.read(&app, |view, _| view.id());
+
+        // Simulate the initial cloud composer state: a dummy cloud-mode session in `ViewPending`.
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.set_shared_session_status(SharedSessionStatus::ViewPending);
+            model.set_is_dummy_cloud_mode_session(true);
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            input.attach_ambient_agent_view_model(view_model, ctx);
+
+            assert!(
+                input.host_selector().is_some(),
+                "the initial cloud composer state must build the host selector"
+            );
+            assert!(
+                input.auth_secret_selector().is_some(),
+                "the initial cloud composer state must build the auth-secret selector"
+            );
+            assert!(
+                input.auth_secret_ftux_view().is_some(),
+                "the initial cloud composer state must build the auth-secret FTUX view"
+            );
+        });
+    });
+}
+
+#[test]
+fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_viewer() {
+    // An actual shared-session viewer (NOT a dummy cloud-mode session) that lazily discovers it is
+    // viewing an ambient run must not build the composer-only selectors, even though its ambient VM
+    // is still `Composing` and the model is in a viewer status when the model is attached.
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        let terminal_view_id = terminal.read(&app, |view, _| view.id());
+
+        // An actual shared-session viewer is in a viewer status but is not a dummy cloud-mode
+        // session (its model is created via `new_for_shared_session_viewer`).
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::ViewPending);
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            input.attach_ambient_agent_view_model(view_model, ctx);
+
+            assert!(
+                input.host_selector().is_none(),
+                "an actual shared-session viewer must not build the host selector"
+            );
+            assert!(
+                input.auth_secret_selector().is_none(),
+                "an actual shared-session viewer must not build the auth-secret selector"
+            );
+            assert!(
+                input.auth_secret_ftux_view().is_none(),
+                "an actual shared-session viewer must not build the auth-secret FTUX view"
+            );
+        });
     });
 }
 
