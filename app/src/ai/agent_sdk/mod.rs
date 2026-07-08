@@ -1021,8 +1021,7 @@ impl AgentDriverRunner {
                     build_merged_config_and_task(&args, &resolved_skill, &prompt_clone, ctx)?;
 
                 let task_id = args.task_id.as_ref().and_then(|s| s.parse().ok());
-                let should_share = (args.share.is_shared() || args.task_id.is_some())
-                    && FeatureFlag::AgentSharedSessions.is_enabled();
+                let should_share = args.share.is_shared() || args.task_id.is_some();
 
                 let third_party_harness_model_config = merged_config
                     .harness

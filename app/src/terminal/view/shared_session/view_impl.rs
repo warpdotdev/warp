@@ -561,13 +561,10 @@ impl TerminalView {
             return;
         }
 
-        // Check if we're trying to share without scrollback while agent shared sessions is enabled
-        // and there are active conversations. This would break the viewer experience since they
-        // wouldn't receive the conversation history they need to continue conversations.
-        if !bypass_conversation_guard
-            && FeatureFlag::AgentSharedSessions.is_enabled()
-            && scrollback_type == SharedSessionScrollbackType::None
-        {
+        // Check if we're trying to share without scrollback while there are active conversations.
+        // This would break the viewer experience since they wouldn't receive the conversation
+        // history they need to continue conversations.
+        if !bypass_conversation_guard && scrollback_type == SharedSessionScrollbackType::None {
             let has_conversations = BlocklistAIHistoryModel::as_ref(ctx)
                 .all_live_conversations_for_terminal_surface(ctx.handle().id())
                 .any(|conv| conv.exchange_count() > 0);

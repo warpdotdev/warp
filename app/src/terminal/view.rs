@@ -8890,12 +8890,11 @@ impl TerminalView {
     /// Cancels the active agent conversation via the status bar's Ctrl+C handler.
     /// Includes shared session notification if applicable.
     fn cancel_active_conversation_via_status_bar(&mut self, ctx: &mut ViewContext<Self>) {
-        if FeatureFlag::AgentSharedSessions.is_enabled()
-            && self
-                .model
-                .lock()
-                .shared_session_status()
-                .is_sharer_or_viewer()
+        if self
+            .model
+            .lock()
+            .shared_session_status()
+            .is_sharer_or_viewer()
         {
             self.input.update(ctx, |input, ctx| {
                 input.cancel_active_agent_conversation_for_shared_session(

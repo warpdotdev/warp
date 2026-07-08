@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use byte_unit::Byte;
 use parking_lot::FairMutex;
-use warp_core::features::FeatureFlag;
 use warpui::elements::{
     Container, Flex, MainAxisSize, MouseStateHandle, ParentElement, Shrinkable, Text,
 };
@@ -118,23 +117,17 @@ impl Body {
         // client and server to ensure that the actual share won't be started if the size is
         // too large.
 
-        // Check if agent shared sessions is enabled and there are active conversations
-        self.has_agent_conversations = if FeatureFlag::AgentSharedSessions.is_enabled() {
-            BlocklistAIHistoryModel::as_ref(ctx)
-                .all_live_conversations_for_terminal_surface(terminal_view_id)
-                .any(|conv| conv.exchange_count() > 0)
-        } else {
-            false
-        };
+        // Check if there are active agent conversations
+        self.has_agent_conversations = BlocklistAIHistoryModel::as_ref(ctx)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
+            .any(|conv| conv.exchange_count() > 0);
 
         // Calculate the size of agent conversation response events that will be sent during initialization.
-        // Only include this if the feature flag is enabled, since the events won't be sent otherwise.
-        let agent_conversations_size =
-            if FeatureFlag::AgentSharedSessions.is_enabled() && self.has_agent_conversations {
-                Self::calculate_agent_conversations_size(terminal_view_id, ctx)
-            } else {
-                Byte::from_u64(0)
-            };
+        let agent_conversations_size = if self.has_agent_conversations {
+            Self::calculate_agent_conversations_size(terminal_view_id, ctx)
+        } else {
+            Byte::from_u64(0)
+        };
 
         let scrollback_from_active_block = SharedSessionScrollbackType::None.to_scrollback(&model);
         let mut is_scrollback_from_active_block_disabled = scrollback_from_active_block
