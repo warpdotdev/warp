@@ -1,0 +1,122 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
+
+use super::core::subscribe_to_shared_dependencies;
+use super::{InlineItem, SlashCommandDataSource, UpdatedActiveCommands};
+use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+use crate::search::data_source::{Query, QueryResult};
+use crate::search::mixer::DataSourceRunErrorWrapper;
+use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
+use crate::search::slash_command_menu::static_commands::Availability;
+use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
+use crate::search::SyncDataSource;
+use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
+use crate::terminal::model::session::active_session::ActiveSession;
+
+pub struct TuiDataSourceArgs {
+    pub active_session: ModelHandle<ActiveSession>,
+    pub cli_subagent_controller: ModelHandle<CLISubagentController>,
+    pub terminal_view_id: EntityId,
+}
+
+pub struct TuiSlashCommandDataSource {
+    core: SlashCommandDataSource,
+}
+
+impl TuiSlashCommandDataSource {
+    pub fn new(args: TuiDataSourceArgs, ctx: &mut ModelContext<Self>) -> Self {
+        let TuiDataSourceArgs {
+            active_session,
+            cli_subagent_controller,
+            terminal_view_id,
+        } = args;
+
+        subscribe_to_shared_dependencies(
+            &active_session,
+            &cli_subagent_controller,
+            terminal_view_id,
+            Self::recompute_active_commands,
+            ctx,
+        );
+
+        let mut me = Self {
+            core: SlashCommandDataSource::new(
+                active_session,
+                cli_subagent_controller,
+                terminal_view_id,
+            ),
+        };
+        me.recompute_active_commands(ctx);
+        me
+    }
+
+    pub(super) fn core(&self) -> &SlashCommandDataSource {
+        &self.core
+    }
+
+    pub fn active_commands(&self) -> impl Iterator<Item = (&SlashCommandId, &StaticCommand)> {
+        self.core.active_commands()
+    }
+
+    pub fn set_active_repo_root(
+        &mut self,
+        repo_root: Option<PathBuf>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.core.set_active_repo_root(repo_root) {
+            self.recompute_active_commands(ctx);
+        }
+    }
+
+    fn recompute_active_commands(&mut self, ctx: &mut ModelContext<Self>) {
+        let availability = self.availability(ctx);
+        let gates = self.core.common_command_gates(ctx);
+        let commands = HashMap::from_iter(
+            COMMAND_REGISTRY
+                .all_commands_by_id()
+                .filter(|(_, command)| {
+                    self.core
+                        .command_passes_common_gates(command, availability, &gates)
+                })
+                .map(|(id, command)| (id, command.clone())),
+        );
+        if self.core.replace_active_commands(commands) {
+            ctx.emit(UpdatedActiveCommands);
+        }
+    }
+
+    fn availability(&self, ctx: &AppContext) -> Availability {
+        self.core.base_availability(ctx)
+            | SlashCommandDataSource::view_availability(true)
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::NOT_CLOUD_AGENT
+    }
+}
+
+impl SyncDataSource for TuiSlashCommandDataSource {
+    type Action = AcceptSlashCommandOrSavedPrompt;
+
+    fn run_query(
+        &self,
+        query: &Query,
+        app: &AppContext,
+    ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
+        if query.text.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let query_text = query.text.trim().to_lowercase();
+        let mut results = self.core.match_active_commands(&query_text, app);
+        results.extend(self.core.match_skills(&query_text, app));
+        Ok(results
+            .into_iter()
+            .map(|item: InlineItem| item.into())
+            .collect())
+    }
+}
+
+impl Entity for TuiSlashCommandDataSource {
+    type Event = UpdatedActiveCommands;
+}

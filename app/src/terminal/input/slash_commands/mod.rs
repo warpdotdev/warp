@@ -1,5 +1,6 @@
 mod cloud_mode_v2_view;
 mod data_source;
+mod mixer;
 mod search_item;
 pub(super) mod view;
 
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use ai::skills::SkillReference;
 pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
 pub use data_source::*;
+pub use mixer::{build_slash_command_mixer, slash_command_query, SlashCommandMixer};
 pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
