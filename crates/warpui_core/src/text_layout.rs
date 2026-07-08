@@ -22,7 +22,7 @@ use crate::geometry::rect::RectF;
 use crate::geometry::vector::vec2f;
 use crate::platform::LineStyle;
 use crate::scene::{Border, CornerRadius, Dash, GlyphFade};
-use crate::{box_drawing, Scene};
+use crate::Scene;
 
 type StyleRun = (Range<usize>, StyleAndFont);
 
@@ -680,11 +680,6 @@ pub struct Glyph {
     pub index: usize,
     /// The width of the glyph (its advance), in pixels.
     pub width: f32,
-    /// The source character this glyph was shaped from, when known. Used by the
-    /// procedural box-drawing renderer (see [`crate::box_drawing`]) to detect
-    /// box-drawing/block codepoints at paint time. `None` for glyphs whose
-    /// originating character isn't tracked (e.g. the mac layout path).
-    pub character: Option<char>,
 }
 
 /// On MacOS, CoreText includes line separators in the TextFrame's lines.
@@ -770,12 +765,11 @@ impl TextFrame {
                 let glyphs: Vec<_> = line
                     .chars()
                     .enumerate()
-                    .map(|(index, ch)| Glyph {
+                    .map(|(index, _)| Glyph {
                         id: Default::default(),
                         position_along_baseline: Default::default(),
                         index: index + acc,
                         width: 10.0, // dummy width
-                        character: Some(ch),
                     })
                     .collect();
                 acc += glyphs.len();
@@ -814,12 +808,11 @@ impl TextFrame {
         let glyphs: Vec<_> = text
             .chars()
             .enumerate()
-            .map(|(index, ch)| Glyph {
+            .map(|(index, _)| Glyph {
                 id: Default::default(),
                 position_along_baseline: vec2f(index as f32 * advance, 0.0),
                 index,
                 width: advance,
-                character: Some(ch),
             })
             .collect();
         let caret_positions = (0..char_count)
@@ -1005,12 +998,11 @@ impl Line {
         let glyphs: Vec<_> = line
             .chars()
             .enumerate()
-            .map(|(index, ch)| Glyph {
+            .map(|(index, _)| Glyph {
                 id: Default::default(),
                 position_along_baseline: Default::default(),
                 index,
                 width: 10.0, // dummy width
-                character: Some(ch),
             })
             .collect();
         let runs = vec![Run {
@@ -1628,75 +1620,15 @@ impl Line {
                     line_origin + glyph.position_along_baseline
                 };
 
-                let color = override_color.unwrap_or(glyph_color);
-
-                // Render supported box-drawing / block characters procedurally as
-                // cell-filling, non-overlapping rects instead of from the font,
-                // eliminating the seams between vertically-adjacent cells (see
-                // `crate::box_drawing`). Skip this for faded (horizontally
-                // clipped) lines so the existing glyph fade is preserved; either
-                // way, fall through to the underline drawing below.
-                let procedural_char =
-                    if fade.is_none() && scene.rendering_config().box_drawing_glyphs {
-                        glyph.character.filter(|c| box_drawing::is_supported(*c))
-                    } else {
-                        None
-                    };
-
-                if let Some(ch) = procedural_char {
-                    let scale_factor = scene.scale_factor();
-                    let cell_top = glyph_origin.y() - baseline_position;
-                    let cell_height =
-                        font_cache.line_height(self.font_size, self.line_height_ratio);
-
-                    // Snap the cell box to the integer device-pixel grid.
-                    // Adjacent cells then share exact edges, so the procedural
-                    // rects tile with no sub-pixel seam between rows or columns
-                    // (the same reason a true terminal cell grid is pixel-aligned).
-                    let left_device = (glyph_origin.x() * scale_factor).round();
-                    let right_device = ((glyph_origin.x() + glyph.width) * scale_factor).round();
-                    let top_device = (cell_top * scale_factor).round();
-                    let bottom_device = ((cell_top + cell_height) * scale_factor).round();
-                    let cell_width_device = right_device - left_device;
-                    let cell_height_device = bottom_device - top_device;
-
-                    for cell_rect in
-                        box_drawing::cell_rects(ch, cell_width_device, cell_height_device)
-                    {
-                        // Convert the device-pixel cell-local rect back to logical
-                        // coordinates for the scene (the rect pipeline re-applies
-                        // the scale factor).
-                        let origin = cell_rect.bounds.origin();
-                        let rect = RectF::new(
-                            vec2f(
-                                (left_device + origin.x()) / scale_factor,
-                                (top_device + origin.y()) / scale_factor,
-                            ),
-                            vec2f(
-                                cell_rect.bounds.width() / scale_factor,
-                                cell_rect.bounds.height() / scale_factor,
-                            ),
-                        );
-                        let Some(clipped) = rect.intersection(bounds) else {
-                            continue;
-                        };
-                        let fill_color = if cell_rect.alpha_scale < 1.0 {
-                            ColorU {
-                                a: (color.a as f32 * cell_rect.alpha_scale).round() as u8,
-                                ..color
-                            }
-                        } else {
-                            color
-                        };
-                        scene
-                            .draw_rect_without_hit_recording(clipped)
-                            .with_background(Fill::Solid(fill_color));
-                    }
-                } else {
-                    scene
-                        .draw_glyph(glyph_origin, glyph.id, run.font_id, self.font_size, color)
-                        .with_fade(fade);
-                }
+                scene
+                    .draw_glyph(
+                        glyph_origin,
+                        glyph.id,
+                        run.font_id,
+                        self.font_size,
+                        override_color.unwrap_or(glyph_color),
+                    )
+                    .with_fade(fade);
 
                 // Draw the underline under the tag (e.g. for a hyperlink).
                 if let Some(underline_color) = style_overrides

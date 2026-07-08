@@ -32,10 +32,9 @@ use smallvec::SmallVec;
 use crate::geometry::rect::RectF;
 use crate::geometry::vector::vec2f;
 
-// Enablement is carried on [`crate::rendering::Config::box_drawing_glyphs`]
-// (set by the app from `FeatureFlag::BoxDrawingGlyphs`) and read at paint time
-// via `scene.rendering_config()`, so this module stays a pure geometry helper
-// with no global state.
+// This module is a pure geometry helper with no global state. Whether to use it
+// is decided by the caller (the terminal grid renderer) behind the
+// `BoxDrawingGlyphs` feature flag.
 
 /// A cell-local rectangle for a box-drawing/block glyph.
 ///

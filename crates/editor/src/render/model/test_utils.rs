@@ -261,7 +261,6 @@ pub fn layout(text: &str, styles: &RichTextStyles, max_width: impl IntoPixels) -
             position_along_baseline: vec2f(line_width.as_f32(), 0.),
             index,
             width: char_width.as_f32(),
-            character: Some(ch),
         });
 
         carets_acc.push(CaretPosition {

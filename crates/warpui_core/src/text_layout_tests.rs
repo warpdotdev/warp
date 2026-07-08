@@ -295,7 +295,6 @@ fn synthetic_line(glyph_count: usize, glyph_width: f32, clip_config: ClipConfig)
             position_along_baseline: vec2f(glyph_width * i as f32, 0.),
             index: i,
             width: glyph_width,
-            character: None,
         })
         .collect();
     let run = Run {
@@ -393,7 +392,6 @@ fn test_run_background_painted_before_underline() {
                     position_along_baseline: vec2f(glyph_width * i as f32, 0.),
                     index: i,
                     width: glyph_width,
-                    character: None,
                 })
                 .collect();
             let run = Run {
@@ -476,7 +474,6 @@ fn test_run_background_clamped_to_visible_glyph_span() {
                     position_along_baseline: vec2f(glyph_width * i as f32, 0.),
                     index: i,
                     width: glyph_width,
-                    character: None,
                 })
                 .collect();
             let run = Run {
@@ -549,7 +546,6 @@ fn test_fully_truncated_run_paints_no_background() {
                         position_along_baseline: vec2f(glyph_width * (start + i) as f32, 0.),
                         index: start + i,
                         width: glyph_width,
-                        character: None,
                     })
                     .collect::<Vec<_>>()
             };
