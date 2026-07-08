@@ -11,9 +11,9 @@ use warpui_core::{App, SingletonEntity};
 use super::{
     BlockLocation, LayOutArgs, layout_mermaid_diagram_block, layout_table_block, layout_text_block,
 };
-use crate::content::buffer::{StyledBufferRun, StyledTextBlock};
+use crate::content::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
-    ParsedUrl, highlight_urls, layout_mermaid_block_for_test,
+    EditDelta, LaidOutRenderDelta, ParsedUrl, highlight_urls, layout_mermaid_block_for_test,
     resolve_asset_source_relative_to_directory,
 };
 use crate::content::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
@@ -1027,6 +1027,96 @@ fn test_layout_code_block_urls() {
                     (17..38, add_link_to_style_and_font(base_styles)),
                 ]
             );
+        });
+    })
+}
+
+#[test]
+fn test_layout_delta_chunking_is_output_preserving() {
+    // Regression test for issue #12561: laying out an edit in bounded parallel chunks must produce
+    // exactly the same blocks (same content, order, and trailing-newline flag) as laying it out
+    // sequentially or as a single chunk. This guards the chunked-layout refactor that bounds peak
+    // memory: only the chunk size changes, never the output.
+    App::test((), |app| async move {
+        let layout_cache = LayoutCache::new();
+        app.read(|ctx| {
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let options = RenderLayoutOptions::default();
+
+            // Build an edit with many blocks (including a URL and an empty line) so chunk
+            // boundaries land in the middle of the edit and the Start/Middle/End logic is
+            // exercised across chunks.
+            let mut total_len = 0usize;
+            let new_lines: Vec<StyledBufferBlock> = (0..50)
+                .map(|i| {
+                    let text = if i % 7 == 0 {
+                        "\n".to_string()
+                    } else {
+                        format!("line number {i} with a link https://warp.dev and text\n")
+                    };
+                    let content_length = text.chars().count();
+                    total_len += content_length;
+                    StyledBufferBlock::Text(StyledTextBlock {
+                        block: vec![StyledBufferRun {
+                            run: text,
+                            text_styles: TextStylesWithMetadata::default(),
+                            block_style: BufferBlockStyle::PlainText,
+                        }],
+                        style: BufferBlockStyle::PlainText,
+                        content_length: CharOffset::from(content_length),
+                    })
+                })
+                .collect();
+
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..CharOffset::from(1 + total_len),
+                new_lines,
+                ..Default::default()
+            };
+
+            // Project a laid-out delta into a stable, comparable form. `BlockItem` is not `PartialEq`
+            // (it holds `Arc`/handles/floats), so compare its `Debug` rendering, which captures the
+            // content, ordering, and config we care about.
+            let project = |laid: &LaidOutRenderDelta| -> (Vec<String>, String) {
+                (
+                    laid.laid_out_line
+                        .iter()
+                        .map(|item| format!("{item:?}"))
+                        .collect(),
+                    format!("{:?}", laid.trailing_newline),
+                )
+            };
+
+            // chunk_size 1 lays out fully sequentially; a huge chunk lays out everything in one
+            // batch (the pre-refactor behavior); 7 forces several mid-edit chunk boundaries.
+            let sequential = delta.clone().layout_delta_with_chunk_size(
+                &text_layout,
+                None,
+                &options,
+                None,
+                ctx,
+                1,
+            );
+            let single_chunk = delta.clone().layout_delta_with_chunk_size(
+                &text_layout,
+                None,
+                &options,
+                None,
+                ctx,
+                10_000,
+            );
+            let many_chunks =
+                delta.layout_delta_with_chunk_size(&text_layout, None, &options, None, ctx, 7);
+
+            // Every non-empty input block should yield a laid-out block.
+            assert_eq!(sequential.laid_out_line.len(), 50);
+            assert_eq!(project(&sequential), project(&single_chunk));
+            assert_eq!(project(&sequential), project(&many_chunks));
         });
     })
 }
