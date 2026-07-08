@@ -39,7 +39,7 @@ The reusable piece both sub-issues consume:
 - `format_cost(cost_in_cents)` → `$0.03` (two decimals).
 - `TokenCostToggle` — shared tokens⇄cost state owned by `TuiTerminalSessionView`, plus a render helper that wraps the footer entry in the hover/click element (`TuiHoverable`/`TuiEventHandler` from `crates/warpui_core/src/elements/tui/`). The `MouseStateHandle` must be owned by the view, not created inline during render.
 - Styles come from `TuiUiBuilder` (`dim_text_style`/`muted_text_style`), matching the mock's `#8e8e8e`.
-- The entry shows a pointing-hand mouse pointer while hovered. This is new TUI-core plumbing mirroring the GUI `Hoverable`'s `with_cursor`: `TuiPointerShape` + `TuiHoverable::with_pointer_shape` request a shape into `TuiEventContext` during mouse-move dispatch (first request wins, so the innermost hovered element prevails), and `TuiScreen` syncs the host terminal via the OSC 22 pointer-shape sequence — emitted only on changes, reset to `default` when nothing requests a shape and on terminal restore (`CrosstermModeControl::leave`). Terminals without OSC 22 support (it's honored by kitty/WezTerm/foot/xterm-class emulators) ignore the sequence.
+- Hover affordance is the DIM-removal brighten only. A pointing-hand mouse pointer (the mock's hover cursor) is **explicitly out of scope for this PR** and tracked as a fast follow in [CODE-1837](https://linear.app/warpdotdev/issue/CODE-1837/tui-pointing-hand-cursor-on-hover-over-the-footer-usage-entry-osc-22): it needs OSC 22 pointer-shape plumbing in the TUI core (a working, PTY-verified implementation is preserved in this branch's history at commit `348484d57`) plus host-terminal support that Warp's own terminal lacks today (in progress on `ian/warp-terminal-osc22-pointer-shape`).
 
 ### 3. Footer entry (CODE-1831, `terminal_session_view.rs`)
 
@@ -55,7 +55,6 @@ The reusable piece both sub-issues consume:
 ## Testing and validation
 
 - Unit tests in sibling `_tests.rs` files per repo convention (`usage_tests.rs`, extend `terminal_session_view` and `agent_block_tests.rs`): formatter edge cases (0/singular/abbreviation/rounding), footer hidden before first usage event, footer entry renders token form then cost form after a click event dispatch, summary section extracted only for finished exchanges with usage, dim styling sourced from theme.
-- Pointer-shape tests in `warpui_core`: `hoverable_tests.rs` (hovered moves request the configured shape, first request wins) and `runtime/mod_tests.rs` (mouse moves over a hand-pointer hoverable emit OSC 22 once per change and reset on leave, against the in-memory terminal).
 - App-side tests in `conversation_tests.rs`: per-exchange `token_usage`/cost captured from `stream_finished`, totals accumulate across requests.
 - Commands: `cargo nextest run -p warp_tui`, `cargo nextest run -p warp` (touched test files), `cargo clippy -p warp_tui --all-targets -- -D warnings`, `./script/format` — all must pass before each PR (presubmit requirement).
 - Manual: `./script/run-tui`; send a prompt; verify footer count appears and updates, click toggles `4 tok` ⇄ `$0.03` and back, summary row appears after completion; compare against Figma frames `323:17499`/`323:17607`.
@@ -70,6 +69,5 @@ Parallel child agents are not proposed: CODE-1832 is hard-blocked on PR #13442, 
 ## Risks and mitigations
 
 - Small responses show tiny counts (`4 tok`) while real conversations reach thousands — abbreviation is part of the formatter from day one so the footer width stays stable.
-- The hand pointer requires host-terminal OSC 22 support. Warp's own terminal doesn't parse OSC 22 today, so the pointer shows in kitty/WezTerm/foot/xterm but not in Warp until terminal-side support lands (tracked separately; the TUI-side emission is unit-tested).
 - Restored/persisted conversations predate per-exchange capture, so old exchanges have no summary row — acceptable; render nothing when `token_usage` is `None`. Persisting per-exchange usage is a follow-up if product wants history parity.
 - Footer click is the TUI's first mouse-interactive footer element; keep the hit target to the entry's cells only so text selection elsewhere in the footer is unaffected.

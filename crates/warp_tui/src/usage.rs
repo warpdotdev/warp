@@ -9,9 +9,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use warp::tui_export::ConversationUsageTotals;
-use warpui_core::elements::tui::{
-    Modifier, TuiElement, TuiHoverable, TuiPointerShape, TuiStyle, TuiText,
-};
+use warpui_core::elements::tui::{Modifier, TuiElement, TuiHoverable, TuiStyle, TuiText};
 use warpui_core::elements::MouseStateHandle;
 
 /// Which unit a usage entry currently displays.
@@ -94,7 +92,6 @@ impl TokenCostToggle {
                 .truncate()
                 .finish(),
         )
-        .with_pointer_shape(TuiPointerShape::Hand)
         .on_click(move |event_ctx, _| {
             toggle.toggle();
             event_ctx.notify();

@@ -3,8 +3,8 @@ use std::rc::Rc;
 
 use super::TuiHoverable;
 use crate::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPoint,
-    TuiPointerShape, TuiRect, TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPoint, TuiRect,
+    TuiSize,
 };
 use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
@@ -63,57 +63,6 @@ fn mouse_moves_toggle_hover_state_and_notify_without_consuming_the_event() {
             assert!(!handle.lock().unwrap().is_hovered());
         });
     });
-}
-
-#[test]
-fn hover_requests_the_configured_pointer_shape() {
-    App::test((), |app| async move {
-        app.read(|app_ctx| {
-            let mut hoverable = TuiHoverable::new(MouseStateHandle::default(), ().finish())
-                .with_pointer_shape(TuiPointerShape::Hand);
-
-            let area = TuiRect::new(0, 0, 10, 1);
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            // Returns the pointer shape requested by a mouse move to (x, y).
-            let mut shape_after_move = |x, y| {
-                let mut event_ctx = TuiEventContext::default();
-                event_ctx.set_origin_view(Some(EntityId::new()));
-                hoverable.dispatch_event(
-                    &TuiEvent::MouseMoved {
-                        position: TuiPoint::new(x, y),
-                        modifiers: ModifiersState::default(),
-                        is_synthetic: false,
-                    },
-                    area,
-                    &mut event_ctx,
-                    &mut ctx,
-                    app_ctx,
-                );
-                event_ctx.take_pointer_shape()
-            };
-
-            // Requested on every move within the area, not just transitions,
-            // since the runtime resolves the shape per pointer event.
-            assert_eq!(shape_after_move(2, 0), Some(TuiPointerShape::Hand));
-            assert_eq!(shape_after_move(4, 0), Some(TuiPointerShape::Hand));
-            // Off the element: no request, so the runtime resets the pointer.
-            assert_eq!(shape_after_move(4, 3), None);
-        });
-    });
-}
-
-#[test]
-fn first_pointer_shape_request_wins() {
-    // Children dispatch before their wrappers, so first-wins keeps the
-    // innermost hovered element's shape.
-    let mut event_ctx = TuiEventContext::default();
-    event_ctx.request_pointer_shape(TuiPointerShape::Hand);
-    event_ctx.request_pointer_shape(TuiPointerShape::Default);
-    assert_eq!(event_ctx.take_pointer_shape(), Some(TuiPointerShape::Hand));
-    assert_eq!(event_ctx.take_pointer_shape(), None);
 }
 
 #[test]

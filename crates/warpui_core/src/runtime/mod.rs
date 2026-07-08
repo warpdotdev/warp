@@ -35,9 +35,7 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
-use crate::elements::tui::{
-    TuiEvent, TuiEventContext, TuiLayoutContext, TuiPointerShape, TuiRect, TuiSize,
-};
+use crate::elements::tui::{TuiEvent, TuiEventContext, TuiLayoutContext, TuiRect, TuiSize};
 use crate::presenter::tui::TuiPresenter;
 use crate::r#async::block_on;
 use crate::r#async::executor::ForegroundTask;
@@ -77,9 +75,6 @@ struct TuiScreen<T, R: TuiTerminal> {
     /// Synthesizes multi-click counts for left mouse presses, which crossterm
     /// does not report.
     click_tracker: ClickTracker,
-    /// The pointer shape last emitted to the host terminal, so the OSC 22
-    /// sequence is only written on changes.
-    pointer_shape: TuiPointerShape,
 }
 
 impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
@@ -91,7 +86,6 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             renderer: TuiFrameRenderer::new(),
             terminal,
             click_tracker: ClickTracker::default(),
-            pointer_shape: TuiPointerShape::default(),
         }
     }
 
@@ -170,34 +164,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
                 action.action.as_ref(),
             );
         }
-
-        // Sync the host terminal's pointer shape with what the hovered element
-        // requested during this pointer event; no request resets it to the
-        // default shape.
-        if matches!(event, TuiEvent::MouseMoved { .. }) {
-            let requested = event_ctx.take_pointer_shape().unwrap_or_default();
-            if let Err(error) = self.sync_pointer_shape(requested) {
-                log::error!("failed to update the terminal pointer shape: {error}");
-            }
-        }
         handled
-    }
-
-    /// Writes the OSC 22 pointer-shape sequence when `shape` differs from the
-    /// last emitted shape, so a supporting terminal shows e.g. a pointing hand
-    /// over clickable elements. Terminals without OSC 22 support ignore it.
-    fn sync_pointer_shape(&mut self, shape: TuiPointerShape) -> io::Result<()> {
-        if shape == self.pointer_shape {
-            return Ok(());
-        }
-        self.pointer_shape = shape;
-        let name = match shape {
-            TuiPointerShape::Default => "default",
-            TuiPointerShape::Hand => "pointer",
-        };
-        let writer = self.terminal.writer();
-        write!(writer, "\x1b]22;{name}\x1b\\")?;
-        writer.flush()
     }
 }
 
@@ -526,9 +493,6 @@ impl TerminalModeControl for CrosstermModeControl {
 
     fn leave(&mut self) {
         let mut out = stdout();
-        // Reset any OSC 22 pointer shape the TUI set while running; a no-op on
-        // terminals without OSC 22 support.
-        let _ = write!(out, "\x1b]22;default\x1b\\");
         let _ = execute!(out, Show, DisableMouseCapture, LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
     }

@@ -19,18 +19,6 @@ use crate::{Action, EntityId};
 /// A terminal scroll delta `(columns, rows)`.
 pub type TuiScrollDelta = (isize, isize);
 
-/// The host-terminal mouse pointer shape requested during event dispatch.
-/// The runtime syncs it via the OSC 22 pointer-shape sequence; terminals
-/// without OSC 22 support ignore it.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum TuiPointerShape {
-    /// The terminal's default pointer.
-    #[default]
-    Default,
-    /// A pointing hand, signalling a clickable element.
-    Hand,
-}
-
 /// Input events dispatched through TUI elements.
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
@@ -127,7 +115,6 @@ pub struct TuiEventContext {
     notified: HashSet<EntityId>,
     typed_actions: Vec<TuiDispatchedAction>,
     origin_view_id: Option<EntityId>,
-    pointer_shape: Option<TuiPointerShape>,
 }
 
 /// A typed action queued during element-tree dispatch, attributed to the view
@@ -174,18 +161,5 @@ impl TuiEventContext {
     /// view's subtree.
     pub fn set_origin_view(&mut self, view_id: Option<EntityId>) -> Option<EntityId> {
         std::mem::replace(&mut self.origin_view_id, view_id)
-    }
-
-    /// Requests a host-terminal pointer shape for the pointer's current
-    /// position. First request wins: dispatch offers events to children before
-    /// their wrappers act, so the innermost hovered element's shape prevails.
-    pub fn request_pointer_shape(&mut self, shape: TuiPointerShape) {
-        self.pointer_shape.get_or_insert(shape);
-    }
-
-    /// The pointer shape requested during dispatch, if any. Drained by the
-    /// runtime after each pointer event to sync the host terminal.
-    pub(crate) fn take_pointer_shape(&mut self) -> Option<TuiPointerShape> {
-        self.pointer_shape.take()
     }
 }

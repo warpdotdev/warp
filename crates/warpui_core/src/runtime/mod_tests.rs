@@ -4,16 +4,13 @@ use std::io::{self, Write};
 use std::rc::Rc;
 use std::time::Duration;
 
-use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
-};
+use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 
 use super::*;
 use crate::elements::tui::{
-    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiHoverable,
-    TuiLayoutContext, TuiStyle, TuiText,
+    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext,
+    TuiStyle, TuiText,
 };
-use crate::elements::MouseStateHandle;
 use crate::keymap::macros::*;
 use crate::keymap::FixedBinding;
 use crate::platform::WindowStyle;
@@ -134,86 +131,6 @@ fn run_until_draws_view_text_and_exits_on_quit() {
         assert!(
             runtime.terminal().output_string().contains("hello"),
             "the view's text should be drawn to the in-memory terminal"
-        );
-    });
-}
-
-/// A root view whose whole area is a hand-pointer hoverable, for the
-/// pointer-shape sync test.
-struct HandView {
-    state: MouseStateHandle,
-}
-
-impl Entity for HandView {
-    type Event = ();
-}
-
-impl TuiView for HandView {
-    fn ui_name() -> &'static str {
-        "HandView"
-    }
-
-    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
-        TuiHoverable::new(self.state.clone(), TuiText::new("click me").finish())
-            .with_pointer_shape(TuiPointerShape::Hand)
-            .finish()
-    }
-}
-
-impl TypedActionView for HandView {
-    type Action = ();
-}
-
-fn mouse_moved(column: u16, row: u16) -> CrosstermEvent {
-    CrosstermEvent::Mouse(MouseEvent {
-        kind: MouseEventKind::Moved,
-        column,
-        row,
-        modifiers: KeyModifiers::NONE,
-    })
-}
-
-/// Mouse moves over a hand-pointer hoverable emit the OSC 22 pointer-shape
-/// sequence once per change: hand on hover-in (not re-emitted while the
-/// pointer stays inside), default again once the pointer leaves.
-#[test]
-fn mouse_moves_sync_the_host_pointer_shape() {
-    App::test((), |mut app| async move {
-        let (window_id, root) = app.update(|ctx| {
-            ctx.add_tui_window(window_options(), |_| HandView {
-                state: MouseStateHandle::default(),
-            })
-        });
-        let mut terminal = TestTerminal::new(TuiSize::new(20, 3));
-        terminal
-            .events
-            .extend([mouse_moved(2, 0), mouse_moved(3, 0), mouse_moved(50, 10)]);
-        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root, terminal);
-
-        let mut iterations = 0;
-        runtime
-            .run_until(&mut app, |_| {
-                iterations += 1;
-                iterations > 5
-            })
-            .unwrap();
-
-        let output = runtime.terminal().output_string();
-        let hand = "\x1b]22;pointer\x1b\\";
-        let reset = "\x1b]22;default\x1b\\";
-        assert_eq!(
-            output.matches(hand).count(),
-            1,
-            "the hand shape is emitted once for repeated hovered moves"
-        );
-        assert_eq!(
-            output.matches(reset).count(),
-            1,
-            "the default shape is restored once the pointer leaves"
-        );
-        assert!(
-            output.find(hand).unwrap() < output.find(reset).unwrap(),
-            "hand precedes the reset"
         );
     });
 }
