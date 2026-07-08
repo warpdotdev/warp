@@ -8,14 +8,14 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    detect_local_git_repo_for_directory, AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent,
+    detect_possible_git_repo, AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent,
     AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, CommandExecutionSource,
     ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
     GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
-    PtyIntentEvent, RepoDetectionSource, ShellCommandExecutorEvent, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit,
+    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity;
@@ -264,37 +264,30 @@ impl TuiTerminalSessionView {
         });
         ctx.subscribe_to_model(&active_session, |view, _, event, ctx| match event {
             ActiveSessionEvent::UpdatedPwd => {
-                // Re-run repo detection so project rules and skills follow the
+                // Run repo detection so project rules and skills follow the
                 // session's working directory (the GUI's equivalent lives in
-                // `TerminalView::apply_block_metadata_update`).
+                // `TerminalView::apply_block_metadata_update`). The first
+                // post-bootstrap precmd metadata transitions the cwd from
+                // `None` to `Some`, so this also covers the launch directory.
+                // Only the `DetectedGitRepo` event side effect is needed
+                // here, so the detection-result future is dropped.
                 if let Some(cwd) = view
                     .active_session
                     .as_ref(ctx)
                     .current_working_directory()
                     .cloned()
                 {
-                    detect_local_git_repo_for_directory(
+                    std::mem::drop(detect_possible_git_repo(
+                        RepoDetectionSessionType::Local,
                         &cwd,
                         RepoDetectionSource::TerminalNavigation,
                         ctx,
-                    );
+                    ));
                 }
                 ctx.notify();
             }
             ActiveSessionEvent::Bootstrapped => {}
         });
-
-        // Kick off repo detection for the launch directory so project rules
-        // and skills are indexed before the shell bootstraps or the user runs
-        // any command (mirrors the footer's process-cwd fallback). Later
-        // `UpdatedPwd` events re-run detection for the live session cwd.
-        if let Ok(cwd) = std::env::current_dir() {
-            detect_local_git_repo_for_directory(
-                &cwd.to_string_lossy(),
-                RepoDetectionSource::TerminalNavigation,
-                ctx,
-            );
-        }
 
         ctx.spawn_stream_local(wakeups_rx, |_, _, ctx| ctx.notify(), |_, _| {});
         // Focus the input view so the keymap responder chain is
