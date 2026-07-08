@@ -8917,8 +8917,8 @@ impl SettingsWidget for ApiKeysWidget {
             }
         }
 
-        // Warp credit fallback toggle (shown when BYO or custom inference is enabled)
-        if (is_byo_enabled && show_provider_keys) || show_custom_inference {
+        // Warp credit fallback applies to member-provided API keys, not custom endpoints.
+        if is_byo_enabled && show_provider_keys {
             column.add_child(
                 Container::new(self.render_warp_credit_fallback_toggle(view, app))
                     .with_margin_top(16.)
