@@ -26,6 +26,8 @@ use std::sync::{Arc, Mutex};
 use crate::ai::persisted_workspace::PersistedWorkspace;
 #[cfg(feature = "local_fs")]
 use crate::terminal::input::repos::data_source::GitSummaryCache;
+#[cfg(feature = "local_fs")]
+use warpui::SingletonEntity;
 
 /// Events emitted by InlineReposMenuView.
 #[derive(Debug, Clone)]
@@ -57,16 +59,13 @@ impl InlineReposMenuView {
         #[cfg(feature = "local_fs")]
         let git_summaries: GitSummaryCache = Arc::new(Mutex::new(HashMap::new()));
 
-        let data_source = ctx.add_model(|_| {
-            #[cfg(feature = "local_fs")]
-            {
-                RepoMenuDataSource::new(git_summaries.clone())
-            }
-            #[cfg(not(feature = "local_fs"))]
-            {
-                RepoMenuDataSource::new()
-            }
-        });
+        #[cfg(feature = "local_fs")]
+        let data_source = {
+            let git_summaries = git_summaries.clone();
+            ctx.add_model(move |_| RepoMenuDataSource::new(git_summaries))
+        };
+        #[cfg(not(feature = "local_fs"))]
+        let data_source = ctx.add_model(|_| RepoMenuDataSource::new());
 
         let mixer = ctx.add_model(|ctx| {
             let mut mixer = SearchMixer::<AcceptRepo>::new();
