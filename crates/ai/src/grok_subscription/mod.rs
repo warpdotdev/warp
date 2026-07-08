@@ -58,6 +58,15 @@ pub fn grok_tokens_from_response(
     }
 }
 
+/// Performs a Grok OAuth token refresh using the `refresh_token` grant and
+/// returns the raw [`TokenResponse`].
+///
+/// Keeps the network/protocol details in this module: the app send path awaits
+/// this and applies the result via [`ApiKeyManager::store_grok_tokens`].
+pub async fn refresh_grok_access_token(refresh_token: String) -> anyhow::Result<TokenResponse> {
+    oauth::refresh_access_token(&refresh_token).await
+}
+
 impl ApiKeyManager {
     /// Persists freshly obtained tokens (e.g. right after the connect flow) and
     /// schedules the next proactive refresh.
@@ -86,39 +95,24 @@ impl ApiKeyManager {
         }
     }
 
-    /// Request-time safety net: kicks off a background refresh of the stored
-    /// Grok tokens when they are nearing (or already past) expiry, so
-    /// upcoming requests can authenticate even if the proactive refresh loop
-    /// never armed or died (e.g. a stale BYO policy at startup, or an earlier
-    /// failed refresh). The triggering request still carries the currently
-    /// stored token — the server is the authority on its validity.
+    /// Returns the refresh token to use for a request-time refresh when the
+    /// stored Grok token is (nearly) expired and eligible to be sent, or `None`
+    /// when no refresh is warranted: BYO disabled, a background refresh already
+    /// in flight, no stored token, the token still fresh, or no refresh token.
     ///
-    /// `byo_allowed` is the BYO API key policy as freshly evaluated by the
-    /// caller at request time. It also re-syncs the stored policy mirror,
-    /// which can go stale between `TeamsChanged` events; a disabled ->
-    /// enabled transition re-arms the proactive refresh loop.
-    pub fn refresh_grok_tokens_if_needed(
-        &mut self,
-        byo_allowed: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.set_grok_refresh_allowed(byo_allowed, ctx);
+    /// Pure read. The caller (app send path) performs the async refresh via
+    /// [`refresh_grok_access_token`] and applies the result with
+    /// [`Self::store_grok_tokens`]. `byo_allowed` is the BYO API key policy as
+    /// freshly evaluated by the caller at request time.
+    pub fn grok_refresh_token_if_stale(&self, byo_allowed: bool) -> Option<String> {
         if !byo_allowed || self.grok_refresh_in_flight {
-            return;
+            return None;
         }
-        let Some(tokens) = self.grok_tokens() else {
-            return;
-        };
+        let tokens = self.grok_tokens()?;
         if !tokens.needs_refresh(REFRESH_LEAD_TIME) {
-            return;
+            return None;
         }
-        let Some(refresh_token) = tokens.refresh_token.clone() else {
-            return;
-        };
-        log::info!(
-            "Grok OAuth token is nearing or past expiry at request time; refreshing in background"
-        );
-        spawn_grok_refresh(self, refresh_token, ctx);
+        tokens.refresh_token.clone()
     }
 }
 
@@ -217,9 +211,9 @@ fn spawn_grok_refresh(
                 Err(err) => {
                     // Leave the existing (possibly expired) token in place; the
                     // server remains the authority and will reject it if it's
-                    // truly invalid. The request-time safety net
-                    // (`ApiKeyManager::refresh_grok_tokens_if_needed`) retries
-                    // on the next request.
+                    // truly invalid. The request-time refresh path
+                    // (`ApiKeyManager::grok_refresh_token_if_stale`) retries on
+                    // the next request.
                     log::error!("Failed to refresh Grok OAuth token: {err:#}");
                 }
             }

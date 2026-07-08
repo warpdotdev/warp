@@ -20,6 +20,12 @@ use crate::{report_error, send_telemetry_from_ctx};
 /// surfaced.
 const MAX_RETRIES: usize = 3;
 
+/// Maximum time to wait for a request-time Grok OAuth token refresh before
+/// sending with the currently stored token. Bounded so a hung refresh can't
+/// stall the request.
+#[cfg(not(target_family = "wasm"))]
+const GROK_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// What to do about a failed or truncated MAA response attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecoveryAction {
@@ -171,24 +177,14 @@ impl ResponseStream {
         can_attempt_resume_on_error: bool,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let server_api = ServerApiProvider::as_ref(ctx).get();
         let (cancellation_tx, cancellation_rx) = oneshot::channel();
         let start_time = Local::now();
 
         let request_id = Uuid::new_v4();
-        let params_clone = params.clone();
-        let _ =
-            ctx.spawn(
-                async move {
-                    generate_multi_agent_output(server_api, params_clone, cancellation_rx).await
-                },
-                move |me, stream, ctx| {
-                    me.handle_response_stream_result(request_id, stream, ctx);
-                },
-            );
+        Self::spawn_request(request_id, params.clone(), cancellation_rx, ctx);
         Self {
             id: ResponseStreamId(Uuid::new_v4().to_string()),
-            params: params.clone(),
+            params,
             start_time,
             time_to_latest_event: TimeDelta::seconds(0),
             cancellation_tx: Some(cancellation_tx),
@@ -247,7 +243,78 @@ impl ResponseStream {
 
         let request_id = Uuid::new_v4();
         self.current_request_id = Some(request_id);
-        let params = self.params.clone();
+        Self::spawn_request(request_id, self.params.clone(), cancellation_rx, ctx);
+    }
+
+    /// Sends the request for `request_id`, first refreshing the connected Grok
+    /// subscription's OAuth token when it is (nearly) expired so the request
+    /// doesn't go out with a stale token. The refresh is bounded by
+    /// [`GROK_REFRESH_REQUEST_TIMEOUT`]; on timeout or failure we fall through
+    /// and send with the currently stored token (the server is the authority on
+    /// validity). When no refresh is needed the request is sent directly.
+    fn spawn_request(
+        request_id: Uuid,
+        params: api::RequestParams,
+        cancellation_rx: oneshot::Receiver<()>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // The Grok subscription and its OAuth refresh are native-only.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use ::ai::api_keys::ApiKeyManager;
+            use warpui::r#async::FutureExt as _;
+
+            use crate::workspaces::user_workspaces::UserWorkspaces;
+
+            let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+            if let Some(refresh_token) =
+                ApiKeyManager::as_ref(ctx).grok_refresh_token_if_stale(byo_allowed)
+            {
+                let _ = ctx.spawn(
+                    async move {
+                        ::ai::grok_subscription::refresh_grok_access_token(refresh_token)
+                            .with_timeout(GROK_REFRESH_REQUEST_TIMEOUT)
+                            .await
+                    },
+                    move |me, result, ctx| {
+                        // Cancelled or superseded while refreshing — drop this attempt.
+                        if me.current_request_id != Some(request_id) {
+                            return;
+                        }
+                        let mut params = params;
+                        // On timeout (outer `Err`) or refresh failure (inner `Err`),
+                        // fall through and send with the existing token.
+                        if let Ok(Ok(response)) = result {
+                            let access_token = response.access_token.clone();
+                            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                                manager.store_grok_tokens(response, ctx);
+                            });
+                            // Use the fresh token for this request, and persist it
+                            // to `params` so any retry reuses it.
+                            if let Some(keys) = params.api_keys.as_mut() {
+                                keys.grok_oauth_access_token = access_token.clone();
+                            }
+                            if let Some(keys) = me.params.api_keys.as_mut() {
+                                keys.grok_oauth_access_token = access_token;
+                            }
+                        }
+                        Self::spawn_generate(request_id, params, cancellation_rx, ctx);
+                    },
+                );
+                return;
+            }
+        }
+
+        Self::spawn_generate(request_id, params, cancellation_rx, ctx);
+    }
+
+    /// Spawns the actual multi-agent request send for `request_id`.
+    fn spawn_generate(
+        request_id: Uuid,
+        params: api::RequestParams,
+        cancellation_rx: oneshot::Receiver<()>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let server_api = ServerApiProvider::as_ref(ctx).get();
         let _ = ctx.spawn(
             async move { generate_multi_agent_output(server_api, params, cancellation_rx).await },

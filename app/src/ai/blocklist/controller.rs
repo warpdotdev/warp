@@ -2396,20 +2396,16 @@ impl BlocklistAIController {
             &conversation_data.server_conversation_token,
         );
 
-        // Safety net: if the connected Grok subscription's OAuth token is
-        // nearing or past expiry, kick off a background refresh so upcoming
-        // requests can authenticate even when the proactive refresh loop
-        // isn't running. This request still carries the currently stored
-        // token; the server is the authority on its validity. The Gemini
-        // Enterprise (GEAP) analog re-arms a parked or never-armed WIF
-        // credential refresh chain the same way.
+        // Safety net: re-arm the Gemini Enterprise (GEAP) credential refresh
+        // chain if it was parked or never armed, so upcoming requests can
+        // authenticate. The connected Grok subscription's request-time OAuth
+        // refresh is handled in the response stream's send path
+        // (`ResponseStream::spawn_request`).
         #[cfg(not(target_family = "wasm"))]
         {
             use ::ai::api_keys::ApiKeyManager;
 
-            let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
             ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                manager.refresh_grok_tokens_if_needed(byo_allowed, ctx);
                 crate::ai::geap_credentials::refresh_geap_credentials_if_needed(manager, ctx);
             });
         }
