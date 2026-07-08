@@ -2602,6 +2602,11 @@ impl Input {
                     ctx.emit(Event::OpenPluginInstructionsPane(*agent, *kind));
                 }
                 AgentInputFooterEvent::HandoffChipClicked => {
+                    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+                    if me.block_cloud_handoff_if_model_unsupported(ctx) {
+                        return;
+                    }
+
                     // Auto-handoff only when the input buffer is empty and the
                     // source conversation has content. Otherwise enter `&`
                     // compose mode so any in-flight prompt is preserved and
@@ -4265,6 +4270,32 @@ impl Input {
             .is_some_and(|c| !c.is_empty())
     }
 
+    /// Cloud handoff is Oz-only. When this pane's active Agent Mode model can't
+    /// run in a Warp cloud (Oz) agent (e.g. a custom-endpoint/BYOK model or
+    /// local custom router), shows an explanatory error toast and returns true
+    /// so the `&`, footer-chip, and `/handoff` entry points can bail out up
+    /// front instead of failing at spawn time.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    fn block_cloud_handoff_if_model_unsupported(&self, ctx: &mut ViewContext<Self>) -> bool {
+        if LLMPreferences::as_ref(ctx)
+            .is_active_base_model_cloud_runnable(self.terminal_view_id, ctx)
+        {
+            return false;
+        }
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+            ts.add_ephemeral_toast(
+                DismissibleToast::error(
+                    "Custom models can't run in the cloud. Switch to a Warp model to hand off."
+                        .to_owned(),
+                ),
+                window_id,
+                ctx,
+            );
+        });
+        true
+    }
+
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn maybe_launch_cloud_handoff_request(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         use crate::cloud_object::CloudObjectLookup as _;
@@ -4275,6 +4306,12 @@ impl Input {
             || self.prefix_mode(ctx) != InputPrefixMode::CloudHandoff
         {
             return false;
+        }
+
+        if self.block_cloud_handoff_if_model_unsupported(ctx) {
+            // Keep compose state, the typed prompt, and attachments so the user
+            // can switch models and resubmit.
+            return true;
         }
 
         let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();

@@ -3,7 +3,7 @@ use warpui::{App, EntityId};
 
 use super::*;
 use crate::ai::blocklist::handoff::HandoffLaunchAttachments;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn attachment() -> AttachmentInput {
@@ -522,6 +522,124 @@ fn handoff_request_carries_universal_orchestration_handoff_marker() {
                 json.get("orchestration_handoff")
                     .and_then(serde_json::Value::as_bool),
                 Some(true)
+            );
+        });
+    });
+}
+
+/// Installs a single-model Agent Mode catalog (also used as the default) so
+/// `get_active_base_model` resolves to it via the profile-default fallback.
+fn install_default_agent_mode_model(
+    model: &warpui::ModelHandle<AmbientAgentViewModel>,
+    app: &mut App,
+    info: LLMInfo,
+) {
+    let default_id = info.id.clone();
+    model.update(app, |_model, ctx| {
+        let models = ModelsByFeature {
+            agent_mode: AvailableLLMs::new(default_id, vec![info], None)
+                .expect("valid available llms"),
+            ..Default::default()
+        };
+        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+            prefs.update_feature_model_choices(Ok(models), ctx);
+        });
+    });
+}
+
+/// The local→cloud handoff "invalid model_id" regression: when the pane's
+/// active Agent Mode model is not cloud-runnable (custom-endpoint/BYOK model or
+/// local custom router), `build_default_spawn_config` must fall back to the
+/// `auto` slug instead of forwarding an id the cloud `start_agent` endpoint
+/// rejects, while a server-accepted Oz slug is forwarded unchanged. A local
+/// custom-router id stands in for the custom-endpoint UUID case, which the
+/// `is_cloud_runnable_oz_model_id` unit tests in `llms_tests.rs` cover.
+#[test]
+fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        // Handoff mode makes `selected_harness()` == Oz so the Oz model-id
+        // branch of `build_default_spawn_config` runs.
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff()), ctx);
+        });
+
+        install_default_agent_mode_model(
+            &model,
+            &mut app,
+            LLMInfo::new_for_test("custom-router:local:byok"),
+        );
+        model.read(&app, |model, app| {
+            assert_eq!(
+                model.build_default_spawn_config(app).model_id.as_deref(),
+                Some("auto"),
+                "a non-cloud-runnable model must fall back to the `auto` slug"
+            );
+        });
+
+        install_default_agent_mode_model(&model, &mut app, LLMInfo::new_for_test("auto-genius"));
+        model.read(&app, |model, app| {
+            assert_eq!(
+                model.build_default_spawn_config(app).model_id.as_deref(),
+                Some("auto-genius"),
+                "a server-accepted Oz slug should be forwarded unchanged"
+            );
+        });
+    });
+}
+
+/// The handoff carries the source conversation's selected model onto the new
+/// pane by seeding a per-pane override on the new pane's `terminal_view_id`.
+/// This verifies that such an override is honored by
+/// `build_default_spawn_config` (instead of reverting to the profile default).
+#[test]
+fn handoff_honors_pane_model_override() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let terminal_view_id = model.read(&app, |model, _| model.terminal_view_id);
+
+        // Catalog with two slug models; `auto` is the profile default.
+        model.update(&mut app, |_model, ctx| {
+            let models = ModelsByFeature {
+                agent_mode: AvailableLLMs::new(
+                    "auto".into(),
+                    vec![
+                        LLMInfo::new_for_test("auto"),
+                        LLMInfo::new_for_test("auto-genius"),
+                    ],
+                    None,
+                )
+                .expect("valid available llms"),
+                ..Default::default()
+            };
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                prefs.update_feature_model_choices(Ok(models), ctx);
+            });
+        });
+
+        // Seed a per-pane selection, as the handoff open path's carry-over does.
+        model.update(&mut app, |_model, ctx| {
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                prefs.update_preferred_agent_mode_llm(
+                    &LLMId::from("auto-genius"),
+                    terminal_view_id,
+                    ctx,
+                );
+            });
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff()), ctx);
+        });
+
+        model.read(&app, |model, app| {
+            assert_eq!(
+                model.build_default_spawn_config(app).model_id.as_deref(),
+                Some("auto-genius"),
+                "the carried per-pane model override must be honored over the profile default"
             );
         });
     });

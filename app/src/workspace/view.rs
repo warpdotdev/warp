@@ -13758,27 +13758,22 @@ impl Workspace {
         });
     }
 
-    /// Copy the model selection and execution profile from the source terminal view to a new terminal view.
+    /// Copy the execution profile and per-pane model override from the source
+    /// terminal view to a new terminal view, reproducing the source pane's
+    /// model resolution on the new pane.
     fn copy_model_and_profile_to_terminal_view(
         source_terminal_view_id: EntityId,
         new_terminal_view_id: EntityId,
-        ctx: &mut ViewContext<Self>,
+        ctx: &mut AppContext,
     ) {
-        // Copy the LLM preference from source to new terminal view
-        let source_llm_id = LLMPreferences::as_ref(ctx)
-            .get_active_base_model(ctx, Some(source_terminal_view_id))
-            .id
-            .clone();
-        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-            prefs.update_preferred_agent_mode_llm(&source_llm_id, new_terminal_view_id, ctx);
-        });
-
-        // Copy the execution profile from source to new terminal view
         let source_profile_id = *AIExecutionProfilesModel::as_ref(ctx)
             .active_profile(Some(source_terminal_view_id), ctx)
             .id();
         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
             profiles.set_active_profile(new_terminal_view_id, source_profile_id, ctx);
+        });
+        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+            prefs.copy_agent_mode_selection(source_terminal_view_id, new_terminal_view_id, ctx);
         });
     }
 
@@ -15309,6 +15304,14 @@ impl Workspace {
             return;
         };
 
+        // Carry the source pane's model selection and execution profile onto
+        // the new cloud pane, which otherwise resolves to the profile default.
+        Self::copy_model_and_profile_to_terminal_view(
+            source_view.id(),
+            model_handle.as_ref(ctx).terminal_view_id(),
+            ctx,
+        );
+
         if let Some(environment_id) = environment_id {
             model_handle.update(ctx, |model, ctx| {
                 model.set_environment_id(Some(environment_id), ctx);
@@ -15725,6 +15728,15 @@ impl Workspace {
             Self::record_automatic_handoff_failed(intent, ctx);
             return;
         };
+
+        // Carry the source pane's model selection and execution profile onto
+        // the new cloud pane, which otherwise resolves to the profile default.
+        Self::copy_model_and_profile_to_terminal_view(
+            source_view.id(),
+            model_handle.as_ref(ctx).terminal_view_id(),
+            ctx,
+        );
+
         // Restore the forked conversation into the newly-created pane.
         new_pane_view.update(ctx, |terminal_view, view_ctx| {
             terminal_view.restore_conversation_after_view_creation(

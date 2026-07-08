@@ -336,8 +336,8 @@ impl LLMInfo {
         self.reasoning_level.clone()
     }
 
-    #[cfg(feature = "integration_tests")]
-    fn new_for_test(llm_name: &str) -> Self {
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub(crate) fn new_for_test(llm_name: &str) -> Self {
         Self {
             display_name: llm_name.to_string(),
             base_model_name: llm_name.to_string(),
@@ -988,6 +988,38 @@ impl LLMPreferences {
         self.custom_llms.iter().find(|info| info.id == *id)
     }
 
+    /// Returns `true` when `id` identifies a model that can run in a Warp cloud
+    /// (Oz) agent, and is therefore safe to forward as a cloud
+    /// `config.model_id`.
+    ///
+    /// Custom-endpoint (BYOK) models — whose `LLMId` is a bare `config_key`
+    /// UUID — and local (YAML-authored) custom routers depend on the user's
+    /// local credentials / local config and cannot run in the cloud. Their ids
+    /// are not in the server's accepted Oz model-slug namespace, so forwarding
+    /// one makes the cloud `start_agent` reject the spawn.
+    ///
+    /// Cloud/team custom routers (`custom-router:cloud:*`) ARE cloud-runnable:
+    /// the server's spawn-time model_id validation explicitly allows the
+    /// `custom-router:cloud:` prefix, and each cloud AI request re-resolves the
+    /// router entirely server-side (no local config or credentials needed), so
+    /// they are treated as runnable here.
+    pub fn is_cloud_runnable_oz_model_id(&self, id: &LLMId) -> bool {
+        !(self.custom_llm_info_for_id(id).is_some()
+            || custom_model_routers::is_local_custom_router_id(id.as_str()))
+    }
+
+    /// True when the pane's active Agent Mode model can run in a Warp cloud
+    /// (Oz) agent (see [`Self::is_cloud_runnable_oz_model_id`]).
+    pub(crate) fn is_active_base_model_cloud_runnable(
+        &self,
+        terminal_view_id: EntityId,
+        app: &AppContext,
+    ) -> bool {
+        self.is_cloud_runnable_oz_model_id(
+            &self.get_active_base_model(app, Some(terminal_view_id)).id,
+        )
+    }
+
     /// Footer label for custom endpoint usage keyed by the request config_key.
     /// The synthetic custom LLMInfo already owns alias-or-name display semantics.
     pub fn custom_endpoint_usage_display_label(&self, config_key: &str) -> String {
@@ -1332,6 +1364,41 @@ impl LLMPreferences {
             self.base_llm_for_terminal_view
                 .insert(terminal_view_id, preferred_llm_id.clone());
             true
+        };
+
+        if changed {
+            self.trigger_snapshot_save(ctx);
+            ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+        }
+    }
+
+    /// Copies the raw per-pane Agent Mode override from `source_terminal_view_id`
+    /// onto `new_terminal_view_id`, removing any existing override when the
+    /// source has none. Combined with copying the source's execution profile,
+    /// this reproduces the source pane's model resolution exactly. Unlike
+    /// [`Self::update_preferred_agent_mode_llm`], the copied override is not
+    /// normalized against the destination's current profile default, so it is
+    /// order-independent with respect to the profile copy.
+    pub(crate) fn copy_agent_mode_selection(
+        &mut self,
+        source_terminal_view_id: EntityId,
+        new_terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let changed = match self
+            .base_llm_for_terminal_view
+            .get(&source_terminal_view_id)
+            .cloned()
+        {
+            Some(id) => {
+                self.base_llm_for_terminal_view
+                    .insert(new_terminal_view_id, id.clone())
+                    != Some(id)
+            }
+            None => self
+                .base_llm_for_terminal_view
+                .remove(&new_terminal_view_id)
+                .is_some(),
         };
 
         if changed {

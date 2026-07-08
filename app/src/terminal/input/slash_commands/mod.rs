@@ -937,6 +937,9 @@ impl Input {
                 if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
                     return false;
                 }
+                if self.block_cloud_handoff_if_model_unsupported(ctx) {
+                    return true;
+                }
                 let prompt = argument
                     .map(|argument| argument.trim())
                     .filter(|argument| !argument.is_empty())
