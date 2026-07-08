@@ -430,14 +430,6 @@ impl TerminalManager {
         session_id: SessionId,
         ctx: &mut AppContext,
     ) -> bool {
-        let prior_state = match &self.network_state {
-            NetworkState::Idle => "Idle",
-            NetworkState::Connecting => "Connecting",
-            NetworkState::Active(_) => "Active",
-        };
-        log::info!(
-            "[remote-2047] attach_execution_session session_id={session_id:?} prior_network_state={prior_state}"
-        );
         match std::mem::replace(&mut self.network_state, NetworkState::Connecting) {
             NetworkState::Active(network) => {
                 network.update(ctx, |network, _| {
@@ -876,13 +868,6 @@ impl TerminalManager {
                 view.update(ctx, |terminal_view, ctx| {
                     if let Some(task_id) = ambient_task_id {
                         let had_model = terminal_view.ambient_agent_view_model().is_some();
-                        log::info!(
-                            "[remote-2047] joined shared session (ambient): task_id={task_id} \
-                             session_id={session_id} source={:?} \
-                             enable_orchestration_polling={enable_orchestration_polling} \
-                             had_model={had_model}",
-                            source.source_type
-                        );
                         // Begin viewing the ambient run. For top-level ambient viewers
                         // (`enable_orchestration_polling`) that joined without a model — e.g.
                         // a raw `shared_session` link that turns out to be a cloud run — this
@@ -893,12 +878,6 @@ impl TerminalManager {
                             terminal_view
                                 .begin_viewing_ambient_session(task_id, session_id, ctx);
                         }
-                    } else {
-                        log::info!(
-                            "[remote-2047] joined shared session (non-ambient): \
-                             session_id={session_id} source={:?}",
-                            source.source_type
-                        );
                     }
 
                     terminal_view.on_session_share_joined(
@@ -1866,11 +1845,6 @@ impl TerminalManager {
                 // Owned ambient tasks remain editable Cloud Mode panes after their live shared
                 // session ends; non-owners are still read-only viewers of a finished session.
                 let owns_ambient_task = terminal_view.owned_ambient_agent_task_id(ctx).is_some();
-                let had_model = terminal_view.ambient_agent_view_model().is_some();
-                log::info!(
-                    "[remote-2047] ambient shared session ended: ended_session_id={ended_session_id} \
-                     owns_ambient_task={owns_ambient_task} had_model={had_model}"
-                );
                 model
                     .lock()
                     .set_shared_session_status(if owns_ambient_task {

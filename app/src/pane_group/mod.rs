@@ -6069,9 +6069,6 @@ impl PaneGroup {
         {
             // Upfront ambient viewer (attach-to-running / restore): the model already
             // exists at construction, so wire it immediately.
-            log::info!(
-                "[remote-2047] create_shared_session_viewer: model present at construction, wiring immediately (is_ambient_agent={is_ambient_agent}, polling={enable_orchestration_polling})"
-            );
             crate::terminal::view::ambient_agent::wire_ambient_agent_session_events(
                 &terminal_manager,
                 &view_model,
@@ -6084,9 +6081,6 @@ impl PaneGroup {
             // creation gate, so model-less hidden child viewers don't install a dead
             // subscription. The weak manager handle avoids keeping a closed pane's manager
             // and view alive via this dormant subscription.
-            log::info!(
-                "[remote-2047] create_shared_session_viewer: no model yet, subscribing for lazy wiring (link-join viewer)"
-            );
             let weak_terminal_manager = terminal_manager.downgrade();
             ctx.subscribe_to_view(&terminal_view, move |_, terminal_view, event, ctx| {
                 if !matches!(
@@ -6095,21 +6089,14 @@ impl PaneGroup {
                 ) {
                     return;
                 }
-                log::info!(
-                    "[remote-2047] create_shared_session_viewer: AmbientAgentViewModelCreated received, wiring manager now"
-                );
                 let Some(terminal_manager) = weak_terminal_manager.upgrade(ctx) else {
-                    log::warn!(
-                        "[remote-2047] lazy wiring: manager already dropped"
-                    );
                     return;
                 };
-                let Some(view_model) =
-                    terminal_view.as_ref(ctx).ambient_agent_view_model().cloned()
+                let Some(view_model) = terminal_view
+                    .as_ref(ctx)
+                    .ambient_agent_view_model()
+                    .cloned()
                 else {
-                    log::warn!(
-                        "[remote-2047] lazy wiring: view has no ambient model after creation event"
-                    );
                     return;
                 };
                 crate::terminal::view::ambient_agent::wire_ambient_agent_session_events(

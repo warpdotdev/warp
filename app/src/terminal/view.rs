@@ -7988,9 +7988,6 @@ impl TerminalView {
             return existing;
         }
         let terminal_view_id = self.view_id;
-        log::info!(
-            "[remote-2047] creating ambient agent view model for viewer (view_id={terminal_view_id:?})"
-        );
         let model =
             ctx.add_model(|ctx| ambient_agent::AmbientAgentViewModel::new(terminal_view_id, ctx));
         self.wire_ambient_agent_view_model(model.clone(), ctx);
@@ -21295,33 +21292,6 @@ impl TerminalView {
             model.submit_cloud_followup(prompt, ctx);
         });
 
-        // [remote-2047] Capture the UI-gating state right after dispatching the follow-up so we
-        // can tell why the setup / prompt-queuing UI does (or does not) render for this pane.
-        {
-            let agent_view_state = self
-                .agent_view_controller
-                .as_ref(ctx)
-                .agent_view_state()
-                .clone();
-            let model = self.model.lock();
-            let pre_first_exchange = ambient_agent::is_cloud_agent_pre_first_exchange(
-                self.ambient_agent_view_model.as_ref(),
-                &self.agent_view_controller,
-                &model,
-                ctx,
-            );
-            let is_shared_ambient = model.is_shared_ambient_agent_session();
-            drop(model);
-            log::info!(
-                "[remote-2047] post-followup UI gate: agent_view_active={} origin={:?} \
-                 active_conversation_id={:?} is_shared_ambient_agent_session={is_shared_ambient} \
-                 is_cloud_agent_pre_first_exchange={pre_first_exchange}",
-                agent_view_state.is_active(),
-                agent_view_state.origin(),
-                agent_view_state.active_conversation_id(),
-            );
-        }
-
         self.input.update(ctx, |input, ctx| {
             input.reset_after_cloud_followup_submission(ctx);
             input.set_input_mode_agent(true, ctx);
@@ -27720,15 +27690,6 @@ impl View for TerminalView {
                     }
 
                     let input_box_visible = self.is_input_box_visible(&model, app);
-                    if self
-                        .ambient_agent_view_model
-                        .as_ref()
-                        .is_some_and(|m| m.as_ref(app).is_waiting_for_session())
-                    {
-                        log::info!(
-                            "[remote-2047] TerminalView render (waiting_for_session): is_input_box_visible={input_box_visible}"
-                        );
-                    }
                     if input_box_visible {
                         column.add_child(self.render_input());
                     } else if self.should_render_legacy_ambient_agent_loading_footer(&model, app) {

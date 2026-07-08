@@ -964,7 +964,6 @@ impl AmbientAgentViewModel {
         task_id: AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) {
-        log::info!("[remote-2047] enter_viewing_existing_session task_id={task_id}");
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
 
         // Store the task ID for later use
@@ -983,17 +982,9 @@ impl AmbientAgentViewModel {
                 Ok(task) => {
                     me.source = task.source.clone();
                     me.apply_viewed_task_config_snapshot(task.agent_config_snapshot.as_ref(), ctx);
-                    log::info!(
-                        "[remote-2047] viewer fetched ambient task {task_id}: environment_id={:?} harness={:?}",
-                        me.environment_id,
-                        me.harness
-                    );
                     ctx.emit(AmbientAgentViewModelEvent::ViewerHarnessResolved);
                 }
-                Err(err) => {
-                    log::warn!(
-                        "[remote-2047] Failed to fetch ambient agent task for shared session: {err}"
-                    );
+                Err(_) => {
                     me.set_environment_id(None, ctx);
                 }
             },
@@ -1007,10 +998,6 @@ impl AmbientAgentViewModel {
     /// `is_ready_for_cloud_followup_prompt` false while the session is live; the end path
     /// clears it via [`Self::record_ambient_execution_ended`] so follow-ups become available.
     pub fn set_live_execution_session(&mut self, session_id: SessionId) {
-        log::info!(
-            "[remote-2047] recording live execution session {session_id} (task_id={:?})",
-            self.task_id
-        );
         self.active_execution_session_id = Some(session_id);
         self.last_ended_execution_session_id = None;
     }
@@ -1108,9 +1095,6 @@ impl AmbientAgentViewModel {
         let previous_session_id = self
             .active_execution_session_id
             .or(self.last_ended_execution_session_id);
-        log::info!(
-            "[remote-2047] submit_cloud_followup task_id={task_id} previous_session_id={previous_session_id:?}"
-        );
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let stream = submit_run_followup(
             prompt.clone(),
@@ -1360,7 +1344,6 @@ impl AmbientAgentViewModel {
     ) {
         match event {
             AmbientAgentEvent::TaskSpawned { task_id, run_id } => {
-                log::info!("[remote-2047] stream TaskSpawned task_id={task_id}");
                 self.task_id = Some(task_id);
                 if matches!(self.status, Status::Cancelled { .. }) {
                     log::info!(
@@ -1407,7 +1390,6 @@ impl AmbientAgentViewModel {
                 state,
                 status_message,
             } => {
-                log::info!("[remote-2047] stream StateChanged state={state:?}");
                 if ignore_events {
                     return;
                 }
@@ -1450,30 +1432,8 @@ impl AmbientAgentViewModel {
             }
             AmbientAgentEvent::SessionStarted { session_join_info } => {
                 if ignore_events {
-                    log::info!("[remote-2047] SessionStarted ignored (status is Cancelled/Failed)");
                     return;
                 }
-
-                let status_label = match &self.status {
-                    Status::WaitingForSession {
-                        kind: SessionStartupKind::InitialRun,
-                        ..
-                    } => "WaitingForSession(InitialRun)",
-                    Status::WaitingForSession {
-                        kind: SessionStartupKind::Followup,
-                        ..
-                    } => "WaitingForSession(Followup)",
-                    Status::AgentRunning => "AgentRunning",
-                    Status::Setup => "Setup",
-                    Status::Composing => "Composing",
-                    Status::Failed { .. } => "Failed",
-                    Status::NeedsGithubAuth { .. } => "NeedsGithubAuth",
-                    Status::Cancelled { .. } => "Cancelled",
-                };
-                log::info!(
-                    "[remote-2047] stream SessionStarted session_id={:?} status={status_label}",
-                    session_join_info.session_id
-                );
 
                 if let Some(session_id) = session_join_info.session_id {
                     self.stop_progress_timer();
@@ -1504,21 +1464,7 @@ impl AmbientAgentViewModel {
                     self.last_ended_execution_session_id = None;
                     self.pending_followup_prompt = None;
                     self.status = Status::AgentRunning;
-                    let event_label = match &event {
-                        AmbientAgentViewModelEvent::SessionReady { .. } => "SessionReady",
-                        AmbientAgentViewModelEvent::ExecutionSessionReady { .. } => {
-                            "ExecutionSessionReady"
-                        }
-                        _ => "other",
-                    };
-                    log::info!(
-                        "[remote-2047] emitting {event_label} for session_id={session_id:?}"
-                    );
                     ctx.emit(event);
-                } else {
-                    log::warn!(
-                        "[remote-2047] SessionStarted had no session_id; viewer cannot attach"
-                    );
                 }
             }
             AmbientAgentEvent::AtCapacity => {
@@ -1539,7 +1485,6 @@ impl AmbientAgentViewModel {
         err: anyhow::Error,
         ctx: &mut ModelContext<Self>,
     ) {
-        log::warn!("[remote-2047] ambient agent stream error: {err:#}");
         let error_message = err.to_string();
         send_telemetry_from_ctx!(
             CloudAgentTelemetryEvent::DispatchFailed {

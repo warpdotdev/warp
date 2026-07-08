@@ -108,7 +108,6 @@ pub fn wire_ambient_agent_session_events(
     view_model: &ModelHandle<AmbientAgentViewModel>,
     ctx: &mut AppContext,
 ) {
-    log::info!("[remote-2047] wiring ambient session events (manager -> model subscription)");
     let view_model = view_model.clone();
     terminal_manager.update(ctx, |_, ctx| {
         ctx.subscribe_to_model(&view_model, move |manager, view_model, event, ctx| {
@@ -116,22 +115,10 @@ pub fn wire_ambient_agent_session_events(
                 .as_any_mut()
                 .downcast_mut::<shared_session::viewer::TerminalManager>()
             else {
-                if matches!(
-                    event,
-                    AmbientAgentViewModelEvent::SessionReady { .. }
-                        | AmbientAgentViewModelEvent::ExecutionSessionReady { .. }
-                ) {
-                    log::warn!(
-                        "[remote-2047] ambient session event fired but manager is not a shared_session viewer"
-                    );
-                }
                 return;
             };
             match event {
                 AmbientAgentViewModelEvent::SessionReady { session_id } => {
-                    log::info!(
-                        "[remote-2047] manager received SessionReady session_id={session_id:?}"
-                    );
                     // Local-to-cloud handoff panes pre-populate the forked
                     // conversation on chip click. Use append-mode scrollback
                     // + replay suppression so the cloud agent's replay doesn't
@@ -143,9 +130,6 @@ pub fn wire_ambient_agent_session_events(
                     }
                 }
                 AmbientAgentViewModelEvent::ExecutionSessionReady { session_id } => {
-                    log::info!(
-                        "[remote-2047] manager received ExecutionSessionReady session_id={session_id:?}; attaching"
-                    );
                     manager.attach_execution_session(*session_id, ctx);
                 }
                 AmbientAgentViewModelEvent::EnteredSetupState

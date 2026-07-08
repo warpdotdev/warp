@@ -2385,7 +2385,6 @@ impl Input {
         if self.ambient_agent_view_state.is_some() {
             return;
         }
-        log::info!("[remote-2047] attaching ambient agent view model to input");
         Self::subscribe_to_ambient_agent_view_model(&view_model, ctx);
         let harness_selector = Self::build_harness_selector(
             view_model.clone(),
@@ -4066,12 +4065,6 @@ impl Input {
         if self.editor.as_ref(ctx).buffer_text(ctx).trim().is_empty() {
             return false;
         }
-
-        // Match the local submission path: cancel any in-flight image-attachment processing
-        // before forwarding or blocking the prompt.
-        self.editor.update(ctx, |editor, ctx| {
-            editor.abort_attached_images_future_handle(ctx);
-        });
 
         // Route by the shared source of truth. A live shared-session viewer forwards to the sharer
         // (an ambient cloud run or a shared local session); the other arms cover panes that are not
@@ -14038,7 +14031,6 @@ impl Input {
                     "Dropping attachments on a queued cloud follow-up prompt; cloud follow-up does not support attachments"
                 );
             }
-            log::info!("[remote-2047] queued prompt routed to SubmitCloudFollowup");
             ctx.emit(Event::SubmitCloudFollowup { prompt });
             return;
         }
@@ -14494,6 +14486,13 @@ impl Input {
                 return false;
             }
         }
+
+        // We're committed to sending the prompt, so finalize any in-flight image-attachment
+        // processing. This drops images that haven't finished processing; already-processed ones
+        // are collected as pending context below. (Local-action slash commands returned above.)
+        self.editor.update(ctx, |editor, ctx| {
+            editor.abort_attached_images_future_handle(ctx);
+        });
 
         // Freeze the editor and put it in a loading state
         self.freeze_input_in_loading_state(ctx);
@@ -16402,17 +16401,6 @@ impl View for Input {
                 .is_some_and(|ambient_agent_model| {
                     ambient_agent_model.as_ref(app).should_show_status_footer()
                 });
-
-        if self
-            .ambient_agent_view_model()
-            .is_some_and(|m| m.as_ref(app).is_waiting_for_session())
-        {
-            log::info!(
-                "[remote-2047] Input::render (waiting_for_session): should_show_status_footer={should_show_status_footer} agent_view_active={} cloud_mode={} universal={is_universal_input}",
-                self.agent_view_controller.as_ref(app).is_active(),
-                FeatureFlag::CloudMode.is_enabled(),
-            );
-        }
 
         if FeatureFlag::CloudMode.is_enabled() && should_show_status_footer {
             self.render_ambient_agent_status_footer(app)

@@ -1161,18 +1161,6 @@ impl View for BlocklistAIStatusBar {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
-        // [remote-2047] While an ambient run is spinning up, confirm whether this status bar is
-        // actually rendered (and whether it produces the setup progress). If we never see this for
-        // a viewer's follow-up, the status bar host isn't being rendered for that pane.
-        if let Some(ambient) = self.ambient_agent_view_model.as_ref() {
-            if ambient.as_ref(app).is_waiting_for_session() {
-                log::info!(
-                    "[remote-2047] status_bar render (waiting_for_session): progress_some={} cloud_mode_setup_v2={}",
-                    ambient.as_ref(app).agent_progress().is_some(),
-                    FeatureFlag::CloudModeSetupV2.is_enabled(),
-                );
-            }
-        }
         let appearance = Appearance::as_ref(app);
         let agent_view_controller = self.agent_view_controller.as_ref(app);
         if let Some(cloud_mode_setup_terminal_message) =
