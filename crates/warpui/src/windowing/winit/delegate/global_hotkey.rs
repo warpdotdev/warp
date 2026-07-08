@@ -37,7 +37,7 @@ impl GlobalHotKeyHandler {
         let hotkey = match hotkey_for_keystroke(&shortcut) {
             Ok(hotkey) => hotkey,
             Err(e) => {
-                report_error!(anyhow::Error::new(e).context("invalid global hotkey"));
+                report_error!(e.context("invalid global hotkey"));
                 return;
             }
         };
@@ -49,7 +49,7 @@ impl GlobalHotKeyHandler {
         let hotkey = match hotkey_for_keystroke(shortcut) {
             Ok(hotkey) => hotkey,
             Err(e) => {
-                report_error!(anyhow::Error::new(e).context("invalid global hotkey"));
+                report_error!(e.context("invalid global hotkey"));
                 return;
             }
         };

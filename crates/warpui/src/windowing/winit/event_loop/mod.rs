@@ -618,7 +618,7 @@ impl EventLoop {
                         self.callbacks.for_window(window).window_resized(window);
                     }
                     Err(err) => {
-                        report_error!(anyhow::Error::new(err).context("Failed to open window"));
+                        report_error!(err.context("Failed to open window"));
                         // Tell the app that the window is "closing".
                         self.callbacks.window_will_close(window_id);
                     }

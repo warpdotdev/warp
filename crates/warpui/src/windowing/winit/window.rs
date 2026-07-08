@@ -131,9 +131,7 @@ impl WindowManager {
             x11_manager: match x11::X11Manager::new() {
                 Ok(x11_manager) => Some(x11_manager),
                 Err(err) => {
-                    report_error!(
-                        anyhow::Error::new(err).context("error creating connection to Xorg server")
-                    );
+                    report_error!(err.context("error creating connection to Xorg server"));
                     None
                 }
             },
