@@ -1246,9 +1246,22 @@ impl TuiInputElement {
         // so the buffer row under the pointer is `scroll_offset + row_in_view`
         // (floored at the first row).
         let visual_row = (i64::from(self.scroll_offset) + row_in_view).max(0) as u32;
-        // ...and capped at the last real visual row, so a drag below the text
-        // resolves to the buffer's end rather than past it.
+        // The rendered layout can include a "phantom" row one past the soft-wrap
+        // map's last row when the final logical line exactly fills the terminal
+        // width (deferred wrap; see `build`). The map has no entry for it —
+        // every cell on it is the end-of-buffer gap — so resolve it directly
+        // instead of clamping into the preceding real row (which would map the
+        // click near that row's start).
         let last_row = render.max_line().as_u32().max(1).saturating_sub(1);
+        let end_char_count = self.text.chars().count();
+        let end_gap_row = render
+            .offset_to_softwrap_point(CharOffset::from(end_char_count))
+            .row();
+        if visual_row > last_row && end_gap_row > last_row {
+            return CharOffset::from(end_char_count + 1);
+        }
+        // ...otherwise cap at the last real visual row, so a drag below the
+        // text resolves to the buffer's end rather than past it.
         let visual_row = visual_row.min(last_row);
 
         // Column within that row, in display cells (0 is the input's left edge).

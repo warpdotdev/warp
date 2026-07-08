@@ -520,6 +520,31 @@ fn single_click_places_cursor() {
     });
 }
 
+/// Clicking the phantom deferred-wrap row (rendered when a logical line
+/// exactly fills the width) must resolve to the end-of-buffer gap — where the
+/// cursor visibly sits — not clamp into the preceding full row and teleport
+/// the cursor to its start.
+#[test]
+fn click_on_phantom_wrap_row_keeps_cursor_at_end() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, &"a".repeat(W as usize));
+            // The exactly-full line renders two rows: the text row and the
+            // phantom cursor row below it.
+            assert_eq!(cursor_and_height(&view, ctx), (Some((0, 1)), 2));
+
+            // Click the phantom row at its left edge.
+            assert!(mouse(&view, ctx, &left_down(0, 1, 1, false)));
+            assert!(mouse(&view, ctx, &left_up(0, 1)));
+
+            // The cursor stays at the buffer end (and the row stays rendered).
+            assert_eq!(cursor_and_height(&view, ctx), (Some((0, 1)), 2));
+            assert_eq!(selected_text(&view, ctx), None);
+        });
+    });
+}
+
 #[test]
 fn click_outside_area_is_ignored() {
     App::test((), |mut app| async move {
