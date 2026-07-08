@@ -42,22 +42,14 @@ impl RenderableHiddenSection {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let base_background = internal_colors::fg_overlay_1(theme);
-        let hover_background = internal_colors::fg_overlay_2(theme);
         let ui_builder = appearance.ui_builder();
 
         let element = Hoverable::new(mouse_state, move |state| {
             let row = Flex::row()
                 .with_child(Empty::new().finish())
                 .with_cross_axis_alignment(CrossAxisAlignment::Center);
-            // The hover highlight tracks the mouse immediately, while the tooltip
-            // below is gated on `is_hovered()` so it respects the hover-in delay.
-            let background = if state.is_mouse_over_element() {
-                hover_background
-            } else {
-                base_background
-            };
             let bar = Container::new(row.finish())
-                .with_background(background)
+                .with_background(base_background)
                 .finish();
 
             if !state.is_hovered() {
