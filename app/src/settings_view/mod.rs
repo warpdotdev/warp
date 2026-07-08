@@ -545,6 +545,8 @@ pub mod flags {
         "Orchestration_Message_Display_AlwaysShow";
     pub const ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_COLLAPSE: &str =
         "Orchestration_Message_Display_AlwaysCollapse";
+    pub const CLOUD_AGENT_INVALID_MODEL_BLOCK: &str = "Cloud_Agent_Invalid_Model_Block";
+    pub const CLOUD_AGENT_INVALID_MODEL_AUTO_SELECT: &str = "Cloud_Agent_Invalid_Model_AutoSelect";
     pub const PROMPT_SUBMISSION_INTERRUPT: &str = "Prompt_Submission_Interrupt";
     pub const PROMPT_SUBMISSION_QUEUE: &str = "Prompt_Submission_Queue";
     pub const LRC_SUBMISSION_SEND_IMMEDIATELY: &str = "LRC_Submission_Send_Immediately";

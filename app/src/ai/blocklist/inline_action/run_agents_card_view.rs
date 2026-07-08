@@ -268,6 +268,10 @@ fn resolve_interactive_defaults(
             }
         }
     }
+    // Under auto-select, replace a model that isn't available for the run
+    // target with a valid fallback so the picker reflects it. No-op under
+    // Block, where the accept gate surfaces the error instead.
+    oc::maybe_auto_select_valid_model(&mut state.orch, ctx);
     if let RunAgentsExecutionMode::Remote {
         environment_id,
         worker_host,
@@ -383,6 +387,11 @@ impl RunAgentsCardView {
                 // ready for user confirmation. Re-render so the card
                 // transitions from the "Configuring agents..." placeholder
                 // to the full confirmation UI.
+                // Refresh the Oz model catalog so validation / auto-select
+                // run against a fresh list. The card subscribes to
+                // `UpdatedAvailableLLMs` and repopulates when it arrives.
+                LLMPreferences::handle(ctx)
+                    .update(ctx, |prefs, ctx| prefs.refresh_available_models(ctx));
                 resolve_interactive_defaults(&mut me.state, &*me.block_model, ctx);
                 oc::repopulate_all_pickers(&mut me.state.orch, &me.handles.pickers, ctx);
                 me.refresh_accept_button_state(ctx);
