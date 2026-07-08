@@ -275,6 +275,12 @@ impl platform::WindowManager for WindowManager {
         }
     }
 
+    fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        if let Some(window) = self.windows.get(&window_id) {
+            window.set_alpha(alpha);
+        }
+    }
+
     fn set_all_windows_background_blur_radius(&self, _blur_radius_pixels: u8) {
         // unsupported on Linux and Windows
         // https://docs.rs/winit/latest/winit/window/struct.Window.html#method.set_blur
@@ -580,6 +586,10 @@ impl platform::WindowManager for IntegrationTestWindowManager {
 
     fn set_window_bounds(&self, window_id: WindowId, bound: RectF) {
         self.window_manager.set_window_bounds(window_id, bound)
+    }
+
+    fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        self.window_manager.set_window_alpha(window_id, alpha)
     }
 
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8) {
@@ -1210,6 +1220,31 @@ impl Window {
         }
     }
 
+    /// Sets the window's uniform opacity, where `1.0` is fully opaque and `0.0`
+    /// is fully transparent. Used to cheaply hide the cross-window tab-drag
+    /// preview while hovering over a target window, without changing the
+    /// window's z-order or focus. Best-effort: a no-op on platforms / windowing
+    /// systems that don't support per-window opacity (e.g. Wayland).
+    fn set_alpha(&self, alpha: f32) {
+        let inner = self.inner.borrow();
+        let Some(Inner { window, .. }) = inner.as_ref() else {
+            return;
+        };
+
+        #[cfg(windows)]
+        {
+            use crate::windowing::winit::windows::WindowExt;
+            if let Err(err) = window.set_alpha(alpha) {
+                log::warn!("Failed to set window alpha: {err:#?}");
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            // No per-window opacity support (e.g. wasm); avoid unused warnings.
+            let _ = (window, alpha);
+        }
+    }
+
     fn set_title(&self, title: &str) {
         if let Some(Inner { window, .. }) = self.inner.borrow().as_ref() {
             window.set_title(title)
@@ -1415,6 +1450,18 @@ fn create_window(
     let created_window = window_target
         .create_window(window_attributes)
         .map_err(Into::into);
+
+    #[cfg(target_os = "linux")]
+    if let Ok(window) = created_window.as_ref() {
+        use wgpu::rwh::RawDisplayHandle;
+        let is_x11 = matches!(
+            window_target.display_handle().map(|dh| dh.as_raw()),
+            Ok(RawDisplayHandle::Xlib(_)) | Ok(RawDisplayHandle::Xcb(_))
+        );
+        if is_x11 {
+            window.set_ime_allowed(true);
+        }
+    }
 
     #[cfg(windows)]
     {

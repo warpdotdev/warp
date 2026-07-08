@@ -109,13 +109,16 @@ impl EventLoop {
 
         let is_honor_ps1_enabled = *SessionSettings::as_ref(ctx).honor_ps1;
 
+        let terminal_model_for_init = self.terminal_model.clone();
         let receiver = self.event_loop_rx.clone();
         ctx.background_executor()
             .spawn(async move {
                 if let Err(e) = Self::write_env_vars(&mut sink, is_honor_ps1_enabled).await {
                     log::error!("Failed to write env vars to pty {e:?}");
                 }
-                if let Err(e) = Self::write_zsh_init_shell_script(&mut sink).await {
+                if let Err(e) =
+                    Self::write_zsh_init_shell_script(&mut sink, &terminal_model_for_init).await
+                {
                     log::error!("Failed to write zsh bootstrap bytes to pty {e:?}");
                 }
 
@@ -157,8 +160,14 @@ impl EventLoop {
     /// Writes the ZSH init shell script to the "PTY", mimicking how we send the init shell script
     /// when there is a local pty:
     /// <https://github.com/warpdotdev/warp-internal/blob/747da2df83f2caa97e781ce284ceb226fb97a66c/app/src/terminal/local_tty/unix.rs#L338-L347>.
-    async fn write_zsh_init_shell_script(sink: &mut impl Sink) -> anyhow::Result<()> {
-        let zsh_init_shell_script = init_shell_script_for_shell(ShellType::Zsh, &crate::ASSETS);
+    async fn write_zsh_init_shell_script(
+        sink: &mut impl Sink,
+        terminal_model: &parking_lot::FairMutex<crate::terminal::TerminalModel>,
+    ) -> anyhow::Result<()> {
+        let session_id = crate::terminal::bootstrap::generate_session_id();
+        terminal_model.lock().register_session_id(session_id);
+        let zsh_init_shell_script =
+            init_shell_script_for_shell(ShellType::Zsh, &crate::ASSETS, session_id);
         sink.send(Message::new_binary(
             zsh_init_shell_script.as_bytes().to_vec(),
         ))

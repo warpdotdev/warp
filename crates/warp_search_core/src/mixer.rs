@@ -26,47 +26,6 @@ const INITIAL_RESULTS_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub use warpui_core::r#async::BoxFuture;
 
-#[derive(Debug, Clone, Default)]
-pub enum DedupeStrategy {
-    #[default]
-    AllowDuplicates,
-    HighestScore,
-}
-
-/// Deduplicate the results list based on provided keys, if any, and keep the highest score,
-/// while preserving the original order of the kept items.
-pub fn dedupe_score<T: Action + Clone>(original: Vec<QueryResult<T>>) -> Vec<QueryResult<T>> {
-    let mut deduped_results: Vec<(Option<String>, &QueryResult<T>)> = Vec::new();
-
-    for result in original.iter() {
-        let mut needs_insert = true;
-        let new_key = result.dedup_key();
-
-        if new_key.is_some() {
-            for (existing_key, existing_result) in deduped_results.iter_mut() {
-                // Note: at this point, new_key must be Some(str)
-                if new_key == *existing_key {
-                    // This does not need to be inserted - either replace or discard
-                    needs_insert = false;
-                    if result.score() > existing_result.score() {
-                        *existing_result = result;
-                    }
-                    break;
-                }
-            }
-        }
-
-        if needs_insert {
-            deduped_results.push((new_key, result));
-        }
-    }
-
-    deduped_results
-        .into_iter()
-        .map(|(_, r)| r.clone())
-        .collect()
-}
-
 /// A structure that combines results from various data sources to produce a
 /// single, ordered, heterogeneous list of search results.
 #[derive(Default)]
@@ -82,9 +41,6 @@ pub struct SearchMixer<T: Action + Clone> {
 
     /// The set of sources that have finished running for the latest query.
     finished_sources: HashSet<DataSourceId>,
-
-    /// The strategy for deduplication
-    dedupe_strategy: DedupeStrategy,
 
     /// Monotonically increasing counter incremented on each `run_query`. Used to discard stale
     /// async callbacks and timeout callbacks whose futures completed before the abort took effect.
@@ -135,16 +91,10 @@ impl<T: Action + Clone> SearchMixer<T> {
             finished_sources: HashSet::new(),
             results: vec![],
             query: None,
-            dedupe_strategy: DedupeStrategy::AllowDuplicates,
             query_generation: 0,
             pending_results: None,
             initial_results_emitted: false,
         }
-    }
-
-    /// Set the deduplication strategy for the mixer
-    pub fn set_dedupe_strategy(&mut self, strategy: DedupeStrategy) {
-        self.dedupe_strategy = strategy;
     }
 
     /// Resets the mixer's state.
@@ -255,7 +205,7 @@ impl<T: Action + Clone> SearchMixer<T> {
     ///
     /// Old results remain visible while new results are buffered. The visible result set is
     /// replaced atomically once all sources finish, or after [`INITIAL_RESULTS_TIMEOUT`] elapses.
-    /// Late-arriving async results are appended without reordering existing results.
+    /// Late-arriving async results are placed at the low-priority edge without reordering existing results.
     pub fn run_query(&mut self, query: Query, ctx: &mut ModelContext<Self>) {
         self.pending_results = Some(Vec::new());
         self.finished_sources.clear();
@@ -472,17 +422,14 @@ impl<T: Action + Clone> SearchMixer<T> {
                 } else if self.initial_results_emitted {
                     let mut late_results = results_with_order;
                     late_results.sort_by_key(|r| (r.priority_tier(), r.score(), r.source_order));
-
-                    self.results.extend(late_results);
-
-                    if matches!(self.dedupe_strategy, DedupeStrategy::HighestScore) {
-                        self.results = dedupe_score(std::mem::take(&mut self.results));
-                    }
+                    let mut existing_results = std::mem::take(&mut self.results);
+                    self.results = late_results;
+                    self.results.append(&mut existing_results);
 
                     ctx.emit(SearchMixerEvent::ResultsChanged);
                 } else {
                     self.results.extend(results_with_order);
-                    self.sort_and_dedupe_results();
+                    self.sort_results();
                     ctx.emit(SearchMixerEvent::ResultsChanged);
                 }
             }
@@ -501,13 +448,14 @@ impl<T: Action + Clone> SearchMixer<T> {
     }
 
     /// Commits buffered results from the current query, replacing the visible result set.
-    /// After this, any late-arriving results are added directly to `results`.
+    /// After this, any late-arriving results are added directly to the low-priority edge of
+    /// `results`.
     fn commit_pending_results(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(pending) = self.pending_results.take() else {
             return;
         };
         self.results = pending;
-        self.sort_and_dedupe_results();
+        self.sort_results();
         ctx.emit(SearchMixerEvent::ResultsChanged);
     }
 
@@ -518,12 +466,9 @@ impl<T: Action + Clone> SearchMixer<T> {
 
     /// Sort by (priority_tier, score, source_order) so that equal-scored results
     /// from earlier-registered sources appear first, regardless of async completion order.
-    fn sort_and_dedupe_results(&mut self) {
+    fn sort_results(&mut self) {
         self.results
             .sort_by_key(|r| (r.priority_tier(), r.score(), r.source_order));
-        if matches!(self.dedupe_strategy, DedupeStrategy::HighestScore) {
-            self.results = dedupe_score(std::mem::take(&mut self.results));
-        }
     }
 
     fn mark_source_as_finished(&mut self, data_source_id: DataSourceId) {

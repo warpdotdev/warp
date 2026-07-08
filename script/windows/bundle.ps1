@@ -115,13 +115,8 @@ if ("$CHANNEL" -eq 'local') {
     $FEATURES = 'release_bundle,gui'
 }
 
-if (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev')) {
-    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
-} elseif ("$CHANNEL" -eq 'preview') {
-    $FEATURES = "$FEATURES,nld_classifier_v2,nld_heuristic_v2"
-} else {
-    $FEATURES = "$FEATURES,nld_classifier_v1,nld_heuristic_v1"
-}
+# All channels ship the v3 classifier and v2 heuristic.
+$FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
 $BUNDLE_ID = "dev.warp.$APP_NAME"
@@ -184,10 +179,10 @@ Write-Output "Built for $ARCH with executable at $BINARY_PATH"
 
 # Prepare bundled resources
 $BUNDLED_RESOURCES_DIR = "$CARGO_TARGET_OUTPUT_DIR\resources"
-Write-Output "Preparing bundled resources..."
+Write-Output 'Preparing bundled resources...'
 & "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE"
 if (-Not $?) {
-    Write-Error "Failed to prepare bundled resources"
+    Write-Error 'Failed to prepare bundled resources'
     exit 1
 }
 

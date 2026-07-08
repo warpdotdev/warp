@@ -1,9 +1,18 @@
 use std::path::{Path, PathBuf};
 
+use ai::skills::SkillPathOrigin;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 mod telemetry;
 pub use telemetry::{SkillOpenOrigin, SkillTelemetryEvent};
+#[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+mod remote;
+#[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+pub(crate) use remote::bundled_skill_snapshot_protos;
+#[cfg(feature = "local_fs")]
+mod bundled;
+#[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+pub(crate) use bundled::{BundledSkill, BundledSkillActivation};
 
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "local_fs"))] {
@@ -13,6 +22,33 @@ cfg_if::cfg_if! {
 }
 
 pub use ai::skills::SkillReference;
+
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub enum SkillManagerEvent {
+    HomeSkillsChanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ActiveSkillLookupError {
+    #[error("Bundled skills are not available on this remote session")]
+    BundledSkillsUnavailable,
+    #[error("Skill not found: {reference}")]
+    NotFound { reference: SkillReference },
+}
+
+impl ActiveSkillLookupError {
+    pub(crate) fn for_reference(reference: &SkillReference, path_origin: &SkillPathOrigin) -> Self {
+        if matches!(path_origin, SkillPathOrigin::Unavailable)
+            && matches!(reference, SkillReference::BundledSkillId(_))
+        {
+            Self::BundledSkillsUnavailable
+        } else {
+            Self::NotFound {
+                reference: reference.clone(),
+            }
+        }
+    }
+}
 
 #[cfg(not(target_family = "wasm"))]
 mod global_skills;
@@ -62,7 +98,5 @@ cfg_if::cfg_if! {
         pub use skill_manager::{
             read_skills_from_directories, SkillManager, SkillWatcher,
         };
-        #[cfg(test)]
-        pub use skill_manager::BundledSkillActivation;
     }
 }

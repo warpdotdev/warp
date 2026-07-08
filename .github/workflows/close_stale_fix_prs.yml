@@ -21,6 +21,7 @@ on:
 jobs:
   close-stale-fix-prs:
     runs-on: ubuntu-latest
+    if: github.repository_owner == 'warpdotdev'
     steps:
       - name: Close Stale Fix PRs
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0

@@ -10,6 +10,7 @@ define_settings_group!(TestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: crate::SettingSurfaces::GUI,
         private: false,
         toml_path: "test.simple_setting",
     },
@@ -18,6 +19,7 @@ define_settings_group!(TestSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: crate::SettingSurfaces::GUI,
         private: true,
         storage_key: "KeyIsOverridden",
     },
@@ -26,6 +28,7 @@ define_settings_group!(TestSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: crate::SettingSurfaces::GUI,
         private: false,
         toml_path: "test_section.hierarchy_flag",
     },
@@ -53,7 +56,7 @@ struct EventListener {
 impl EventListener {
     fn new(ctx: &mut warpui_core::ModelContext<Self>) -> Self {
         let test_settings = TestSettings::handle(ctx);
-        ctx.subscribe_to_model(&test_settings, |me, event, _ctx| {
+        ctx.subscribe_to_model(&test_settings, |me, _, event, _ctx| {
             // Update our internal state if we get a change event for
             // SimpleSetting.
             if matches!(event, TestSettingsChangedEvent::SimpleSetting { .. }) {

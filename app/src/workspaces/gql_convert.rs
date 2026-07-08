@@ -6,8 +6,8 @@ use warp_graphql::billing::{
     AiAutonomyPolicy as GqlAiAutonomyPolicy, AmbientAgentsPolicy as GqlAmbientAgentsPolicy,
     BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
     BonusGrant as GqlBonusGrant, ByoApiKeyPolicy as GqlByoApiKeyPolicy,
-    CodebaseContextPolicy as GqlCodebaseContextPolicy, CustomerType as GqlCustomerType,
-    DelinquencyStatus as GqlDelinquencyStatus,
+    ByoEndpointPolicy as GqlByoEndpointPolicy, CodebaseContextPolicy as GqlCodebaseContextPolicy,
+    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
     EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
     MultiAdminPolicy as GqlMultiAdminPolicy,
@@ -68,7 +68,7 @@ use crate::server::graphql::schema::object_action_history_from_gql;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::workspace::{
-    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, CodebaseContextPolicy,
+    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
     EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, MultiAdminPolicy,
     PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
 };
@@ -247,6 +247,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             token_usage: models,
             tool_usage_metadata: tool,
             context_window_usage,
+            context_window_segments,
             ..
         } = (&gql.usage_metadata).into();
         ConversationUsageInfo {
@@ -256,6 +257,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             tool_calls: tool.total_tool_calls(),
             models,
             context_window_usage,
+            context_window_segments,
             files_changed: tool.apply_file_diff_stats.files_changed,
             lines_added: tool.apply_file_diff_stats.lines_added,
             lines_removed: tool.apply_file_diff_stats.lines_removed,
@@ -385,6 +387,14 @@ impl From<GqlByoApiKeyPolicy> for ByoApiKeyPolicy {
     fn from(gql_byo_api_key_policy: GqlByoApiKeyPolicy) -> ByoApiKeyPolicy {
         Self {
             enabled: gql_byo_api_key_policy.enabled,
+        }
+    }
+}
+
+impl From<GqlByoEndpointPolicy> for ByoEndpointPolicy {
+    fn from(gql_byo_endpoint_policy: GqlByoEndpointPolicy) -> ByoEndpointPolicy {
+        Self {
+            enabled: gql_byo_endpoint_policy.enabled,
         }
     }
 }
@@ -538,6 +548,7 @@ impl From<GqlTier> for Tier {
             usage_based_pricing_policy: gql_tier.usage_based_pricing_policy.map(From::from),
             codebase_context_policy: gql_tier.codebase_context_policy.map(From::from),
             byo_api_key_policy: gql_tier.byo_api_key_policy.map(From::from),
+            byo_endpoint_policy: gql_tier.byo_endpoint_policy.map(From::from),
             purchase_add_on_credits_policy: gql_tier.purchase_add_on_credits_policy.map(From::from),
             enterprise_pay_as_you_go_policy: gql_tier
                 .enterprise_pay_as_you_go_policy
@@ -748,12 +759,10 @@ impl From<warp_graphql::workspace::LlmModelHost> for crate::ai::llms::LLMModelHo
             GqlLlmModelHost::DirectApi => Self::DirectApi,
             GqlLlmModelHost::AwsBedrock => Self::AwsBedrock,
             GqlLlmModelHost::CustomEndpoint => Self::CustomEndpoint,
+            GqlLlmModelHost::GeminiEnterprise => Self::GeminiEnterprise,
             GqlLlmModelHost::Other(value) => {
-                report_error!(
-                    anyhow!(
-                        "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                log::warn!(
+                    "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
                 );
                 Self::Unknown
             }
@@ -769,6 +778,8 @@ impl From<warp_graphql::workspace::LlmHostSettings> for super::workspace::LlmHos
                 .enablement_setting
                 .map(Into::into)
                 .unwrap_or_default(),
+            gcp_audience: gql_settings.gcp_audience,
+            gcp_sa_email: gql_settings.gcp_sa_email,
         }
     }
 }

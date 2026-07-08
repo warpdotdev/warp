@@ -128,6 +128,17 @@ impl TerminalView {
             {
                 return None;
             }
+
+            let is_cloud_conversation_selection = model.is_shared_ambient_agent_session()
+                || model.is_conversation_transcript_viewer()
+                || self
+                    .ambient_agent_view_model
+                    .as_ref()
+                    .is_some_and(|model| model.as_ref(ctx).is_ambient_agent());
+            if !is_cloud_conversation_selection {
+                return None;
+            }
+
             self.ambient_agent_task_id_for_details_panel_from_model(&model, ctx)
         };
         let Some(task_id) = task_id else {
@@ -558,7 +569,7 @@ impl TerminalView {
             && scrollback_type == SharedSessionScrollbackType::None
         {
             let has_conversations = BlocklistAIHistoryModel::as_ref(ctx)
-                .all_live_conversations_for_terminal_view(ctx.handle().id())
+                .all_live_conversations_for_terminal_surface(ctx.handle().id())
                 .any(|conv| conv.exchange_count() > 0);
 
             if has_conversations {
@@ -1511,6 +1522,13 @@ impl TerminalView {
                 let role = &role;
                 editor.set_interaction_state(role.into(), ctx);
             });
+            // Role gates whether prompts can be sent, so the queued prompts panel's
+            // send-now buttons and enter hint must re-sync.
+            if let Some(panel) = input.queued_prompts_panel().cloned() {
+                panel.update(ctx, |panel, ctx| {
+                    panel.set_can_send_prompt(role.can_execute(), ctx);
+                });
+            }
         });
     }
 

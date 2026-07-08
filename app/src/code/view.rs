@@ -45,7 +45,7 @@ use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, S
 use crate::editor::InteractionState;
 use crate::input::Vector2F;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::notebooks::file::{is_markdown_file, MarkdownDisplayMode};
+use crate::notebooks::file::{renders_in_warp_notebook_viewer, MarkdownDisplayMode};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::header::components::{
     render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
@@ -55,7 +55,7 @@ use crate::pane_group::pane::view::header::render_pane_header_draggable;
 use crate::pane_group::pane::{view, ActionOrigin, PaneHeaderAction};
 use crate::pane_group::{
     BackingView, CodePane, PaneConfiguration, PaneConfigurationEvent, PaneDragDropLocation,
-    PaneEvent,
+    PaneEvent, TabBarAxis,
 };
 use crate::quit_warning::UnsavedStateSummary;
 use crate::search::files::icon::icon_from_file_path;
@@ -278,13 +278,13 @@ impl CodeView {
 
     #[cfg(feature = "local_fs")]
     fn update_markdown_mode_segmented_control(&mut self, ctx: &mut ViewContext<Self>) {
-        let is_markdown = self
+        let renders_in_notebook_viewer = self
             .tab_at(self.active_tab_index)
             .and_then(|t| t.location.as_ref())
-            .map(|loc| is_markdown_file(std::path::Path::new(&loc.display_path())))
+            .map(|loc| renders_in_warp_notebook_viewer(std::path::Path::new(&loc.display_path())))
             .unwrap_or(false);
 
-        if !is_markdown {
+        if !renders_in_notebook_viewer {
             self.markdown_mode_segmented_control = None;
             ctx.notify();
             return;
@@ -531,7 +531,7 @@ impl CodeView {
                 );
             }
             LocalCodeEditorEvent::FileSaved => {
-                me.sync_active_tab_path(ctx);
+                me.sync_active_tab_location(ctx);
                 me.set_title_after_content_update(ctx);
                 CodeView::display_save_success(ctx.window_id(), ctx);
                 ctx.notify();
@@ -990,16 +990,11 @@ impl CodeView {
         self.set_title(self.contains_unsaved_changes(ctx), ctx);
     }
 
-    /// Update the TabData path for the active tab to match the LocalCodeEditor metadata.
-    /// This is needed after save_as operations to keep the paths in sync.
-    fn sync_active_tab_path(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Update the TabData location for the active tab to match the LocalCodeEditor metadata.
+    /// This is needed after save operations to keep local and remote locations in sync.
+    fn sync_active_tab_location(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(tab) = self.tab_group.get_mut(self.active_tab_index) {
-            let new_path = tab
-                .editor_view
-                .as_ref(ctx)
-                .file_path()
-                .map(|p| LocalOrRemotePath::Local(p.to_path_buf()));
-            tab.location = new_path;
+            tab.location = tab.editor_view.as_ref(ctx).file_location().cloned();
         }
     }
 
@@ -1619,7 +1614,7 @@ impl CodeView {
                         origin: ActionOrigin::EditorTab(index),
                         drag_location: PaneDragDropLocation::TabBar(data.tab_bar_location),
                         drag_position,
-                        precomputed_tab_hover_index: None,
+                        tab_bar_axis: Some(TabBarAxis::Horizontal),
                     },
                 );
             } else {
@@ -2066,15 +2061,19 @@ impl CodeView {
                 );
             }
 
-            let is_md = local_path
+            let renders_in_notebook_viewer = local_path
                 .as_ref()
-                .map(is_markdown_file)
+                .map(renders_in_warp_notebook_viewer)
                 .unwrap_or_else(|| {
                     active_location
-                        .map(|loc| is_markdown_file(std::path::Path::new(&loc.display_path())))
+                        .map(|loc| {
+                            renders_in_warp_notebook_viewer(std::path::Path::new(
+                                &loc.display_path(),
+                            ))
+                        })
                         .unwrap_or(false)
                 });
-            if is_md {
+            if renders_in_notebook_viewer {
                 items.push(
                     MenuItemFields::new("View Markdown preview")
                         .with_on_select_action(CodeViewAction::RenderMarkdown)

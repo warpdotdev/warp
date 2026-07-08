@@ -64,6 +64,11 @@ const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
 
+/// Cloud `config.model_id` fallback slug used when the pane's active Oz model
+/// is not cloud-runnable (e.g. a custom-endpoint/BYOK model or local custom
+/// router). `auto` defers to Warp's automatic server-side model selection.
+const CLOUD_FALLBACK_OZ_MODEL_ID: &str = "auto";
+
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
 pub struct AgentProgress {
@@ -284,15 +289,18 @@ pub struct AmbientAgentViewModel {
 
 impl AmbientAgentViewModel {
     pub fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
 
-        ctx.subscribe_to_model(&HarnessAvailabilityModel::handle(ctx), |me, _event, ctx| {
-            me.validate_selected_harness(ctx);
-        });
+        ctx.subscribe_to_model(
+            &HarnessAvailabilityModel::handle(ctx),
+            |me, _, _event, ctx| {
+                me.validate_selected_harness(ctx);
+            },
+        );
 
-        ctx.subscribe_to_model(&GitHubAuthNotifier::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&GitHubAuthNotifier::handle(ctx), |me, _, event, ctx| {
             if matches!(event, GitHubAuthEvent::AuthCompleted) {
                 me.handle_github_auth_completed(ctx);
             }
@@ -350,6 +358,17 @@ impl AmbientAgentViewModel {
 
     pub fn request(&self) -> Option<&SpawnAgentRequest> {
         self.request.as_ref()
+    }
+
+    /// The terminal view this model belongs to. Used by the handoff open path
+    /// to seed the source conversation's selected model onto this pane.
+    ///
+    /// Only the local→cloud handoff callers use this, and they are gated to
+    /// non-wasm targets; gate the getter the same way so it isn't flagged as
+    /// dead code on the wasm build.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    pub(crate) fn terminal_view_id(&self) -> EntityId {
+        self.terminal_view_id
     }
 
     pub fn setup_command_state(&self) -> &SetupCommandState {
@@ -1168,10 +1187,19 @@ impl AmbientAgentViewModel {
         };
 
         let oz_model = (selected_harness == Harness::Oz).then(|| {
-            LLMPreferences::as_ref(ctx)
+            let prefs = LLMPreferences::as_ref(ctx);
+            let active_id = &prefs
                 .get_active_base_model(ctx, Some(self.terminal_view_id))
-                .id
-                .to_string()
+                .id;
+            // The cloud `start_agent` endpoint only accepts Oz model slugs; a
+            // custom-endpoint (BYOK) model or local custom router id would be
+            // rejected, so fall back to `auto`. See
+            // `LLMPreferences::is_cloud_runnable_oz_model_id`.
+            if prefs.is_cloud_runnable_oz_model_id(active_id) {
+                active_id.to_string()
+            } else {
+                CLOUD_FALLBACK_OZ_MODEL_ID.to_owned()
+            }
         });
         let third_party_harness = (selected_harness != Harness::Oz).then(|| HarnessConfig {
             harness_type: selected_harness,

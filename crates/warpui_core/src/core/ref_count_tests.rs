@@ -8,15 +8,23 @@ use super::*;
 /// `WeakModelHandle::upgrade` attempted afterward must return `None`.
 #[test]
 fn test_weak_handle_fails_after_last_strong_handle_dropped_in_event_callback() {
-    struct Emitter;
+    /// The model whose events trigger the callback.
+    struct Trigger;
 
-    impl Entity for Emitter {
+    impl Entity for Trigger {
+        type Event = ();
+    }
+
+    /// The model that is being dropped and weak-upgraded.
+    struct Target;
+
+    impl Entity for Target {
         type Event = ();
     }
 
     struct Subscriber {
-        emitter: Option<ModelHandle<Emitter>>,
-        emitter_weak: Option<WeakModelHandle<Emitter>>,
+        target: Option<ModelHandle<Target>>,
+        target_weak: Option<WeakModelHandle<Target>>,
     }
 
     impl Entity for Subscriber {
@@ -24,56 +32,45 @@ fn test_weak_handle_fails_after_last_strong_handle_dropped_in_event_callback() {
     }
 
     App::test((), |mut app| async move {
+        let trigger = app.add_model(|_| Trigger);
         let subscriber = app.add_model(|_| Subscriber {
-            emitter: None,
-            emitter_weak: None,
+            target: None,
+            target_weak: None,
         });
 
-        // Create the emitter in a block so the test-scope handle is dropped,
+        // Create the target in a block so the test-scope handle is dropped,
         // leaving the subscriber as the sole strong-handle holder.
         {
-            let emitter = app.add_model(|_| Emitter);
-            let emitter_weak = emitter.downgrade();
-            let emitter_for_subscribe = emitter.clone();
+            let target = app.add_model(|_| Target);
+            let target_weak = target.downgrade();
 
             subscriber.update(&mut app, |sub, ctx| {
-                sub.emitter = Some(emitter.clone());
-                sub.emitter_weak = Some(emitter_weak);
+                sub.target = Some(target);
+                sub.target_weak = Some(target_weak);
 
-                // In the event callback, drop the only remaining strong
-                // handle and immediately try to upgrade the weak handle.
-                ctx.subscribe_to_model(
-                    &emitter_for_subscribe,
-                    |sub: &mut Subscriber, _event, ctx| {
-                        sub.emitter.take();
+                // When the trigger fires, drop the only remaining strong
+                // handle to `target` and immediately try to upgrade the
+                // weak handle.
+                ctx.subscribe_to_model(&trigger, |sub: &mut Subscriber, _, _event, ctx| {
+                    sub.target.take();
 
-                        // The weak upgrade should fail because the last
-                        // strong handle was just dropped.
-                        let upgrade_result = sub.emitter_weak.as_ref().unwrap().upgrade(ctx);
-                        assert!(
-                            upgrade_result.is_none(),
-                            "weak upgrade should return None immediately after \
+                    let upgrade_result = sub.target_weak.as_ref().unwrap().upgrade(ctx);
+                    assert!(
+                        upgrade_result.is_none(),
+                        "weak upgrade should return None immediately after \
                              the last strong handle is dropped"
-                        );
-                    },
-                );
+                    );
+                });
             });
         }
 
-        // Trigger the emit from within the subscriber, since it holds the
-        // only handle to the emitter.
-        subscriber.update(&mut app, |sub, ctx| {
-            if let Some(handle) = sub.emitter.clone() {
-                handle.update(ctx, |_emitter, ctx| {
-                    ctx.emit(());
-                });
-            }
-        });
+        // Fire the trigger.
+        trigger.update(&mut app, |_, ctx| ctx.emit(()));
 
-        // After effect processing, the emitter should have been removed from
+        // After effect processing, the target should have been removed from
         // the store. The weak handle must fail to upgrade.
         subscriber.read(&app, |sub, ctx| {
-            let upgrade_result = sub.emitter_weak.as_ref().unwrap().upgrade(ctx);
+            let upgrade_result = sub.target_weak.as_ref().unwrap().upgrade(ctx);
             assert!(
                 upgrade_result.is_none(),
                 "weak upgrade should return None after last strong handle was dropped"
@@ -150,16 +147,19 @@ fn test_weak_view_handle_fails_after_last_strong_handle_dropped_in_event_callbac
 
                 // When the trigger fires, drop the last strong ViewHandle
                 // and immediately try to upgrade the weak handle.
-                ctx.subscribe_to_model(&trigger_clone, |orch: &mut Orchestrator, _event, ctx| {
-                    orch.target_view.take();
+                ctx.subscribe_to_model(
+                    &trigger_clone,
+                    |orch: &mut Orchestrator, _, _event, ctx| {
+                        orch.target_view.take();
 
-                    let upgrade_result = orch.target_weak.as_ref().unwrap().upgrade(ctx);
-                    assert!(
-                        upgrade_result.is_none(),
-                        "weak view upgrade should return None immediately \
+                        let upgrade_result = orch.target_weak.as_ref().unwrap().upgrade(ctx);
+                        assert!(
+                            upgrade_result.is_none(),
+                            "weak view upgrade should return None immediately \
                              after the last strong handle is dropped"
-                    );
-                });
+                        );
+                    },
+                );
             });
         }
 

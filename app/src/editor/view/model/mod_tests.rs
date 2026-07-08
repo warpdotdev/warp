@@ -635,7 +635,7 @@ fn test_restoring_invalid_selections() {
                                 ByteOffset::from(0)..ByteOffset::from(3),
                             )],
                         };
-                        model.restore_from_snapshot(snapshot, ctx);
+                        model.restore_from_snapshot(snapshot, Vec::new(), ctx);
                     },
                 ),
             )

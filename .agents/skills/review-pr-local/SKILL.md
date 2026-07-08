@@ -1,10 +1,15 @@
 ---
 name: review-pr-local
 specializes: review-pr
+specializes_source: warpdotdev/common-skills:.agents/skills/review-pr
 description: Repo-specific review guidance for warp. Only the categories declared overridable by the core review-pr skill may be specialized here.
 ---
 
 # Repo-specific review guidance for `warp`
+
+## Prerequisite: install the parent skill
+
+This skill specializes the core `review-pr` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable at `.agents/skills/review-pr/SKILL.md`. If it is missing, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/common-skills:.agents/skills/review-pr`). Then continue with the guidance below.
 
 This file is a companion to the core `review-pr` skill. It does not
 redefine the review output schema, severity labels, safety rules, or
@@ -15,7 +20,7 @@ skill marks as overridable.
 
 - Do not suggest adding test cases that only vary constructor inputs or struct fields when an existing test already covers the meaningful behavior. Only suggest new tests when they exercise a distinct code path or edge case.
 - When a PR is clearly a V0 or initial implementation, frame robustness suggestions such as timeouts, retries, and lifecycle management as optional future work rather than blocking concerns, unless they risk correctness, security, data loss, or a persistent UI hang.
-- For Rust changes, apply the repository conventions from `WARP.md`: avoid unnecessary type annotations, prefer imports over long path qualifiers, name context parameters `ctx` and place them last, remove unused parameters instead of prefixing them with `_`, and prefer inline format arguments in macros.
+- For Rust changes, apply the repository conventions from `AGENTS.md`: avoid unnecessary type annotations, prefer imports over long path qualifiers, name context parameters `ctx` and place them last, remove unused parameters instead of prefixing them with `_`, and prefer inline format arguments in macros.
 - Avoid wildcard `_` match arms when an enum can reasonably be matched exhaustively; exhaustive matches are preferred so future variants are surfaced during review.
 - For new or changed feature flags, prefer high-level runtime checks with `FeatureFlag::YourFlag.is_enabled()` over `#[cfg(...)]` unless the code cannot compile without a compile-time gate.
 - Flag nested or redundant `TerminalModel` locking when the call stack may already hold the model lock. Prefer passing locked references down the stack and keeping lock scopes short.

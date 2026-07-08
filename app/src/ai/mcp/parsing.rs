@@ -190,6 +190,8 @@ pub(crate) fn normalize_codex_toml_to_json(file_contents: &str) -> Result<String
 pub struct ParsedTemplatableMCPServerResult {
     pub templatable_mcp_server: TemplatableMCPServer,
     pub templatable_mcp_server_installation: Option<TemplatableMCPServerInstallation>,
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
+    pub variable_values: HashMap<String, VariableValue>,
 }
 
 /// Extracts a field from JSON as a HashMap<String, String>.
@@ -343,33 +345,32 @@ impl ParsedTemplatableMCPServerResult {
             .iter()
             .all(|variable| combined_values.contains_key(&variable.key));
 
-        let templatable_mcp_server_installation = match all_variables_present {
-            true => {
-                let variable_values = combined_values
-                    .into_iter()
-                    .map(|(key, value)| {
-                        (
-                            key,
-                            VariableValue {
-                                variable_type: VariableType::Text,
-                                value,
-                            },
-                        )
-                    })
-                    .collect();
+        let variable_values: HashMap<String, VariableValue> = combined_values
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key,
+                    VariableValue {
+                        variable_type: VariableType::Text,
+                        value,
+                    },
+                )
+            })
+            .collect();
 
-                Some(TemplatableMCPServerInstallation::new(
-                    uuid::Uuid::new_v4(),
-                    templatable_mcp_server.clone(),
-                    variable_values,
-                ))
-            }
+        let templatable_mcp_server_installation = match all_variables_present {
+            true => Some(TemplatableMCPServerInstallation::new(
+                uuid::Uuid::new_v4(),
+                templatable_mcp_server.clone(),
+                variable_values.clone(),
+            )),
             false => None,
         };
 
         ParsedTemplatableMCPServerResult {
             templatable_mcp_server,
             templatable_mcp_server_installation,
+            variable_values,
         }
     }
 }

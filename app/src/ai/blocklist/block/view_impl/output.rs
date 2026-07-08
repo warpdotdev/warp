@@ -13,7 +13,7 @@ use ai::agent::action::{
     RequestComputerUseRequest, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
 use ai::agent::file_locations::group_file_contexts_for_display;
-use ai::skills::SkillReference;
+use ai::skills::{ParsedSkill, SkillReference};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -39,7 +39,7 @@ use warpui::{
 };
 
 use super::common::{
-    format_elapsed_seconds, render_debug_footer, render_failed_output, render_informational_footer,
+    render_debug_footer, render_failed_output, render_informational_footer,
     render_output_status_text, render_scrollable_collapsible_content, render_text_sections,
     DebugFooterProps, FailedOutputProps, FindContext, TextSectionsProps,
     STATUS_FOOTER_VERTICAL_PADDING, STATUS_ICON_SIZE_DELTA,
@@ -58,10 +58,11 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CreateDocumentsResult,
-    EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, SubagentCall, SubagentType,
-    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome,
+    CreateDocumentsResult, EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult,
+    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult, SubagentCall,
+    SubagentType, SuggestNewConversationResult, SummarizationType, TodoOperation,
+    UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -108,6 +109,8 @@ use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
 use crate::settings_view::SettingsSection;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::ShellLaunchData;
@@ -115,6 +118,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::time_format::format_elapsed_seconds;
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::ActionButton;
 use crate::view_components::compactible_action_button::{
@@ -171,6 +175,8 @@ pub(crate) struct Props<'a> {
     pub(super) shared_session_status: &'a SharedSessionStatus,
     pub(super) terminal_view_id: EntityId,
     pub(super) is_conversation_transcript_viewer: bool,
+    #[cfg(not(target_family = "wasm"))]
+    pub(super) is_cloud_agent_context: bool,
     pub(super) aws_bedrock_credentials_error_view:
         Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub(super) imported_comments: &'a HashMap<AIAgentActionId, ImportedCommentGroup>,
@@ -1094,9 +1100,30 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 }
 
                 if should_render_references_section {
-                    if let Some(references) =
-                        render_references_footer(&output.citations, props, app)
-                    {
+                    let exchange_id = props.model.exchange_id(app);
+                    let memory_citations: Vec<AIAgentCitation> = props
+                        .model
+                        .conversation(app)
+                        .filter(|conv| {
+                            // Only show memory citations on the first exchange.
+                            conv.first_exchange().map(|e| Some(e.id)) == Some(exchange_id)
+                        })
+                        .into_iter()
+                        .flat_map(|conv| conv.fetched_memories())
+                        .filter(|m| !m.memory_store_id.is_empty() && !m.memory_id.is_empty())
+                        .map(|m| AIAgentCitation::AgentMemory {
+                            memory_store_id: m.memory_store_id.clone(),
+                            memory_id: m.memory_id.clone(),
+                            content: m.content.clone(),
+                        })
+                        .collect();
+                    let all_citations: Vec<AIAgentCitation> = output
+                        .citations
+                        .iter()
+                        .cloned()
+                        .chain(memory_citations)
+                        .collect();
+                    if let Some(references) = render_references_footer(&all_citations, props, app) {
                         output_items.add_child(references);
                     }
                 }
@@ -1141,62 +1168,69 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
 
     if request_type.is_active() {
         if let AIBlockOutputStatus::Failed { error, .. } = &status {
-            output_items.add_child(
-                render_failed_output(
-                    FailedOutputProps {
-                        error,
-                        is_ai_input_enabled: props.is_ai_input_enabled,
-                        invalid_api_key_button_handle: &props
-                            .state_handles
-                            .invalid_api_key_button_handle,
-                        aws_bedrock_credentials_error_view: props
-                            .aws_bedrock_credentials_error_view,
-                        icon_right_margin: 16.,
-                    },
-                    app,
-                )
-                .with_content_item_spacing()
-                .finish(),
-            );
-
-            if props.model.is_latest_visible_exchange_in_root_task(app)
-                && !has_expanded_last_requested_command
-                && !props.model.is_restored()
-                && !error.is_invalid_api_key()
-            {
+            // While an automatic resume is still in flight, keep the failed exchange
+            // quiet: skip the error banner, the "won't count towards usage" notice, and
+            // the debug footer. The full failure UI is surfaced only once recovery has
+            // actually failed. Dogfood builds (Local/Dev) opt out so developers still see
+            // every transport failure aggressively.
+            if !error.should_suppress_during_recovery() {
                 output_items.add_child(
-                    render_informational_footer(
+                    render_failed_output(
+                        FailedOutputProps {
+                            error,
+                            is_ai_input_enabled: props.is_ai_input_enabled,
+                            invalid_api_key_button_handle: &props
+                                .state_handles
+                                .invalid_api_key_button_handle,
+                            aws_bedrock_credentials_error_view: props
+                                .aws_bedrock_credentials_error_view,
+                            icon_right_margin: 16.,
+                        },
                         app,
-                        "This response won't count towards your usage.".to_string(),
                     )
-                    .with_agent_output_item_spacing(app)
+                    .with_content_item_spacing()
                     .finish(),
                 );
 
-                output_items.add_child(
-                    render_debug_footer(
-                        DebugFooterProps {
-                            conversation: props.model.conversation(app),
-                            model: props.model,
-                            debug_copy_button_handle: props
-                                .state_handles
-                                .debug_copy_button_handle
-                                .clone(),
-                            submit_issue_button_handle: props
-                                .state_handles
-                                .submit_issue_button_handle
-                                .clone(),
-                            should_render_feedback_below: false,
-                        },
-                        |debug_id, ctx| {
-                            ctx.dispatch_typed_action(AIBlockAction::CopyDebugId(debug_id))
-                        },
-                        |ctx| ctx.dispatch_typed_action(AIBlockAction::OpenFeedbackDocs),
-                        app,
-                    )
-                    .with_agent_output_item_spacing(app)
-                    .finish(),
-                );
+                if props.model.is_latest_visible_exchange_in_root_task(app)
+                    && !has_expanded_last_requested_command
+                    && !props.model.is_restored()
+                    && !error.is_invalid_api_key()
+                {
+                    output_items.add_child(
+                        render_informational_footer(
+                            app,
+                            "This response won't count towards your usage.".to_string(),
+                        )
+                        .with_agent_output_item_spacing(app)
+                        .finish(),
+                    );
+
+                    output_items.add_child(
+                        render_debug_footer(
+                            DebugFooterProps {
+                                conversation: props.model.conversation(app),
+                                model: props.model,
+                                debug_copy_button_handle: props
+                                    .state_handles
+                                    .debug_copy_button_handle
+                                    .clone(),
+                                submit_issue_button_handle: props
+                                    .state_handles
+                                    .submit_issue_button_handle
+                                    .clone(),
+                                should_render_feedback_below: false,
+                            },
+                            |debug_id, ctx| {
+                                ctx.dispatch_typed_action(AIBlockAction::CopyDebugId(debug_id))
+                            },
+                            |ctx| ctx.dispatch_typed_action(AIBlockAction::OpenFeedbackDocs),
+                            app,
+                        )
+                        .with_agent_output_item_spacing(app)
+                        .finish(),
+                    );
+                }
             }
         }
     }
@@ -1220,7 +1254,15 @@ fn should_render_stopped_output(props: Props, app: &AppContext) -> bool {
 
     let status = props.model.status(app);
     let cancellation_reason = status.cancellation_reason().cloned();
-    if cancellation_reason.is_some_and(|reason| reason.is_follow_up_for_same_conversation()) {
+    // Reasons that keep the conversation alive (follow-ups, CLI-subagent takeover)
+    // or finalize it as a success (optimistic command completion, revert) must not
+    // render a stopped banner.
+    if cancellation_reason.is_some_and(|reason| {
+        matches!(
+            reason.conversation_outcome(),
+            CancellationOutcome::KeepInProgress | CancellationOutcome::Succeeded
+        )
+    }) {
         return false;
     }
 
@@ -1723,6 +1765,21 @@ pub fn render_read_files_text<A: Action>(
     formatted_files
 }
 
+/// Returns the display text for a `read_skill` action.
+///
+/// When the skill is found in the manager, formats it as a slash command
+/// (e.g. `/hello-world`). When the skill is unknown, falls back to the
+/// raw reference string (e.g. the path) **without** prepending an extra
+/// `/`, which would otherwise produce paths like `//home/user/…`.
+fn read_skill_display_text(
+    skill: Option<&ParsedSkill>,
+    skill_reference: &SkillReference,
+) -> String {
+    skill
+        .map(|s| format!("/{}", s.name))
+        .unwrap_or_else(|| skill_reference.to_string())
+}
+
 fn render_read_skill(
     props: Props,
     id: &AIAgentActionId,
@@ -1732,12 +1789,8 @@ fn render_read_skill(
     let appearance = Appearance::as_ref(app);
     let skill = SkillManager::as_ref(app).skill_by_reference(skill_reference);
 
-    let display_name = skill
-        .map(|skill| skill.name.clone())
-        .unwrap_or_else(|| skill_reference.to_string());
-
     let formatted_text = render_requested_action_body_text(
-        format!("/{display_name}").into(),
+        read_skill_display_text(skill, skill_reference).into(),
         appearance.monospace_font_family(),
         app,
     );
@@ -1749,27 +1802,29 @@ fn render_read_skill(
     // Renders the 'open skill' button for known, non-bundled skills.
     if let Some(skill) = skill {
         if !skill.is_bundled() {
-            let source = CodeSource::Skill {
-                reference: skill_reference.clone(),
-                location: skill.path.clone(),
-                origin: SkillOpenOrigin::ReadSkill,
-            };
+            if let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned() {
+                let source = CodeSource::Skill {
+                    reference: skill_reference.clone(),
+                    location: skill.path.clone(),
+                    origin: SkillOpenOrigin::ReadSkill,
+                };
 
-            let skill_icon_override = icon_override_for_skill_name(&skill.name);
-            let open_button = render_skill_button(
-                "Open skill",
-                props.state_handles.open_skill_button_handle.clone(),
-                appearance,
-                skill.provider,
-                skill_icon_override,
-                move |ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
-                        source: source.clone(),
-                    });
-                },
-            );
+                let skill_icon_override = icon_override_for_skill_name(&skill.name);
+                let open_button = render_skill_button(
+                    "Open skill",
+                    button_handle,
+                    appearance,
+                    skill.provider,
+                    skill_icon_override,
+                    move |ctx| {
+                        ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
+                            source: source.clone(),
+                        });
+                    },
+                );
 
-            renderable_action = renderable_action.with_action_button(open_button);
+                renderable_action = renderable_action.with_action_button(open_button);
+            }
         }
     }
 
@@ -1851,28 +1906,30 @@ fn render_read_files(
 
     // Renders the 'open skill' button if all files belong to the same skill directory.
     if let Some(skill) = parsed_skill {
-        let reference = SkillManager::handle(app)
-            .as_ref(app)
-            .reference_for_skill_path(&skill.path);
-        let source = CodeSource::Skill {
-            reference,
-            location: skill.path.clone(),
-            origin: SkillOpenOrigin::ReadFiles,
-        };
-        let skill_icon_override = icon_override_for_skill_name(&skill.name);
-        let open_button = render_skill_button(
-            &format!("/{}", skill.name),
-            props.state_handles.read_from_skill_button_handle.clone(),
-            appearance,
-            skill.provider,
-            skill_icon_override,
-            move |ctx| {
-                ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
-                    source: source.clone(),
-                });
-            },
-        );
-        renderable_action = renderable_action.with_action_button(open_button);
+        if let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned() {
+            let reference = SkillManager::handle(app)
+                .as_ref(app)
+                .reference_for_skill_path(&skill.path);
+            let source = CodeSource::Skill {
+                reference,
+                location: skill.path.clone(),
+                origin: SkillOpenOrigin::ReadFiles,
+            };
+            let skill_icon_override = icon_override_for_skill_name(&skill.name);
+            let open_button = render_skill_button(
+                &format!("/{}", skill.name),
+                button_handle,
+                appearance,
+                skill.provider,
+                skill_icon_override,
+                move |ctx| {
+                    ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
+                        source: source.clone(),
+                    });
+                },
+            );
+            renderable_action = renderable_action.with_action_button(open_button);
+        }
     }
 
     renderable_action.render(app).finish()
@@ -2366,9 +2423,13 @@ fn create_formatted_text_for_grep(
         .is_some_and(|status| status.is_queued());
 
     let display_path = if path == "." {
-        "the current directory"
+        "the current directory".to_string()
     } else {
-        path
+        shell_native_absolute_path(
+            path,
+            props.shell_launch_data,
+            props.current_working_directory,
+        )
     };
 
     let formatted_text = if queries.len() == 1 {
@@ -2465,7 +2526,15 @@ fn create_formatted_text_for_file_glob(
         .as_ref()
         .is_some_and(|status| status.is_queued());
 
-    let path = path.unwrap_or("the current directory");
+    let path = path
+        .map(|path| {
+            shell_native_absolute_path(
+                path,
+                props.shell_launch_data,
+                props.current_working_directory,
+            )
+        })
+        .unwrap_or_else(|| "the current directory".to_string());
 
     let formatted_text = if patterns.len() == 1 {
         let pattern = patterns
@@ -3209,7 +3278,15 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         flex.add_child(continue_button);
     }
 
-    if !props.is_conversation_transcript_viewer && !cfg!(target_family = "wasm") {
+    #[cfg(not(target_family = "wasm"))]
+    if !props.is_conversation_transcript_viewer {
+        let fork_button_tooltip = fork_button_action(
+            props.model.conversation_id(app),
+            props.is_cloud_agent_context,
+            app,
+        )
+        .tooltip;
+
         let ui_builder = appearance.ui_builder().clone();
         let fork_button = icon_button(
             appearance,
@@ -3219,7 +3296,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         )
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Fork conversation".to_string())
+                .tool_tip(fork_button_tooltip.to_string())
                 .build()
                 .finish()
         })

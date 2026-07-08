@@ -32,7 +32,7 @@ use warp::terminal::shell::ShellType;
 use warp::workspace::tab_settings::{TabSettings, VerticalTabsDisplayGranularity};
 use warp::workspace::{WorkspaceAction, NEW_TAB_BUTTON_POSITION_ID};
 use warpui_core::event::{Event, ModifiersState};
-use warpui_core::integration::{AssertionCallback, AssertionOutcome, TestStep};
+use warpui_core::integration::{AssertionCallback, AssertionOutcome, StepDataMap, TestStep};
 use warpui_core::windowing::WindowManager;
 use warpui_core::{async_assert, async_assert_eq, SingletonEntity, TypedActionView, WindowId};
 
@@ -1006,6 +1006,215 @@ pub fn test_attach_tab_to_other_window_and_continue_drag() -> Builder {
                 .add_assertion(assert_focused_editor_in_tab(1)),
         )
         .with_step(focus_saved_window(SOURCE_WINDOW_KEY).add_assertion(assert_tab_count(1)))
+}
+
+/// Regression test for a cross-window tab drag that re-enters the source
+/// window's own tab bar (a "put-back") and then drags back out again, all
+/// within one continuous gesture. Previously the put-back performed a live
+/// view-tree transfer back into the source and dragging out reversed it via
+/// `reverse_handoff`, which cancelled the drag's shared `DraggableState` —
+/// orphaning the gesture so no further drag events were processed (no preview
+/// followed the cursor and no window was brought to the foreground). The drop
+/// would then never transfer the tab, leaving the preview window stranded.
+///
+/// Now the source's tab bar is treated like any other target (`GhostInTarget`),
+/// so the gesture survives the oscillation and the final drop on the target
+/// window transfers the tab as expected (two windows, not a stranded third).
+pub fn test_multi_tab_drag_back_to_source_and_out_again() -> Builder {
+    new_builder()
+        .set_should_run_test(drag_tabs_feature_enabled)
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            execute_command_for_single_terminal_in_tab(
+                0,
+                "echo source-zero".to_string(),
+                ExpectedExitStatus::Success,
+                (),
+            )
+            .add_assertion(save_active_window_id(SOURCE_WINDOW_KEY)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Open a new tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            1,
+            "echo source-one".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(add_and_save_window(TARGET_WINDOW_KEY))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo target-only".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(set_saved_window_origin(
+            SOURCE_WINDOW_KEY,
+            vec2f(100.0, 100.0),
+        ))
+        .with_step(set_saved_window_origin(
+            TARGET_WINDOW_KEY,
+            vec2f(900.0, 100.0),
+        ))
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY))
+        .with_step(
+            TestStep::new("Detach, hover target, return to source, leave again, drop on target")
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let start = tab_center(app, source_window_id, 1);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDown {
+                            position: start,
+                            modifiers: ModifiersState::default(),
+                            click_count: 1,
+                            is_first_mouse: false,
+                        },
+                    );
+                })
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let start = tab_center(app, source_window_id, 1);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(12.0, 0.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let start = tab_center(app, source_window_id, 1);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(0.0, 140.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                // Hover the target window's tab bar (GhostInTarget on target).
+                .with_action(drag_over_target_tab_bar)
+                .with_action(drag_over_target_tab_bar)
+                // Return to the source window's own tab bar. In the buggy
+                // version this performed a live put-back; now it is a ghost.
+                .with_action(drag_over_source_tab_bar)
+                .with_action(drag_over_source_tab_bar)
+                // Leave the source again and hover the target once more. In
+                // the buggy version this reverse-handoff cancelled the drag.
+                .with_action(drag_over_target_tab_bar)
+                .with_action(drag_over_target_tab_bar)
+                // Release over the target: the tab should transfer there.
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let target_window_id = *data
+                        .get::<_, WindowId>(TARGET_WINDOW_KEY)
+                        .expect("saved target window id should exist");
+                    let target_tab_bounds = tab_bounds(app, target_window_id, 0);
+                    let drop_point = tab_screen_point(
+                        app,
+                        target_window_id,
+                        0,
+                        8.0,
+                        target_tab_bounds.height() / 2.0,
+                    );
+                    let source_local_target =
+                        source_local_point_for_screen_point(app, source_window_id, drop_point);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseUp {
+                            position: source_local_target,
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                // Two windows (not a stranded preview) and the tab moved out
+                // of the source and into the target.
+                .add_assertion(assert_num_windows_open(2))
+                .add_assertion(assert_total_tab_count(3)),
+        )
+        .with_step(focus_saved_window(TARGET_WINDOW_KEY).add_assertion(assert_tab_count(2)))
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY).add_assertion(assert_tab_count(1)))
+}
+
+/// Dispatches a drag event whose cursor lands on the target window's tab bar,
+/// addressed to the source window (which owns the active drag gesture).
+fn drag_over_target_tab_bar(
+    app: &mut warpui_core::App,
+    _window_id: WindowId,
+    data: &mut StepDataMap,
+) {
+    let source_window_id = *data
+        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+        .expect("saved source window id should exist");
+    let target_window_id = *data
+        .get::<_, WindowId>(TARGET_WINDOW_KEY)
+        .expect("saved target window id should exist");
+    let target_tab_bounds = tab_bounds(app, target_window_id, 0);
+    let over_target = tab_screen_point(
+        app,
+        target_window_id,
+        0,
+        8.0,
+        target_tab_bounds.height() / 2.0,
+    );
+    let source_local_target =
+        source_local_point_for_screen_point(app, source_window_id, over_target);
+    dispatch_mouse_event(
+        app,
+        source_window_id,
+        Event::LeftMouseDragged {
+            position: source_local_target,
+            modifiers: ModifiersState::default(),
+        },
+    );
+}
+
+/// Dispatches a drag event whose cursor lands back on the source window's own
+/// tab bar (the put-back case), addressed to the source window.
+fn drag_over_source_tab_bar(
+    app: &mut warpui_core::App,
+    _window_id: WindowId,
+    data: &mut StepDataMap,
+) {
+    let source_window_id = *data
+        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+        .expect("saved source window id should exist");
+    let source_tab_bounds = tab_bounds(app, source_window_id, 0);
+    let over_source = tab_screen_point(
+        app,
+        source_window_id,
+        0,
+        8.0,
+        source_tab_bounds.height() / 2.0,
+    );
+    let source_local_target =
+        source_local_point_for_screen_point(app, source_window_id, over_source);
+    dispatch_mouse_event(
+        app,
+        source_window_id,
+        Event::LeftMouseDragged {
+            position: source_local_target,
+            modifiers: ModifiersState::default(),
+        },
+    );
 }
 
 pub fn test_single_tab_handoff_continues_drag() -> Builder {

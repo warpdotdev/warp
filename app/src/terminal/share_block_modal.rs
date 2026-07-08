@@ -8,6 +8,7 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde::Serialize;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
+use warpui::browser::escape_html_attribute;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     try_rect_with_z, Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -524,6 +525,8 @@ impl ShareBlockModal {
         if title.is_empty() {
             title = DEFAULT_EMBED_TITLE.to_string();
         }
+        let embed_link = escape_html_attribute(&embed_link);
+        let title = escape_html_attribute(&title);
 
         Some(format!(
             "<iframe src=\"{embed_link}\" title=\"{title}\" style=\"width: {width}px; height: {height}px; border:0; overflow:hidden;\" allow=\"clipboard-read; clipboard-write\"></iframe>"
@@ -1557,3 +1560,7 @@ impl ScrollableElement for SingleBlock {
         self.scroll_by_pixels(delta, ctx);
     }
 }
+
+#[cfg(test)]
+#[path = "share_block_modal_tests.rs"]
+mod tests;

@@ -1,11 +1,15 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
+    Empty, Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -25,8 +29,8 @@ use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
-    token_usage_category_display_name, ModelTokenUsage, FULL_TERMINAL_USE_CATEGORY,
-    PRIMARY_AGENT_CATEGORY,
+    token_usage_category_display_name, ContextWindowSegment, ContextWindowSegmentType,
+    ModelTokenUsage, FULL_TERMINAL_USE_CATEGORY, PRIMARY_AGENT_CATEGORY,
 };
 use crate::ui_components::blended_colors;
 
@@ -45,6 +49,9 @@ pub struct ConversationUsageInfo {
     pub tool_calls: i32,
     pub models: Vec<ModelTokenUsage>,
     pub context_window_usage: f32,
+    /// Per-segment breakdown of the context window. Scaled so the segments
+    /// sum to `context_window_usage`. Empty when the server did not emit it.
+    pub context_window_segments: Vec<ContextWindowSegment>,
     pub files_changed: i32,
     pub lines_added: i32,
     pub lines_removed: i32,
@@ -76,6 +83,8 @@ pub enum ConversationUsageViewAction {
     /// Reveal the truncated rows beyond the first 5 in the per-agent
     /// breakdown.
     ShowAllAgentRows,
+    /// Flip the context-window per-segment breakdown expand toggle.
+    ToggleContextWindowExpanded,
 }
 
 /// View to hold a conversation usage info block.
@@ -107,6 +116,13 @@ pub struct ConversationUsageView {
     /// survives across renders.
     details_toggle_mouse_state: MouseStateHandle,
     show_more_mouse_state: MouseStateHandle,
+    /// Local UI state: whether the context-window per-segment breakdown is
+    /// expanded. Resets on view rebuild, like `details_expanded`.
+    context_window_expanded: bool,
+    /// Mouse state for the context-window breakdown toggle link.
+    context_window_toggle_mouse_state: MouseStateHandle,
+    /// Mouse state for the context-window "Other" segment info tooltip.
+    context_window_other_tooltip_mouse_state: MouseStateHandle,
 }
 
 impl ConversationUsageView {
@@ -126,6 +142,9 @@ impl ConversationUsageView {
             show_all_clicked: false,
             details_toggle_mouse_state: MouseStateHandle::default(),
             show_more_mouse_state: MouseStateHandle::default(),
+            context_window_expanded: false,
+            context_window_toggle_mouse_state: MouseStateHandle::default(),
+            context_window_other_tooltip_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -197,6 +216,9 @@ impl ConversationUsageView {
             show_all_clicked: false,
             details_toggle_mouse_state: MouseStateHandle::default(),
             show_more_mouse_state: MouseStateHandle::default(),
+            context_window_expanded: false,
+            context_window_toggle_mouse_state: MouseStateHandle::default(),
+            context_window_other_tooltip_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -281,6 +303,13 @@ impl ConversationUsageView {
         let theme = appearance.theme();
         let font_size = appearance.ui_font_size() + 2.;
         let text_color = blended_colors::text_main(theme, theme.surface_2());
+        let context_window_breakdown_enabled = FeatureFlag::ContextWindowUsageBreakdown
+            .is_enabled()
+            && !context_window_segment_display_rows(
+                self.usage_info.context_window_usage,
+                &self.usage_info.context_window_segments,
+            )
+            .is_empty();
 
         let rollup = self.rollup(app);
 
@@ -437,10 +466,16 @@ impl ConversationUsageView {
         }
 
         labels.push(render_label_text("Context window used", appearance));
-        let context_usage_str =
-            format!("{}%", (self.usage_info.context_window_usage * 100.).round());
-        let context_window_element = Flex::row()
+        let context_usage_pct = self.usage_info.context_window_usage * 100.;
+        let context_usage_str = if context_window_breakdown_enabled && self.context_window_expanded
+        {
+            format!("{context_usage_pct:.2}%")
+        } else {
+            format!("{}%", context_usage_pct.round())
+        };
+        let mut context_window_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(4.)
             .with_child(
                 Text::new(context_usage_str, appearance.ui_font_family(), font_size)
@@ -456,9 +491,28 @@ impl ConversationUsageView {
                 .with_width(font_size)
                 .with_height(font_size)
                 .finish(),
-            )
-            .finish();
-        values.push(context_window_element);
+            );
+        if context_window_breakdown_enabled {
+            context_window_row =
+                context_window_row
+                    .with_spacing(8.)
+                    .with_child(render_toggle_link(
+                        self.context_window_toggle_mouse_state.clone(),
+                        self.context_window_expanded,
+                        "Hide breakdown",
+                        "View breakdown",
+                        ConversationUsageViewAction::ToggleContextWindowExpanded,
+                        appearance,
+                    ));
+        }
+        values.push(context_window_row.finish());
+
+        self.append_context_window_segment_rows(
+            &mut labels,
+            &mut values,
+            context_window_breakdown_enabled,
+            appearance,
+        );
 
         // Space between sections
         labels.push(
@@ -656,7 +710,14 @@ impl ConversationUsageView {
             return value_text;
         }
 
-        let toggle = self.render_details_toggle(appearance);
+        let toggle = render_toggle_link(
+            self.details_toggle_mouse_state.clone(),
+            self.details_expanded,
+            "Hide details",
+            "View details",
+            ConversationUsageViewAction::ToggleDetailsExpanded,
+            appearance,
+        );
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
@@ -666,53 +727,63 @@ impl ConversationUsageView {
             .finish()
     }
 
-    /// Renders the "View details ▾" / "Hide details ▴" toggle link
-    /// rendered to the right of the "Credits spent (total)" value when
-    /// a rollup applies. The link is styled in the theme's hyperlink
-    /// color (`ansi_fg_blue`) — the same color the `FormattedTextElement`
-    /// uses for in-line hyperlinks throughout Agent Mode — so it reads
-    /// as a clickable affordance rather than a passive label. The
-    /// `Hoverable` carries a `PointingHand` cursor on hover; we don't
-    /// also flip the color or weight on hover because `Text` doesn't
-    /// expose an underline knob and changing color in this two-token
-    /// theme system tends to push the link into the accent space.
-    fn render_details_toggle(&self, appearance: &Appearance) -> Box<dyn Element> {
+    /// Pushes the per-segment context-window breakdown rows into the
+    /// two-column layout when the dev-only breakdown is enabled and
+    /// expanded. Segment percentages are derived from token counts.
+    fn append_context_window_segment_rows(
+        &self,
+        labels: &mut Vec<Box<dyn Element>>,
+        values: &mut Vec<Box<dyn Element>>,
+        context_window_breakdown_enabled: bool,
+        appearance: &Appearance,
+    ) {
+        if !context_window_breakdown_enabled || !self.context_window_expanded {
+            return;
+        }
         let theme = appearance.theme();
+        let background = theme.surface_2();
         let font_size = appearance.ui_font_size() + 2.;
-        let link_color = theme.ansi_fg_blue();
-        let icon_size = font_size;
-        let (label, icon) = if self.details_expanded {
-            ("Hide details", Icon::ChevronUp)
-        } else {
-            ("View details", Icon::ChevronDown)
-        };
-        Hoverable::new(
-            self.details_toggle_mouse_state.clone(),
-            move |_hover_state| {
-                let text_element =
-                    Text::new(label.to_string(), appearance.ui_font_family(), font_size)
-                        .with_color(link_color)
-                        .with_selectable(false)
-                        .finish();
-                let icon_element =
-                    ConstrainedBox::new(icon.to_warpui_icon(link_color.into()).finish())
-                        .with_width(icon_size)
-                        .with_height(icon_size)
-                        .finish();
+        let label_color = blended_colors::text_disabled(theme, background);
+        let value_color = blended_colors::text_sub(theme, background);
+        let rows = context_window_segment_display_rows(
+            self.usage_info.context_window_usage,
+            &self.usage_info.context_window_segments,
+        );
+        for (segment_type, pct) in rows {
+            let label = Text::new(
+                token_usage_category_display_name(segment_type.as_str()),
+                appearance.ui_font_family(),
+                font_size,
+            )
+            .with_color(label_color)
+            .finish();
+            labels.push(if segment_type == ContextWindowSegmentType::Other {
+                let info_icon = render_context_window_other_info_icon(
+                    appearance,
+                    self.context_window_other_tooltip_mouse_state.clone(),
+                    font_size,
+                );
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_main_axis_size(MainAxisSize::Min)
-                    .with_spacing(4.)
-                    .with_child(text_element)
-                    .with_child(icon_element)
+                    .with_child(label)
+                    .with_child(Container::new(info_icon).with_margin_left(4.).finish())
                     .finish()
-            },
-        )
-        .with_cursor(Cursor::PointingHand)
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(ConversationUsageViewAction::ToggleDetailsExpanded);
-        })
-        .finish()
+            } else {
+                label
+            });
+            values.push(
+                Text::new(
+                    format!(
+                        "{pct:.precision$}%",
+                        precision = CONTEXT_WINDOW_SEGMENT_PERCENT_DECIMAL_PLACES
+                    ),
+                    appearance.ui_font_family(),
+                    font_size,
+                )
+                .with_color(value_color)
+                .finish(),
+            );
+        }
     }
 
     /// Renders the avatar + label cell for a per-agent breakdown row,
@@ -882,6 +953,10 @@ impl TypedActionView for ConversationUsageView {
                 self.show_all_clicked = true;
                 ctx.notify();
             }
+            ConversationUsageViewAction::ToggleContextWindowExpanded => {
+                self.context_window_expanded = !self.context_window_expanded;
+                ctx.notify();
+            }
         }
     }
 }
@@ -931,6 +1006,150 @@ fn render_value_text(text: String, appearance: &Appearance) -> Box<dyn Element> 
         .finish()
 }
 
+/// Renders a hyperlink-styled expand/collapse toggle with a chevron.
+fn render_toggle_link(
+    mouse_state: MouseStateHandle,
+    expanded: bool,
+    expanded_label: &'static str,
+    collapsed_label: &'static str,
+    action: ConversationUsageViewAction,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let font_size = appearance.ui_font_size() + 2.;
+    let link_color = theme.ansi_fg_blue();
+    let icon_size = font_size;
+    let (label, icon) = if expanded {
+        (expanded_label, Icon::ChevronUp)
+    } else {
+        (collapsed_label, Icon::ChevronDown)
+    };
+    Hoverable::new(mouse_state, move |_hover_state| {
+        let text_element = Text::new(label.to_string(), appearance.ui_font_family(), font_size)
+            .with_color(link_color)
+            .with_selectable(false)
+            .finish();
+        let icon_element = ConstrainedBox::new(icon.to_warpui_icon(link_color.into()).finish())
+            .with_width(icon_size)
+            .with_height(icon_size)
+            .finish();
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(4.)
+            .with_child(text_element)
+            .with_child(icon_element)
+            .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(action.clone());
+    })
+    .finish()
+}
+
+/// Computes the per-segment display rows for the context-window breakdown.
+/// Each row's percentage is derived as
+/// `context_window_usage * token_count / total_positive_segment_token_count * 100`,
+/// so the segments sum to `context_window_usage`. Rows that round to zero
+/// are dropped. Rows are sorted by percentage descending with `Other` last.
+fn context_window_segment_display_rows(
+    context_window_usage: f32,
+    segments: &[ContextWindowSegment],
+) -> Vec<(ContextWindowSegmentType, f32)> {
+    let total: u32 = segments
+        .iter()
+        .map(|s| s.token_count)
+        .filter(|&t| t > 0)
+        .sum();
+    if total == 0 || context_window_usage <= 0. {
+        return Vec::new();
+    }
+    let total_f = total as f32;
+    let multiplier = 10f32.powi(CONTEXT_WINDOW_SEGMENT_PERCENT_DECIMAL_PLACES as i32);
+    let mut rows: Vec<(ContextWindowSegmentType, f32)> = segments
+        .iter()
+        .filter_map(|s| {
+            if s.token_count == 0 {
+                return None;
+            }
+            let pct = (context_window_usage * (s.token_count as f32) / total_f * 100. * multiplier)
+                .round()
+                / multiplier;
+            (pct != 0.).then_some((s.segment_type, pct))
+        })
+        .collect();
+    rows.sort_by(|a, b| match (a.0, b.0) {
+        (ContextWindowSegmentType::Other, _) => Ordering::Greater,
+        (_, ContextWindowSegmentType::Other) => Ordering::Less,
+        _ => b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal),
+    });
+    rows
+}
+
+/// Renders the "Other" segment info icon with an unclipped overlay tooltip.
+fn render_context_window_other_info_icon(
+    appearance: &Appearance,
+    mouse_state: MouseStateHandle,
+    font_size: f32,
+) -> Box<dyn Element> {
+    let icon_size = font_size * 0.85;
+    Hoverable::new(mouse_state, move |state| {
+        let icon_color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().surface_2());
+        let icon = ConstrainedBox::new(Icon::Info.to_warpui_icon(icon_color).finish())
+            .with_width(icon_size)
+            .with_height(icon_size)
+            .finish();
+        let mut stack = Stack::new();
+        stack.add_child(icon);
+        if state.is_hovered() {
+            stack.add_positioned_overlay_child(
+                render_context_window_other_tooltip(appearance),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., -6.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopMiddle,
+                    ChildAnchor::BottomMiddle,
+                ),
+            );
+        }
+        stack.finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .finish()
+}
+
+/// Renders the explanatory tooltip for the context-window "Other" segment.
+fn render_context_window_other_tooltip(appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let background = theme.tooltip_background();
+    let text = ConstrainedBox::new(
+        Text::new(
+            "Includes other request context and temporary instructions added to help the agent better respond.".to_string(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size() - 2.,
+        )
+        .soft_wrap(true)
+        .with_color(theme.main_text_color(background.into()).into_solid())
+        .finish(),
+    )
+    .with_max_width(CONTEXT_WINDOW_OTHER_TOOLTIP_MAX_WIDTH)
+    .finish();
+    Container::new(text)
+        .with_background_color(background)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+        .with_border(Border::all(1.).with_border_color(theme.outline().into_solid()))
+        .with_horizontal_padding(8.)
+        .with_vertical_padding(5.)
+        .with_drop_shadow(
+            DropShadow::new_with_standard_offset_and_spread(ColorU::new(0, 0, 0, 48))
+                .with_offset(vec2f(0., 4.)),
+        )
+        .finish()
+}
+
 /// Renders a placeholder value cell that occupies one full line of the
 /// value column without painting any visible text. Used opposite the
 /// "Show N more" link so the two-column flex stays row-aligned for the
@@ -958,6 +1177,12 @@ const PER_AGENT_LABEL_MAX_WIDTH: f32 = 110.;
 /// invariants 5e (≤ 5 rows render in full) and 5f (> 5 rows render the
 /// first 5 followed by a "Show N more" link).
 const PER_AGENT_BREAKDOWN_TRUNCATION_CAP: usize = 5;
+
+/// Decimal precision used for visible context-window segment percentages.
+const CONTEXT_WINDOW_SEGMENT_PERCENT_DECIMAL_PLACES: usize = 2;
+
+/// Maximum width of the context-window "Other" tooltip before wrapping.
+const CONTEXT_WINDOW_OTHER_TOOLTIP_MAX_WIDTH: f32 = 280.;
 
 #[cfg(test)]
 #[path = "conversation_usage_view_tests.rs"]

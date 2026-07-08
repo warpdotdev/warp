@@ -467,7 +467,12 @@ impl NotebookCommand {
         });
     }
 
-    fn on_buffer_content_updated(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
+    fn on_buffer_content_updated(
+        &mut self,
+        _: ModelHandle<Buffer>,
+        event: &BufferEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // If the buffer changes, check to see if we should update the dropdown
         match event {
             BufferEvent::ContentChanged { origin, delta, .. }

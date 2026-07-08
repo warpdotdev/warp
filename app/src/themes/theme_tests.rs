@@ -451,7 +451,8 @@ fn in_memory_theme_generation_test() {
             dark_mode_colors(),
             Some(Image {
                 source: AssetSource::LocalFile {
-                    path: mountains_bg_path_string.clone()
+                    path: mountains_bg_path_string.clone(),
+                    content_version: None,
                 },
                 opacity: 30,
             }),
@@ -475,7 +476,8 @@ fn in_memory_theme_generation_test() {
             light_mode_colors(),
             Some(Image {
                 source: AssetSource::LocalFile {
-                    path: mountains_bg_path_string
+                    path: mountains_bg_path_string,
+                    content_version: None,
                 },
                 opacity: 30,
             }),

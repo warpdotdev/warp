@@ -39,7 +39,7 @@ impl History {
             if !is_session_initialized {
                 let (tx, rx) = async_channel::unbounded();
                 let history_handle_clone = history_handle.clone();
-                history_handle.update(app, move |_, ctx| {
+                app.update(|ctx| {
                     ctx.subscribe_to_model(&history_handle_clone, move |_, event, _| {
                         let HistoryEvent::Initialized(event_id) = event;
                         if session_id == *event_id {

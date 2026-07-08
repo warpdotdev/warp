@@ -55,7 +55,7 @@ pub fn onboarding_slide_content(
         .with_child(Shrinkable::new(1., scrollable).finish())
         .with_child(
             Container::new(bottom_nav)
-                .with_margin_top(24.)
+                .with_margin_top(16.)
                 .with_padding_right(PADDING)
                 .finish(),
         )
@@ -65,7 +65,7 @@ pub fn onboarding_slide_content(
     // inside the scrollable and bottom nav so the scrollbar stays at the edge.
     Container::new(outer)
         .with_padding_top(PADDING)
-        .with_padding_bottom(PADDING)
+        .with_padding_bottom(PADDING - 16.)
         .with_padding_left(PADDING)
         .finish()
 }

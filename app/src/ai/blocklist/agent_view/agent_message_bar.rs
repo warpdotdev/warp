@@ -8,7 +8,9 @@ use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{Container, Element, Empty, MouseStateHandle};
 use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
-use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, View, ViewContext};
+use warpui::{
+    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+};
 
 use super::{AgentViewState, EphemeralMessageModel, EphemeralMessageModelEvent};
 use crate::ai::agent::conversation::AIConversation;
@@ -73,6 +75,8 @@ pub struct AgentMessageBarMouseStates {
     pub figma_install_button: MouseStateHandle,
     /// Mouse state handle for the "Enable Figma MCP" contextual button.
     pub figma_enable_button: MouseStateHandle,
+    /// Mouse state handle for dismissing the ambient credits banner.
+    pub ambient_credits_banner_close: MouseStateHandle,
 }
 
 /// Renders contextual hint text at the bottom of the agent view status bar.
@@ -95,6 +99,10 @@ pub struct AgentMessageBar {
 
 impl Entity for AgentMessageBar {
     type Event = ();
+}
+#[derive(Clone, Debug)]
+pub enum AgentMessageBarAction {
+    DismissAmbientCreditsBanner,
 }
 
 impl AgentMessageBar {
@@ -222,7 +230,11 @@ impl AgentMessageBar {
         }
 
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, event, ctx| {
-            if matches!(event, AIRequestUsageModelEvent::RequestUsageUpdated) {
+            if matches!(
+                event,
+                AIRequestUsageModelEvent::RequestUsageUpdated
+                    | AIRequestUsageModelEvent::AmbientCreditsBannerDismissed
+            ) {
                 ctx.notify();
             }
         });
@@ -353,16 +365,24 @@ impl View for AgentMessageBar {
         // Show credits banner when user has ambient credits remaining.
         let right_element = if cfg!(target_family = "wasm") {
             None
-        } else if let Some(credits) =
-            AIRequestUsageModel::as_ref(app).ambient_only_credits_remaining()
-        {
-            if credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD {
-                Some(render_ambient_credits_banner(credits, app))
+        } else {
+            let request_usage_model = AIRequestUsageModel::as_ref(app);
+            if let Some(credits) = request_usage_model.ambient_only_credits_remaining() {
+                if credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD
+                    && !request_usage_model.is_ambient_credits_banner_dismissed()
+                {
+                    Some(render_ambient_credits_banner(
+                        credits,
+                        self.mouse_states.ambient_credits_banner_close.clone(),
+                        AgentMessageBarAction::DismissAmbientCreditsBanner,
+                        app,
+                    ))
+                } else {
+                    None
+                }
             } else {
                 None
             }
-        } else {
-            None
         };
 
         // Append a Figma MCP chip to the message if applicable.
@@ -405,6 +425,19 @@ impl View for AgentMessageBar {
     }
 }
 
+impl TypedActionView for AgentMessageBar {
+    type Action = AgentMessageBarAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            AgentMessageBarAction::DismissAmbientCreditsBanner => {
+                AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.dismiss_ambient_credits_banner(ctx);
+                });
+            }
+        }
+    }
+}
 /// Arguments for agent message producers.
 #[derive(Copy, Clone)]
 pub struct AgentMessageArgs<'a> {
@@ -756,8 +789,14 @@ fn should_fork_from_last_known_good_state(
         | RenderableAIError::ContextWindowExceeded(_)
         | RenderableAIError::InvalidApiKey { .. }
         | RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { .. } => false,
-        RenderableAIError::InternalWarpError => true,
+        // A shell-exit failure can't resume in this (now-dead) pane, but the user
+        // can fork from the last known good state to continue in a fresh one.
+        RenderableAIError::InternalWarpError | RenderableAIError::AgentExitedShell => true,
         RenderableAIError::Other {
+            will_attempt_resume,
+            ..
+        }
+        | RenderableAIError::TransientNetworkError {
             will_attempt_resume,
             ..
         } => !will_attempt_resume,
@@ -799,24 +838,15 @@ impl MessageProvider<AgentMessageArgs<'_>> for ForkSlashCommandMessageProducer {
             }
         };
 
-        // `/fork` and `/continue-locally` open in a new pane with Enter and a new tab with
-        // Cmd/Ctrl+Enter. Other fork-like commands open in the current pane with Enter and a new
-        // pane with Cmd/Ctrl+Enter.
-        let primary_to_new_pane = command_name == commands::FORK.name || is_continue_locally;
-        let (primary_label, secondary_label) = if primary_to_new_pane {
-            (" new pane", " new tab")
-        } else {
-            (" current pane", " new pane")
-        };
-
+        // All fork-style commands open a new pane on Enter and a new tab on Cmd/Ctrl+Enter.
         Some(Message::new(vec![
             MessageItem::keystroke(Keystroke {
                 key: "enter".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text(primary_label),
+            MessageItem::text(" new pane"),
             MessageItem::keystroke(modifier_keystroke),
-            MessageItem::text(secondary_label),
+            MessageItem::text(" new tab"),
         ]))
     }
 }

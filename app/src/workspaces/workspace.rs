@@ -377,6 +377,11 @@ pub struct ByoApiKeyPolicy {
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+pub struct ByoEndpointPolicy {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct PurchaseAddOnCreditsPolicy {
     pub enabled: bool,
 }
@@ -474,6 +479,7 @@ pub struct Tier {
     pub usage_based_pricing_policy: Option<UsageBasedPricingPolicy>,
     pub codebase_context_policy: Option<CodebaseContextPolicy>,
     pub byo_api_key_policy: Option<ByoApiKeyPolicy>,
+    pub byo_endpoint_policy: Option<ByoEndpointPolicy>,
     pub purchase_add_on_credits_policy: Option<PurchaseAddOnCreditsPolicy>,
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
@@ -703,6 +709,12 @@ impl BillingMetadata {
             .is_some_and(|policy| policy.enabled)
     }
 
+    pub fn is_byo_endpoint_enabled(&self) -> bool {
+        self.tier
+            .byo_endpoint_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
     pub fn has_overages_used(&self) -> bool {
         self.ai_overages
             .as_ref()
@@ -747,6 +759,17 @@ mod tests;
 pub struct LlmHostSettings {
     pub enabled: bool,
     pub enablement_setting: HostEnablementSetting,
+    /// Full resource name of the GCP workload identity provider that Gemini Enterprise
+    /// (GEAP) credential minting exchanges Warp OIDC JWTs against. Only populated on the
+    /// `GeminiEnterprise` host entry; `None` for other hosts and for workspace caches
+    /// written before this field existed.
+    #[serde(default)]
+    pub gcp_audience: Option<String>,
+    /// Email of the GCP service account that Gemini Enterprise credential minting
+    /// impersonates after the STS exchange. `None` (or empty) means the federated token
+    /// is used directly.
+    #[serde(default)]
+    pub gcp_sa_email: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

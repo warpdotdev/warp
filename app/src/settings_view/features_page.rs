@@ -67,8 +67,8 @@ use crate::settings::{
     ChangelogSettings, CloudPreferencesSettings, CodeEditorLineNumberMode,
     CodeEditorLineNumberModeSetting, CodeSettings, CommandCorrections, CompletionsOpenWhileTyping,
     CopyOnSelect, CtrlTabBehavior, DefaultSessionMode, EnableSlashCommandsInTerminal,
-    EnableSshWrapper, ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings, GlobalHotkeyMode,
-    InputSettings, InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
+    ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, InputSettings,
+    InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
     MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
     PreferredGraphicsBackend, QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent,
     SelectionSettings, ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate,
@@ -96,8 +96,8 @@ use crate::terminal::session_settings::{
     SessionSettingsChangedEvent, ShouldConfirmCloseSession,
 };
 use crate::terminal::settings::{
-    AsyncFindEnabled, MaximumGridSize, ShowTerminalZeroStateBlock, TerminalSettings,
-    TerminalSettingsChangedEvent, UseAudibleBell,
+    AsyncFindEnabled, MaximumGridSize, Osc52ClipboardAccess, Osc52ClipboardAccessSetting,
+    ShowTerminalZeroStateBlock, TerminalSettings, TerminalSettingsChangedEvent, UseAudibleBell,
 };
 use crate::terminal::{BlockListSettings, PreserveInputFocusOnBlockSelection, SnackbarEnabled};
 use crate::undo_close::UndoCloseSettings;
@@ -302,18 +302,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         .with_enabled(|| FeatureFlag::AllowIgnoringInputSuggestions.is_enabled()),
     ];
 
-    if !FeatureFlag::SSHTmuxWrapper.is_enabled() {
-        toggle_binding_pairs.push(ToggleSettingActionPair::new(
-            "Warp SSH wrapper",
-            builder(SettingsAction::FeaturesPageToggle(
-                #[allow(deprecated)]
-                FeaturesPageAction::ToggleSshWrapper,
-            )),
-            context,
-            #[allow(deprecated)]
-            flags::LEGACY_SSH_WRAPPER_CONTEXT_FLAG,
-        ))
-    }
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "reuse existing SSH ControlMaster in the Warp SSH wrapper",
+        builder(SettingsAction::FeaturesPageToggle(
+            FeaturesPageAction::ToggleSshReuseControlMaster,
+        )),
+        context,
+        flags::SSH_REUSE_CONTROL_MASTER_CONTEXT_FLAG,
+    ));
 
     toggle_binding_pairs.push(ToggleSettingActionPair::new(
         "show tooltip on click on links",
@@ -736,8 +732,7 @@ pub enum FeaturesPageAction {
     ToggleAutocompleteSymbols,
     ToggleLinuxClipboardSelection,
     ToggleOpenLinksInDesktopApp,
-    #[deprecated]
-    ToggleSshWrapper,
+    ToggleSshReuseControlMaster,
     ToggleSnackbar,
     ToggleLinkTooltip,
     ToggleCompletionsOpenWhileTyping,
@@ -795,6 +790,7 @@ pub enum FeaturesPageAction {
     SetCtrlTabBehavior(CtrlTabBehavior),
     SetPreferredGraphicsBackend(Option<GraphicsBackend>),
     SetNewTabPlacement(NewTabPlacement),
+    SetOsc52ClipboardAccess(Osc52ClipboardAccess),
     SetDefaultSessionMode(DefaultSessionMode),
     SetDefaultTabConfig(String),
     SearchForKeybinding(String),
@@ -885,7 +881,6 @@ impl FeaturesPageAction {
         let reporting_settings = AltScreenReporting::as_ref(ctx);
         let selection_settings = SelectionSettings::as_ref(ctx);
         let input_settings = InputSettings::as_ref(ctx);
-        let ssh_settings = SshSettings::as_ref(ctx);
         let keys_settings = KeysSettings::as_ref(ctx);
         match self {
             Self::ToggleCopyOnSelect => TelemetryEvent::FeaturesPageAction {
@@ -926,10 +921,13 @@ impl FeaturesPageAction {
                 action: "ToggleAutocompleteSymbols".to_string(),
                 value: to_string(*AppEditorSettings::as_ref(ctx).autocomplete_symbols),
             },
-            #[allow(deprecated)]
-            Self::ToggleSshWrapper => TelemetryEvent::FeaturesPageAction {
-                action: "ToggleSshWrapper".to_string(),
-                value: to_string(*ssh_settings.enable_legacy_ssh_wrapper.value()),
+            Self::ToggleSshReuseControlMaster => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleSshReuseControlMaster".to_string(),
+                value: to_string(
+                    *SshSettings::as_ref(ctx)
+                        .reuse_existing_control_master
+                        .value(),
+                ),
             },
             Self::SetGlobalHotkeyMode(mode) => TelemetryEvent::FeaturesPageAction {
                 action: "SetGlobalHotkeyMode".to_string(),
@@ -1207,6 +1205,10 @@ impl FeaturesPageAction {
                 action: "SetNewTabPlacement".to_string(),
                 value: format!("{new_tab_placement:?}"),
             },
+            Self::SetOsc52ClipboardAccess(access) => TelemetryEvent::FeaturesPageAction {
+                action: "SetOsc52ClipboardAccess".to_string(),
+                value: format!("{access:?}"),
+            },
             Self::SetDefaultSessionMode(mode) => TelemetryEvent::FeaturesPageAction {
                 action: "SetDefaultSessionMode".to_string(),
                 value: format!("{mode:?}"),
@@ -1407,10 +1409,6 @@ pub struct FeaturesPageView {
     mouse_scroll_input_editor: ViewHandle<EditorView>,
     valid_mouse_scroll_multiplier: bool,
 
-    // Whether or not the SSH wrapper value was changed while the page has been
-    // open.
-    ssh_wrapper_toggled: bool,
-
     #[cfg(feature = "local_fs")]
     external_editor_view: ViewHandle<features::ExternalEditorView>,
     word_boundary_editor: ViewHandle<EditorView>,
@@ -1418,6 +1416,7 @@ pub struct FeaturesPageView {
     tab_behavior_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     graphics_backend_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     new_tab_placement_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+    osc52_clipboard_access_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     default_session_mode_dropdown: ViewHandle<FilterableDropdown<FeaturesPageAction>>,
     tab_behavior: Tracked<TabBehavior>,
     completions_keystroke: Tracked<String>,
@@ -1514,12 +1513,10 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 })
             }
-            #[allow(deprecated)]
-            ToggleSshWrapper => {
-                self.ssh_wrapper_toggled = true;
+            ToggleSshReuseControlMaster => {
                 SshSettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
                     report_if_error!(ssh_settings
-                        .enable_legacy_ssh_wrapper
+                        .reuse_existing_control_master
                         .toggle_and_save_value(ctx));
                 });
             }
@@ -1925,6 +1922,13 @@ impl TypedActionView for FeaturesPageView {
             SetNewTabPlacement(new_tab_placement) => {
                 self.set_new_tab_placement(new_tab_placement, ctx)
             }
+            SetOsc52ClipboardAccess(access) => {
+                TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+                    report_if_error!(terminal_settings
+                        .osc52_clipboard_access
+                        .set_value(*access, ctx));
+                });
+            }
             SetDefaultSessionMode(mode) => self.set_default_session_mode(mode, ctx),
             SetDefaultTabConfig(path) => {
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
@@ -2153,9 +2157,6 @@ impl FeaturesPageView {
         });
 
         ctx.subscribe_to_model(&SelectionSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
-
-        // TODO(CORE-3029): Remove when we launch the new SSH Warpification.
-        ctx.subscribe_to_model(&SshSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&AltScreenReporting::handle(ctx), |_, _, _, ctx| {
             ctx.notify()
         });
@@ -2266,6 +2267,15 @@ impl FeaturesPageView {
                         );
                     });
                 }
+                if matches!(
+                    event,
+                    TerminalSettingsChangedEvent::Osc52ClipboardAccessSetting { .. }
+                ) {
+                    Self::update_osc52_clipboard_access_dropdown(
+                        me.osc52_clipboard_access_dropdown.clone(),
+                        ctx,
+                    );
+                }
                 ctx.notify()
             },
         );
@@ -2344,8 +2354,10 @@ impl FeaturesPageView {
         });
 
         let new_tab_placement_dropdown = ctx.add_typed_action_view(Dropdown::new);
-
         Self::update_new_tab_placement_dropdown(new_tab_placement_dropdown.clone(), ctx);
+
+        let osc52_clipboard_access_dropdown = ctx.add_typed_action_view(Dropdown::new);
+        Self::update_osc52_clipboard_access_dropdown(osc52_clipboard_access_dropdown.clone(), ctx);
 
         ctx.subscribe_to_model(&TabSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(event, TabSettingsChangedEvent::NewTabPlacement { .. }) {
@@ -2618,8 +2630,6 @@ impl FeaturesPageView {
             max_block_size_input_editor: block_size_editor,
             valid_max_block_size: true,
 
-            ssh_wrapper_toggled: false,
-
             #[cfg(feature = "local_fs")]
             external_editor_view,
             word_boundary_editor,
@@ -2630,6 +2640,7 @@ impl FeaturesPageView {
             code_editor_line_number_mode_dropdown,
             graphics_backend_dropdown,
             new_tab_placement_dropdown,
+            osc52_clipboard_access_dropdown,
             default_session_mode_dropdown,
             tab_behavior: Default::default(),
 
@@ -2747,14 +2758,6 @@ impl FeaturesPageView {
         let mut session_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![];
 
         session_widgets.push(Box::new(BlockLimitWidget::default()));
-
-        if !FeatureFlag::SSHTmuxWrapper.is_enabled()
-            && SshSettings::as_ref(ctx)
-                .enable_legacy_ssh_wrapper
-                .is_supported_on_current_platform()
-        {
-            session_widgets.push(Box::new(SSHWrapperWidget::default()));
-        }
 
         let session_settings = SessionSettings::as_ref(ctx);
 
@@ -2955,6 +2958,7 @@ impl FeaturesPageView {
 
         terminal_widgets.push(Box::new(SmartSelectWidget::default()));
         terminal_widgets.push(Box::new(CopyOnSelectWidget::default()));
+        terminal_widgets.push(Box::new(Osc52ClipboardAccessWidget::default()));
         terminal_widgets.push(Box::new(NewTabPlacementWidget::default()));
 
         let mut system_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![];
@@ -3578,6 +3582,39 @@ impl FeaturesPageView {
     fn set_new_tab_placement(&mut self, value: &NewTabPlacement, ctx: &mut ViewContext<Self>) {
         let _ = TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
             tab_settings.new_tab_placement.set_value(*value, ctx)
+        });
+    }
+
+    fn update_osc52_clipboard_access_dropdown(
+        dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        dropdown.update(ctx, |dropdown, ctx| {
+            let values = vec![
+                Osc52ClipboardAccess::Deny,
+                Osc52ClipboardAccess::WriteOnly,
+                Osc52ClipboardAccess::ReadWrite,
+            ];
+            let current_value = *TerminalSettings::as_ref(ctx).osc52_clipboard_access;
+
+            let selected_index = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or(0);
+
+            dropdown.set_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.as_dropdown_label(),
+                            FeaturesPageAction::SetOsc52ClipboardAccess(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
         });
     }
 
@@ -4324,10 +4361,6 @@ impl SettingsPageMeta for FeaturesPageView {
             display_count.0 = ctx.windows().display_count();
             ctx.notify();
         });
-
-        // Make sure we're not already showing the hint text for the SSH wrapper
-        // toggle when the user switches to the page.
-        self.ssh_wrapper_toggled = false;
 
         // Fetch the latest tab behavior state in case the user changed their keybindings
         // since we last loaded this page.
@@ -5152,65 +5185,6 @@ impl SettingsWidget for BlockLimitWidget {
 }
 
 #[derive(Default)]
-struct SSHWrapperWidget {
-    additional_info_link: MouseStateHandle,
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for SSHWrapperWidget {
-    type View = FeaturesPageView;
-
-    fn search_terms(&self) -> &str {
-        "ssh wrapper"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ui_builder = appearance.ui_builder();
-        render_body_item::<FeaturesPageAction>(
-            "Warp SSH Wrapper".into(),
-            Some(AdditionalInfo {
-                mouse_state: self.additional_info_link.clone(),
-                on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "https://docs.warp.dev/terminal/warpify/ssh-legacy#implementation".into(),
-                )),
-                secondary_text: if view.ssh_wrapper_toggled {
-                    Some("This change will take effect in new sessions".to_string())
-                } else {
-                    None
-                },
-                tooltip_override_text: None,
-            }),
-            LocalOnlyIconState::for_setting(
-                EnableSshWrapper::storage_key(),
-                EnableSshWrapper::sync_to_cloud(),
-                &mut view
-                    .button_mouse_states
-                    .local_only_icon_tooltip_states
-                    .borrow_mut(),
-                app,
-            ),
-            ToggleState::Enabled,
-            appearance,
-            ui_builder
-                .switch(self.switch_state.clone())
-                .check(*SshSettings::as_ref(app).enable_legacy_ssh_wrapper.value())
-                .build()
-                .on_click(move |ctx, _, _| {
-                    #[allow(deprecated)]
-                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleSshWrapper);
-                })
-                .finish(),
-            None,
-        )
-    }
-}
-
-#[derive(Default)]
 struct DesktopNotificationsWidget {
     additional_info_link: MouseStateHandle,
     switch_state: SwitchStateHandle,
@@ -5611,6 +5585,13 @@ impl SettingsWidget for ExtraMetaKeysWidget {
             ))
             .finish()
     }
+}
+
+/// Stable `&'static str` id for the global-hotkey settings widget, exposed for
+/// the `warp://settings?widget=global_hotkey` deeplink (see
+/// `settings_widget_deeplink_target`).
+pub(crate) fn global_hotkey_widget_id() -> &'static str {
+    GlobalHotkeyWidget::static_widget_id()
 }
 
 #[derive(Default)]
@@ -7210,6 +7191,42 @@ impl SettingsWidget for CopyOnSelectWidget {
                 })
                 .finish(),
             None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct Osc52ClipboardAccessWidget {}
+
+impl SettingsWidget for Osc52ClipboardAccessWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "clipboard osc 52 osc52 paste copy access terminal program"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            "Clipboard access (OSC 52)",
+            Some("Controls whether programs running in the terminal can read or write your system clipboard."),
+            None,
+            LocalOnlyIconState::for_setting(
+                Osc52ClipboardAccessSetting::storage_key(),
+                Osc52ClipboardAccessSetting::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            None,
+            &view.osc52_clipboard_access_dropdown,
         )
     }
 }

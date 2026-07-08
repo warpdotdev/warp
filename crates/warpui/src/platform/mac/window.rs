@@ -1254,6 +1254,39 @@ impl WindowExt for &dyn platform::Window {
     }
 }
 
+/// Invokes the platform `window_resized` callback for `window`.
+///
+/// `window_resized` mutably borrows the global app via [`app::callback_dispatcher`]. AppKit
+/// can fire frame-size callbacks synchronously while we are already inside that borrow — for
+/// example, ordering a torn-off tab's preview window during event dispatch triggers a
+/// fullscreen transition that synchronously calls `setFrameSize:`. Invoking `window_resized`
+/// synchronously in that situation panics with "RefCell already borrowed".
+///
+/// To stay safe we defer the callback onto the foreground executor whenever the caller
+/// requests async dispatch (`force_async`) or the app is currently borrowed. Deferral is the
+/// same path AppKit-initiated resizes already use; it runs once the outer borrow is released.
+/// Callers still perform the drawable/renderer resize synchronously, since that touches no app
+/// state.
+fn dispatch_window_resized(window: &Rc<WindowState>, force_async: bool) {
+    if force_async || !app::callback_dispatcher().can_borrow_mut() {
+        let weak_window_state = Rc::downgrade(window);
+        window
+            .executor
+            .spawn(async move {
+                if let Some(window_state) = weak_window_state.upgrade() {
+                    app::callback_dispatcher()
+                        .for_window(&Window(window_state.clone()))
+                        .window_resized(window_state.as_ref());
+                }
+            })
+            .detach();
+    } else {
+        app::callback_dispatcher()
+            .for_window(&Window(window.clone()))
+            .window_resized(window.as_ref());
+    }
+}
+
 #[no_mangle]
 extern "C-unwind" fn warp_view_did_change_backing_properties(this: &Object, async_callback: bool) {
     // SAFETY: `this` is a WarpHostView carrying the window-state ivar; its backing
@@ -1287,24 +1320,7 @@ extern "C-unwind" fn warp_view_did_change_backing_properties(this: &Object, asyn
 
     window.resize_renderer();
 
-    if async_callback {
-        // Dispatch the callback asynchronously if async_callback is true.
-        let weak_window_state = Rc::downgrade(window);
-        window
-            .executor
-            .spawn(async move {
-                if let Some(window_state) = weak_window_state.upgrade() {
-                    app::callback_dispatcher()
-                        .for_window(&Window(window_state.clone()))
-                        .window_resized(window_state.as_ref());
-                }
-            })
-            .detach();
-    } else {
-        app::callback_dispatcher()
-            .for_window(&Window(window.clone()))
-            .window_resized(window.as_ref());
-    }
+    dispatch_window_resized(window, async_callback);
 }
 
 #[no_mangle]
@@ -1377,24 +1393,7 @@ extern "C-unwind" fn warp_view_set_frame_size(this: &Object, size: NSSize, async
 
     window.resize_renderer();
 
-    if async_callback {
-        // Dispatch the callback asynchronously if async_callback is true.
-        let weak_window_state = Rc::downgrade(window);
-        window
-            .executor
-            .spawn(async move {
-                if let Some(window_state) = weak_window_state.upgrade() {
-                    app::callback_dispatcher()
-                        .for_window(&Window(window_state.clone()))
-                        .window_resized(window_state.as_ref());
-                }
-            })
-            .detach();
-    } else {
-        app::callback_dispatcher()
-            .for_window(&Window(window.clone()))
-            .window_resized(window.as_ref());
-    }
+    dispatch_window_resized(window, async_callback);
 }
 
 #[no_mangle]

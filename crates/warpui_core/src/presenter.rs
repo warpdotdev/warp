@@ -1,3 +1,6 @@
+#[cfg(feature = "tui")]
+pub mod tui;
+
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -18,8 +21,8 @@ use crate::scene::{Scene, ZIndex};
 use crate::text_layout::LayoutCache;
 use crate::zoom::Scale;
 use crate::{
-    fonts, Action, AppContext, ClipBounds, EntityId, TaskId, View, ViewHandle, WindowId,
-    WindowInvalidation,
+    fonts, Action, AppContext, ClipBounds, EntityId, EntityIdMap, EntityIdSet, TaskId, View,
+    ViewHandle, WindowId, WindowInvalidation,
 };
 
 pub struct Presenter {
@@ -27,16 +30,15 @@ pub struct Presenter {
     frame_count: usize,
     window_id: WindowId,
     scene: Option<Rc<Scene>>,
-    rendered_views: HashMap<EntityId, Box<dyn Element>>,
-    parents: HashMap<EntityId, EntityId>,
+    rendered_views: EntityIdMap<Box<dyn Element>>,
     text_layout_cache: LayoutCache,
     position_cache: PositionCache,
     highlighted_view: Option<EntityId>,
 }
 
 pub struct LayoutContext<'a> {
-    rendered_views: &'a mut HashMap<EntityId, Box<dyn Element>>,
-    parents: &'a mut HashMap<EntityId, EntityId>,
+    rendered_views: &'a mut EntityIdMap<Box<dyn Element>>,
+    parents: &'a mut EntityIdMap<EntityId>,
     pub text_layout_cache: &'a LayoutCache,
     view_stack: Vec<EntityId>,
     pub window_size: Vector2F,
@@ -44,12 +46,12 @@ pub struct LayoutContext<'a> {
 }
 
 pub struct AfterLayoutContext<'a> {
-    rendered_views: &'a mut HashMap<EntityId, Box<dyn Element>>,
+    rendered_views: &'a mut EntityIdMap<Box<dyn Element>>,
     pub text_layout_cache: &'a LayoutCache,
 }
 
 pub struct PaintContext<'a> {
-    rendered_views: &'a mut HashMap<EntityId, Box<dyn Element>>,
+    rendered_views: &'a mut EntityIdMap<Box<dyn Element>>,
     pub font_cache: &'a FontCache,
     pub text_layout_cache: &'a LayoutCache,
     pub position_cache: &'a mut PositionCache,
@@ -64,7 +66,7 @@ pub struct PaintContext<'a> {
     repaint_at: Option<Instant>,
     pending_assets: HashSet<AssetHandle>,
     /// Keep track of all the views that were actually painted in this scene.
-    views_painted: HashSet<EntityId>,
+    views_painted: EntityIdSet,
 }
 
 #[derive(Default)]
@@ -76,7 +78,7 @@ pub struct DispatchResult {
     pub actions: Vec<DispatchedAction>,
 
     /// All views to notify as a result of the event being handled
-    pub notified: HashSet<EntityId>,
+    pub notified: EntityIdSet,
 
     /// Views that need to be notified after a delay
     pub notify_timers_to_set: HashMap<TaskId, ViewToNotify>,
@@ -219,13 +221,13 @@ pub struct EventContext<'a> {
     // Scene is optional because it's technically possible for a window event to
     // be fired before the first scene has been rendered.
     scene: Option<Rc<Scene>>,
-    rendered_views: &'a mut HashMap<EntityId, Box<dyn Element>>,
+    rendered_views: &'a mut EntityIdMap<Box<dyn Element>>,
     actions: Vec<DispatchedAction>,
     pub font_cache: &'a FontCache,
     pub text_layout_cache: &'a LayoutCache,
     position_cache: &'a PositionCache,
     view_stack: Vec<EntityId>,
-    notified: HashSet<EntityId>,
+    notified: EntityIdSet,
     /// A map of timer ids to (view_id, duration) pairs for delayed notification
     notify_timers_to_set: HashMap<TaskId, ViewToNotify>,
     notify_timers_to_clear: HashSet<TaskId>,
@@ -305,8 +307,7 @@ impl Presenter {
         Self {
             frame_count: 0,
             window_id,
-            rendered_views: HashMap::new(),
-            parents: HashMap::new(),
+            rendered_views: EntityIdMap::default(),
             scene: None,
             text_layout_cache: LayoutCache::new(),
             position_cache: PositionCache::default(),
@@ -326,7 +327,6 @@ impl Presenter {
         }
         for view_id in invalidation.removed {
             self.rendered_views.remove(&view_id);
-            self.parents.remove(&view_id);
         }
     }
 
@@ -346,7 +346,13 @@ impl Presenter {
         let zoomed_window_size = window_size.scale_down(ctx.zoom_factor());
         let zoomed_scale_factor = scale_factor.scale_up(ctx.zoom_factor());
 
-        self.layout(zoomed_window_size, ctx);
+        // Collect the child-view embeddings discovered during layout and report
+        // them to the backend-neutral view hierarchy on the app context, which
+        // the shared core walks for ancestors/responder-chain/focus propagation.
+        // (Reported as a batch because the layout walk itself only has `&AppContext`.)
+        let mut view_embeddings = EntityIdMap::default();
+        self.layout(zoomed_window_size, &mut view_embeddings, ctx);
+        ctx.report_view_embeddings(self.window_id, view_embeddings);
         // In theory, after_layout would be a good place for Elements to update app state with the
         // results of layout (for example, if a View stored the heights of its children to
         // implement scrolling). However, it's not safe to pass a AppContext to after_layout
@@ -374,11 +380,16 @@ impl Presenter {
         scene
     }
 
-    fn layout(&mut self, window_size: Vector2F, app: &AppContext) {
+    fn layout(
+        &mut self,
+        window_size: Vector2F,
+        parents: &mut EntityIdMap<EntityId>,
+        app: &AppContext,
+    ) {
         if let Some(root_view_id) = app.root_view_id(self.window_id) {
             let mut layout_ctx = LayoutContext {
                 rendered_views: &mut self.rendered_views,
-                parents: &mut self.parents,
+                parents,
                 text_layout_cache: &self.text_layout_cache,
                 view_stack: Vec::new(),
                 window_size,
@@ -426,7 +437,7 @@ impl Presenter {
                 current_selection: None,
                 repaint_at: None,
                 pending_assets: HashSet::new(),
-                views_painted: HashSet::new(),
+                views_painted: EntityIdSet::default(),
             };
             paint_ctx.paint(root_view_id, Vector2F::zero(), ctx);
 
@@ -461,35 +472,6 @@ impl Presenter {
         }
 
         (scene, repaint_at, pending_assets)
-    }
-
-    pub fn ancestors(&self, mut view_id: EntityId) -> Vec<EntityId> {
-        let mut chain = vec![view_id];
-        while let Some(parent_id) = self.parents.get(&view_id) {
-            view_id = *parent_id;
-            chain.push(view_id);
-        }
-        chain.reverse();
-        chain
-    }
-
-    /// Returns all descendant view IDs of the given root view.
-    /// This is computed by finding all views whose ancestor chain includes the root.
-    pub fn descendants(&self, root_view_id: EntityId) -> Vec<EntityId> {
-        self.parents
-            .keys()
-            .filter(|&&view_id| {
-                let mut current = view_id;
-                while let Some(&parent_id) = self.parents.get(&current) {
-                    if parent_id == root_view_id {
-                        return true;
-                    }
-                    current = parent_id;
-                }
-                false
-            })
-            .copied()
-            .collect()
     }
 
     fn create_event_context<'a>(&'a mut self, font_cache: &'a fonts::Cache) -> EventContext<'a> {
@@ -553,10 +535,6 @@ impl Presenter {
         self.frame_count
     }
 
-    pub(crate) fn parents(&self) -> HashMap<EntityId, EntityId> {
-        self.parents.clone()
-    }
-
     pub fn set_highlighted_view(&mut self, view_id: EntityId) {
         self.highlighted_view = Some(view_id);
     }
@@ -567,13 +545,6 @@ impl Presenter {
 
     pub fn text_layout_cache(&self) -> &LayoutCache {
         &self.text_layout_cache
-    }
-
-    /// Set the parent of a view.
-    /// This will be overwritten on the next layout pass, but is useful before the initial layout
-    /// of a view.
-    pub(crate) fn set_parent(&mut self, view_id: EntityId, parent_id: EntityId) {
-        self.parents.insert(view_id, parent_id);
     }
 }
 

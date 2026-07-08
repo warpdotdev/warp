@@ -44,7 +44,7 @@ impl PtyRecorder {
         window_id: WindowId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&DebugSettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&DebugSettings::handle(ctx), |me, _, event, ctx| {
             if let DebugSettingsChangedEvent::RecordingModeEnabled { .. } = event {
                 me.update_recording_state(ctx);
             }

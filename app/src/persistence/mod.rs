@@ -70,6 +70,7 @@ pub enum PersistenceScope {
 /// Returns the previously-persisted data, if any, and handles for
 /// writing updated data to persist, if the persistence subsystem is
 /// available.
+#[tracing::instrument(name = "persistence::initialize", skip_all, fields(tags.cloud_agent = true))]
 #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
 pub fn initialize(
     ctx: &mut AppContext,
@@ -194,6 +195,7 @@ pub struct PersistedData {
     pub object_actions: Vec<ObjectAction>,
     pub experiments: Vec<ServerExperiment>,
     pub ai_queries: Vec<PersistedAIInput>,
+    pub nld_prompts: Vec<(String, DateTime<Local>)>,
     pub codebase_indices: Vec<CodeWorkspaceMetadata>,
     pub workspace_language_servers: HashMap<PathBuf, HashMap<LSPServerType, EnablementState>>,
     pub multi_agent_conversations: Vec<AgentConversation>,

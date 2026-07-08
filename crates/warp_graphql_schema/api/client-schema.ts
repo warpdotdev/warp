@@ -12,6 +12,7 @@ const clientMutations = [
   'createFileArtifactUploadTarget',
   'createFolder',
   'createGenericStringObject',
+  'createManagedMcpClientConfig',
   'createManagedSecret',
   'createNotebook',
   'createTeam',

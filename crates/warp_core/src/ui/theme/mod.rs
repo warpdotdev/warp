@@ -38,7 +38,7 @@ impl Serialize for Image {
     where
         S: serde::Serializer,
     {
-        let AssetSource::LocalFile { path } = self.source.clone() else {
+        let AssetSource::LocalFile { path, .. } = self.source.clone() else {
             return Err(serde::ser::Error::custom(
                 "image path was serialized but it's not a local file",
             ));
@@ -75,6 +75,7 @@ impl<'de> Deserialize<'de> for Image {
         Ok(Image {
             source: AssetSource::LocalFile {
                 path: path.to_str().unwrap_or_default().to_owned(),
+                content_version: None,
             },
             opacity: value.opacity,
         })

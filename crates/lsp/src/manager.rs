@@ -187,7 +187,7 @@ impl LspManagerModel {
         let lsp = ctx.add_model(|_| LspServerModel::new(config));
 
         let path_clone = path.clone();
-        ctx.subscribe_to_model(&lsp, move |_, event, ctx| match event {
+        ctx.subscribe_to_model(&lsp, move |_, _, event, ctx| match event {
             LspEvent::Started => {
                 ctx.emit(LspManagerModelEvent::ServerStarted(path_clone.clone()));
             }

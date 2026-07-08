@@ -47,6 +47,7 @@ impl HomeDirectoryWatcher {
     /// Forwards filesystem events to home directory watcher subscribers.
     fn handle_fs_event(
         &mut self,
+        _: ModelHandle<BulkFilesystemWatcher>,
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {

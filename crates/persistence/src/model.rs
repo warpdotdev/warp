@@ -15,8 +15,8 @@ use super::schema::{
     generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
-    project_rules, projects, server_experiments, settings_panes, tabs, team_members, team_settings,
-    teams, terminal_panes, user_profiles, welcome_panes, windows, workflow_panes, workflows,
+    project_rules, projects, server_experiments, settings_panes, tab_groups, tabs, team_members,
+    team_settings, teams, terminal_panes, user_profiles, windows, workflow_panes, workflows,
     workspace_language_server, workspace_metadata, workspace_teams, workspaces,
 };
 
@@ -349,6 +349,8 @@ pub struct Tab {
     pub window_id: i32,
     pub custom_title: Option<String>,
     pub color: Option<String>,
+    pub tab_group_id: Option<i32>,
+    pub pinned: bool,
 }
 
 #[derive(Insertable)]
@@ -357,6 +359,32 @@ pub struct NewTab {
     pub window_id: i32,
     pub custom_title: Option<String>,
     pub color: Option<String>,
+    pub tab_group_id: Option<i32>,
+    pub pinned: bool,
+}
+
+/// Persisted form of a tab group. `name` is optional — untitled groups omit
+/// it and the UI falls back to a default label.
+#[derive(Identifiable, Queryable, Associations)]
+#[diesel(belongs_to(Window))]
+#[diesel(table_name = tab_groups)]
+pub struct TabGroup {
+    pub id: i32,
+    pub window_id: i32,
+    pub name: Option<String>,
+    pub color: Option<String>,
+    pub collapsed: bool,
+    pub pinned: bool,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = tab_groups)]
+pub struct NewTabGroup {
+    pub window_id: i32,
+    pub name: Option<String>,
+    pub color: Option<String>,
+    pub collapsed: bool,
+    pub pinned: bool,
 }
 
 /// The panes data model includes pane_nodes, pane_leaves and pane_branches.
@@ -467,15 +495,6 @@ pub struct SettingsPane {
     pub current_page: String,
 }
 
-#[derive(Identifiable, Queryable, Selectable)]
-#[diesel(table_name = welcome_panes)]
-#[diesel(primary_key(id))]
-pub struct WelcomePane {
-    pub id: i32,
-    pub kind: String,
-    pub startup_directory: Option<String>,
-}
-
 /// Maps to the `ai_memory_panes` table
 /// (where table name is historical and not worth a migration to change).
 #[derive(Identifiable, Queryable, Selectable)]
@@ -557,9 +576,6 @@ pub const CODE_REVIEW_PANE_KIND: &str = "code_review";
 
 /// The [`pane_leaves::kind`] value for execution profile editor panes.
 pub const EXECUTION_PROFILE_EDITOR_PANE_KIND: &str = "execution_profile_editor";
-
-/// The [`pane_leaves::kind`] value for the welcome pane.
-pub const WELCOME_PANE_KIND: &str = "welcome";
 
 /// The [`pane_leaves::kind`] value for the get-started pane.
 pub const GET_STARTED_PANE_KIND: &str = "get_started";
@@ -652,13 +668,6 @@ pub struct NewAIFactPane {
 #[diesel(table_name = mcp_server_panes)]
 pub struct NewMCPServerPane {
     pub id: i32,
-}
-
-#[derive(Insertable)]
-#[diesel(table_name = welcome_panes)]
-pub struct NewWelcomePane {
-    pub id: i32,
-    pub startup_directory: Option<String>,
 }
 
 #[derive(Identifiable, Queryable, Selectable)]
@@ -1352,6 +1361,109 @@ impl From<&stream_finished::ToolUsageMetadata> for ToolUsageMetadata {
     }
 }
 
+/// The kind of a context-window segment, mirroring the proto
+/// `ContextWindowSegmentType` enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextWindowSegmentType {
+    #[default]
+    Unknown,
+    SystemPrompt,
+    ToolDefinitions,
+    ConversationHistory,
+    LatestInput,
+    Images,
+    Other,
+}
+
+impl ContextWindowSegmentType {
+    /// Snake-case identifier used for display-name lookup.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContextWindowSegmentType::Unknown => "unknown",
+            ContextWindowSegmentType::SystemPrompt => "system_prompt",
+            ContextWindowSegmentType::ToolDefinitions => "tool_definitions",
+            ContextWindowSegmentType::ConversationHistory => "conversation_history",
+            ContextWindowSegmentType::LatestInput => "latest_input",
+            ContextWindowSegmentType::Images => "images",
+            ContextWindowSegmentType::Other => "other",
+        }
+    }
+}
+
+impl From<i32> for ContextWindowSegmentType {
+    fn from(value: i32) -> Self {
+        match stream_finished::ContextWindowSegmentType::try_from(value) {
+            Ok(stream_finished::ContextWindowSegmentType::SystemPrompt) => Self::SystemPrompt,
+            Ok(stream_finished::ContextWindowSegmentType::ToolDefinitions) => Self::ToolDefinitions,
+            Ok(stream_finished::ContextWindowSegmentType::ConversationHistory) => {
+                Self::ConversationHistory
+            }
+            Ok(stream_finished::ContextWindowSegmentType::LatestInput) => Self::LatestInput,
+            Ok(stream_finished::ContextWindowSegmentType::Images) => Self::Images,
+            Ok(stream_finished::ContextWindowSegmentType::Other) => Self::Other,
+            // Unknown (0) and any unrecognized value map to Unknown.
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<ContextWindowSegmentType> for i32 {
+    fn from(value: ContextWindowSegmentType) -> Self {
+        match value {
+            ContextWindowSegmentType::Unknown => {
+                stream_finished::ContextWindowSegmentType::Unknown as i32
+            }
+            ContextWindowSegmentType::SystemPrompt => {
+                stream_finished::ContextWindowSegmentType::SystemPrompt as i32
+            }
+            ContextWindowSegmentType::ToolDefinitions => {
+                stream_finished::ContextWindowSegmentType::ToolDefinitions as i32
+            }
+            ContextWindowSegmentType::ConversationHistory => {
+                stream_finished::ContextWindowSegmentType::ConversationHistory as i32
+            }
+            ContextWindowSegmentType::LatestInput => {
+                stream_finished::ContextWindowSegmentType::LatestInput as i32
+            }
+            ContextWindowSegmentType::Images => {
+                stream_finished::ContextWindowSegmentType::Images as i32
+            }
+            ContextWindowSegmentType::Other => {
+                stream_finished::ContextWindowSegmentType::Other as i32
+            }
+        }
+    }
+}
+
+/// A single portion of the context window, described by its kind and an
+/// estimated token count. Segment token counts add up to the token total
+/// represented by `context_window_usage`.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ContextWindowSegment {
+    pub segment_type: ContextWindowSegmentType,
+    /// Estimated number of tokens this segment occupies in the context window.
+    pub token_count: u32,
+}
+
+impl From<&stream_finished::ContextWindowSegment> for ContextWindowSegment {
+    fn from(segment: &stream_finished::ContextWindowSegment) -> Self {
+        Self {
+            segment_type: segment.segment_type.into(),
+            token_count: segment.token_count,
+        }
+    }
+}
+
+impl From<&ContextWindowSegment> for stream_finished::ContextWindowSegment {
+    fn from(segment: &ContextWindowSegment) -> Self {
+        Self {
+            segment_type: segment.segment_type.into(),
+            token_count: segment.token_count,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ConversationUsageMetadata {
     pub was_summarized: bool,
@@ -1365,6 +1477,8 @@ pub struct ConversationUsageMetadata {
     pub token_usage: Vec<ModelTokenUsage>,
     #[serde(default)]
     pub tool_usage_metadata: ToolUsageMetadata,
+    #[serde(default)]
+    pub context_window_segments: Vec<ContextWindowSegment>,
 }
 
 impl ConversationUsageMetadata {

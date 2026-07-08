@@ -1,10 +1,12 @@
 mod keysym;
+mod recording;
 mod wayland;
 mod x11;
 
 use async_trait::async_trait;
+pub use recording::Recorder;
 
-use crate::{Action, ActionResult, Options};
+use crate::{ActionResult, Options, TargetedAction};
 
 /// Returns true if a Wayland environment is available.
 fn is_wayland_available() -> bool {
@@ -22,6 +24,12 @@ fn is_x11_available() -> bool {
 
 pub fn is_supported_on_current_platform() -> bool {
     is_wayland_available() || is_x11_available()
+}
+
+/// Reports whether background, per-window control is available. The Linux input stack drives the
+/// whole screen / frontmost application, so per-window background control is unsupported.
+pub fn background_supported() -> bool {
+    false
 }
 
 pub struct Actor {
@@ -77,7 +85,7 @@ impl super::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
+        actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String> {
         match &mut self.inner {

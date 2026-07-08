@@ -1,0 +1,33 @@
+#!/bin/bash
+
+set -e
+
+if [[ $# -ne 2 ]]; then
+  echo "Usage: $0 <wrapper-path> <binary-relative-path>" >&2
+  exit 1
+fi
+
+WRAPPER_PATH="$1"
+BINARY_RELATIVE_PATH="$2"
+
+mkdir -p "$(dirname "$WRAPPER_PATH")"
+cat > "$WRAPPER_PATH" << EOF
+#!/bin/bash
+# This wrapper may be installed through a symlink in /usr/local/bin. Resolve
+# symlinks before locating the Warp executable relative to the bundled wrapper.
+wrapper_path="\${BASH_SOURCE[0]}"
+while [[ -L "\$wrapper_path" ]]; do
+  wrapper_dir="\$(cd -P "\$(dirname "\$wrapper_path")" && pwd)"
+  wrapper_path="\$(readlink "\$wrapper_path")"
+  if [[ "\$wrapper_path" != /* ]]; then
+    wrapper_path="\$wrapper_dir/\$wrapper_path"
+  fi
+done
+script_dir="\$(cd -P "\$(dirname "\$wrapper_path")" && pwd)"
+
+# Warp Control has a separate argument parser from the normal Warp/Oz parser.
+# The hidden flag selects it before normal CLI parsing or GUI startup.
+# Replace the wrapper process while preserving its invocation name as argv[0].
+exec -a "\$0" "\$script_dir/$BINARY_RELATIVE_PATH" --warpctrl "\$@"
+EOF
+chmod +x "$WRAPPER_PATH"

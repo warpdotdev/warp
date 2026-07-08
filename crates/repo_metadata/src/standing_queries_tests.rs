@@ -80,3 +80,49 @@ fn support_file_beneath_skill_does_not_synthesize_provider_update() {
 
     assert!(results.project_skills().next().is_none());
 }
+
+/// Emulates the open `AGENTS.md` discovery contract that non-Warp agents follow:
+/// walk from a working directory up to the repository root, collecting any
+/// `AGENTS.md` rule files via the same predicate Warp uses to index project
+/// rules. Guards the `WARP.md` → `AGENTS.md` rename so the repo-root agent
+/// context file stays present, non-empty, and discoverable.
+#[test]
+fn repo_root_agents_md_is_discovered_by_rule_file_contract() {
+    let definitions = StandingQueryDefinitions::default();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // Locate the repository root (the ancestor that holds `.git`).
+    let repo_root = manifest_dir
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        .expect("repo_metadata crate should live inside the warp git checkout");
+
+    // Walk from the crate dir up to (and including) the repo root, collecting
+    // every `AGENTS.md` the rule-file predicate recognizes — the same
+    // nearest-file-up-the-tree contract a conformant non-Warp agent uses.
+    let discovered: Vec<PathBuf> = manifest_dir
+        .ancestors()
+        .take_while(|ancestor| ancestor.starts_with(repo_root))
+        .map(|ancestor| ancestor.join("AGENTS.md"))
+        .filter(|candidate| candidate.is_file() && definitions.is_project_rule_file(candidate))
+        .collect();
+
+    let root_agents_md = repo_root.join("AGENTS.md");
+    assert!(
+        discovered.contains(&root_agents_md),
+        "repo-root AGENTS.md should be discovered by the rule-file contract; found {discovered:?}"
+    );
+
+    let contents =
+        std::fs::read_to_string(&root_agents_md).expect("repo-root AGENTS.md should be readable");
+    assert!(
+        !contents.trim().is_empty(),
+        "repo-root AGENTS.md should not be empty"
+    );
+
+    // Clean rename: the repo no longer ships a root WARP.md.
+    assert!(
+        !repo_root.join("WARP.md").exists(),
+        "repo-root WARP.md should have been renamed to AGENTS.md"
+    );
+}

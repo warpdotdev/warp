@@ -96,6 +96,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::time_format::format_elapsed_seconds;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
@@ -141,6 +142,7 @@ pub const BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB: &str =
     "OK if I search the files in this directory?";
 
 const BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER: f32 = 10.0;
+const BLOCKLIST_MERMAID_MAX_HEIGHT_LINE_MULTIPLIER: f32 = 40.0;
 const INLINE_IMAGE_HEIGHT: f32 = 164.;
 const INLINE_IMAGE_MAX_WIDTH: f32 = 218.;
 const INLINE_IMAGE_SPACING: f32 = 32.;
@@ -525,6 +527,23 @@ pub struct WarpingIndicatorProps {
     pub secondary_element: Option<Box<dyn Element>>,
 }
 
+/// Computes the fixed height of the warping-indicator footer.
+///
+/// The warping text occupies a single line. When a secondary element (an agent
+/// tip or fallback-model explanation) is present, it renders on a second line
+/// below the warping text, so the footer must reserve room for that extra line;
+/// otherwise the `Clipped` wrapper — which keeps action chips from overflowing
+/// narrow panes — also clips the secondary line. The extra line accounts for the
+/// secondary element's font size (`monospace_font_size - 3`, see
+/// `render_agent_tip` / `render_fallback_explanation`) plus its 1px top margin.
+fn warping_footer_height(monospace_font_size: f32, has_secondary_element: bool) -> f32 {
+    let mut height = STATUS_FOOTER_VERTICAL_PADDING * 2. + monospace_font_size;
+    if has_secondary_element {
+        height += (monospace_font_size - 3.) + 1.;
+    }
+    height
+}
+
 /// Helper function to render text in the "warping..." footer.
 /// Additional text that does not use the shimmering text animation can be passed in via
 /// `non_shimmering_text` which is useful if you want some part of the text to constantly update
@@ -542,6 +561,10 @@ pub fn render_warping_indicator_base(
         is_passive_code_diff,
         secondary_element,
     } = props;
+    // Whether a secondary element (an agent tip or fallback-model explanation)
+    // will be rendered on a second line below the warping text. Captured before
+    // `secondary_element` is consumed so the container can reserve room for it.
+    let has_secondary_element = secondary_element.is_some();
     // Unicode code point for the Warp glyph that is embedded in the version of Roboto we bundle
     // into the app. This code point MUST be rendered using Roboto (the default ui font) or else the
     // glyph may not be rendered.
@@ -645,7 +668,10 @@ pub fn render_warping_indicator_base(
     } else {
         let mut container = Container::new(
             ConstrainedBox::new(content)
-                .with_height(STATUS_FOOTER_VERTICAL_PADDING * 2. + appearance.monospace_font_size())
+                .with_height(warping_footer_height(
+                    appearance.monospace_font_size(),
+                    has_secondary_element,
+                ))
                 .finish(),
         )
         .with_padding_right(CONTENT_HORIZONTAL_PADDING);
@@ -658,16 +684,6 @@ pub fn render_warping_indicator_base(
         }
 
         container.finish()
-    }
-}
-
-/// Formats elapsed time as a human-readable string with proper singular/plural.
-pub fn format_elapsed_seconds(elapsed: std::time::Duration) -> String {
-    let total_seconds = elapsed.as_secs();
-    if total_seconds == 1 {
-        "1 second".to_string()
-    } else {
-        format!("{total_seconds} seconds")
     }
 }
 
@@ -1753,12 +1769,26 @@ enum VisualMarkdownAlignment {
     Center,
 }
 
+/// How a visual markdown block (image or mermaid diagram) is sized.
+#[derive(Clone, Copy, Debug)]
+enum VisualMarkdownSizing {
+    /// Fixed element height. Width is fixed when `width` is set, otherwise
+    /// bounded by `max_width`, otherwise falls back to a square of `height`.
+    FixedHeight {
+        height: f32,
+        width: Option<f32>,
+        max_width: Option<f32>,
+    },
+    /// Fill the available width, deriving the element height from the
+    /// image's intrinsic aspect ratio, capped at `max_height`. When the cap
+    /// applies, the width shrinks proportionally instead of letterboxing.
+    FitWidth { max_height: f32 },
+}
+
 #[derive(Clone)]
 struct VisualMarkdownBlockOptions<A: 'static> {
-    height: f32,
-    width: Option<f32>,
+    sizing: VisualMarkdownSizing,
     copy_action_factory: Option<CopyCodeActionFactory<A>>,
-    max_width: Option<f32>,
     alignment: VisualMarkdownAlignment,
     lightbox_trigger: Option<VisualMarkdownLightboxTrigger>,
     /// When `Some(non_empty)`, the rendered image is wrapped in the standard
@@ -1969,10 +1999,12 @@ fn render_inline_image_group_item<A: Action>(
         asset_source,
         indexed_image.image.markdown_source.clone(),
         VisualMarkdownBlockOptions {
-            height: INLINE_IMAGE_HEIGHT,
-            width: Some(width),
+            sizing: VisualMarkdownSizing::FixedHeight {
+                height: INLINE_IMAGE_HEIGHT,
+                width: Some(width),
+                max_width: None,
+            },
             copy_action_factory: render_context.copy_action_factory,
-            max_width: None,
             alignment: VisualMarkdownAlignment::Left,
             lightbox_trigger: lightbox_trigger_for_section(
                 render_context.lightbox_collection,
@@ -2062,10 +2094,12 @@ fn render_block_image_group_row<A: Action>(
         asset_source,
         indexed_image.image.markdown_source.clone(),
         VisualMarkdownBlockOptions {
-            height: BLOCK_IMAGE_THUMBNAIL_SIZE,
-            width: Some(BLOCK_IMAGE_THUMBNAIL_SIZE),
+            sizing: VisualMarkdownSizing::FixedHeight {
+                height: BLOCK_IMAGE_THUMBNAIL_SIZE,
+                width: Some(BLOCK_IMAGE_THUMBNAIL_SIZE),
+                max_width: None,
+            },
             copy_action_factory: render_context.copy_action_factory,
-            max_width: None,
             alignment: VisualMarkdownAlignment::Center,
             lightbox_trigger: lightbox_trigger_for_section(
                 render_context.lightbox_collection,
@@ -2126,14 +2160,23 @@ fn render_mermaid_diagram_section<A: Action>(
     }
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let sizing = if matches!(asset_state, AssetState::Loaded { .. }) {
+        VisualMarkdownSizing::FitWidth {
+            max_height: mermaid_section_max_height(app),
+        }
+    } else {
+        VisualMarkdownSizing::FixedHeight {
+            height: visual_section_height(app),
+            width: None,
+            max_width: None,
+        }
+    };
     let mermaid_block = render_visual_markdown_block(
         asset_source,
         diagram.markdown_source.clone(),
         VisualMarkdownBlockOptions {
-            height: visual_section_height(app),
-            width: None,
+            sizing,
             copy_action_factory,
-            max_width: visual_section_max_width(&asset_state, visual_section_height(app)),
             alignment: VisualMarkdownAlignment::Center,
             lightbox_trigger: lightbox_trigger_for_section(lightbox_collection, section_index),
             // Mermaid diagrams don't carry CommonMark image titles.
@@ -2194,15 +2237,30 @@ fn render_visual_markdown_block<A: Action>(
         .contain()
         .before_load(placeholder)
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)));
-    let mut content = ConstrainedBox::new(Box::new(image)).with_height(options.height);
-    if let Some(width) = finite_positive_visual_size(options.width) {
-        content = content.with_width(width);
-    } else if let Some(max_width) = finite_positive_visual_size(options.max_width) {
-        content = content.with_max_width(max_width);
-    } else if let Some(fallback_width) = finite_positive_visual_size(Some(options.height)) {
-        content = content.with_width(fallback_width);
-    }
-    let content = content.finish();
+    let content = match options.sizing {
+        VisualMarkdownSizing::FixedHeight {
+            height,
+            width,
+            max_width,
+        } => {
+            let mut content = ConstrainedBox::new(Box::new(image)).with_height(height);
+            if let Some(width) = finite_positive_visual_size(width) {
+                content = content.with_width(width);
+            } else if let Some(max_width) = finite_positive_visual_size(max_width) {
+                content = content.with_max_width(max_width);
+            } else if let Some(fallback_width) = finite_positive_visual_size(Some(height)) {
+                content = content.with_width(fallback_width);
+            }
+            content.finish()
+        }
+        VisualMarkdownSizing::FitWidth { max_height } => {
+            let mut content = ConstrainedBox::new(Box::new(image.layout_using_paint_bounds()));
+            if let Some(max_height) = finite_positive_visual_size(Some(max_height)) {
+                content = content.with_max_height(max_height);
+            }
+            content.finish()
+        }
+    };
     let content = match options.alignment {
         VisualMarkdownAlignment::Left => Align::new(content).left().finish(),
         VisualMarkdownAlignment::Center => Align::new(content).finish(),
@@ -2359,10 +2417,17 @@ fn is_supported_blocklist_image_source(source: &str) -> bool {
 }
 
 fn visual_section_height(app: &AppContext) -> f32 {
+    blocklist_base_line_height(app) * BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER
+}
+
+fn mermaid_section_max_height(app: &AppContext) -> f32 {
+    blocklist_base_line_height(app) * BLOCKLIST_MERMAID_MAX_HEIGHT_LINE_MULTIPLIER
+}
+
+fn blocklist_base_line_height(app: &AppContext) -> f32 {
     rich_text_styles(Appearance::as_ref(app), FontSettings::as_ref(app))
         .base_line_height()
         .as_f32()
-        * BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER
 }
 
 const TABLE_BLOCK_CORNER_RADIUS: f32 = 8.0;
@@ -2986,6 +3051,16 @@ pub struct FailedOutputProps<'a> {
 pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
 
+    // While an automatic retry/resume is still in flight, don't surface the underlying
+    // transport failure at all. These are typically transient and recover on their own,
+    // so showing the alarming "Warp lost connection" banner (plus debug info) for every
+    // blip is noisy and misleading. Render nothing during in-flight recovery; the full
+    // error banner is only shown once recovery has actually failed. Dogfood builds
+    // (Local/Dev) opt out so developers still see every transport failure aggressively.
+    if props.error.should_suppress_during_recovery() {
+        return Empty::new().finish();
+    }
+
     let error_text = match props.error {
         RenderableAIError::QuotaLimit {
             user_display_message,
@@ -3010,22 +3085,19 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         RenderableAIError::InternalWarpError => {
             format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_WARP_ERROR}")
         }
-        RenderableAIError::Other {
-            error_message,
-            will_attempt_resume,
-            waiting_for_network,
-        } => {
-            if *will_attempt_resume {
-                if *waiting_for_network {
-                    format!(
-                        "{error_message}\n\nWill resume conversation when network connectivity is restored..."
-                    )
-                } else {
-                    format!("{error_message}\n\nAttempting to resume conversation...")
-                }
-            } else {
-                format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
-            }
+        RenderableAIError::Other { error_message, .. } => {
+            // A still-recovering `Other` error is handled by the early return above; once we
+            // reach here recovery has failed, so surface the error directly.
+            format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
+        }
+        RenderableAIError::AgentExitedShell => {
+            format!("{ERROR_APOLOGY_TEXT}\n\n{}", props.error)
+        }
+        RenderableAIError::TransientNetworkError { .. } => {
+            // Recovering transient errors are handled by the early return above; once we
+            // reach here recovery has failed. These carry their own complete user-facing
+            // copy (plus debug info), so the apology prefix adds nothing.
+            props.error.to_string()
         }
         RenderableAIError::InvalidApiKey {
             provider,

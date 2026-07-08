@@ -16,7 +16,7 @@ use crate::ai::agent::{
     ShellCommandCompletedTrigger,
 };
 use crate::ai::block_context::BlockContext;
-use crate::ai::blocklist::inline_action::code_diff_view::FileDiff;
+use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::{
     apply_edits, BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind,
     SessionContext,
@@ -113,10 +113,10 @@ impl PassiveSuggestionsModel {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(model_event_dispatcher, |me, event, ctx| {
+        ctx.subscribe_to_model(model_event_dispatcher, |me, _, event, ctx| {
             me.handle_model_event(event, ctx);
         });
-        ctx.subscribe_to_model(&ai_controller, |me, event, ctx| {
+        ctx.subscribe_to_model(&ai_controller, |me, _, event, ctx| {
             me.handle_controller_event(event, ctx);
         });
 

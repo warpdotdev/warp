@@ -33,6 +33,16 @@ pub enum ForkedConversationDestination {
 }
 
 impl ForkedConversationDestination {
+    /// Fork destination from an Enter (`false`) / Cmd-or-Ctrl+Enter (`true`) trigger: Enter
+    /// opens a new split pane, Cmd/Ctrl+Enter opens a new tab. Shared by all fork-style commands.
+    pub fn for_fork_trigger(cmd_or_ctrl_enter: bool) -> Self {
+        if cmd_or_ctrl_enter {
+            Self::NewTab
+        } else {
+            Self::SplitPane
+        }
+    }
+
     pub fn is_new_tab(&self) -> bool {
         matches!(self, Self::NewTab)
     }
@@ -232,6 +242,7 @@ fn fork_ai_conversation(params: &ForkAIConversationParams, ctx: &mut AppContext)
             summarize_after_fork: params.summarize_after_fork,
             summarization_prompt: params.summarization_prompt.clone(),
             initial_prompt: params.initial_prompt.clone(),
+            initial_attachments: vec![],
             destination: params.destination,
         },
     );

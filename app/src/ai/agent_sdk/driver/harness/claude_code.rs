@@ -18,8 +18,8 @@ use warpui::{ModelHandle, ModelSpawner};
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::{
-    claude_config_dir, home_dir_for_claude_config, read_envelope, write_envelope,
-    write_session_index_entry, ClaudeResumeInfo, ClaudeTranscriptEnvelope,
+    claude_config_dir, home_dir_for_claude_config, read_envelope, rehydrate_claude_transcript,
+    ClaudeResumeInfo, ClaudeTranscriptEnvelope,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::{
@@ -180,6 +180,10 @@ impl ThirdPartyHarness for ClaudeHarness {
             resolved_mcp_servers,
         )?))
     }
+
+    fn requires_verified_platform_plugin(&self) -> bool {
+        true
+    }
 }
 
 /// Format slug sent to the server when creating a Claude Code conversation.
@@ -273,26 +277,8 @@ impl ClaudeHarnessRunner {
                 session_id,
                 mut envelope,
             }) => {
-                // Rehydrate the stored envelope under the current working directory so
-                // `claude --resume <uuid>` finds the jsonl under ~/.claude/projects/<encoded_cwd>/.
-                // The original envelope's cwd usually points at the cloud sandbox path, which
-                // doesn't exist locally.
-                envelope.cwd = working_dir.to_path_buf();
-                let config_root = claude_config_dir().map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to resolve Claude config dir"),
-                    )
-                })?;
-                write_envelope(&envelope, &config_root).map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to rehydrate Claude transcript"),
-                    )
-                })?;
-                // Index write is best-effort: upstream Claude versions vary in how they use
-                // `sessions-index.json`, so losing the index entry shouldn't abort the run.
-                if let Err(e) = write_session_index_entry(session_id, working_dir, &config_root) {
-                    log::warn!("Failed to update Claude sessions-index.json: {e:#}");
-                }
+                rehydrate_claude_transcript(&mut envelope, working_dir)
+                    .map_err(AgentDriverError::ConfigBuildFailed)?;
                 (session_id, Some(conversation_id))
             }
             None => (Uuid::new_v4(), None),

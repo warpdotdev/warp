@@ -61,7 +61,7 @@ fn test_simple_example() -> TestDriver {
 }
 ```
 
-I find `with_keystrokes` and `with_input_string` most helpful methods, so far. You can check the implementation (and expand it!) in [ui/src/integration/test_driver.rs](../../ui/src/integration/test_driver.ts).
+I find `with_keystrokes` and `with_input_string` most helpful methods, so far. You can check the implementation (and expand it!) in [warpui_core/src/integration/step.rs](../../warpui_core/src/integration/step.rs).
 
 ## When to use `assert!` vs `async_assert!`
 The former will fail the test the first time it's false. The latter will fail the test if we don't ever see a success in the timeout. If you don't specify a timeout, the default timeout is used.

@@ -55,7 +55,7 @@ use crate::features::FeatureFlag;
 use crate::gpu_state::{GPUState, GPUStateEvent};
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::server::telemetry::{InputUXChangeOrigin, TelemetryEvent};
-use crate::settings::app_icon::{AppIcon, AppIconSettings};
+use crate::settings::app_icon::{AppIcon, AppIconSettings, ShowDockIconState};
 use crate::settings::{
     active_theme_kind, respect_system_theme, AIFontName, AppEditorSettings, CursorBlink,
     CursorBlinkEnabled, CursorDisplayType, EnforceMinimumContrast, FocusPaneOnHover, FontSettings,
@@ -90,10 +90,10 @@ use crate::window_settings::{
 };
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
-    DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor,
-    ShowCodeReviewButton, ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows,
-    TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
-    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
+    canonical_directory_key, DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs,
+    PreserveActiveTabColor, ShowCodeReviewButton, ShowIndicatorsButton,
+    ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition, TabSettings,
+    TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
     WorkspaceDecorationVisibility,
 };
 use crate::workspace::WorkspaceAction;
@@ -501,6 +501,7 @@ pub enum AppearancePageAction {
     },
     SetInputType(InputBoxType),
     SetAppIcon(AppIcon),
+    ToggleShowDockIcon,
     SetCursorType(CursorDisplayType),
     SetWorkspaceDecorationVisibility(WorkspaceDecorationVisibility),
     ToggleWorkspaceDecorationVisibility,
@@ -649,6 +650,7 @@ impl TypedActionView for AppearanceSettingsPageView {
             } => self.set_input_mode(*new_mode, *from_binding, ctx),
             SetInputType(input_type) => self.set_input_type(*input_type, ctx),
             SetAppIcon(new_icon) => self.set_app_icon(*new_icon, ctx),
+            ToggleShowDockIcon => self.toggle_show_dock_icon(ctx),
             SetCursorType(cursor_display_type) => self.set_cursor_type(*cursor_display_type, ctx),
             OpacitySliderDragged(val) => self.set_opacity(*val, false, ctx),
             BlurSliderDragged(val) => self.set_blur(*val, false, ctx),
@@ -1535,6 +1537,11 @@ impl AppearanceSettingsPageView {
                     editor.set_buffer_text(&format!("{line_height_ratio}"), ctx);
                 });
             }
+            AppearanceEvent::ThemeChanged => {
+                // Context-chip colors are theme-derived, so rebuild the Input
+                // preview chips when the theme changes to keep them in sync.
+                self.context_chips = Self::get_context_chip_renderers(ctx);
+            }
             _ => {}
         }
 
@@ -2330,6 +2337,12 @@ impl AppearanceSettingsPageView {
         });
     }
 
+    fn toggle_show_dock_icon(&mut self, ctx: &mut ViewContext<Self>) {
+        AppIconSettings::handle(ctx).update(ctx, |app_icon_settings, ctx| {
+            report_if_error!(app_icon_settings.show_dock_icon.toggle_and_save_value(ctx));
+        });
+    }
+
     fn set_cursor_type(&mut self, new_cursor_type: CursorDisplayType, ctx: &mut ViewContext<Self>) {
         AppEditorSettings::handle(ctx).update(ctx, |app_editor_settings, ctx| {
             report_if_error!(app_editor_settings
@@ -2893,20 +2906,22 @@ impl SettingsWidget for ThemeSelectWidget {
 }
 
 #[derive(Default)]
-struct CustomAppIconWidget {}
+struct CustomAppIconWidget {
+    show_dock_icon_switch_state: SwitchStateHandle,
+}
 
 impl SettingsWidget for CustomAppIconWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "customize custom app icon icons"
+        "customize custom app icon icons dock cmd tab app switcher"
     }
 
     fn render(
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         #[allow(unused_mut)]
         let show_bundle_warning = {
@@ -2933,41 +2948,76 @@ impl SettingsWidget for CustomAppIconWidget {
             &view.app_icon_dropdown,
         );
 
+        let show_dock_icon_toggle = render_body_item::<AppearancePageAction>(
+            "Show Warp in Dock".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ShowDockIconState::storage_key(),
+                ShowDockIconState::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.show_dock_icon_switch_state.clone())
+                .check(*AppIconSettings::as_ref(app).show_dock_icon)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleShowDockIcon);
+                })
+                .finish(),
+            None,
+        );
+        let show_dock_icon_is_supported = AppIconSettings::as_ref(app)
+            .show_dock_icon
+            .is_supported_on_current_platform();
+
         #[cfg(target_os = "macos")]
         {
             use crate::appearance::AppearanceManager;
 
-            let app_icon_at_startup = AppearanceManager::as_ref(_app).app_icon_at_startup();
-            let current_icon = *AppIconSettings::as_ref(_app).app_icon;
+            let app_icon_at_startup = AppearanceManager::as_ref(app).app_icon_at_startup();
+            let current_icon = *AppIconSettings::as_ref(app).app_icon;
             if current_icon == AppIcon::Default
                 && ChannelState::channel() != Channel::Local
                 && app_icon_at_startup != AppIcon::Default
             {
                 let theme = appearance.theme();
-                return Flex::column()
-                    .with_child(dropdown)
-                    .with_child(
-                        appearance
-                            .ui_builder()
-                            .wrappable_text(
-                                "You may need to restart Warp for MacOS to apply the preferred icon style.",
-                                true,
-                            )
-                            .with_style(UiComponentStyles {
-                                font_color: Some(
-                                    theme.sub_text_color(theme.background()).into_solid(),
-                                ),
-                                margin: Some(Coords::default().bottom(8.)),
-                                ..Default::default()
-                            })
-                            .build()
-                            .finish(),
-                    )
-                    .finish();
+                let column = Flex::column().with_child(dropdown).with_child(
+                    appearance
+                        .ui_builder()
+                        .wrappable_text(
+                            "You may need to restart Warp for MacOS to apply the preferred icon style.",
+                            true,
+                        )
+                        .with_style(UiComponentStyles {
+                            font_color: Some(
+                                theme.sub_text_color(theme.background()).into_solid(),
+                            ),
+                            margin: Some(Coords::default().bottom(8.)),
+                            ..Default::default()
+                        })
+                        .build()
+                        .finish(),
+                );
+                let column = if show_dock_icon_is_supported {
+                    column.with_child(show_dock_icon_toggle)
+                } else {
+                    column
+                };
+                return column.finish();
             }
         }
 
-        dropdown
+        let column = Flex::column().with_child(dropdown);
+        let column = if show_dock_icon_is_supported {
+            column.with_child(show_dock_icon_toggle)
+        } else {
+            column
+        };
+        column.finish()
     }
 }
 
@@ -4905,8 +4955,7 @@ fn build_directory_delete_buttons(
 fn add_directory_tab_color_path(path: PathBuf, ctx: &mut ViewContext<AppearanceSettingsPageView>) {
     TabSettings::handle(ctx).update(ctx, |settings, ctx| {
         let current = settings.directory_tab_colors.value();
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-        let key = canonical.to_string_lossy().to_string();
+        let key = canonical_directory_key(&path);
         let dominated_by_existing = current
             .0
             .get(&key)

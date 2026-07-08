@@ -38,7 +38,7 @@ use crate::pane_group::pane::view::header::components::{
 use crate::pane_group::pane::view::header::{render_pane_header_draggable, PANE_HEADER_HEIGHT};
 use crate::pane_group::pane::view::PaneHeaderAction;
 use crate::pane_group::pane::{view, PaneStack};
-use crate::pane_group::{BackingView, SplitPaneState};
+use crate::pane_group::{BackingView, SplitPaneState, TOGGLE_MAXIMIZE_PANE_BINDING_NAME};
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
@@ -51,6 +51,7 @@ use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::ui_components::{blended_colors, icons};
+use crate::util::bindings::keybinding_name_to_display_string;
 use crate::workspace::tab_settings::TabSettings;
 
 /// Total size of the agent icon-with-status component rendered in the pane header.
@@ -699,6 +700,10 @@ impl BackingView for TerminalView {
             items.push(
                 MenuItemFields::toggle_pane_action(is_maximized)
                     .with_on_select_action(TerminalAction::ToggleMaximizePane)
+                    .with_key_shortcut_label(keybinding_name_to_display_string(
+                        TOGGLE_MAXIMIZE_PANE_BINDING_NAME,
+                        ctx,
+                    ))
                     .into_item(),
             );
         }
@@ -1027,6 +1032,17 @@ impl TerminalView {
         self.selected_conversation_for_user_facing_chrome(ctx)
             .map(|conversation| {
                 self.selected_conversation_display_title_for_chrome(conversation, is_ambient_agent)
+            })
+    }
+
+    /// Whether the selected conversation is a local orchestration child: it was spawned by a
+    /// parent orchestrator and is not executing on a remote worker. These runs are backed by a
+    /// server task (so they carry an ambient task id) but execute locally, so their agent icon
+    /// must use the local treatment rather than the cloud/ambient one.
+    pub(crate) fn selected_conversation_is_local_child(&self, ctx: &AppContext) -> bool {
+        self.selected_conversation_for_user_facing_chrome(ctx)
+            .is_some_and(|conversation| {
+                conversation.is_child_agent_conversation() && !conversation.is_remote_child()
             })
     }
 

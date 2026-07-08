@@ -2,6 +2,7 @@ use std::path::Path;
 
 #[cfg(feature = "local_fs")]
 use settings::Setting as _;
+use warp_core::features::FeatureFlag;
 
 use super::*;
 
@@ -52,6 +53,38 @@ fn test_resolve_file_target_warp_uses_default_layout() {
     assert_eq!(target, FileTarget::CodeEditor(EditorLayout::NewTab));
 }
 
+/// `file.open` from local control relies on this resolver never routing to an
+/// external editor or the system default app, even when user settings prefer one.
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_resolve_file_target_to_open_in_warp_never_leaves_warp() {
+    use crate::util::file::external_editor::settings::{
+        OpenCodePanelsFileEditor, OpenConversationLayoutPreference, OpenFileEditor, OpenFileLayout,
+        PreferMarkdownViewer, PreferTabbedEditorView,
+    };
+
+    let settings = EditorSettings {
+        open_file_editor: OpenFileEditor::new(Some(EditorChoice::ExternalEditor(Editor::VSCode))),
+        open_code_panels_file_editor: OpenCodePanelsFileEditor::new(Some(
+            EditorChoice::ExternalEditor(Editor::VSCode),
+        )),
+        open_file_layout: OpenFileLayout::new(None),
+        prefer_markdown_viewer: PreferMarkdownViewer::new(Some(false)),
+        prefer_tabbed_editor_view: PreferTabbedEditorView::new(None),
+        open_conversation_layout_preference: OpenConversationLayoutPreference::new(None),
+    };
+    for path in ["README.md", "data.txt", "main.rs", "image.png", "script.sh"] {
+        let target = resolve_file_target_to_open_in_warp(Path::new(path), &settings, None);
+        assert!(
+            matches!(
+                target,
+                FileTarget::CodeEditor(_) | FileTarget::MarkdownViewer(_)
+            ),
+            "{path} must resolve to an in-Warp surface, got {target:?}"
+        );
+    }
+}
+
 #[test]
 #[cfg(feature = "local_fs")]
 fn test_resolve_file_target_binary_is_system_generic() {
@@ -77,6 +110,56 @@ fn test_resolve_file_target_binary_uses_env_editor() {
         None,
     );
     assert_eq!(target, FileTarget::EnvEditor);
+}
+
+#[test]
+fn test_renders_in_warp_notebook_viewer() {
+    // Markdown always renders in the notebook viewer, independent of the flag.
+    let off = FeatureFlag::JupyterNotebookRendering.override_enabled(false);
+    assert!(renders_in_warp_notebook_viewer(Path::new("README.md")));
+    assert!(!renders_in_warp_notebook_viewer(Path::new(
+        "notebook.ipynb"
+    )));
+    assert!(!renders_in_warp_notebook_viewer(Path::new("main.rs")));
+    drop(off);
+
+    // With the flag on, Jupyter notebooks also render in the notebook viewer.
+    let _on = FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+    assert!(renders_in_warp_notebook_viewer(Path::new("notebook.ipynb")));
+    assert!(renders_in_warp_notebook_viewer(Path::new("README.md")));
+    assert!(!renders_in_warp_notebook_viewer(Path::new("main.rs")));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_resolve_file_target_jupyter_notebook_flag_on() {
+    let _flag = FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+    // Even with prefer_markdown_viewer off and an explicit Warp editor choice,
+    // a Jupyter notebook routes to the notebook viewer (not the JSON editor).
+    let target = resolve_file_target_with_editor_choice(
+        Path::new("analysis.ipynb"),
+        EditorChoice::Warp,
+        false, /* prefer_markdown_viewer */
+        EditorLayout::SplitPane,
+        None,
+    );
+    assert_eq!(target, FileTarget::MarkdownViewer(EditorLayout::SplitPane));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_resolve_file_target_jupyter_notebook_flag_off() {
+    let _flag = FeatureFlag::JupyterNotebookRendering.override_enabled(false);
+    // With the flag off, a Jupyter notebook opens as JSON in the code editor,
+    // exactly as it does today.
+    let target = resolve_file_target_with_editor_choice(
+        Path::new("analysis.ipynb"),
+        EditorChoice::Warp,
+        true, /* prefer_markdown_viewer */
+        EditorLayout::SplitPane,
+        None,
+    );
+    assert_eq!(target, FileTarget::CodeEditor(EditorLayout::SplitPane));
 }
 
 #[test]

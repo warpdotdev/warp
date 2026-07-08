@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use fuzzy_match::match_indices_case_insensitive;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::search::command_palette::launch_config::search_item::SearchItem;
@@ -48,7 +48,12 @@ impl DataSource {
         Self { searcher }
     }
 
-    fn handle_config_event(&mut self, event: &WarpConfigUpdateEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_config_event(
+        &mut self,
+        _: ModelHandle<WarpConfig>,
+        event: &WarpConfigUpdateEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if matches!(event, WarpConfigUpdateEvent::LaunchConfigs) {
             self.searcher.refresh_search_index(ctx);
         }

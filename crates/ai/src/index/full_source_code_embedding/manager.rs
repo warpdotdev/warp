@@ -675,6 +675,7 @@ impl CodebaseIndexManager {
     #[cfg(feature = "local_fs")]
     fn handle_watcher_event(
         &mut self,
+        _: ModelHandle<BulkFilesystemWatcher>,
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1031,6 +1032,7 @@ impl CodebaseIndexManager {
 
     fn handle_codebase_index_event(
         &mut self,
+        _: ModelHandle<CodebaseIndex>,
         event: &CodebaseIndexEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1138,6 +1140,7 @@ impl CodebaseIndexManager {
             .map(|(_, path)| path)
             .ok()
     }
+
     pub fn with_indexed_codebase<T>(
         &mut self,
         path: &Path,

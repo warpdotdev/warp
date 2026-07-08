@@ -5,7 +5,9 @@ use warp_util::path::EscapeChar;
 use super::super::lexer::Lexer;
 use super::super::{Command, Part};
 use super::*;
-use crate::parsers::simple::{decompose_command, top_level_command};
+use crate::parsers::simple::{
+    command_without_leading_env_vars, decompose_command, top_level_command,
+};
 
 #[test]
 fn test_parse_open_subshell() {
@@ -157,6 +159,26 @@ fn test_decompose_command() {
         assert_eq!(
             HashSet::<String>::from_iter(decompose_command(input, EscapeChar::Backslash).0),
             HashSet::from_iter(expected_output.into_iter().map(ToString::to_string)),
+        );
+    }
+}
+
+#[test]
+fn test_command_without_leading_env_vars() {
+    let test_data = vec![
+        ("X=1 rm -rf target", Some("rm -rf target")),
+        (
+            "X=1 Y=2 curl https://example.com",
+            Some("curl https://example.com"),
+        ),
+        ("rm -rf target", Some("rm -rf target")),
+        ("X=1", None),
+    ];
+
+    for (input, expected_output) in test_data {
+        assert_eq!(
+            command_without_leading_env_vars(input, EscapeChar::Backslash),
+            expected_output.map(ToString::to_string)
         );
     }
 }
