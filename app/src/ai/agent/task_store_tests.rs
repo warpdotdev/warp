@@ -6,13 +6,13 @@ use uuid::Uuid;
 
 use super::TaskStore;
 use crate::ai::agent::task::{Task, TaskId};
-use crate::test_util::ai_agent_tasks::{create_api_task, create_subagent_tool_call_message};
 use crate::ai::agent::{
     AIAgentExchange, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputMessageType, AIAgentOutputStatus, FinishedAIAgentOutput, MessageId, Shared,
     SubagentCall,
 };
 use crate::ai::llms::LLMId;
+use crate::test_util::ai_agent_tasks::{create_api_task, create_subagent_tool_call_message};
 
 fn create_test_exchange() -> AIAgentExchange {
     AIAgentExchange {
@@ -798,7 +798,10 @@ fn test_prune_unreachable_subtasks_removes_nested_orphans() {
     store.insert(child_task);
 
     // child → grandchild
-    store.append_exchange(&child_id, create_exchange_with_subagent_call(&grandchild_id));
+    store.append_exchange(
+        &child_id,
+        create_exchange_with_subagent_call(&grandchild_id),
+    );
     store.insert(grandchild);
 
     // root(1) + root→child(1) + child(1) + child→grandchild(1) + grandchild(1) = 5
