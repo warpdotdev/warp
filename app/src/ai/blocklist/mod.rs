@@ -33,7 +33,7 @@ pub mod usage;
 
 pub(crate) mod codebase_index_speedbump_banner;
 pub(crate) mod telemetry_banner;
-pub(super) mod view_util;
+pub(crate) mod view_util;
 
 pub(crate) use action_model::recording_controller::RecordingController;
 // Consumed by `tui_export` for the `warp_tui` frontend.

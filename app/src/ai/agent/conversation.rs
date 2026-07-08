@@ -156,21 +156,19 @@ fn footer_model_token_usage(
         .collect()
 }
 
-/// Cross-model usage totals for compact displays (e.g. the TUI footer's
+/// Conversation usage totals for compact displays (e.g. the TUI footer's
 /// usage entry).
 ///
-/// A projection summed on demand from the conversation's existing
-/// `total_token_usage_by_model` state — named so the underlying
-/// `warp_multi_agent_api::TokenUsage` rows don't leak through `tui_export`.
+/// A projection computed on demand from existing conversation state — named
+/// so the underlying types don't leak through `tui_export`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ConversationUsageTotals {
-    /// Freshly processed tokens across all models: input excluding cached
-    /// reads, plus output. Cache reads are excluded because `total_input`
-    /// re-counts the entire (mostly cached, steeply discounted) context on
-    /// every request — including them balloons the count while barely moving
-    /// the cost.
-    pub total_tokens: u64,
-    /// Total cost across all models, in US cents.
+    /// Total credits spent (inference + platform), from the server's
+    /// cumulative usage metadata — the same number the GUI's usage footer
+    /// shows as "Credits spent (total)" and the conversation details panel
+    /// shows as "Credits used".
+    pub credits_spent: f32,
+    /// Total provider cost across all models, in US cents.
     pub cost_in_cents: f64,
 }
 
@@ -3513,17 +3511,15 @@ impl AIConversation {
         self.total_token_usage_by_model.values().cloned().collect()
     }
 
-    /// Sums the existing `total_token_usage_by_model` state into compact
-    /// cross-model totals for lightweight displays (e.g. the TUI footer's
-    /// usage entry). Cached input reads are excluded from the token count —
-    /// `total_input` includes them (see the server's `ExactTokenUsage`
-    /// construction), and re-counting the cached context every request
-    /// balloons the number while barely moving the cost.
+    /// Compact usage totals for lightweight displays (e.g. the TUI footer's
+    /// usage entry): the GUI-consistent credits total plus the accumulated
+    /// provider dollar cost from the per-request `StreamFinished` usage rows.
     pub fn usage_totals(&self) -> ConversationUsageTotals {
-        let mut totals = ConversationUsageTotals::default();
+        let mut totals = ConversationUsageTotals {
+            credits_spent: self.inference_credits_spent() + self.platform_credits_spent(),
+            cost_in_cents: 0.0,
+        };
         for usage in self.total_token_usage_by_model.values() {
-            let fresh_input = usage.total_input.saturating_sub(usage.input_cache_read);
-            totals.total_tokens += u64::from(fresh_input) + u64::from(usage.output);
             totals.cost_in_cents += f64::from(usage.cost_in_cents);
         }
         totals

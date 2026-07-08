@@ -38,7 +38,7 @@ use crate::transcript_view::TuiTranscriptView;
 use crate::transient_hint::TransientHint;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
-use crate::usage::TokenCostToggle;
+use crate::usage::UsageToggle;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
@@ -98,8 +98,8 @@ pub(crate) struct TuiTerminalSessionView {
     /// Armed by a ctrl-c press; a second press while armed exits the TUI.
     /// The footer shows [`CTRL_C_EXIT_HINT`] while armed.
     exit_confirmation: ExitConfirmation,
-    /// Tokens⇄cost display state for the footer's clickable usage entry.
-    usage_toggle: TokenCostToggle,
+    /// Credits⇄cost display state for the footer's clickable usage entry.
+    usage_toggle: UsageToggle,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
@@ -292,7 +292,7 @@ impl TuiTerminalSessionView {
             active_session,
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
-            usage_toggle: TokenCostToggle::default(),
+            usage_toggle: UsageToggle::default(),
             ai_input_model,
             terminal_model: model,
             transient_hint: TransientHint::default(),

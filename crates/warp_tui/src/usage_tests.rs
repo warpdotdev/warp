@@ -2,42 +2,11 @@ use warp::tui_export::ConversationUsageTotals;
 
 use super::*;
 
-fn totals(total_tokens: u64, cost_in_cents: f64) -> ConversationUsageTotals {
+fn totals(credits_spent: f32, cost_in_cents: f64) -> ConversationUsageTotals {
     ConversationUsageTotals {
-        total_tokens,
+        credits_spent,
         cost_in_cents,
     }
-}
-
-#[test]
-fn token_count_uses_short_and_long_labels() {
-    assert_eq!(format_token_count(4, TokenLabelForm::Short), "4 tok");
-    assert_eq!(format_token_count(4, TokenLabelForm::Long), "4 tokens");
-    assert_eq!(format_token_count(1, TokenLabelForm::Short), "1 tok");
-    assert_eq!(format_token_count(1, TokenLabelForm::Long), "1 token");
-    assert_eq!(format_token_count(0, TokenLabelForm::Long), "0 tokens");
-}
-
-#[test]
-fn token_count_abbreviates_large_counts() {
-    assert_eq!(format_token_count(9_999, TokenLabelForm::Short), "9999 tok");
-    assert_eq!(format_token_count(10_000, TokenLabelForm::Short), "10k tok");
-    assert_eq!(
-        format_token_count(12_345, TokenLabelForm::Short),
-        "12.3k tok"
-    );
-    assert_eq!(
-        format_token_count(999_000, TokenLabelForm::Short),
-        "999k tok"
-    );
-    assert_eq!(
-        format_token_count(1_000_000, TokenLabelForm::Short),
-        "1M tok"
-    );
-    assert_eq!(
-        format_token_count(1_234_567, TokenLabelForm::Long),
-        "1.2M tokens"
-    );
 }
 
 #[test]
@@ -50,24 +19,34 @@ fn cost_formats_cents_as_dollars() {
 }
 
 #[test]
-fn toggle_flips_entry_between_tokens_and_cost() {
-    let toggle = TokenCostToggle::default();
-    let usage = totals(4, 3.2);
+fn entry_text_matches_the_gui_credits_formatting() {
+    // `format_credits` is the GUI's formatter: whole values pluralize and
+    // drop the decimal, fractional values keep one decimal place.
+    let toggle = UsageToggle::default();
+    assert_eq!(toggle.entry_text(totals(1.0, 0.0)), "1 credit");
+    assert_eq!(toggle.entry_text(totals(2.0, 0.0)), "2 credits");
+    assert_eq!(toggle.entry_text(totals(2.5, 0.0)), "2.5 credits");
+}
 
-    assert_eq!(toggle.entry_text(usage), "4 tok");
+#[test]
+fn toggle_flips_entry_between_credits_and_cost() {
+    let toggle = UsageToggle::default();
+    let usage = totals(2.5, 3.2);
+
+    assert_eq!(toggle.entry_text(usage), "2.5 credits");
     toggle.toggle();
     assert_eq!(toggle.entry_text(usage), "$0.03");
     toggle.toggle();
-    assert_eq!(toggle.entry_text(usage), "4 tok");
+    assert_eq!(toggle.entry_text(usage), "2.5 credits");
 }
 
 #[test]
 fn cloned_toggles_share_display_mode() {
     // Render closures capture a clone; a click through the clone must be
     // visible to the view-owned original.
-    let toggle = TokenCostToggle::default();
+    let toggle = UsageToggle::default();
     let clone = toggle.clone();
-    let usage = totals(4, 3.2);
+    let usage = totals(2.5, 3.2);
 
     clone.toggle();
     assert_eq!(toggle.entry_text(usage), "$0.03");
