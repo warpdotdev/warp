@@ -4022,20 +4022,6 @@ impl Input {
             .map(AmbientAgentViewState::view_model)
     }
 
-    /// Classifies how a follow-up prompt for this pane would be routed, using the same
-    /// [`resolve_ai_query_routing`] source of truth as the footer live-VM indicator.
-    /// Consulted by `maybe_route_ai_query_to_remote_target` and the slash/skill guards so a remote
-    /// cloud conversation never continues on the local agent.
-    fn ai_query_routing(&self, ctx: &AppContext) -> AIQueryRouting {
-        let model = self.model.lock();
-        resolve_ai_query_routing(
-            self.terminal_view_id,
-            self.ambient_agent_view_model(),
-            &model,
-            ctx,
-        )
-    }
-
     /// Shows a transient error toast for a follow-up submission that was blocked or redirected.
     fn show_ephemeral_error_toast(&self, message: &str, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
@@ -4068,7 +4054,16 @@ impl Input {
         // Route by the shared source of truth. A live shared-session viewer forwards to the sharer
         // (an ambient cloud run or a shared local session); the other arms cover panes that are not
         // attached to a live session.
-        match self.ai_query_routing(ctx) {
+        let ai_query_routing = {
+            let model = self.model.lock();
+            resolve_ai_query_routing(
+                self.terminal_view_id,
+                self.ambient_agent_view_model(),
+                &model,
+                ctx,
+            )
+        };
+        match ai_query_routing {
             AIQueryRouting::Local => false,
             AIQueryRouting::LiveRemoteVm {
                 is_executor: true, ..
@@ -5771,7 +5766,13 @@ impl Input {
         // This is a safety net to prevent invoking skills locally when follow ups are not supposed to run locally, in case some skills are showing up in the menu.
         // Currently skills are populated by the local machine's state and are always run locally below.
         // TODO: consider populating the skills menu with skills in the remote machine, and forward to the remote machine.
-        if !self.ai_query_routing(ctx).is_local() {
+        let ai_query_routing = resolve_ai_query_routing(
+            self.terminal_view_id,
+            self.ambient_agent_view_model(),
+            &self.model.lock(),
+            ctx,
+        );
+        if !ai_query_routing.is_local() {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
