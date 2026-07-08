@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use markdown_parser::{Hyperlink, TableAlignment};
 use num_traits::SaturatingSub;
 use rangemap::RangeSet;
@@ -38,6 +39,42 @@ use crate::render::model::{
     SelectableTextRun, TableBlockConfig, TableStyle, gutter_expansion_button_types,
 };
 use crate::render::{TABLE_BASELINE_RATIO, TABLE_LINE_HEIGHT_RATIO};
+
+/// Maximum number of threads used for parallel text layout.
+/// This bounds peak memory usage during large file loads by limiting how many
+/// concurrent layout tasks (each allocating glyph and caret-position data) can
+/// run simultaneously. Without this bound, opening a file with thousands of lines
+/// causes a transient memory spike that can exceed the application-level warning threshold.
+/// See: https://sentry.io/organizations/warpdotdev/issues/7259255054/
+const MAX_LAYOUT_THREADS: usize = 4;
+
+/// Creates the layout thread pool, bounded to [`MAX_LAYOUT_THREADS`].
+/// Returns `None` if the thread pool cannot be created (e.g., on WASM targets).
+fn create_layout_thread_pool() -> Option<rayon::ThreadPool> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let num_threads = std::thread::available_parallelism()
+            .map(|p| (p.get() / 2).clamp(1, MAX_LAYOUT_THREADS))
+            .unwrap_or(MAX_LAYOUT_THREADS);
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|index| format!("warp-editor-layout-{index}"))
+            .num_threads(num_threads)
+            .build()
+            .ok()
+    }
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
+lazy_static! {
+    /// A rayon thread pool bounded to [`MAX_LAYOUT_THREADS`] used for parallel text layout.
+    ///
+    /// Using a bounded pool instead of the global default pool prevents large file loads
+    /// from spawning too many concurrent layout tasks. Each task allocates substantial
+    /// glyph and caret-position data (hundreds of bytes to kilobytes per line), so
+    /// running all tasks for a large file simultaneously causes large transient memory spikes.
+    static ref LAYOUT_THREAD_POOL: Option<rayon::ThreadPool> = create_layout_thread_pool();
+}
 
 #[cfg(test)]
 #[path = "edit_tests.rs"]
@@ -541,34 +578,53 @@ impl EditDelta {
             .collect();
 
         let last_task = layout_tasks.len().saturating_sub(1);
+        // Capture the offset before moving layout_tasks into the closure below.
+        let old_offset_for_log = self.old_offset.clone();
 
         // Then, run each task in parallel, collecting (a) the laid out BlockItems and (b) whether
         // or not the last item ends with a newline.
-        let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = layout_tasks
-            .into_par_iter()
-            .enumerate()
-            .filter_map(|(idx, (task, is_hidden))| {
-                let location = if idx == 0 {
-                    BlockLocation::Start
-                } else if idx >= last_task {
-                    BlockLocation::End
-                } else {
-                    BlockLocation::Middle
-                };
+        //
+        // Run inside the bounded LAYOUT_THREAD_POOL to cap the number of concurrent layout tasks.
+        // Each task allocates glyph and caret-position data, so unlimited concurrency causes
+        // large transient memory spikes when opening files with many lines.
+        let run_layout = || {
+            layout_tasks
+                .into_par_iter()
+                .enumerate()
+                .filter_map(|(idx, (task, is_hidden))| {
+                    let location = if idx == 0 {
+                        BlockLocation::Start
+                    } else if idx >= last_task {
+                        BlockLocation::End
+                    } else {
+                        BlockLocation::Middle
+                    };
 
-                match task.run(layout, location, is_hidden) {
-                    Ok(result) => Some(result),
-                    Err(e) => {
-                        log::error!(
-                            "Failed to lay out BlockItem at offset {:?}: {:?}",
-                            self.old_offset,
-                            e
-                        );
-                        None
+                    match task.run(layout, location, is_hidden) {
+                        Ok(result) => Some(result),
+                        Err(e) => {
+                            log::error!(
+                                "Failed to lay out BlockItem at offset {:?}: {:?}",
+                                old_offset_for_log,
+                                e
+                            );
+                            None
+                        }
                     }
-                }
-            })
-            .unzip();
+                })
+                .unzip()
+        };
+        // In test builds, thread-local feature flag overrides (set via `FeatureFlag::override_enabled`)
+        // are not propagated to the bounded pool's worker threads. Use the calling thread's pool in
+        // tests to ensure the overrides work correctly.
+        let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = if cfg!(not(test)) {
+            match LAYOUT_THREAD_POOL.as_ref() {
+                Some(pool) => pool.install(run_layout),
+                None => run_layout(),
+            }
+        } else {
+            run_layout()
+        };
 
         // Iterate through block_items, and collapse adjacent Hidden items.
         let block_items = block_items.into_iter().fold(Vec::new(), |mut acc, item| {
@@ -630,27 +686,37 @@ pub fn layout_temporary_blocks(
 
     let last_task = layout_tasks.len().saturating_sub(1);
 
-    let results: Vec<_> = layout_tasks
-        .into_par_iter()
-        .enumerate()
-        .filter_map(|(idx, (task, line_count))| {
-            let location = if idx == 0 {
-                BlockLocation::Start
-            } else if idx >= last_task {
-                BlockLocation::End
-            } else {
-                BlockLocation::Middle
-            };
+    let run_layout = || {
+        layout_tasks
+            .into_par_iter()
+            .enumerate()
+            .filter_map(|(idx, (task, line_count))| {
+                let location = if idx == 0 {
+                    BlockLocation::Start
+                } else if idx >= last_task {
+                    BlockLocation::End
+                } else {
+                    BlockLocation::Middle
+                };
 
-            match task.run(layout, location, false) {
-                Ok(result) => Some((line_count, result.0)),
-                Err(e) => {
-                    log::error!("Failed to lay out temporary blocks: {e:?}");
-                    None
+                match task.run(layout, location, false) {
+                    Ok(result) => Some((line_count, result.0)),
+                    Err(e) => {
+                        log::error!("Failed to lay out temporary blocks: {e:?}");
+                        None
+                    }
                 }
-            }
-        })
-        .collect();
+            })
+            .collect()
+    };
+    let results: Vec<_> = if cfg!(not(test)) {
+        match LAYOUT_THREAD_POOL.as_ref() {
+            Some(pool) => pool.install(run_layout),
+            None => run_layout(),
+        }
+    } else {
+        run_layout()
+    };
 
     results.into_iter().into_group_map()
 }
