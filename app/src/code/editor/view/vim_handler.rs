@@ -235,7 +235,7 @@ impl VimHandler for CodeEditorView {
                                 let current_selections = selection_model.selection_offsets();
 
                                 let max_row = buffer.max_point().row;
-                                let row = (*line_number).saturating_sub(1).min(max_row);
+                                let row = (*line_number).min(max_row);
 
                                 let new_selections = current_selections.mapped(|selection| {
                                     let cursor_pos = selection.head;
@@ -667,10 +667,7 @@ impl VimHandler for CodeEditorView {
 
     fn jump_to_line(&mut self, line_number: u32, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
-            let buffer = model.content().as_ref(ctx);
-            let max_row = buffer.max_point().row as usize;
-            let row = (line_number as usize).saturating_sub(1).min(max_row);
-            model.jump_to_line_column(row, None, ctx);
+            model.jump_to_line_column(line_number as usize, None, ctx);
         });
     }
 
