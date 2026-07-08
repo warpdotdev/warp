@@ -53,11 +53,12 @@ pub fn is_enabled() -> bool {
 
 /// A cell-local rectangle for a box-drawing/block glyph.
 ///
-/// `bounds` is expressed in logical (pre-`scale_factor`) pixels with its origin
-/// at the **top-left of the character cell**. The caller offsets it by the
-/// cell's screen origin. `alpha_scale` (in `0.0..=1.0`) is multiplied into the
-/// foreground color's alpha and is used to render the shade characters
-/// (`░ ▒ ▓`); it is `1.0` for solid strokes and blocks.
+/// `bounds` is expressed in **device** pixels with its origin at the top-left of
+/// the character cell. The caller passes the cell size in device pixels (snapped
+/// to the integer pixel grid) and offsets/scales the result back to logical
+/// coordinates. `alpha_scale` (in `0.0..=1.0`) is multiplied into the foreground
+/// color's alpha and is used to render the shade characters (`░ ▒ ▓`); it is
+/// `1.0` for solid strokes and blocks.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CellRect {
     pub bounds: RectF,
@@ -142,21 +143,19 @@ pub fn is_supported(c: char) -> bool {
 
 /// Computes the non-overlapping, cell-local rectangles for a supported glyph.
 ///
-/// Returns an empty [`SmallVec`] if `c` is not supported (see [`is_supported`])
-/// or if the cell has no area.
-pub fn cell_rects(
-    c: char,
-    cell_width: f32,
-    cell_height: f32,
-    scale_factor: f32,
-) -> SmallVec<[CellRect; 8]> {
+/// `cell_width` and `cell_height` are in **device** pixels and are expected to be
+/// whole numbers snapped to the pixel grid, so that vertically- and
+/// horizontally-adjacent cells (which share the same snapped edges) tile with no
+/// gap. Returns an empty [`SmallVec`] if `c` is not supported (see
+/// [`is_supported`]) or if the cell has no area.
+pub fn cell_rects(c: char, cell_width: f32, cell_height: f32) -> SmallVec<[CellRect; 8]> {
     let mut out = SmallVec::new();
-    if cell_width <= 0.0 || cell_height <= 0.0 || scale_factor <= 0.0 {
+    if cell_width <= 0.0 || cell_height <= 0.0 {
         return out;
     }
 
     if let Some(edges) = line_edges(c) {
-        push_line_rects(&mut out, edges, cell_width, cell_height, scale_factor);
+        push_line_rects(&mut out, edges, cell_width, cell_height);
     } else {
         push_block_rects(&mut out, c, cell_width, cell_height);
     }
@@ -180,11 +179,10 @@ fn push_rect(out: &mut SmallVec<[CellRect; 8]>, x0: f32, y0: f32, x1: f32, y1: f
     });
 }
 
-/// The device-pixel thickness for a stroke weight, given the cell size and
-/// scale factor. Always at least one device pixel.
-fn thickness_device(weight: Weight, cell_width: f32, cell_height: f32, scale_factor: f32) -> f32 {
-    let min_dim_device = cell_width.min(cell_height) * scale_factor;
-    let light = (min_dim_device / 8.0).round().max(1.0);
+/// The device-pixel thickness for a stroke weight, given the cell size (in
+/// device pixels). Always at least one device pixel.
+fn thickness_device(weight: Weight, cell_width: f32, cell_height: f32) -> f32 {
+    let light = (cell_width.min(cell_height) / 8.0).round().max(1.0);
     match weight {
         Weight::Light => light,
         // Heavy strokes are ~2x a light stroke, but always at least one device
@@ -193,33 +191,25 @@ fn thickness_device(weight: Weight, cell_width: f32, cell_height: f32, scale_fac
     }
 }
 
-/// Returns the logical `[lo, hi]` extent of a band of the given device-pixel
-/// thickness, centered on `center` (logical) and snapped to the device pixel
-/// grid so the stroke stays crisp.
-fn band(center: f32, thickness_device: f32, scale_factor: f32) -> (f32, f32) {
-    let center_device = center * scale_factor;
-    let lo_device = (center_device - thickness_device / 2.0).round();
-    let hi_device = lo_device + thickness_device;
-    (lo_device / scale_factor, hi_device / scale_factor)
+/// Returns the `[lo, hi]` extent (device pixels) of a band of the given
+/// thickness, centered on `center` and snapped to the integer pixel grid so the
+/// stroke stays crisp.
+fn band(center: f32, thickness: f32) -> (f32, f32) {
+    let lo = (center - thickness / 2.0).round();
+    (lo, lo + thickness)
 }
 
-fn push_line_rects(
-    out: &mut SmallVec<[CellRect; 8]>,
-    edges: Edges,
-    w: f32,
-    h: f32,
-    scale_factor: f32,
-) {
+fn push_line_rects(out: &mut SmallVec<[CellRect; 8]>, edges: Edges, w: f32, h: f32) {
     let cx = w / 2.0;
     let cy = h / 2.0;
 
     if edges.has_vertical() {
-        let tv = thickness_device(edges.vertical_weight(), w, h, scale_factor);
-        let (vlo, vhi) = band(cx, tv, scale_factor);
+        let tv = thickness_device(edges.vertical_weight(), w, h);
+        let (vlo, vhi) = band(cx, tv);
         // The horizontal band is needed both to cap a vertical-only stub at the
         // center and to place the horizontal arms.
-        let th = thickness_device(edges.horizontal_weight(), w, h, scale_factor);
-        let (hlo, hhi) = band(cy, th, scale_factor);
+        let th = thickness_device(edges.horizontal_weight(), w, h);
+        let (hlo, hhi) = band(cy, th);
 
         // The vertical band spans the full cell height when both arms are
         // present; otherwise it stops at the center (capped by the horizontal
@@ -239,9 +229,9 @@ fn push_line_rects(
     } else if edges.has_horizontal() {
         // Pure horizontal glyph: a single rect owns the center, spanning from
         // the relevant edge(s) to the center for a stub, or edge-to-edge.
-        let th = thickness_device(edges.horizontal_weight(), w, h, scale_factor);
-        let (hlo, hhi) = band(cy, th, scale_factor);
-        let (clo, chi) = band(cx, th, scale_factor);
+        let th = thickness_device(edges.horizontal_weight(), w, h);
+        let (hlo, hhi) = band(cy, th);
+        let (clo, chi) = band(cx, th);
         let left = if edges.left.is_some() { 0.0 } else { clo };
         let right = if edges.right.is_some() { w } else { chi };
         push_rect(out, left, hlo, right.min(w), hhi, 1.0);
@@ -405,11 +395,13 @@ fn rects_overlap(rects: &[CellRect]) -> bool {
 mod tests {
     use super::*;
 
+    // Cell dimensions are in device pixels (whole numbers, as the caller snaps
+    // them to the pixel grid before calling in).
     const W: f32 = 8.0;
     const H: f32 = 18.0;
 
-    fn rects(c: char, scale: f32) -> SmallVec<[CellRect; 8]> {
-        cell_rects(c, W, H, scale)
+    fn rects(c: char) -> SmallVec<[CellRect; 8]> {
+        cell_rects(c, W, H)
     }
 
     fn covers_row(rects: &[CellRect], y: f32) -> bool {
@@ -430,11 +422,12 @@ mod tests {
 
     #[test]
     fn sprite_vline_fills_cell_height() {
-        // The vertical bar of `│` must reach the very top and very bottom of the
-        // cell so that stacked cells abut with no gap.
-        for scale in [1.0, 1.25, 1.5, 2.0] {
-            let r = rects('│', scale);
-            assert!(!r.is_empty(), "no rects at scale {scale}");
+        // The vertical bar of `│` must span the FULL cell height (0..=cell_h) at
+        // several cell sizes, so that stacked cells — which share an integer
+        // pixel boundary — abut with no gap.
+        for (w, h) in [(8.0, 18.0), (10.0, 22.0), (13.0, 30.0), (7.0, 15.0)] {
+            let r = cell_rects('│', w, h);
+            assert!(!r.is_empty(), "no rects for cell {w}x{h}");
             let top = r
                 .iter()
                 .map(|r| r.bounds.origin().y())
@@ -443,36 +436,30 @@ mod tests {
                 .iter()
                 .map(|r| r.bounds.origin().y() + r.bounds.height())
                 .fold(f32::NEG_INFINITY, f32::max);
-            assert!(
-                top <= 0.0,
-                "top {top} should reach cell top at scale {scale}"
-            );
-            assert!(
-                bot >= H,
-                "bottom {bot} should reach cell bottom {H} at scale {scale}"
+            assert_eq!(top, 0.0, "top should be exactly the cell top for {w}x{h}");
+            assert_eq!(
+                bot, h,
+                "bottom should be exactly the cell bottom for {w}x{h}"
             );
         }
     }
 
     #[test]
     fn sprite_vline_no_seam_when_stacked() {
-        // Two `│` cells stacked vertically must have a continuous stroke across
-        // the cell boundary: there must be no fully-uncovered row at the seam.
-        for scale in [1.0, 1.25, 1.5, 2.0] {
-            let top_cell = rects('│', scale);
-            let bottom_cell = rects('│', scale);
-            // Sample rows straddling the boundary at y == H.
-            let stroke_x = W / 2.0;
-            // Bottom row of the top cell is covered...
+        // Two `│` cells stacked vertically share the boundary at y == H. Because
+        // each bar spans its full cell height exactly, the top cell covers its
+        // bottom edge and the bottom cell covers its top edge at the same x, so
+        // there is no uncovered row at the seam.
+        for (w, h) in [(8.0, 18.0), (10.0, 22.0), (7.0, 15.0)] {
+            let cell = cell_rects('│', w, h);
+            let stroke_x = w / 2.0;
             assert!(
-                covers_row_at(&top_cell, H - 0.01, stroke_x),
-                "top cell must cover its bottom edge at scale {scale}"
+                covers_row_at(&cell, h - 0.01, stroke_x),
+                "cell must cover its bottom edge for {w}x{h}"
             );
-            // ...and the top row of the bottom cell (its own y==0) is covered,
-            // which sits exactly at the shared boundary.
             assert!(
-                covers_row_at(&bottom_cell, 0.0, stroke_x),
-                "bottom cell must cover its top edge at scale {scale}"
+                covers_row_at(&cell, 0.0, stroke_x),
+                "cell must cover its top edge for {w}x{h}"
             );
         }
     }
@@ -489,7 +476,9 @@ mod tests {
 
     #[test]
     fn sprite_hline_fills_cell_width() {
-        let r = rects('─', 1.0);
+        // The horizontal bar of `─` must span the full cell width so horizontally
+        // adjacent cells connect.
+        let r = rects('─');
         let left = r
             .iter()
             .map(|r| r.bounds.origin().x())
@@ -498,14 +487,15 @@ mod tests {
             .iter()
             .map(|r| r.bounds.origin().x() + r.bounds.width())
             .fold(f32::NEG_INFINITY, f32::max);
-        assert!(left <= 0.0 && right >= W);
+        assert_eq!(left, 0.0);
+        assert_eq!(right, W);
     }
 
     #[test]
     fn sprite_cross_covers_all_edges() {
         // `┼` must have ink touching all four cell edges through the centered
         // strokes.
-        let r = rects('┼', 1.0);
+        let r = rects('┼');
         assert!(covers_row(&r, 0.0), "top edge");
         assert!(covers_row(&r, H - 0.01), "bottom edge");
         assert!(covers_col(&r, 0.0), "left edge");
@@ -515,13 +505,14 @@ mod tests {
     #[test]
     fn sprite_cross_is_non_overlapping() {
         // The crossing of `┼`/`╋` is the canonical overlap risk; verify the
-        // partition is disjoint (required for non-opaque foreground colors).
+        // partition is disjoint (required for non-opaque foreground colors)
+        // across a range of cell sizes.
         for c in ['┼', '╋', '├', '┤', '┬', '┴', '┌', '┐', '└', '┘'] {
-            for scale in [1.0, 1.5, 2.0] {
-                let r = cell_rects(c, W, H, scale);
+            for (w, h) in [(8.0, 18.0), (11.0, 24.0), (7.0, 15.0)] {
+                let r = cell_rects(c, w, h);
                 assert!(
                     !rects_overlap(&r),
-                    "{c:?} produced overlapping rects at scale {scale}"
+                    "{c:?} produced overlapping rects for cell {w}x{h}"
                 );
             }
         }
@@ -529,8 +520,8 @@ mod tests {
 
     #[test]
     fn sprite_heavy_is_thicker_than_light() {
-        let light = rects('│', 2.0);
-        let heavy = rects('┃', 2.0);
+        let light = rects('│');
+        let heavy = rects('┃');
         let light_w: f32 = light.iter().map(|r| r.bounds.width()).sum();
         let heavy_w: f32 = heavy.iter().map(|r| r.bounds.width()).sum();
         assert!(
@@ -541,7 +532,7 @@ mod tests {
 
     #[test]
     fn sprite_full_block_fills_cell() {
-        let r = rects('█', 1.0);
+        let r = rects('█');
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].bounds.origin(), vec2f(0.0, 0.0));
         assert_eq!(r[0].bounds.width(), W);
@@ -551,31 +542,31 @@ mod tests {
 
     #[test]
     fn sprite_half_blocks() {
-        let upper = rects('▀', 1.0);
+        let upper = rects('▀');
         assert_eq!(upper[0].bounds.height(), H / 2.0);
         assert_eq!(upper[0].bounds.origin().y(), 0.0);
 
-        let lower = rects('▄', 1.0);
+        let lower = rects('▄');
         assert_eq!(lower[0].bounds.origin().y(), H / 2.0);
 
-        let left = rects('▌', 1.0);
+        let left = rects('▌');
         assert_eq!(left[0].bounds.width(), W / 2.0);
 
-        let right = rects('▐', 1.0);
+        let right = rects('▐');
         assert_eq!(right[0].bounds.origin().x(), W / 2.0);
     }
 
     #[test]
     fn sprite_shades_use_alpha() {
-        assert_eq!(rects('░', 1.0)[0].alpha_scale, 0.25);
-        assert_eq!(rects('▒', 1.0)[0].alpha_scale, 0.5);
-        assert_eq!(rects('▓', 1.0)[0].alpha_scale, 0.75);
+        assert_eq!(rects('░')[0].alpha_scale, 0.25);
+        assert_eq!(rects('▒')[0].alpha_scale, 0.5);
+        assert_eq!(rects('▓')[0].alpha_scale, 0.75);
     }
 
     #[test]
     fn sprite_quadrants_are_disjoint_and_cover() {
         // `▟` = top-right + bottom-left + bottom-right; three disjoint quarters.
-        let r = rects('▟', 1.0);
+        let r = rects('▟');
         assert_eq!(r.len(), 3);
         assert!(!rects_overlap(&r));
     }
@@ -584,14 +575,9 @@ mod tests {
     fn unsupported_glyphs_return_empty() {
         // Double lines, rounded corners, diagonals and plain text are not
         // handled here (they fall back to the font).
-        for c in ['═', '║', '╬', '╭', '╱', 'a', ' ', '█'.to_ascii_uppercase()] {
-            if c == '█' {
-                continue;
-            }
-            if super::is_supported(c) {
-                continue;
-            }
-            assert!(cell_rects(c, W, H, 1.0).is_empty(), "{c:?} should be empty");
+        for c in ['═', '║', '╬', '╭', '╱', 'a', ' '] {
+            assert!(!super::is_supported(c), "{c:?} should be unsupported");
+            assert!(cell_rects(c, W, H).is_empty(), "{c:?} should be empty");
         }
     }
 
@@ -601,7 +587,7 @@ mod tests {
             let c = char::from_u32(cp).unwrap();
             assert_eq!(
                 is_supported(c),
-                !cell_rects(c, W, H, 1.0).is_empty(),
+                !cell_rects(c, W, H).is_empty(),
                 "mismatch for U+{cp:04X} {c:?}"
             );
         }

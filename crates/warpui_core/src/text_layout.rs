@@ -1637,18 +1637,40 @@ impl Line {
                 if box_drawing::is_enabled() {
                     if let Some(ch) = glyph.character {
                         if box_drawing::is_supported(ch) {
+                            let scale_factor = scene.scale_factor();
                             let cell_top = glyph_origin.y() - baseline_position;
                             let cell_height =
                                 font_cache.line_height(self.font_size, self.line_height_ratio);
-                            for cell_rect in box_drawing::cell_rects(
-                                ch,
-                                glyph.width,
-                                cell_height,
-                                scene.scale_factor(),
-                            ) {
+
+                            // Snap the cell box to the integer device-pixel grid.
+                            // Adjacent cells then share exact edges, so the
+                            // procedural rects tile with no sub-pixel seam between
+                            // rows or columns (the same reason a true terminal
+                            // cell grid is pixel-aligned).
+                            let left_device = (glyph_origin.x() * scale_factor).round();
+                            let right_device =
+                                ((glyph_origin.x() + glyph.width) * scale_factor).round();
+                            let top_device = (cell_top * scale_factor).round();
+                            let bottom_device = ((cell_top + cell_height) * scale_factor).round();
+                            let cell_width_device = right_device - left_device;
+                            let cell_height_device = bottom_device - top_device;
+
+                            for cell_rect in
+                                box_drawing::cell_rects(ch, cell_width_device, cell_height_device)
+                            {
+                                // Convert the device-pixel cell-local rect back to
+                                // logical coordinates for the scene (the rect
+                                // pipeline re-applies the scale factor).
+                                let origin = cell_rect.bounds.origin();
                                 let rect = RectF::new(
-                                    cell_rect.bounds.origin() + vec2f(glyph_origin.x(), cell_top),
-                                    cell_rect.bounds.size(),
+                                    vec2f(
+                                        (left_device + origin.x()) / scale_factor,
+                                        (top_device + origin.y()) / scale_factor,
+                                    ),
+                                    vec2f(
+                                        cell_rect.bounds.width() / scale_factor,
+                                        cell_rect.bounds.height() / scale_factor,
+                                    ),
                                 );
                                 let Some(clipped) = rect.intersection(bounds) else {
                                     continue;
