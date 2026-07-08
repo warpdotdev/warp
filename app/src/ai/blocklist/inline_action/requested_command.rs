@@ -1473,7 +1473,7 @@ pub(crate) fn header_message_for_user_take_over_reason(
 ) -> &'static str {
     match reason {
         UserTakeOverReason::Manual => USER_TOOK_CONTROL_COMMAND_MESSAGE,
-        UserTakeOverReason::Stop => USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE,
+        UserTakeOverReason::Stop { .. } => USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE,
         UserTakeOverReason::TransferFromAgent { .. } => {
             AGENT_REQUESTED_USER_TAKE_CONTROL_COMMAND_MESSAGE
         }

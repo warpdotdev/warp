@@ -6,7 +6,7 @@ use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
-use warpui::{App, EntityId};
+use warpui::{App, EntityId, ModelHandle};
 
 use super::{
     convert_persisted_conversation_to_ai_conversation_with_metadata, AIConversationMetadata,
@@ -18,6 +18,7 @@ use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
     ServerAIConversationMetadata,
 };
+use crate::ai::agent::task::helper::MessageExt;
 use crate::ai::agent::{
     AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
     RenderableAIError, Shared, TransientNetworkErrorKind, UserQueryMode,
@@ -38,6 +39,7 @@ use crate::persistence::ModelEvent;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::model::session::SessionId;
+use crate::test_util::ai_agent_tasks::create_api_task;
 use crate::test_util::settings::{
     initialize_history_persistence_for_tests, initialize_settings_for_tests,
 };
@@ -4726,6 +4728,258 @@ fn straddle_rewind_followup_requests_are_clean_and_durable() {
         assert!(
             !has_dangling_subagent_pair(find_root_task(&active_b, root_task_id)),
             "follow-up request B root must not contain a dangling sub-agent tool_call"
+        );
+    });
+}
+
+// --- fork-from-here (exact-exchange) dangling tool_use reconciliation ---
+
+/// Builds a regular (non-sub-agent) `run_shell_command` tool_call message with
+/// `request_id` set and `tool_call_id`.
+fn regular_tool_call_message(
+    id: &str,
+    task_id: &str,
+    tool_call_id: &str,
+    request_id: &str,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: id.to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        fetched_memories: vec![],
+        message: Some(warp_multi_agent_api::message::Message::ToolCall(
+            warp_multi_agent_api::message::ToolCall {
+                tool_call_id: tool_call_id.to_string(),
+                tool: Some(
+                    warp_multi_agent_api::message::tool_call::Tool::RunShellCommand(
+                        warp_multi_agent_api::message::tool_call::RunShellCommand {
+                            command: "echo hi".to_string(),
+                            ..Default::default()
+                        },
+                    ),
+                ),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+/// Builds a real (non-cancel) `run_shell_command` tool_call_result message.
+fn regular_tool_call_result_message(
+    id: &str,
+    task_id: &str,
+    tool_call_id: &str,
+    request_id: &str,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: id.to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        fetched_memories: vec![],
+        message: Some(warp_multi_agent_api::message::Message::ToolCallResult(
+            warp_multi_agent_api::message::ToolCallResult {
+                tool_call_id: tool_call_id.to_string(),
+                context: None,
+                result: Some(
+                    warp_multi_agent_api::message::tool_call_result::Result::RunShellCommand(
+                        warp_multi_agent_api::RunShellCommandResult::default(),
+                    ),
+                ),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+/// Builds a server-handled tool_call message (like the `RunPrimaryAgent`
+/// bootstrap call at the start of every root task), which never receives a
+/// result by design.
+fn server_tool_call_message(
+    id: &str,
+    task_id: &str,
+    tool_call_id: &str,
+    request_id: &str,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: id.to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        fetched_memories: vec![],
+        message: Some(warp_multi_agent_api::message::Message::ToolCall(
+            warp_multi_agent_api::message::ToolCall {
+                tool_call_id: tool_call_id.to_string(),
+                tool: Some(warp_multi_agent_api::message::tool_call::Tool::Server(
+                    warp_multi_agent_api::message::tool_call::Server {
+                        payload: String::new(),
+                    },
+                )),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+/// Returns the non-empty forked root task from a fork result.
+fn forked_root_task(forked: &AIConversation) -> &warp_multi_agent_api::Task {
+    forked
+        .all_tasks()
+        .filter_map(|t| t.source())
+        .find(|t| !t.messages.is_empty())
+        .expect("forked root task exists")
+}
+
+/// Restores `source` into the history model and returns the exchange id whose
+/// input is the given user query.
+fn restore_and_find_exchange(
+    app: &mut warpui::App,
+    history_model: &ModelHandle<BlocklistAIHistoryModel>,
+    source: AIConversation,
+    query: &str,
+) -> (AIConversationId, AIAgentExchangeId) {
+    let terminal_view_id = EntityId::new();
+    let source_id = source.id();
+    history_model.update(app, |model, ctx| {
+        model.restore_conversations(terminal_view_id, vec![source], ctx);
+    });
+    let exchange_id = history_model.read(app, |model, _| {
+        model
+            .conversation(&source_id)
+            .unwrap()
+            .root_task_exchanges()
+            .find(|e| {
+                e.input
+                    .iter()
+                    .any(|i| matches!(i, AIAgentInput::UserQuery { query: q, .. } if q == query))
+            })
+            .map(|e| e.id)
+            .expect("exchange for query should exist")
+    });
+    (source_id, exchange_id)
+}
+
+/// Wires up the sqlite sender the fork path requires. Returns the receiver,
+/// which the caller must keep alive so the bounded channel stays open (a
+/// dropped receiver makes the fork's persist `send` fail).
+fn install_mock_model_event_sender(app: &mut warpui::App) -> std::sync::mpsc::Receiver<ModelEvent> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+    let mut global_resource_handles = GlobalResourceHandles::mock(app);
+    global_resource_handles.model_event_sender = Some(sender);
+    app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+    receiver
+}
+
+/// Forking at an exact exchange reconciles exactly the client tool_calls in
+/// the fork-point exchange: a completed call gets its REAL result pulled
+/// forward from the source, an in-flight call gets a synthesized `Cancel`
+/// right after the call, and unresolved server tool calls plus danglers from
+/// earlier exchanges are left untouched.
+#[test]
+fn fork_exact_reconciles_fork_point_client_tool_calls() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let _receiver = install_mock_model_event_sender(&mut app);
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let root_task_id = "root-task";
+        let orphan_id = "toolu_orphan";
+        let server_id = "toolu_server";
+        let completed_id = "toolu_completed";
+        let inflight_id = "toolu_inflight";
+        // req-1 holds a client tool_call that never received a result (a
+        // pre-existing dangler). The fork point (req-2) holds an unresolved
+        // server tool_call plus two client tool_calls: one whose real result
+        // lives in req-3 (truncated by the fork) and one that never receives a
+        // result (in-flight).
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
+                create_user_query_message("m1", root_task_id, "req-1", "first"),
+                regular_tool_call_message("m2", root_task_id, orphan_id, "req-1"),
+                create_user_query_message("m3", root_task_id, "req-2", "second"),
+                server_tool_call_message("m4", root_task_id, server_id, "req-2"),
+                regular_tool_call_message("m5", root_task_id, completed_id, "req-2"),
+                regular_tool_call_message("m6", root_task_id, inflight_id, "req-2"),
+                regular_tool_call_result_message("m7", root_task_id, completed_id, "req-3"),
+                agent_output_message("m8", root_task_id, "req-3", "done"),
+            ],
+        );
+        let source = AIConversation::new_restored(AIConversationId::new(), vec![root_task], None)
+            .expect("source conversation should build");
+
+        let (source_id, exchange_id) =
+            restore_and_find_exchange(&mut app, &history_model, source, "second");
+
+        let forked = history_model.update(&mut app, |model, ctx| {
+            let source = model.conversation(&source_id).unwrap().clone();
+            model
+                .fork_conversation_at_exchange(&source, exchange_id, true, "[Fork] ", None, ctx)
+                .expect("fork should succeed")
+        });
+
+        let root = forked_root_task(&forked);
+        let result_for = |tool_call_id: &str| {
+            root.messages.iter().find(|m| {
+                m.tool_call_result()
+                    .is_some_and(|r| r.tool_call_id == tool_call_id)
+            })
+        };
+
+        // Completed call: the REAL result (m7) is pulled forward, not a Cancel.
+        let completed = result_for(completed_id).expect("completed tool_call must be paired");
+        assert_eq!(
+            completed.id, "m7",
+            "the REAL result message should be pulled forward"
+        );
+        assert!(
+            matches!(
+                completed.tool_call_result().and_then(|r| r.result.as_ref()),
+                Some(warp_multi_agent_api::message::tool_call_result::Result::RunShellCommand(_))
+            ),
+            "the pulled-forward result must be the real run_shell_command result, not a Cancel"
+        );
+
+        // In-flight call: a Cancel is synthesized immediately after the call,
+        // carrying the call's request_id.
+        let inflight =
+            result_for(inflight_id).expect("in-flight tool_call must be paired with a Cancel");
+        assert!(
+            matches!(
+                inflight.tool_call_result().and_then(|r| r.result.as_ref()),
+                Some(warp_multi_agent_api::message::tool_call_result::Result::Cancel(_))
+            ),
+            "in-flight tool_call must fall back to a Cancel result"
+        );
+        let call_idx = root.messages.iter().position(|m| m.id == "m6").unwrap();
+        let next = &root.messages[call_idx + 1];
+        assert_eq!(
+            next.id, inflight.id,
+            "Cancel must immediately follow its tool_call"
+        );
+        assert_eq!(
+            next.request_id, "req-2",
+            "Cancel carries the call's request_id"
+        );
+
+        // The unresolved server tool_call must stay unresolved: a synthesized
+        // Cancel would pop an agent off the server's run stack on restore.
+        assert!(root.messages.iter().any(|m| m.id == "m4"));
+        assert!(
+            result_for(server_id).is_none(),
+            "no result may be synthesized for a server tool_call"
+        );
+
+        // The pre-existing dangler outside the fork point is reproduced as-is.
+        assert!(root.messages.iter().any(|m| m.id == "m2"));
+        assert!(
+            result_for(orphan_id).is_none(),
+            "no result may be synthesized outside the fork-point exchange"
         );
     });
 }

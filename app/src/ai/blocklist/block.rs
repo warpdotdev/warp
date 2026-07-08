@@ -67,8 +67,6 @@ use warpui::{
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-#[cfg(feature = "agent_mode_debug")]
-use self::code_diff_view::FileDiff;
 use self::model::{AIBlockModel, AIBlockModelHelper};
 use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
 use super::code_block::CodeSnippetButtonHandles;
@@ -108,6 +106,8 @@ use crate::ai::blocklist::block::keyboard_navigable_buttons::{
     KeyboardNavigableButtonBuilder, KeyboardNavigableButtons,
 };
 use crate::ai::blocklist::context_model::AttachmentType;
+#[cfg(feature = "agent_mode_debug")]
+use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::inline_action::ask_user_question_view::{
     self, AskUserQuestionView, AskUserQuestionViewEvent,
 };
@@ -3167,9 +3167,6 @@ impl AIBlock {
             .action_model
             .as_ref(ctx)
             .request_file_edits_executor(ctx);
-        executor.update(ctx, |executor, _| {
-            executor.register_requested_edits(action_id, &view);
-        });
 
         // If the diff is being viewed in a shared session (read-only mode), populate diffs from the payload.
         if self.action_model.as_ref(ctx).is_view_only() {
@@ -3182,12 +3179,28 @@ impl AIBlock {
             view.update(ctx, |diff_view, ctx| {
                 diff_view.set_candidate_diffs(file_diffs, ctx);
             });
+        } else {
+            // Register the review view as the action's diff storage: the
+            // executor seeds it with the resolved diffs when preprocess
+            // completes and drives its save at execute time.
+            //
+            // View-only (shared-session viewer) diffs must not be registered:
+            // registration wires the view into the persistence flow, and a
+            // spectator's view must never become the surface that writes the
+            // edits to disk.
+            executor.update(ctx, |executor, _| {
+                executor.register_requested_edits(action_id, Box::new(view.downgrade()));
+            });
         }
 
         let action_id_clone = action_id.clone();
         ctx.subscribe_to_view(&view, move |me, view, event, ctx| {
             match event {
                 CodeDiffViewEvent::TryAccept => {
+                    // The executor drives the save through the registered
+                    // diff storage at execute time, pulling the (possibly
+                    // edited) final content from the view's editor buffers.
+                    view.update(ctx, |view, ctx| view.send_malformed_line_telemetry(ctx));
                     me.action_model.update(ctx, |action_model, ctx| {
                         action_model.execute_action(
                             &action_id_clone,
@@ -3391,7 +3404,7 @@ impl AIBlock {
                     match action_status {
                         Some(AIActionStatus::Finished(result)) => {
                             if result.result.is_successful() {
-                                CodeDiffState::Accepted(None)
+                                CodeDiffState::Accepted
                             } else {
                                 // For other finished states, default to rejected
                                 CodeDiffState::Rejected

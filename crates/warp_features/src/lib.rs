@@ -501,6 +501,10 @@ pub enum FeatureFlag {
     /// Enables rendering markdown tables in notebooks.
     MarkdownTables,
 
+    /// Renders `.ipynb` (Jupyter) files as a formatted, read-only notebook in
+    /// Warp's notebook viewer instead of showing the raw JSON in the code editor.
+    JupyterNotebookRendering,
+
     /// Enables rendering markdown tables inline in AI block list responses.
     BlocklistMarkdownTableRendering,
     /// Enables rendering markdown images inline in AI block list responses.
@@ -987,6 +991,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::BackgroundComputerUse,
     FeatureFlag::ContextWindowUsageBreakdown,
+    FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
@@ -994,12 +999,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    FeatureFlag::AsyncFind,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    FeatureFlag::DragTabsToWindows,
-    FeatureFlag::PinnedTabs,
-];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::AsyncFind, FeatureFlag::PinnedTabs];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely
@@ -1014,6 +1014,8 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)

@@ -15861,7 +15861,9 @@ dependencies = [
 name = "warp_tui"
 version = "0.0.0"
 dependencies = [
+ "ai",
  "anyhow",
+ "async-channel",
  "async-fs",
  "channel_versions",
  "command",
@@ -15877,16 +15879,20 @@ dependencies = [
  "pathfinder_color",
  "pathfinder_geometry",
  "serde_json",
+ "similar",
  "string-offset",
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "sum_tree",
+ "tempfile",
  "vec1",
  "warp",
  "warp_channel_config",
  "warp_core",
  "warp_editor",
+ "warp_files",
  "warp_terminal",
+ "warp_util",
  "warpui",
  "warpui_core",
 ]
@@ -15967,6 +15973,7 @@ dependencies = [
  "font-kit",
  "fontconfig",
  "fontdb",
+ "foreign-types 0.5.0",
  "futures",
  "futures-lite 1.13.0",
  "futures-timer",

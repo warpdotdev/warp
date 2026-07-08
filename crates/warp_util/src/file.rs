@@ -14,6 +14,10 @@ pub enum FileSaveError {
     },
     #[error("Remote file operation failed: {0}")]
     RemoteError(String),
+    /// A non-IO failure with a self-describing message (e.g. content could
+    /// not be derived for the write).
+    #[error("{0}")]
+    Other(String),
 }
 
 #[derive(thiserror::Error, Debug)]

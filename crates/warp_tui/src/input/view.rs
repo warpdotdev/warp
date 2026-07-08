@@ -1299,7 +1299,11 @@ impl TuiElement for TuiInputElement {
         let visible_rows = cmp::min(visual_line_count, self.max_visible_rows);
 
         self.build(terminal_width, visible_rows);
-        self.column.layout(constraint, ctx, app)
+        let content_size = self.column.layout(constraint, ctx, app);
+        // The editor claims the full width it was offered (its wrap width),
+        // not just the longest row's width the content-sized column reports.
+        // Both components are already within `constraint`.
+        TuiSize::new(terminal_width, content_size.height)
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {

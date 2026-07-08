@@ -15,7 +15,7 @@ on:
 
 jobs:
   sync:
-    if: github.event_name == 'push' || inputs.action == 'sync'
+    if: (github.event_name == 'push' || inputs.action == 'sync') && github.repository == 'warpdotdev/warp'
     uses: warpdotdev/repo-sync/.github/workflows/sync.yml@main
     with:
       repo_sync_ref: main
@@ -35,7 +35,8 @@ jobs:
       (
        github.event.pull_request.merged == true ||
        (github.event.action == 'labeled' && github.event.label.name == 'repo-sync:needs-restack')
-      )
+      ) &&
+      github.repository == 'warpdotdev/warp'
     uses: warpdotdev/repo-sync/.github/workflows/restack.yml@main
     with:
       repo_sync_ref: main
@@ -50,7 +51,8 @@ jobs:
     if: >-
       github.event_name == 'pull_request' &&
       github.event.action != 'closed' &&
-      startsWith(github.event.pull_request.head.ref, 'repo-sync/')
+      startsWith(github.event.pull_request.head.ref, 'repo-sync/') &&
+      github.repository == 'warpdotdev/warp'
     uses: warpdotdev/repo-sync/.github/workflows/approve.yml@main
     with:
       repo_sync_ref: main
@@ -61,7 +63,7 @@ jobs:
       approver_app_private_key: ${{ secrets.REPO_SYNC_APPROVER_APP_PRIVATE_KEY }}
 
   escalation:
-    if: inputs.action == 'escalation'
+    if: inputs.action == 'escalation' && github.repository == 'warpdotdev/warp'
     uses: warpdotdev/repo-sync/.github/workflows/escalation.yml@main
     with:
       repo_sync_ref: main

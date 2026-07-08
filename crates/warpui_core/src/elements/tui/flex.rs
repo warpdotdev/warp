@@ -12,11 +12,18 @@
 //! children.
 //!
 //! # Layout policy
-//! The flex fills the cross-axis extent it is offered (a column spans the
-//! offered width, a row the offered height) and gives every child that same
-//! cross-axis extent to lay out against. Wrap a flex in a
-//! [`TuiConstrainedBox`](super::TuiConstrainedBox) to cap the cross axis, e.g.
-//! a one-row status line inside a column.
+//! Every child is offered the flex's full cross-axis extent to lay out
+//! against, but the flex itself sizes its cross axis to its largest child,
+//! clamped to the constraint — so a tight cross-axis constraint still forces
+//! the flex to fill it. This is the same content-sized cross-axis policy as
+//! the GUI `Flex` (and Flutter).
+//!
+//! [`with_cross_axis_alignment`](TuiFlex::with_cross_axis_alignment) controls
+//! where children land along the cross axis, mirroring the GUI's
+//! [`CrossAxisAlignment`]: `Start` (default) anchors children at the cross
+//! start, `Center` / `End` position each child's measured cross extent within
+//! its slot, and `Stretch` forces children — and the flex itself — to fill the
+//! offered cross extent (e.g. a full-width background banner).
 //!
 //! Along the main axis, each fixed child is laid out against the remaining
 //! extent (loose) and takes its natural size; children are packed without gaps
@@ -36,7 +43,7 @@ use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
-use crate::elements::Axis;
+use crate::elements::{Axis, CrossAxisAlignment};
 use crate::AppContext;
 
 /// A child of a [`TuiFlex`] plus whether it fills leftover main-axis space.
@@ -48,6 +55,9 @@ struct FlexChild {
 pub struct TuiFlex {
     axis: Axis,
     children: Vec<FlexChild>,
+    /// Where children land along the cross axis (see
+    /// [`with_cross_axis_alignment`](Self::with_cross_axis_alignment)).
+    cross_axis_alignment: CrossAxisAlignment,
     /// Sizes returned by each child's `layout()` call; populated during layout
     /// so `render`, `cursor_position`, and `dispatch_event` have consistent slot
     /// information.
@@ -59,6 +69,7 @@ impl TuiFlex {
         Self {
             axis,
             children: Vec::new(),
+            cross_axis_alignment: CrossAxisAlignment::Start,
             child_sizes: Vec::new(),
         }
     }
@@ -94,11 +105,28 @@ impl TuiFlex {
         self
     }
 
+    /// Sets where children land along the cross axis, mirroring the GUI
+    /// `Flex`'s method of the same name. `Stretch` additionally makes the flex
+    /// (and its children) fill the offered cross extent instead of sizing to
+    /// content.
+    pub fn with_cross_axis_alignment(mut self, alignment: CrossAxisAlignment) -> Self {
+        self.cross_axis_alignment = alignment;
+        self
+    }
+
     /// The main-axis component of `size`.
     fn main_extent(axis: Axis, size: TuiSize) -> u16 {
         match axis {
             Axis::Vertical => size.height,
             Axis::Horizontal => size.width,
+        }
+    }
+
+    /// The cross-axis component of `size`.
+    fn cross_extent(axis: Axis, size: TuiSize) -> u16 {
+        match axis {
+            Axis::Vertical => size.width,
+            Axis::Horizontal => size.height,
         }
     }
 
@@ -126,6 +154,78 @@ impl TuiFlex {
             Axis::Horizontal => constraint.constrain_width(extent),
         }
     }
+
+    /// Clamps a cross-axis extent into the constraint's cross-axis bounds.
+    fn constrain_cross(axis: Axis, constraint: TuiConstraint, extent: u16) -> u16 {
+        match axis {
+            Axis::Vertical => constraint.constrain_width(extent),
+            Axis::Horizontal => constraint.constrain_height(extent),
+        }
+    }
+
+    /// The minimum cross extent handed to children: `Stretch` tightens the
+    /// cross constraint so children fill it; other alignments leave it loose.
+    fn child_cross_min(&self, cross: u16) -> u16 {
+        match self.cross_axis_alignment {
+            CrossAxisAlignment::Stretch => cross,
+            CrossAxisAlignment::Start | CrossAxisAlignment::Center | CrossAxisAlignment::End => 0,
+        }
+    }
+
+    /// The cross extent the flex reports for itself: `Stretch` fills the
+    /// offered extent; otherwise the largest child's, clamped to the
+    /// constraint.
+    fn reported_cross(&self, constraint: TuiConstraint, cross: u16, cross_max: u16) -> u16 {
+        match self.cross_axis_alignment {
+            CrossAxisAlignment::Stretch => cross,
+            CrossAxisAlignment::Start | CrossAxisAlignment::Center | CrossAxisAlignment::End => {
+                Self::constrain_cross(self.axis, constraint, cross_max)
+            }
+        }
+    }
+
+    /// The rect a child occupies within its main-axis `slot`, positioned along
+    /// the cross axis per the alignment. `Start` and `Stretch` keep the full
+    /// slot (children paint only their content, and hit areas span the slot);
+    /// `Center` / `End` place the child's measured cross extent within it.
+    /// Associated (not `&self`) so `dispatch_event` can call it while
+    /// `children` is mutably borrowed.
+    fn child_rect_for(
+        axis: Axis,
+        alignment: CrossAxisAlignment,
+        slot: TuiRect,
+        child_size: TuiSize,
+    ) -> TuiRect {
+        // The cross axis is horizontal for a column and vertical for a row.
+        let (slot_cross, child_cross) = match axis {
+            Axis::Vertical => (slot.width, child_size.width.min(slot.width)),
+            Axis::Horizontal => (slot.height, child_size.height.min(slot.height)),
+        };
+        let offset = match alignment {
+            CrossAxisAlignment::Start | CrossAxisAlignment::Stretch => return slot,
+            CrossAxisAlignment::Center => slot_cross.saturating_sub(child_cross) / 2,
+            CrossAxisAlignment::End => slot_cross.saturating_sub(child_cross),
+        };
+        match axis {
+            Axis::Vertical => TuiRect::new(
+                slot.x.saturating_add(offset),
+                slot.y,
+                child_cross,
+                slot.height,
+            ),
+            Axis::Horizontal => TuiRect::new(
+                slot.x,
+                slot.y.saturating_add(offset),
+                slot.width,
+                child_cross,
+            ),
+        }
+    }
+
+    /// [`Self::child_rect_for`] with this flex's axis and alignment.
+    fn child_rect(&self, slot: TuiRect, child_size: TuiSize) -> TuiRect {
+        Self::child_rect_for(self.axis, self.cross_axis_alignment, slot, child_size)
+    }
 }
 
 /// Allows [`TuiParentElement`](super::TuiParentElement) (`with_child`,
@@ -148,14 +248,18 @@ impl TuiElement for TuiFlex {
         app: &AppContext,
     ) -> TuiSize {
         let axis = self.axis;
-        // The flex fills the cross-axis extent it is offered.
+        // Children lay out against the full offered cross-axis extent; the
+        // flex itself reports its largest child's cross extent, clamped to the
+        // constraint (or the full extent under `Stretch`).
         let cross = match axis {
             Axis::Vertical => constraint.constrain_width(constraint.max.width),
             Axis::Horizontal => constraint.constrain_height(constraint.max.height),
         };
+        let cross_min = self.child_cross_min(cross);
         let offered_main = Self::main_extent(axis, constraint.max);
         let has_flex = self.children.iter().any(|c| c.flex);
         self.child_sizes.clear();
+        let mut cross_max: u16 = 0;
 
         if !has_flex {
             // No flex children: give each child the remaining main-axis extent
@@ -163,15 +267,19 @@ impl TuiElement for TuiFlex {
             let mut total_main: u16 = 0;
             for child in &mut self.children {
                 let remaining = offered_main.saturating_sub(total_main);
-                let child_constraint = TuiConstraint::loose(Self::size_of(axis, remaining, cross));
+                let child_constraint = TuiConstraint::new(
+                    Self::size_of(axis, 0, cross_min),
+                    Self::size_of(axis, remaining, cross),
+                );
                 let size = child.element.layout(child_constraint, ctx, app);
                 total_main = total_main.saturating_add(Self::main_extent(axis, size));
+                cross_max = cross_max.max(Self::cross_extent(axis, size));
                 self.child_sizes.push(size);
             }
             return Self::size_of(
                 axis,
                 Self::constrain_main(axis, constraint, total_main),
-                cross,
+                self.reported_cross(constraint, cross, cross_max),
             );
         }
 
@@ -184,9 +292,13 @@ impl TuiElement for TuiFlex {
                 fixed_sizes.push(None);
             } else {
                 let remaining = offered_main.saturating_sub(total_fixed);
-                let child_constraint = TuiConstraint::loose(Self::size_of(axis, remaining, cross));
+                let child_constraint = TuiConstraint::new(
+                    Self::size_of(axis, 0, cross_min),
+                    Self::size_of(axis, remaining, cross),
+                );
                 let size = child.element.layout(child_constraint, ctx, app);
                 total_fixed = total_fixed.saturating_add(Self::main_extent(axis, size));
+                cross_max = cross_max.max(Self::cross_extent(axis, size));
                 fixed_sizes.push(Some(size));
             }
         }
@@ -201,18 +313,26 @@ impl TuiElement for TuiFlex {
             let size = if child.flex {
                 let slot = base + u16::from(flex_rank < remainder);
                 flex_rank += 1;
-                let slot_size = Self::size_of(axis, slot, cross);
-                // Lay out with a tight extent so the child fills its slot.
-                child
-                    .element
-                    .layout(TuiConstraint::tight(slot_size), ctx, app);
-                slot_size
+                // Tight along the main axis so the child fills its slot; the
+                // cross axis stays as for fixed children (loose, or tight
+                // under `Stretch`).
+                let child_constraint = TuiConstraint::new(
+                    Self::size_of(axis, slot, cross_min),
+                    Self::size_of(axis, slot, cross),
+                );
+                let child_size = child.element.layout(child_constraint, ctx, app);
+                cross_max = cross_max.max(Self::cross_extent(axis, child_size));
+                Self::size_of(axis, slot, Self::cross_extent(axis, child_size))
             } else {
                 maybe_size.expect("fixed child was measured in pass 1")
             };
             self.child_sizes.push(size);
         }
-        Self::size_of(axis, offered_main, cross)
+        Self::size_of(
+            axis,
+            offered_main,
+            self.reported_cross(constraint, cross, cross_max),
+        )
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
@@ -223,7 +343,9 @@ impl TuiElement for TuiFlex {
             }
             let (slot, rest) =
                 Self::split_main(self.axis, remaining, Self::main_extent(self.axis, *size));
-            child.element.render(slot, buffer, ctx);
+            child
+                .element
+                .render(self.child_rect(slot, *size), buffer, ctx);
             remaining = rest;
         }
     }
@@ -236,11 +358,12 @@ impl TuiElement for TuiFlex {
             }
             let (slot, rest) =
                 Self::split_main(self.axis, remaining, Self::main_extent(self.axis, *size));
-            if let Some((cx, cy)) = child.element.cursor_position(slot, ctx) {
-                // Offset is relative to the slot, not the full area.
+            let rect = self.child_rect(slot, *size);
+            if let Some((cx, cy)) = child.element.cursor_position(rect, ctx) {
+                // Offset is relative to the child's rect, not the full area.
                 return Some((
-                    slot.x.saturating_sub(area.x) + cx,
-                    slot.y.saturating_sub(area.y) + cy,
+                    rect.x.saturating_sub(area.x) + cx,
+                    rect.y.saturating_sub(area.y) + cy,
                 ));
             }
             remaining = rest;
@@ -262,19 +385,21 @@ impl TuiElement for TuiFlex {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> bool {
-        // Offer the event to each child in its rendered slot (mirrors render's
-        // packing); the first child to handle it consumes it. Children clipped
-        // past the available extent see no events.
+        // Offer the event to each child in its rendered rect (mirrors render's
+        // packing and alignment); the first child to handle it consumes it.
+        // Children clipped past the available extent see no events.
         let axis = self.axis;
+        let alignment = self.cross_axis_alignment;
         let mut remaining = area;
         for (child, size) in self.children.iter_mut().zip(&self.child_sizes) {
             if remaining.is_empty() {
                 break;
             }
             let (slot, rest) = Self::split_main(axis, remaining, Self::main_extent(axis, *size));
+            let rect = Self::child_rect_for(axis, alignment, slot, *size);
             if child
                 .element
-                .dispatch_event(event, slot, event_ctx, ctx, app)
+                .dispatch_event(event, rect, event_ctx, ctx, app)
             {
                 return true;
             }

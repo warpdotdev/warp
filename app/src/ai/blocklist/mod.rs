@@ -6,6 +6,8 @@ pub mod code_block;
 mod context_model;
 mod controller;
 pub(crate) mod conversation_selection;
+pub(crate) mod diff_storage;
+pub(crate) mod diff_types;
 pub(crate) mod handoff;
 
 pub(crate) mod local_agent_task_sync_model;
@@ -34,13 +36,18 @@ pub(crate) mod telemetry_banner;
 pub(super) mod view_util;
 
 pub(crate) use action_model::recording_controller::RecordingController;
+// Consumed by `tui_export` for the `warp_tui` frontend.
+#[cfg(feature = "tui")]
+pub use action_model::RequestFileEditsExecutor;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
-    apply_edits, read_local_file_context, BlocklistAIActionEvent, FileReadResult,
-    ReadFileContextResult, RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentRequest, StartAgentRequestId,
+    apply_edits, read_local_file_context, FileReadResult, ReadFileContextResult,
+    RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
+    StartAgentRequestId,
 };
-pub use action_model::{BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent};
+pub use action_model::{
+    BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
+};
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};

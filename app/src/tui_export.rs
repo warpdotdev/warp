@@ -21,19 +21,26 @@ pub use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,
     PendingQueryState,
 };
+pub use crate::ai::blocklist::diff_storage::{
+    DiffStorage, DiffStorageHelper, FileSnapshot, RegisteredDiffStorage, SaveFuture,
+    UpdatedFileState,
+};
+pub use crate::ai::blocklist::diff_types::{changed_lines_from_op, DiffSessionType, FileDiff};
 pub use crate::ai::blocklist::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
 };
 pub use crate::ai::blocklist::{
-    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
-    InputConfig, InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
-    PolicyConfigUpdate, ShellCommandExecutor, ShellCommandExecutorEvent,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIInputModel, InputConfig, InputModePolicy, InputModePolicyHandle, InputType,
+    InputTypeAutoDetectionSource, PolicyConfigUpdate, RequestFileEditsExecutor,
+    ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
+pub use crate::code::DiffResult;
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::event::AfterBlockCompletedEvent;
@@ -49,8 +56,9 @@ pub use crate::terminal::model::blocks::{
 };
 pub use crate::terminal::model::rich_content::RichContentType;
 pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
+pub use crate::terminal::model::session::Sessions;
 pub use crate::terminal::model::terminal_model::BlockIndex;
-pub use crate::terminal::model_events::ModelEvent;
+pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::ExecuteCommandEvent;

@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use warp::tui_export::{format_elapsed_seconds, MessageId};
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiText};
+use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::AppContext;
 
 use crate::agent_block::ThinkingBlockStates;
@@ -24,7 +25,9 @@ pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiE
 
     // Only the first line carries the `≫` prompt marker; continuation
     // lines are indented to the marker's width so they align beneath it.
-    let mut column = TuiFlex::column();
+    // The column stretches to the full offered width so the highlighted
+    // background spans the whole row, not just the text.
+    let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     for (index, line) in text.split('\n').enumerate() {
         let line_text = if index == 0 {
             format!("{INPUT_PREFIX}{line}")
