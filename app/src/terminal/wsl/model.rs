@@ -82,8 +82,9 @@ impl WslInfo {
                     .map_err(|err| {
                         // Some entries don't have names, that's not an error state we need to monitor.
                         if err.code() != KEY_NOT_FOUND_ERR {
-                            report_error!(anyhow::Error::new(err)
-                                .context("Unable to read distribution name"));
+                            report_error!(
+                                anyhow::Error::new(err).context("Unable to read distribution name")
+                            );
                         }
                     })
                     .ok()?;

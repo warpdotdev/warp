@@ -271,7 +271,9 @@ pub(super) fn read_agent_conversation_metadata(
                 match api::Task::decode(&task_record.task[..]) {
                     Ok(task) => decoded_tasks.push(task),
                     Err(e) => {
-                        report_error!(anyhow::Error::new(e).context("Failed to decode task protobuf"));
+                        report_error!(
+                            anyhow::Error::new(e).context("Failed to decode task protobuf")
+                        );
                         decode_failed = true;
                         break;
                     }

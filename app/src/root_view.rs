@@ -3215,7 +3215,9 @@ impl RootView {
                         // Stop listening and proceed to transcription (don't abort).
                         voice_input.update(ctx, |voice_input, ctx| {
                             if let Err(e) = voice_input.stop_listening(ctx) {
-                                report_error!(e.context("Failed to stop voice input on key release"));
+                                report_error!(
+                                    e.context("Failed to stop voice input on key release")
+                                );
                             }
                         });
                     }

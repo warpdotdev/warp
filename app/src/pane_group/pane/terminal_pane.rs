@@ -44,7 +44,6 @@ use crate::pane_group::CodeSource;
 use crate::pane_group::Event::OpenConversationHistory;
 use crate::pane_group::{self, Direction, PaneGroup};
 use crate::persistence::{BlockCompleted, ModelEvent};
-use crate::report_error;
 use crate::server::server_api::ai::{SpawnAgentRequest, UserQueryMode};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
@@ -62,7 +61,6 @@ use crate::terminal::{TerminalManager, TerminalView};
 use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
-use crate::AIExecutionProfilesModel;
 // Imports below are only consumed by the non-wasm `launch_local_*_child`
 // dispatch helpers; gating them keeps the wasm build warning-clean.
 #[cfg(not(target_family = "wasm"))]
@@ -73,6 +71,7 @@ use crate::{
     },
     terminal::shared_session::IsSharedSessionCreator,
 };
+use crate::{report_error, AIExecutionProfilesModel};
 
 pub type TerminalPaneView = PaneView<TerminalView>;
 
