@@ -1,4 +1,4 @@
-use super::{register_error, ErrorExt};
+use crate::{register_error, ErrorExt};
 
 impl ErrorExt for tokio::task::JoinError {
     fn is_actionable(&self) -> bool {

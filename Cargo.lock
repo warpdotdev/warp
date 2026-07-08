@@ -1208,6 +1208,7 @@ dependencies = [
  "log",
  "reqwest",
  "url",
+ "warp_errors",
  "warpui_core",
 ]
 
@@ -3146,6 +3147,7 @@ dependencies = [
  "log",
  "tempfile",
  "thiserror 2.0.17",
+ "warp_errors",
  "win32job",
  "windows 0.62.2",
 ]
@@ -3191,6 +3193,7 @@ dependencies = [
 name = "computer_use"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "ashpd",
  "async-trait",
  "cfg-if",
@@ -3216,6 +3219,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "warp_errors",
  "warpui_core",
  "windows 0.62.2",
  "x11rb",
@@ -6881,6 +6885,7 @@ dependencies = [
  "smol_str",
  "tokenizers",
  "warp_completer",
+ "warp_errors",
  "warp_features",
 ]
 
@@ -7362,6 +7367,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "warp_errors",
  "warpui_core",
 ]
 
@@ -12509,6 +12515,7 @@ dependencies = [
  "serde_json",
  "settings_value",
  "tempfile",
+ "warp_errors",
  "warp_features",
  "warpui_core",
  "warpui_extras",
@@ -13071,6 +13078,7 @@ dependencies = [
  "log",
  "rand 0.8.6",
  "sum_tree",
+ "warp_errors",
 ]
 
 [[package]]
@@ -14909,6 +14917,7 @@ dependencies = [
  "parking_lot",
  "rubato",
  "thiserror 2.0.17",
+ "warp_errors",
  "warpui_core",
 ]
 
@@ -15471,6 +15480,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "warp_errors",
  "warp_features",
  "warp_util",
  "warpui_core",
@@ -15528,6 +15538,20 @@ dependencies = [
  "warp_util",
  "warpui",
  "warpui_core",
+]
+
+[[package]]
+name = "warp_errors"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "http 1.4.0",
+ "inventory",
+ "log",
+ "reqwest",
+ "sentry",
+ "tokio",
+ "websocket",
 ]
 
 [[package]]
@@ -15922,6 +15946,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
+ "warp_errors",
  "warpui_core",
  "windows 0.62.2",
 ]
@@ -16020,6 +16045,7 @@ dependencies = [
  "vec1",
  "version-compare",
  "virtual-fs",
+ "warp_errors",
  "warpui",
  "warpui_core",
  "wasm-bindgen",
@@ -16110,6 +16136,7 @@ dependencies = [
  "tracing",
  "trait-set",
  "vec1",
+ "warp_errors",
  "warp_util",
  "warpui_core",
  "wasm-bindgen-futures",
@@ -16137,6 +16164,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "toml_edit 0.25.6+spec-1.1.0",
+ "warp_errors",
  "warpui_core",
  "warpui_extras",
  "windows 0.62.2",
@@ -16285,6 +16313,7 @@ dependencies = [
  "futures",
  "log",
  "notify-debouncer-full",
+ "warp_errors",
  "warpui_core",
 ]
 

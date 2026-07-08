@@ -5,17 +5,16 @@ use super::ErrorExt;
 #[macro_export]
 macro_rules! register_error {
     ($error:ty) => {
-        impl $crate::errors::RegisteredError for $error {}
+        impl $crate::RegisteredError for $error {}
 
-        $crate::errors::submit! {
-            $crate::errors::ErrorRegistration::<$error>::adapt()
+        $crate::submit! {
+            $crate::ErrorRegistration::<$error>::adapt()
         }
     };
 }
-pub use register_error;
 
-/// Marker trait for known error events. We rely on this to implement [`ErrorExt`] for [`anyhow::Error`]
-/// in a way that delegates to errors in the context chain.
+/// Marker trait for known error events. We rely on this to implement [`ErrorExt`] for
+/// [`anyhow::Error`] in a way that delegates to errors in the context chain.
 ///
 /// DO NOT implement this trait directly - use the [`register_error!`] macro instead.
 pub trait RegisteredError {}

@@ -1,10 +1,9 @@
 use super::registration::AnyErrorRegistration;
 
-/// A version of [`ErrorExt`] that works for [`anyhow::Error`] (which does not
-/// implement [`std::error::Error`]).
+/// A version of [`ErrorExt`] that works for [`anyhow::Error`] (which does not implement
+/// [`std::error::Error`]).
 pub trait AnyhowErrorExt {
-    /// Returns whether or not an error is something that is actionable by our
-    /// engineering team.
+    /// Returns whether or not an error is something that is actionable by our engineering team.
     fn is_actionable(&self) -> bool;
 
     /// Reports the error.
