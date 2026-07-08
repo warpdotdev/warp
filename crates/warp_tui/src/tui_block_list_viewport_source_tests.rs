@@ -229,6 +229,7 @@ fn request_top_window(
 fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
     let query = query.to_owned();
     let action_model = add_test_action_model(app);
+    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
             AddWindowOptions {
@@ -245,6 +246,7 @@ fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
                     inputs: vec![query_input(&query)],
                 }),
                 action_model,
+                terminal_model,
                 ctx,
             )
         })

@@ -53,6 +53,7 @@ use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
 use crate::terminal::shared_session::sharer::network::Network;
 use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionStatus};
 use crate::terminal::shell::ShellName;
+use crate::terminal::terminal_manager::BlockSpacing;
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
@@ -194,6 +195,7 @@ impl<S> TerminalManager<S> {
             initial_size,
             model_event_sender,
             chosen_shell,
+            BlockSpacing::for_gui(ctx),
             ctx,
             create_surface,
             |manager| Box::new(manager),
@@ -201,6 +203,7 @@ impl<S> TerminalManager<S> {
     }
 
     /// Creates a local terminal manager for a TUI-owned terminal surface.
+    /// `block_spacing` is the TUI frontend's spacing baked into block heights.
     #[allow(clippy::too_many_arguments)]
     pub fn create_tui_model<PostWire>(
         startup_directory: Option<PathBuf>,
@@ -211,6 +214,7 @@ impl<S> TerminalManager<S> {
         initial_size: Vector2F,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
+        block_spacing: BlockSpacing,
         ctx: &mut AppContext,
         create_surface: impl FnOnce(
             TerminalSurfaceInit,
@@ -231,6 +235,7 @@ impl<S> TerminalManager<S> {
             initial_size,
             model_event_sender,
             chosen_shell,
+            block_spacing,
             ctx,
             create_surface,
             |manager| Box::new(TuiTerminalManager(manager)),
@@ -248,6 +253,7 @@ impl<S> TerminalManager<S> {
         initial_size: Vector2F,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
+        block_spacing: BlockSpacing,
         ctx: &mut AppContext,
         create_surface: impl FnOnce(
             TerminalSurfaceInit,
@@ -311,6 +317,7 @@ impl<S> TerminalManager<S> {
                     .map(|wsl_name_or_shell_starter| wsl_name_or_shell_starter.name())
                     .unwrap_or(ShellName::LessDescriptive("Shell".to_owned())),
             },
+            block_spacing,
             ctx,
         );
         let colors = model.colors();

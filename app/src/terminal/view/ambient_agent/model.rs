@@ -994,18 +994,28 @@ impl AmbientAgentViewModel {
         // queued-prompt / harness-command-started flow).
         ctx.spawn(
             async move { ai_client.get_ambient_agent_task(&task_id).await },
-            |me, result, ctx| match result {
+            move |me, result, ctx| match result {
                 Ok(task) => {
                     me.source = task.source.clone();
                     me.apply_viewed_task_config_snapshot(task.agent_config_snapshot.as_ref(), ctx);
                     ctx.emit(AmbientAgentViewModelEvent::ViewerHarnessResolved);
                 }
-                Err(err) => {
-                    log::warn!("Failed to fetch ambient agent task for shared session: {err}");
+                Err(_) => {
                     me.set_environment_id(None, ctx);
                 }
             },
         );
+    }
+
+    /// Records the live execution session for a viewer that just joined an already-running
+    /// ambient session. Unlike [`Self::attach_execution_session`], this does not emit
+    /// `ExecutionSessionReady` (the viewer is already connected to this session), so it does
+    /// not trigger a session swap. Setting `active_execution_session_id` keeps
+    /// `is_ready_for_cloud_followup_prompt` false while the session is live; the end path
+    /// clears it via [`Self::record_ambient_execution_ended`] so follow-ups become available.
+    pub fn set_live_execution_session(&mut self, session_id: SessionId) {
+        self.active_execution_session_id = Some(session_id);
+        self.last_ended_execution_session_id = None;
     }
 
     /// Applies the run configuration for an existing shared ambient session.

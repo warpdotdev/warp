@@ -310,6 +310,40 @@ impl BlocklistAIInputModel {
         }
     }
 
+    /// Builds a self-contained input model for tests, usable from other crates
+    /// via the `test-util` feature: a mock terminal model, an inert
+    /// conversation selection, and no production subscriptions.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn mock(policy: InputModePolicyHandle, ctx: &mut AppContext) -> ModelHandle<Self> {
+        use super::conversation_selection::{ConversationSelection, MockConversationSelection};
+
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let conversation_selection = ctx
+            .add_model(|_| Box::new(MockConversationSelection) as Box<dyn ConversationSelection>);
+        let context_conversation_selection = conversation_selection.clone();
+        let context_terminal_model = model.clone();
+        let ai_context_model = ctx.add_model(|_| {
+            BlocklistAIContextModel::new_for_test(
+                context_terminal_model,
+                EntityId::new(),
+                context_conversation_selection,
+            )
+        });
+        let input_config = policy.initial_config(ctx);
+        ctx.add_model(|_| Self {
+            input_config,
+            conversation_selection,
+            ai_context_model,
+            policy,
+            last_ai_autodetection_ts: None,
+            last_ai_autodetection_source: None,
+            last_explicit_input_type_set_at: None,
+            was_lock_set_with_empty_buffer: false,
+            autodetect_abort_handle: None,
+            model,
+        })
+    }
+
     /// Returns whether the surface presents a selected conversation as active.
     fn is_conversation_active(&self, app: &AppContext) -> bool {
         self.conversation_selection

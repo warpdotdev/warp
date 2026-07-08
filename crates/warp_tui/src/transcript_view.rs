@@ -8,8 +8,9 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
-    BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, RichContentItem,
-    RichContentType, TerminalModel,
+    BlockPadding, BlockSpacing, BlocklistAIActionEvent, BlocklistAIActionModel,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, RichContentItem, RichContentType,
+    TerminalModel,
 };
 use warpui_core::elements::tui::{
     TuiElement, TuiScrollable, TuiScrollableElement, TuiViewportVerticalAlignment,
@@ -22,6 +23,29 @@ use warpui_core::{
 
 use super::agent_block::TuiAIBlock;
 use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
+
+/// Rows of blank space above every transcript block. Terminal blocks get it
+/// via [`TRANSCRIPT_BLOCK_SPACING`]'s `padding_top`; agent blocks apply the
+/// same top padding directly, so every adjacent block pair is separated by
+/// exactly this many rows.
+pub(crate) const BLOCK_TOP_PADDING_ROWS: u16 = 1;
+
+/// Block spacing baked into the terminal model's block heights for this
+/// transcript, passed in at session creation. The transcript renders whole
+/// rows, so fractional pixel-derived padding would ceil into several blank
+/// rows per block; instead every block gets exactly [`BLOCK_TOP_PADDING_ROWS`]
+/// blank rows above it, no reserved Warp-prompt height, and no memory-stats
+/// footer row (the transcript renders neither).
+pub(crate) const TRANSCRIPT_BLOCK_SPACING: BlockSpacing = BlockSpacing {
+    block_padding: BlockPadding {
+        padding_top: BLOCK_TOP_PADDING_ROWS as f32,
+        command_padding_top: 0.0,
+        middle: 0.0,
+        bottom: 0.0,
+    },
+    warp_prompt_height_lines: 0.0,
+    show_memory_stats: false,
+};
 
 /// TUI transcript view over one terminal surface's canonical block-list order.
 pub(super) struct TuiTranscriptView {
@@ -43,6 +67,34 @@ impl TuiTranscriptView {
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |view, _, event, ctx| view.handle_history_event(event, ctx),
+        );
+
+        // Tool-call rows derive their text from per-action status, so any
+        // status transition must re-measure and re-render the owning block.
+        // Finding the owning block is an O(1) set lookup per block (mirroring
+        // the GUI `AIBlock`'s `requested_action_ids` membership check).
+        ctx.subscribe_to_model(
+            &action_model,
+            |view, _, event: &BlocklistAIActionEvent, ctx| {
+                let action_id = event.action_id();
+                let view_id = view
+                    .agent_blocks
+                    .borrow()
+                    .iter()
+                    .find_map(|(view_id, block)| {
+                        block
+                            .as_ref(ctx)
+                            .renders_action(action_id)
+                            .then_some(*view_id)
+                    });
+                if let Some(view_id) = view_id {
+                    view.model
+                        .lock()
+                        .block_list_mut()
+                        .mark_rich_content_dirty(view_id);
+                    ctx.notify();
+                }
+            },
         );
 
         Self {
@@ -162,8 +214,16 @@ impl TuiTranscriptView {
 
         let block_model = Rc::new(block_model);
         let action_model = self.action_model.clone();
+        let terminal_model = self.model.clone();
         let view = ctx.add_tui_view(|ctx| {
-            TuiAIBlock::new(conversation_id, exchange_id, block_model, action_model, ctx)
+            TuiAIBlock::new(
+                conversation_id,
+                exchange_id,
+                block_model,
+                action_model,
+                terminal_model,
+                ctx,
+            )
         });
         let view_id = view.id();
         self.agent_blocks.borrow_mut().insert(view_id, view);

@@ -11,7 +11,7 @@ on:
         type: string
 jobs:
   update_dedupe:
-    if: github.repository == 'warpdotdev/warp'
+    if: github.repository_owner == 'warpdotdev'
     permissions:
       contents: write
       pull-requests: write

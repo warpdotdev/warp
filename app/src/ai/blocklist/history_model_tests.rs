@@ -33,7 +33,8 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::input_suggestions::HistoryInputSuggestion;
 use crate::persistence::model::{
-    AgentConversation, AgentConversationData, AgentConversationRecord, PersistedAutoexecuteMode,
+    AgentConversation, AgentConversationData, AgentConversationRecord, AgentConversationSummary,
+    PersistedAutoexecuteMode,
 };
 use crate::persistence::ModelEvent;
 use crate::server::ids::ServerId;
@@ -125,6 +126,7 @@ fn persisted_agent_conversation(
             conversation_data: serde_json::to_string(&conversation_data)
                 .expect("conversation data should serialize"),
             last_modified_at,
+            summary: None,
         },
         tasks,
     }
@@ -183,6 +185,7 @@ fn persisted_agent_conversation_from_update_event(event: ModelEvent) -> AgentCon
             conversation_data: serde_json::to_string(&conversation_data)
                 .expect("conversation data should serialize"),
             last_modified_at: Utc::now().naive_utc(),
+            summary: None,
         },
         tasks: updated_tasks,
     }
@@ -703,6 +706,7 @@ fn test_initialize_historical_conversations_uses_root_task_description_title() {
                 })
                 .expect("conversation data should serialize"),
                 last_modified_at: now,
+                summary: None,
             },
             tasks: vec![warp_multi_agent_api::Task {
                 id: task_id.clone(),
@@ -731,6 +735,107 @@ fn test_initialize_historical_conversations_uses_root_task_description_title() {
         });
     });
 }
+
+#[test]
+fn test_initialize_historical_conversations_uses_summary_column_without_tasks() {
+    // Startup rows carry only `agent_conversations` records: task lists are
+    // empty and the metadata comes from the write-time `summary` column.
+    App::test((), |app| async move {
+        let conversation_id = AIConversationId::new();
+        let now = Utc::now().naive_utc();
+        let summary = AgentConversationSummary {
+            initial_query: "Initial query".to_string(),
+            title: "Summary title".to_string(),
+            initial_working_directory: Some("/tmp/repo".to_string()),
+            is_restorable: true,
+            is_unlisted_auto_code_diff: false,
+        };
+        let conversations = vec![AgentConversation {
+            conversation: AgentConversationRecord {
+                id: 0,
+                conversation_id: conversation_id.to_string(),
+                conversation_data: r#"{"server_conversation_token":null}"#.to_string(),
+                last_modified_at: now,
+                summary: Some(serde_json::to_string(&summary).expect("summary should serialize")),
+            },
+            tasks: vec![],
+        }];
+
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+
+        history_model.read(&app, |model, _| {
+            let metadata = model
+                .get_conversation_metadata(&conversation_id)
+                .expect("conversation metadata should be initialized from the summary column");
+            assert_eq!(metadata.title, "Summary title");
+            assert_eq!(metadata.initial_query, "Initial query");
+            assert_eq!(
+                metadata.initial_working_directory.as_deref(),
+                Some("/tmp/repo")
+            );
+            assert!(metadata.has_local_data);
+            // The conversation itself stays on the lazy path.
+            assert!(model.conversation(&conversation_id).is_none());
+        });
+    });
+}
+
+#[test]
+fn test_initialize_historical_conversations_skips_unrestorable_and_unlisted_summaries() {
+    App::test((), |app| async move {
+        let unrestorable_id = AIConversationId::new();
+        let unlisted_id = AIConversationId::new();
+        let now = Utc::now().naive_utc();
+        let record = |id: &AIConversationId, summary: &AgentConversationSummary, row: i32| {
+            AgentConversation {
+                conversation: AgentConversationRecord {
+                    id: row,
+                    conversation_id: id.to_string(),
+                    conversation_data: r#"{"server_conversation_token":null}"#.to_string(),
+                    last_modified_at: now,
+                    summary: Some(
+                        serde_json::to_string(summary).expect("summary should serialize"),
+                    ),
+                },
+                tasks: vec![],
+            }
+        };
+        let conversations = vec![
+            record(
+                &unrestorable_id,
+                &AgentConversationSummary {
+                    initial_query: "Initial query".to_string(),
+                    title: "Unrestorable".to_string(),
+                    initial_working_directory: None,
+                    is_restorable: false,
+                    is_unlisted_auto_code_diff: false,
+                },
+                0,
+            ),
+            record(
+                &unlisted_id,
+                &AgentConversationSummary {
+                    initial_query: "diff".to_string(),
+                    title: "Passive diff".to_string(),
+                    initial_working_directory: None,
+                    is_restorable: true,
+                    is_unlisted_auto_code_diff: true,
+                },
+                1,
+            ),
+        ];
+
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+
+        history_model.read(&app, |model, _| {
+            assert!(model.get_conversation_metadata(&unrestorable_id).is_none());
+            assert!(model.get_conversation_metadata(&unlisted_id).is_none());
+        });
+    });
+}
+
 #[test]
 fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_children() {
     // Fix C: orchestration children should be inserted into `conversations_by_id`
@@ -1641,6 +1746,7 @@ fn test_initialize_historical_conversations_indexes_child_conversations() {
                 conversation_id: child_id.to_string(),
                 conversation_data: child_conversation_data,
                 last_modified_at: NaiveDateTime::default(),
+                summary: None,
             },
             tasks: vec![],
         }];
@@ -2352,6 +2458,7 @@ fn test_optimistic_root_restore_round_trip_yields_in_progress_optimistic_root() 
                 conversation_data: serde_json::to_string(&conversation_data)
                     .expect("conversation data should serialize"),
                 last_modified_at: Utc::now().naive_utc(),
+                summary: None,
             },
             tasks: updated_tasks,
         };

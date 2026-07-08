@@ -37,6 +37,9 @@ pub(super) mod view_util;
 
 pub(crate) use action_model::recording_controller::RecordingController;
 // Consumed by `tui_export` for the `warp_tui` frontend.
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use action_model::AIActionStatus;
+// Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg(feature = "tui")]
 pub use action_model::RequestFileEditsExecutor;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]

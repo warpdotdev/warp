@@ -104,7 +104,7 @@ impl PaneGroup {
                         resources.clone(),
                         view_size,
                         true, // enable_orchestration_polling
-                        true, // is_cloud_mode
+                        true, // is_ambient_agent
                         ctx,
                     );
                     let new_pane = TerminalPane::new(

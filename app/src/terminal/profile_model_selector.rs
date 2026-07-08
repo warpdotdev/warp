@@ -56,7 +56,7 @@ use crate::context_chips::spacing;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::SettingsSection;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
-use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::TerminalModel;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
@@ -515,22 +515,6 @@ impl ProfileModelSelector {
             },
         );
 
-        if let Some(ref ambient_model) = ambient_agent_view_model {
-            ctx.subscribe_to_model(ambient_model, |me, _, event, ctx| {
-                use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
-                if matches!(
-                    event,
-                    AmbientAgentViewModelEvent::HarnessSelected
-                        | AmbientAgentViewModelEvent::HarnessModelSelected
-                        | AmbientAgentViewModelEvent::RunLifecycleChanged
-                        | AmbientAgentViewModelEvent::SessionReady { .. }
-                        | AmbientAgentViewModelEvent::FollowupDispatched
-                ) {
-                    me.refresh_state(ctx);
-                }
-            });
-        }
-
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| {
@@ -573,15 +557,51 @@ impl ProfileModelSelector {
             is_blurred: false,
             new_model_popup,
             input_model,
-            ambient_agent_view_model,
+            ambient_agent_view_model: None,
             render_compact: false,
             hovered_llm_info: None,
             manage_api_key_button,
             terminal_model,
             all_model_choices: Vec::new(),
         };
-        me.refresh_state(ctx);
+        // Route ambient wiring through the setter so construction and the lazy shared-session
+        // viewer path share one implementation.
+        if let Some(ambient_agent_view_model) = ambient_agent_view_model {
+            me.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
+        } else {
+            me.refresh_state(ctx);
+        }
         me
+    }
+
+    /// Attaches an ambient agent view model to an already-constructed selector. Used on the
+    /// shared-session viewer path where the model is created lazily at `SessionJoined`, after the
+    /// selector was built with `None`. Without this, the model / harness chip reflects the local
+    /// default instead of the viewed cloud run. Mirrors the ambient subscription in [`Self::new`].
+    /// Idempotent: a no-op when a model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        ctx.subscribe_to_model(&ambient_agent_view_model, |me, _, event, ctx| {
+            if matches!(
+                event,
+                AmbientAgentViewModelEvent::HarnessSelected
+                    | AmbientAgentViewModelEvent::HarnessModelSelected
+                    | AmbientAgentViewModelEvent::RunLifecycleChanged
+                    | AmbientAgentViewModelEvent::SessionReady { .. }
+                    | AmbientAgentViewModelEvent::FollowupDispatched
+            ) {
+                me.refresh_state(ctx);
+            }
+        });
+        self.ambient_agent_view_model = Some(ambient_agent_view_model);
+        self.refresh_state(ctx);
+        ctx.notify();
     }
 
     pub fn set_profile_menu_visibility(&mut self, is_open: bool, ctx: &mut ViewContext<Self>) {

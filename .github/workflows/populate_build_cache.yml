@@ -22,6 +22,6 @@ name: Populate Build Cache
 jobs:
   populate_build_cache:
     name: CI
-    if: github.repository == 'warpdotdev/warp'
+    if: github.repository_owner == 'warpdotdev'
     uses: ./.github/workflows/ci.yml
     secrets: inherit

@@ -32,9 +32,10 @@ use warpui_core::{
 use crate::conversation_selection::TuiConversationSelection;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::input::{TuiInputView, TuiInputViewEvent};
-use crate::input_mode_policy::TuiInputModePolicy;
+use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::transcript_view::TuiTranscriptView;
+use crate::transient_hint::TransientHint;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 use crate::usage::TokenCostToggle;
@@ -67,6 +68,13 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
     }
 }
 
+/// Transient hint shown when a shell command is rejected because the PTY is
+/// already running a command.
+const COMMAND_ALREADY_RUNNING_HINT: &str = "cannot run — command already running";
+
+/// Footer hint shown while the input is in `!` shell mode.
+const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
+
 /// Typed actions handled by [`TuiTerminalSessionView`].
 #[derive(Debug, Clone)]
 pub(crate) enum TuiTerminalSessionAction {
@@ -92,6 +100,11 @@ pub(crate) struct TuiTerminalSessionView {
     exit_confirmation: ExitConfirmation,
     /// Tokens⇄cost display state for the footer's clickable usage entry.
     usage_toggle: TokenCostToggle,
+    ai_input_model: ModelHandle<BlocklistAIInputModel>,
+    terminal_model: Arc<FairMutex<TerminalModel>>,
+    /// Transient notice shown in the footer's hint slot (e.g. a rejected
+    /// shell submission).
+    transient_hint: TransientHint,
 }
 
 /// Registers the session surface's keybindings. Called once at TUI startup
@@ -157,7 +170,7 @@ impl TuiTerminalSessionView {
         });
         let ai_controller = ctx.add_model(|ctx| {
             BlocklistAIController::new(
-                ai_input_model,
+                ai_input_model.clone(),
                 context_model,
                 conversation_selection.clone(),
                 action_model.clone(),
@@ -194,17 +207,16 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
-        let input_view =
-            ctx.add_typed_action_tui_view(move |ctx| TuiInputView::new(input_editor_model, ctx));
-        ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
-            TuiInputViewEvent::Submitted(prompt) => {
-                let prompt = prompt.trim().to_owned();
-                if !prompt.is_empty() {
-                    view.send_prompt(prompt, ctx);
-                    ctx.notify();
-                }
-            }
+        let input_mode_for_input_view = ai_input_model.clone();
+        let input_view = ctx.add_typed_action_tui_view(move |ctx| {
+            TuiInputView::new(input_editor_model, input_mode_for_input_view, ctx)
         });
+        ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
+            TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), ctx),
+        });
+        // The input box border color and the footer's shell-mode hint depend
+        // on the input mode.
+        ctx.subscribe_to_model(&ai_input_model, |_, _, _, ctx| ctx.notify());
 
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
         let shell_command_executor = action_model.as_ref(ctx).shell_command_executor(ctx);
@@ -281,7 +293,17 @@ impl TuiTerminalSessionView {
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
             usage_toggle: TokenCostToggle::default(),
+            ai_input_model,
+            terminal_model: model,
+            transient_hint: TransientHint::default(),
         }
+    }
+
+    /// Displays `text` in the footer's hint slot for the transient-hint
+    /// duration, then reverts to the persistent content.
+    fn show_transient_hint(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        self.transient_hint
+            .show(text, ctx, |view| &mut view.transient_hint);
     }
 
     /// Handles a ctrl-c press: a second press within [`CTRL_C_EXIT_WINDOW`]
@@ -338,23 +360,31 @@ impl TuiTerminalSessionView {
         })
     }
 
-    /// Builds the status footer under the input box. The left slot shows the
-    /// ctrl-c exit-confirmation hint while armed (contextual key hints will
-    /// live there later); the active model and working directory are pushed to
-    /// the right edge behind a flex spacer. The caller must cap the row's
-    /// height (a row fills the height it is offered), e.g. with a one-row
-    /// [`TuiConstrainedBox`].
+    /// Builds the status footer under the input box. The left slot shows one
+    /// hint at a time — the ctrl-c exit confirmation while armed, else a
+    /// transient notice, else the shell-mode callout; the active model and
+    /// working directory are pushed to the right edge behind a flex spacer.
+    /// Every child truncates to a single row, so the row lays out one row tall.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
         let mut footer = TuiFlex::row();
-        // Left slot: the ctrl-c exit-confirmation hint.
-        if self.exit_confirmation.is_armed() {
-            footer = footer.child(
-                TuiText::new(CTRL_C_EXIT_HINT)
-                    .with_style(dim)
-                    .truncate()
-                    .finish(),
-            );
+        // Left slot, highest priority first: while armed, the ctrl-c hint
+        // replaces the other hints in place.
+        let hint = if self.exit_confirmation.is_armed() {
+            Some((CTRL_C_EXIT_HINT.to_owned(), dim))
+        } else if let Some(transient) = self.transient_hint.current() {
+            Some((transient.to_owned(), dim))
+        } else if self.is_shell_mode(ctx) {
+            Some((
+                SHELL_MODE_HINT.to_owned(),
+                TuiUiBuilder::from_app(ctx).shell_mode_accent_style(),
+            ))
+        } else {
+            None
+        };
+
+        if let Some((text, style)) = hint {
+            footer = footer.child(TuiText::new(text).with_style(style).truncate().finish());
         }
         let model_name = LLMPreferences::as_ref(ctx)
             .get_active_base_model(ctx, Some(self.terminal_surface_id))
@@ -406,6 +436,101 @@ impl TuiTerminalSessionView {
             .selected_conversation(ctx)?
             .usage_totals();
         (totals != ConversationUsageTotals::default()).then_some(totals)
+    }
+
+    /// Whether the input is in `!` shell mode (locked shell input).
+    fn is_shell_mode(&self, ctx: &AppContext) -> bool {
+        input_mode_policy::is_shell_mode(self.ai_input_model.as_ref(ctx))
+    }
+
+    /// Routes a submission to shell execution or the agent conversation based
+    /// on the input mode.
+    fn handle_submitted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        if self.is_shell_mode(ctx) {
+            self.execute_user_command(&text, ctx);
+        } else {
+            let prompt = text.trim().to_owned();
+            self.input_view.update(ctx, |input_view, ctx| {
+                input_view.clear(ctx);
+            });
+            if !prompt.is_empty() {
+                self.send_prompt(prompt, ctx);
+            }
+        }
+        ctx.notify();
+    }
+
+    /// Executes `command` in the session's PTY as a plain user command.
+    ///
+    /// Mirrors the GUI's shell-mode submission: rejected while the agent holds
+    /// the PTY with an active long-running command (the input keeps its text
+    /// and a transient hint is shown), and an in-progress conversation is
+    /// cancelled when the command runs. On success the input clears and exits
+    /// shell mode back to agent input.
+    fn execute_user_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) {
+        // A whitespace-only command is a no-op; stay in shell mode. The command
+        // itself is sent to the PTY untrimmed, exactly as typed.
+        if command.trim().is_empty() {
+            return;
+        }
+
+        // Keep the lock scope to these reads only (see the terminal-model
+        // locking guidance).
+        let (is_pty_busy, session_id) = {
+            let terminal_model = self.terminal_model.lock();
+            let block_list = terminal_model.block_list();
+            let active_block = block_list.active_block();
+            let is_pty_busy = !block_list.is_bootstrapped()
+                || (active_block.is_active_and_long_running()
+                    && !active_block.is_in_band_command_block());
+            (is_pty_busy, active_block.session_id())
+        };
+        let Some(session_id) = session_id else {
+            log::warn!("Unable to execute TUI user command: no active session");
+            return;
+        };
+        if is_pty_busy {
+            self.show_transient_hint(COMMAND_ALREADY_RUNNING_HINT.to_owned(), ctx);
+            return;
+        }
+
+        // Executing a shell command cancels an in-progress conversation
+        // (mirrors the GUI; the running command above is left untouched).
+        if let Some(conversation_id) = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        {
+            let is_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| conversation.status().is_in_progress());
+            if is_in_progress {
+                self.ai_controller.update(ctx, |controller, ctx| {
+                    controller.cancel_conversation_progress(
+                        conversation_id,
+                        CancellationReason::UserCommandExecuted,
+                        ctx,
+                    );
+                });
+            }
+        }
+
+        ctx.emit(TuiTerminalSessionEvent::ExecuteCommand(Box::new(
+            ExecuteCommandEvent {
+                command: command.to_owned(),
+                session_id,
+                workflow_id: None,
+                workflow_command: None,
+                should_add_command_to_history: true,
+                source: CommandExecutionSource::User,
+            },
+        )));
+
+        // The submission was accepted: clear the input and return to agent mode.
+        self.input_view.update(ctx, |input_view, ctx| {
+            input_view.clear(ctx);
+            input_view.exit_shell_mode(ctx);
+        });
     }
 
     /// Sends a prompt to the selected conversation, creating one if needed.
@@ -499,9 +624,16 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        // The border takes the shell-mode accent while in shell mode.
+        let builder = TuiUiBuilder::from_app(ctx);
+        let border_style = if self.is_shell_mode(ctx) {
+            builder.shell_mode_accent_style()
+        } else {
+            builder.accent_border_style()
+        };
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view).finish())
-                .with_border_style(TuiUiBuilder::from_app(ctx).accent_border_style())
+                .with_border_style(border_style)
                 .finish(),
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + 2);
@@ -513,11 +645,7 @@ impl TuiView for TuiTerminalSessionView {
             TuiFlex::column()
                 .flex_child(TuiChildView::new(&self.transcript).finish())
                 .child(input_box.finish())
-                .child(
-                    TuiConstrainedBox::new(self.render_footer(ctx).finish())
-                        .with_max_rows(1)
-                        .finish(),
-                )
+                .child(self.render_footer(ctx).finish())
                 .finish(),
         )
         .with_padding(2)

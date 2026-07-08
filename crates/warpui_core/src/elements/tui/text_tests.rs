@@ -119,3 +119,62 @@ fn truncation_keeps_one_row_per_hard_line() {
         vec!["a  ", "b  ", "c  "],
     );
 }
+
+#[test]
+fn spans_flow_as_one_paragraph_with_per_span_styles() {
+    let green = Style::default().fg(Color::Green);
+    let text = TuiText::from_spans([
+        ("✓ ".to_owned(), green),
+        ("done".to_owned(), Style::default()),
+    ])
+    .with_style(Style::default().fg(Color::White));
+
+    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 6, 1));
+    let mut rendered_views = EntityIdMap::default();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    text.render(TuiRect::new(0, 0, 6, 1), &mut buffer, &mut ctx);
+
+    assert_eq!(buffer.to_lines(), vec!["✓ done"]);
+    // The span's style patches over the base style.
+    assert_eq!(buffer[(0, 0)].fg, Color::Green);
+    assert_eq!(buffer[(2, 0)].fg, Color::White);
+}
+
+#[test]
+fn spans_wrap_across_span_boundaries() {
+    // "aa bb cc" wraps at width 5 as "aa bb" / "cc", even though the wrap
+    // point falls inside the second span.
+    let text = TuiText::from_spans([
+        ("aa ".to_owned(), Style::default()),
+        ("bb cc".to_owned(), Style::default()),
+    ]);
+    assert_eq!(text.desired_height(5), 2);
+    assert_eq!(
+        render_to_lines(&text, TuiSize::new(5, 2)),
+        vec!["aa bb", "cc   "],
+    );
+}
+
+#[test]
+fn hard_newlines_inside_spans_split_lines() {
+    let text = TuiText::from_spans([
+        ("a\nb".to_owned(), Style::default()),
+        ("c".to_owned(), Style::default()),
+    ]);
+    assert_eq!(text.desired_height(10), 2);
+    assert_eq!(
+        render_to_lines(&text, TuiSize::new(3, 2)),
+        vec!["a  ", "bc "],
+    );
+}
+
+#[test]
+fn all_empty_spans_occupy_no_rows() {
+    let text = TuiText::from_spans([
+        (String::new(), Style::default()),
+        (String::new(), Style::default()),
+    ]);
+    assert_eq!(text.desired_height(10), 0);
+}

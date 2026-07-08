@@ -81,6 +81,22 @@ impl SlashCommandDataSource {
         Self::build(args, /* is_cloud_mode_v2 */ true, ctx)
     }
 
+    /// Attaches an ambient agent view model after construction. Used on the shared-session viewer
+    /// path where the model is created lazily at `SessionJoined`, after the data source was built
+    /// with `None`. Keeps cloud-mode command and skill gating correct for a link-join viewer.
+    /// Idempotent: a no-op when a model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        self.ambient_agent_view_model = Some(ambient_agent_view_model);
+        self.recompute_active_commands(ctx);
+    }
+
     fn build(args: DataSourceArgs, is_cloud_mode_v2: bool, ctx: &mut ModelContext<Self>) -> Self {
         let DataSourceArgs {
             active_session,
@@ -193,10 +209,16 @@ impl SlashCommandDataSource {
             terminal_view_id,
             active_commands_by_id: Default::default(),
             active_repo_root: None,
-            ambient_agent_view_model,
+            ambient_agent_view_model: None,
             is_cloud_mode_v2,
         };
-        me.recompute_active_commands(ctx);
+        // Route ambient wiring through the setter so construction and the lazy shared-session
+        // viewer path share one implementation.
+        if let Some(ambient_agent_view_model) = ambient_agent_view_model {
+            me.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
+        } else {
+            me.recompute_active_commands(ctx);
+        }
         me
     }
 
@@ -518,8 +540,13 @@ impl SyncDataSource for SlashCommandDataSource {
         }
 
         // Also search skills — when CLI agent input is open, filter to natively supported providers.
-        // Skills are invoked by the agent, so they're hidden entirely when AI is globally off.
-        if FeatureFlag::ListSkills.is_enabled() && AISettings::as_ref(app).is_any_ai_enabled(app) {
+        // Skills invoke locally, so they're hidden when AI is globally off or on any cloud pane
+        // (live viewer, disconnected follow-up, or read-only tombstone): running a skill locally
+        // is disconnected from the remote session in all of those cases.
+        if FeatureFlag::ListSkills.is_enabled()
+            && AISettings::as_ref(app).is_any_ai_enabled(app)
+            && !self.is_cloud_mode(app)
+        {
             let cli_agent_providers = self.active_cli_agent_providers(app);
             let active_session = self.active_session.as_ref(app);
             let cwd_path = active_session.current_working_directory_location(app);

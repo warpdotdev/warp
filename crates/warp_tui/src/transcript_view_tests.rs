@@ -117,12 +117,14 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
 
         transcript.update(&mut app, |view, ctx| {
             let action_model = view.action_model.clone();
+            let terminal_model = view.model.clone();
             let agent_block = ctx.add_tui_view(|ctx| {
                 TuiAIBlock::new(
                     original_conversation_id,
                     exchange_id,
                     Rc::new(EmptyAgentBlockModel),
                     action_model,
+                    terminal_model,
                     ctx,
                 )
             });

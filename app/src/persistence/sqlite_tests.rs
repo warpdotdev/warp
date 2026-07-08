@@ -23,7 +23,7 @@ use crate::cloud_object::{CloudObjectPermissions, Owner};
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
 use crate::persistence::model::ObjectPermissions;
-use crate::persistence::{BlockCompleted, ModelEvent, PersistenceScope};
+use crate::persistence::{BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope};
 use crate::server::ids::ClientId;
 use crate::tab::SelectedTabColor;
 use crate::terminal::model::block::SerializedBlock;
@@ -117,8 +117,12 @@ fn sqlite_read_restores_app_state_and_codebase_metadata() {
     let metadata = test_codebase_metadata("/tmp/remote-repo");
     save_codebase_index_metadata(&mut conn, metadata.clone())
         .expect("codebase index metadata should save");
-    let restored = read_sqlite_data(&mut conn, None).expect("persisted data should load");
-    assert_eq!(restored.app_state.windows.len(), 1);
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("persisted data should load");
+    let restored_app_state = restored
+        .app_state
+        .expect("app state should be present for the full scope");
+    assert_eq!(restored_app_state.windows.len(), 1);
     assert_eq!(restored.codebase_indices.len(), 1);
     assert_eq!(restored.codebase_indices[0].path, metadata.path);
 }
@@ -320,9 +324,10 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.active_window_index, Some(1));
     assert_eq!(
@@ -393,9 +398,10 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     let PaneNodeSnapshot::Leaf(LeafSnapshot {
         custom_vertical_tabs_title,
@@ -470,9 +476,10 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     let restored_tab = &restored.windows[0].tabs[0];
@@ -593,9 +600,10 @@ fn test_sqlite_round_trips_tab_groups() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     let restored_window = &restored.windows[0];
@@ -752,9 +760,10 @@ fn test_sqlite_round_trips_pinned_state() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     let restored_window = &restored.windows[0];
@@ -929,9 +938,10 @@ fn test_sqlite_drops_too_small_bounds_on_read() {
     )
     .expect("corrupting update should succeed");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     assert!(

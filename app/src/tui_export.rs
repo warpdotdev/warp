@@ -6,10 +6,13 @@ pub use crate::ai::agent::conversation::{
 };
 pub use crate::ai::agent::task::TaskId;
 pub use crate::ai::agent::{
-    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
-    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode,
-    AIAgentText, AIAgentTextSection, CancellationReason, MessageId, ServerOutputId, Shared,
-    UserQueryMode,
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText, AIAgentTextSection,
+    AskUserQuestionResult, CancellationReason, FileGlobV2Result, GrepResult, MessageId,
+    RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
+    SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
+    StartAgentExecutionMode, SuggestNewConversationResult, UserQueryMode,
 };
 pub use crate::ai::blocklist::agent_view::{
     AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
@@ -31,10 +34,10 @@ pub use crate::ai::blocklist::history_model::{
     ConversationStatusUpdate,
 };
 pub use crate::ai::blocklist::{
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIInputModel, InputConfig, InputModePolicy, InputModePolicyHandle, InputType,
-    InputTypeAutoDetectionSource, PolicyConfigUpdate, RequestFileEditsExecutor,
-    ShellCommandExecutor, ShellCommandExecutorEvent,
+    AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel,
+    BlocklistAIController, BlocklistAIInputModel, InputConfig, InputModePolicy,
+    InputModePolicyHandle, InputType, InputTypeAutoDetectionSource, PolicyConfigUpdate,
+    RequestFileEditsExecutor, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
@@ -60,11 +63,12 @@ pub use crate::terminal::model::session::Sessions;
 pub use crate::terminal::model::terminal_model::BlockIndex;
 pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
+pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::ExecuteCommandEvent;
 pub use crate::terminal::{
-    PtyIntent, PtyIntentEvent, ShellLaunchData, TerminalManager as TerminalManagerTrait,
-    TerminalModel, TerminalSurface,
+    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData,
+    TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::dark_theme;
 pub use crate::util::time_format::format_elapsed_seconds;

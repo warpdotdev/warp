@@ -1,5 +1,5 @@
 use warp_cli::agent::Harness;
-use warpui::{AppContext, EntityId, SingletonEntity};
+use warpui::{AppContext, EntityId, ModelHandle, SingletonEntity};
 
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -14,6 +14,8 @@ use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, ServerGuestSubject};
 use crate::drive::sharing::SharingAccessLevel;
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+use crate::terminal::TerminalModel;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,39 @@ pub(crate) enum TombstoneCta {
 pub(in crate::terminal::view) enum CloudConversationContinuationUiState {
     FollowupInput,
     Tombstone { cta: Option<TombstoneCta> },
+}
+
+/// How a follow-up prompt for this pane should be routed. Single source of truth shared by the
+/// submission router (so a remote cloud conversation never continues on the local agent) and the
+/// agent input footer live-VM indicator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AIQueryRouting {
+    /// Connected as a live shared-session viewer (an ambient cloud run or a shared session); the
+    /// follow-up is forwarded to the sharer via the viewer prompt path. `is_executor` is true when
+    /// this viewer may submit (read-only viewers are blocked). `ambient_agent_task_id` is set only
+    /// for ambient agent shared sessions (it is `None` for a shared local session), so the footer
+    /// shows the live-VM indicator only for ambient runs. Also used for a disconnected pane whose
+    /// owned run still has an active execution we can't attach to as a viewer, in which case
+    /// `is_executor` is false and the submission router surfaces stale-pane guidance.
+    LiveRemoteVm {
+        is_executor: bool,
+        ambient_agent_task_id: Option<AmbientAgentTaskId>,
+    },
+    /// Disconnected but resumable owned Oz cloud conversation; the follow-up must start a new cloud
+    /// VM via cloud-to-cloud handoff.
+    NewCloudVm { task_id: AmbientAgentTaskId },
+    /// A finished/non-resumable remote cloud conversation (non-owner finished viewer, blocked
+    /// source, non-Oz tombstone). The input is non-editable; a follow-up must never run locally.
+    UnconnectedReadOnly,
+    /// Continues on the local machine. Covers ordinary local agent panes and local ambient sharers
+    /// (e.g. `run_agents(local)` orchestration children, `/remote-control` of a local session).
+    Local,
+}
+
+impl AIQueryRouting {
+    pub(crate) fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +144,82 @@ pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_stat
         Err(CloudConversationContinuationError::MissingConversationToken)
     } else {
         Err(CloudConversationContinuationError::MissingServerConversationMetadata)
+    }
+}
+
+/// Resolves the [`AIQueryRouting`] for a pane from its terminal model and optional ambient
+/// view model. `terminal_model` must already be locked by the caller; this function does not lock
+/// it, and reuses [`resolve_cloud_conversation_continuation_ui_state`] for the disconnected case.
+pub(crate) fn resolve_ai_query_routing(
+    terminal_view_id: EntityId,
+    ambient_agent_view_model: Option<&ModelHandle<AmbientAgentViewModel>>,
+    terminal_model: &TerminalModel,
+    app: &AppContext,
+) -> AIQueryRouting {
+    let status = terminal_model.shared_session_status();
+    let is_ambient = terminal_model.is_shared_ambient_agent_session()
+        || ambient_agent_view_model.is_some_and(|model| model.as_ref(app).is_ambient_agent());
+    let is_transcript_viewer = terminal_model.is_conversation_transcript_viewer();
+    // The ambient task this pane is associated with, if any. `None` for a shared *local* session,
+    // which keeps the footer's live-VM indicator hidden for non-ambient shared sessions.
+    let ambient_agent_task_id = ambient_agent_view_model
+        .and_then(|model| model.as_ref(app).task_id())
+        .or_else(|| terminal_model.ambient_agent_task_id());
+
+    // A live shared-session viewer forwards its follow-up to the sharer via the viewer prompt path,
+    // whether the shared session is an ambient cloud run or a shared local session. `is_executor`
+    // tells the submission router whether this viewer may actually submit; `ambient_agent_task_id`
+    // is set only for ambient runs so the footer indicator stays hidden for shared local sessions.
+    if status.is_active_viewer() {
+        return AIQueryRouting::LiveRemoteVm {
+            is_executor: status.is_executor(),
+            ambient_agent_task_id,
+        };
+    }
+
+    // Ordinary local pane (not a cloud/ambient or transcript pane), or a sharer running locally
+    // (e.g. a local orchestration child, `/remote-control` of a local session): local behavior.
+    if !is_ambient && !is_transcript_viewer {
+        return AIQueryRouting::Local;
+    }
+    if status.is_active_sharer() {
+        return AIQueryRouting::Local;
+    }
+
+    // Disconnected / ended / transcript ambient pane: defer to the resolved continuation state.
+    let Some(task_id) = ambient_agent_task_id else {
+        // No ambient task yet (fresh composing cloud pane, replay/loading, or a generic local
+        // transcript): defer to existing local handling.
+        return AIQueryRouting::Local;
+    };
+
+    match resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, app) {
+        // Editable, resumable owned Oz cloud conversation -> the follow-up starts a new cloud VM.
+        Ok(CloudConversationContinuationUiState::FollowupInput)
+            if !terminal_model.is_read_only() =>
+        {
+            AIQueryRouting::NewCloudVm { task_id }
+        }
+        // A third-party harness run (Claude Code, Gemini, Codex) that ended but is cloud-resumable
+        // surfaces a "Continue" tombstone CTA instead of an inline follow-up input. Clicking
+        // Continue clears the finished-viewer read-only state and enables the input, so once the
+        // pane is editable a follow-up must start a new cloud VM (cloud-to-cloud handoff) rather
+        // than be blocked as read-only. While the pane is still read-only (tombstone shown, not yet
+        // continued) this falls through to `UnconnectedReadOnly` below.
+        Ok(CloudConversationContinuationUiState::Tombstone {
+            cta: Some(TombstoneCta::ContinueInCloud { .. }),
+        }) if !terminal_model.is_read_only() => AIQueryRouting::NewCloudVm { task_id },
+        // The run still has an active execution but this pane is not attached as a viewer; treat it
+        // as a live remote VM (never local) so the submission router surfaces stale-pane guidance
+        // rather than letting a follow-up fall through to local submission.
+        Err(CloudConversationContinuationError::ActiveTaskExecution) => {
+            AIQueryRouting::LiveRemoteVm {
+                is_executor: false,
+                ambient_agent_task_id: Some(task_id),
+            }
+        }
+        // Any other outcome on an existing cloud task is non-resumable here: read-only, never local.
+        Ok(_) | Err(_) => AIQueryRouting::UnconnectedReadOnly,
     }
 }
 
