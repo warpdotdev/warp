@@ -14,8 +14,8 @@ use watcher::HomeDirectoryWatcher;
 
 use super::{
     format_upload_artifact_text, parsed_skill_for_common_locations, read_skill_display_text,
-    resolve_recording_summary, should_decorate_recorded_use_computer, start_recording_card_text,
-    stop_recording_card_text, RecordingCardText,
+    should_decorate_recorded_use_computer, start_recording_card_text, stop_recording_card_text,
+    RecordingCardText,
 };
 use crate::ai::agent::{
     RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
@@ -117,27 +117,6 @@ fn start_recording_card_text_includes_failure_copy() {
             primary: "Recording failed to start".to_string(),
             subtext: Some("unsupported platform".to_string()),
         }
-    );
-}
-
-#[test]
-fn recording_summary_prefers_agent_summary_then_title() {
-    assert_eq!(
-        resolve_recording_summary(Some("Checkout flow"), Some("Conversation title")),
-        "Checkout flow"
-    );
-    // A blank agent summary falls through to the conversation title.
-    assert_eq!(
-        resolve_recording_summary(Some("   "), Some("Conversation title")),
-        "Conversation title"
-    );
-    assert_eq!(
-        resolve_recording_summary(None, Some("Conversation title")),
-        "Conversation title"
-    );
-    assert_eq!(
-        resolve_recording_summary(None, None),
-        "Recording computer-use session"
     );
 }
 

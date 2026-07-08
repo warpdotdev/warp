@@ -2947,20 +2947,10 @@ fn recording_summary(props: Props, agent_summary: Option<&str>, app: &AppContext
         .model
         .conversation(app)
         .and_then(|conversation| conversation.title());
-    resolve_recording_summary(agent_summary, title.as_deref())
-}
-
-/// Resolves the recording card's summary, preferring the agent-authored summary
-/// and falling back to the conversation title, then a generic default.
-fn resolve_recording_summary(
-    agent_summary: Option<&str>,
-    conversation_title: Option<&str>,
-) -> String {
-    [agent_summary, conversation_title]
-        .into_iter()
-        .flatten()
+    agent_summary
         .map(str::trim)
-        .find(|text| !text.is_empty())
+        .filter(|s| !s.is_empty())
+        .or_else(|| title.as_deref().map(str::trim).filter(|s| !s.is_empty()))
         .map(ToString::to_string)
         .unwrap_or_else(|| "Recording computer-use session".to_string())
 }
