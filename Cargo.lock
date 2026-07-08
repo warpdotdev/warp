@@ -15376,6 +15376,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "tempfile",
  "url",
  "uuid",
  "warp_core",

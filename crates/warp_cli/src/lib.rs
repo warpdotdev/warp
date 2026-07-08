@@ -25,6 +25,7 @@ pub mod completions;
 pub mod config_file;
 mod date_time;
 pub mod environment;
+pub mod factory;
 pub mod federate;
 pub mod harness_support;
 pub mod integration;
@@ -563,6 +564,10 @@ pub enum CliCommand {
     #[command(subcommand)]
     Federate(crate::federate::FederateCommand),
 
+    /// Manage factories and their config sources.
+    #[command(subcommand)]
+    Factory(crate::factory::FactoryCommand),
+
     /// Support commands for agent harnesses to integrate with Oz.
     #[command(hide = true)]
     HarnessSupport(crate::harness_support::HarnessSupportArgs),
@@ -593,6 +598,7 @@ impl CliCommand {
             CliCommand::Schedule(command) => command.as_str_for_tracing(),
             CliCommand::Secret(command) => command.as_str_for_tracing(),
             CliCommand::Federate(command) => command.as_str_for_tracing(),
+            CliCommand::Factory(command) => command.as_str_for_tracing(),
             CliCommand::HarnessSupport(args) => args.command.as_str_for_tracing(),
             CliCommand::Artifact(command) => command.as_str_for_tracing(),
             CliCommand::ApiKey(command) => command.as_str_for_tracing(),

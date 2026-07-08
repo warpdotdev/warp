@@ -20,6 +20,7 @@ use warp_cli::agent::{
 use warp_cli::api_key::ApiKeyCommand;
 use warp_cli::artifact::ArtifactCommand;
 use warp_cli::environment::{EnvironmentCommand, ImageCommand};
+use warp_cli::factory::FactoryCommand;
 use warp_cli::federate::FederateCommand;
 use warp_cli::harness_support::{HarnessSupportCommand, ReportArtifactCommand, TaskStatus};
 use warp_cli::integration::IntegrationCommand;
@@ -84,6 +85,7 @@ mod common;
 mod config_file;
 pub(crate) mod driver;
 mod environment;
+mod factory;
 mod federate;
 mod harness_support;
 #[cfg(not(target_family = "wasm"))]
@@ -193,6 +195,7 @@ fn dispatch_command(
             }
             federate::run(ctx, global_options, federate_cmd)
         }
+        CliCommand::Factory(factory_cmd) => factory::run(ctx, global_options, factory_cmd),
         CliCommand::HarnessSupport(args) => {
             if !FeatureFlag::AgentHarness.is_enabled() {
                 return Err(anyhow::anyhow!("invalid value 'harness-support'"));
@@ -1540,6 +1543,16 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Schedule(_) => true,
         CliCommand::Secret(_) => true,
         CliCommand::Federate(_) => true,
+        CliCommand::Factory(factory_cmd) => match factory_cmd {
+            // Local scaffolding only; no server interaction.
+            FactoryCommand::Init(_) => false,
+            FactoryCommand::Link(_)
+            | FactoryCommand::Unlink(_)
+            | FactoryCommand::Status(_)
+            | FactoryCommand::Plan(_)
+            | FactoryCommand::Apply(_)
+            | FactoryCommand::Export(_) => true,
+        },
         CliCommand::HarnessSupport(_) => true,
         CliCommand::Artifact(_) => true,
         CliCommand::ApiKey(_) => true,
@@ -1762,6 +1775,16 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
         CliCommand::Federate(federate_cmd) => match federate_cmd {
             FederateCommand::IssueToken(_) => CliTelemetryEvent::FederateIssueToken,
             FederateCommand::IssueGcpToken(_) => CliTelemetryEvent::FederateIssueGcpToken,
+        },
+        CliCommand::Factory(factory_cmd) => match factory_cmd {
+            FactoryCommand::Link(args) if args.unlink => CliTelemetryEvent::FactoryUnlink,
+            FactoryCommand::Link(_) => CliTelemetryEvent::FactoryLink,
+            FactoryCommand::Unlink(_) => CliTelemetryEvent::FactoryUnlink,
+            FactoryCommand::Status(_) => CliTelemetryEvent::FactoryStatus,
+            FactoryCommand::Plan(_) => CliTelemetryEvent::FactoryPlan,
+            FactoryCommand::Apply(_) => CliTelemetryEvent::FactoryApply,
+            FactoryCommand::Init(_) => CliTelemetryEvent::FactoryInit,
+            FactoryCommand::Export(_) => CliTelemetryEvent::FactoryExport,
         },
         CliCommand::HarnessSupport(args) => match &args.command {
             HarnessSupportCommand::Ping => CliTelemetryEvent::HarnessSupportPing,

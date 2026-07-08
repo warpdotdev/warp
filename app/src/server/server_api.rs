@@ -3,6 +3,7 @@ pub mod auth;
 pub mod block;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod download;
+pub mod factory;
 pub mod harness_support;
 pub mod integrations;
 pub mod managed_mcp;
@@ -1306,6 +1307,10 @@ impl ServerApiProvider {
     }
 
     pub fn get_ai_client(&self) -> Arc<dyn AIClient> {
+        self.server_api.clone()
+    }
+
+    pub fn get_factory_client(&self) -> Arc<dyn factory::FactoryClient> {
         self.server_api.clone()
     }
 
