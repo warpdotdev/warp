@@ -13,7 +13,13 @@ use warp::tui_export::{
     SlashCommandMixer, TuiSlashCommandDataSource, UpdatedActiveCommands,
 };
 use warp_editor::model::CoreEditorModel;
+use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiText};
+use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
+
+use crate::tui_builder::TuiUiBuilder;
+
+const MAX_VISIBLE_ROWS: usize = 8;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -32,6 +38,8 @@ pub(crate) enum TuiSlashCommandState {
         query: String,
         rows: Vec<TuiSlashCommandRow>,
         selected_index: usize,
+        scroll_offset: usize,
+        select_last_result_on_refresh: bool,
         is_loading: bool,
     },
 }
@@ -91,6 +99,101 @@ impl TuiSlashCommandModel {
         matches!(self.state, TuiSlashCommandState::Open { .. })
     }
 
+    pub(crate) fn selected_action(&self) -> Option<AcceptSlashCommandOrSavedPrompt> {
+        let TuiSlashCommandState::Open {
+            rows,
+            selected_index,
+            ..
+        } = &self.state
+        else {
+            return None;
+        };
+        rows.get(*selected_index).map(|row| row.action.clone())
+    }
+
+    pub(crate) fn select_previous(&mut self, ctx: &mut ModelContext<Self>) {
+        let TuiSlashCommandState::Open {
+            rows,
+            selected_index,
+            scroll_offset,
+            ..
+        } = &mut self.state
+        else {
+            return;
+        };
+        if rows.is_empty() {
+            return;
+        }
+        *selected_index = if *selected_index == 0 {
+            rows.len() - 1
+        } else {
+            *selected_index - 1
+        };
+        keep_selected_visible(rows.len(), *selected_index, scroll_offset);
+        ctx.emit(TuiSlashCommandModelEvent);
+    }
+
+    pub(crate) fn select_next(&mut self, ctx: &mut ModelContext<Self>) {
+        let TuiSlashCommandState::Open {
+            rows,
+            selected_index,
+            scroll_offset,
+            ..
+        } = &mut self.state
+        else {
+            return;
+        };
+        if rows.is_empty() {
+            return;
+        }
+        *selected_index = (*selected_index + 1) % rows.len();
+        keep_selected_visible(rows.len(), *selected_index, scroll_offset);
+        ctx.emit(TuiSlashCommandModelEvent);
+    }
+
+    pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
+        self.close(ctx);
+    }
+
+    pub(crate) fn render_menu(&self, app: &AppContext) -> Option<Box<dyn TuiElement>> {
+        let TuiSlashCommandState::Open {
+            rows,
+            selected_index,
+            scroll_offset,
+            is_loading,
+            ..
+        } = &self.state
+        else {
+            return None;
+        };
+
+        let builder = TuiUiBuilder::from_app(app);
+        let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        if rows.is_empty() {
+            let label = if *is_loading {
+                "Loading slash commands…"
+            } else {
+                "No slash commands found"
+            };
+            column = column.child(menu_status_row(label, &builder));
+        } else {
+            for (index, row) in rows
+                .iter()
+                .enumerate()
+                .skip(*scroll_offset)
+                .take(MAX_VISIBLE_ROWS)
+            {
+                column = column.child(menu_result_row(row, index == *selected_index, &builder));
+            }
+        }
+
+        Some(
+            TuiContainer::new(column.finish())
+                .with_border_style(builder.accent_border_style())
+                .finish(),
+        )
+    }
+
     fn update_from_input(&mut self, ctx: &mut ModelContext<Self>) {
         let input = input_text(&self.input_editor, ctx);
         let Some(query) = slash_command_composition_filter(&input).map(str::to_owned) else {
@@ -101,14 +204,28 @@ impl TuiSlashCommandModel {
     }
 
     fn run_query(&mut self, query: String, force: bool, ctx: &mut ModelContext<Self>) {
-        let previous_selected_index = match &self.state {
-            TuiSlashCommandState::Closed => 0,
-            TuiSlashCommandState::Open { selected_index, .. } => *selected_index,
+        let (previous_query_matches, previous_selected_index, previous_scroll_offset) =
+            match &self.state {
+                TuiSlashCommandState::Closed => (false, 0, 0),
+                TuiSlashCommandState::Open {
+                    query: previous_query,
+                    selected_index,
+                    scroll_offset,
+                    ..
+                } => (previous_query == &query, *selected_index, *scroll_offset),
+            };
+        let select_last_result_on_refresh = query.is_empty() && !previous_query_matches;
+        let scroll_offset = if select_last_result_on_refresh {
+            0
+        } else {
+            previous_scroll_offset
         };
         self.state = TuiSlashCommandState::Open {
             query: query.clone(),
             rows: Vec::new(),
             selected_index: previous_selected_index,
+            scroll_offset,
+            select_last_result_on_refresh,
             is_loading: true,
         };
         self.mixer.update(ctx, |mixer, ctx| {
@@ -123,7 +240,9 @@ impl TuiSlashCommandModel {
     fn refresh_rows(&mut self, ctx: &mut ModelContext<Self>) {
         let TuiSlashCommandState::Open {
             selected_index,
+            scroll_offset,
             rows,
+            select_last_result_on_refresh,
             is_loading,
             ..
         } = &mut self.state
@@ -134,7 +253,18 @@ impl TuiSlashCommandModel {
         let mixer = self.mixer.as_ref(ctx);
         *rows = mixer.results().iter().filter_map(row_from_result).collect();
         *is_loading = mixer.is_loading();
-        *selected_index = (*selected_index).min(rows.len().saturating_sub(1));
+        if rows.is_empty() {
+            *selected_index = 0;
+            *scroll_offset = 0;
+        } else {
+            if *select_last_result_on_refresh {
+                *selected_index = rows.len() - 1;
+                *select_last_result_on_refresh = false;
+            } else {
+                *selected_index = (*selected_index).min(rows.len() - 1);
+            }
+            keep_selected_visible(rows.len(), *selected_index, scroll_offset);
+        }
         ctx.emit(TuiSlashCommandModelEvent);
     }
 
@@ -176,4 +306,72 @@ fn row_from_result(
         description: detail.description,
         action: result.accept_result(),
     })
+}
+fn keep_selected_visible(rows_len: usize, selected_index: usize, scroll_offset: &mut usize) {
+    if rows_len == 0 {
+        *scroll_offset = 0;
+        return;
+    }
+
+    let max_scroll_offset = rows_len.saturating_sub(MAX_VISIBLE_ROWS);
+    *scroll_offset = (*scroll_offset).min(max_scroll_offset);
+    if selected_index < *scroll_offset {
+        *scroll_offset = selected_index;
+    } else if selected_index >= *scroll_offset + MAX_VISIBLE_ROWS {
+        *scroll_offset = selected_index + 1 - MAX_VISIBLE_ROWS;
+    }
+}
+
+fn menu_status_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+    TuiContainer::new(
+        TuiText::new(label.to_owned())
+            .with_style(builder.dim_text_style())
+            .truncate()
+            .finish(),
+    )
+    .with_padding_left(1)
+    .with_padding_right(1)
+    .finish()
+}
+
+fn menu_result_row(
+    row: &TuiSlashCommandRow,
+    is_selected: bool,
+    builder: &TuiUiBuilder,
+) -> Box<dyn TuiElement> {
+    let title_style = if is_selected {
+        builder.input_text_style()
+    } else {
+        builder.primary_text_style()
+    };
+    let description_style = if is_selected {
+        builder.input_text_style()
+    } else {
+        builder.muted_text_style()
+    };
+
+    let mut content = TuiFlex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .child(
+            TuiText::new(row.title.clone())
+                .with_style(title_style)
+                .truncate()
+                .finish(),
+        );
+    if let Some(description) = &row.description {
+        content = content.child(
+            TuiText::new(format!("  {description}"))
+                .with_style(description_style)
+                .truncate()
+                .finish(),
+        );
+    }
+
+    let mut container = TuiContainer::new(content.finish())
+        .with_padding_left(1)
+        .with_padding_right(1);
+    if is_selected {
+        container = container.with_background(builder.input_background());
+    }
+    container.finish()
 }

@@ -25,7 +25,9 @@ use std::ops::Range;
 
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
-use warp::tui_export::{BlocklistAIInputModel, InputTypeAutoDetectionSource};
+use warp::tui_export::{
+    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputTypeAutoDetectionSource,
+};
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
@@ -39,6 +41,7 @@ use super::kill_buffer::KillBuffer;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::keybindings::TUI_BINDING_GROUP;
+use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
 
 /// Keymap-context flag set by [`TuiInputView::keymap_context`] while the input
@@ -97,6 +100,14 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("TuiInputView"))
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("alt-enter"),
+        EditableBinding::new(
+            "tui:input:dismiss_slash_commands",
+            "Dismiss slash commands",
+            TuiInputAction::DismissSlashCommands,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("escape"),
         // ── Deletion ───────────────────────────────────────────────────
         EditableBinding::new(
             "tui:input:backspace",
@@ -459,6 +470,8 @@ pub fn init(app: &mut AppContext) {
 pub enum TuiInputViewEvent {
     /// The user pressed Enter to submit the current input. Contains the final text.
     Submitted(String),
+    /// The user selected a slash command menu item.
+    AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -476,6 +489,8 @@ pub enum TuiInputAction {
     InsertNewline,
     /// Submit the current input (`Enter`).
     Submit,
+    /// Dismiss an open slash command menu (`Escape`).
+    DismissSlashCommands,
     /// Delete the character before the cursor (`Backspace`, `Ctrl+H`).
     Backspace,
     /// Delete the character after the cursor (`Delete`, `Ctrl+D`).
@@ -558,6 +573,8 @@ pub struct TuiInputView {
     model: ModelHandle<CodeEditorModel>,
     /// Shared input-mode state driving `!` shell-mode handling.
     input_mode: ModelHandle<BlocklistAIInputModel>,
+    /// Optional slash command state model used to route menu keyboard actions.
+    slash_commands: Option<ModelHandle<TuiSlashCommandModel>>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
     kill_buffer: KillBuffer,
     /// Maximum number of visible rows before the input scrolls.
@@ -586,6 +603,15 @@ impl TuiInputView {
         input_mode: ModelHandle<BlocklistAIInputModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        Self::new_with_slash_commands(model, input_mode, None, ctx)
+    }
+
+    pub(crate) fn new_with_slash_commands(
+        model: ModelHandle<CodeEditorModel>,
+        input_mode: ModelHandle<BlocklistAIInputModel>,
+        slash_commands: Option<ModelHandle<TuiSlashCommandModel>>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
             if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 ctx.notify();
@@ -597,6 +623,7 @@ impl TuiInputView {
         Self {
             model,
             input_mode,
+            slash_commands,
             kill_buffer: KillBuffer::default(),
             max_visible_rows: 6,
             prefix_mouse_state: MouseStateHandle::default(),
@@ -710,6 +737,9 @@ impl TypedActionView for TuiInputView {
     type Action = TuiInputAction;
 
     fn handle_action(&mut self, action: &TuiInputAction, ctx: &mut ViewContext<Self>) {
+        if self.handle_slash_command_action(action, ctx) {
+            return;
+        }
         match action {
             TuiInputAction::InsertChar(c) => {
                 // A `!` typed at the very start of the input enters shell mode
@@ -725,6 +755,7 @@ impl TypedActionView for TuiInputView {
                 self.model.update(ctx, |m, ctx| m.user_insert("\n", ctx));
             }
             TuiInputAction::Submit => self.submit(ctx),
+            TuiInputAction::DismissSlashCommands => {}
             TuiInputAction::Backspace => {
                 // With nothing left to delete, backspace removes the `!`
                 // affordance instead; typed text is preserved.
@@ -1022,6 +1053,50 @@ impl TuiInputView {
     fn submit(&mut self, ctx: &mut ViewContext<Self>) {
         let text = self.plain_text(ctx);
         ctx.emit(TuiInputViewEvent::Submitted(text));
+    }
+
+    fn handle_slash_command_action(
+        &mut self,
+        action: &TuiInputAction,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !matches!(
+            action,
+            TuiInputAction::MoveUp
+                | TuiInputAction::MoveDown
+                | TuiInputAction::Submit
+                | TuiInputAction::DismissSlashCommands
+        ) {
+            return false;
+        }
+        let Some(slash_commands) = self.slash_commands.clone() else {
+            return false;
+        };
+        if !slash_commands.as_ref(ctx).is_open() {
+            return false;
+        }
+
+        match action {
+            TuiInputAction::MoveUp => {
+                slash_commands.update(ctx, |model, ctx| model.select_previous(ctx));
+            }
+            TuiInputAction::MoveDown => {
+                slash_commands.update(ctx, |model, ctx| model.select_next(ctx));
+            }
+            TuiInputAction::Submit => {
+                let selected_action = slash_commands.as_ref(ctx).selected_action();
+                slash_commands.update(ctx, |model, ctx| model.dismiss(ctx));
+                if let Some(selected_action) = selected_action {
+                    ctx.emit(TuiInputViewEvent::AcceptedSlashCommand(selected_action));
+                }
+            }
+            TuiInputAction::DismissSlashCommands => {
+                slash_commands.update(ctx, |model, ctx| model.dismiss(ctx));
+            }
+            _ => return false,
+        }
+        ctx.notify();
+        true
     }
 
     // ── Kill / yank ───────────────────────────────────────────────────────────
