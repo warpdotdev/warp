@@ -931,13 +931,8 @@ impl<V: EditorView> EditorWrapper<V> {
         line_range: Range<LineCount>,
         offset: Pixels,
     ) -> GutterElement {
-        // Use a slightly stronger overlay when hovered for better visual feedback
         let theme = appearance.theme();
-        let gutter_background_color = if range_hovered {
-            internal_colors::fg_overlay_2(theme)
-        } else {
-            internal_colors::fg_overlay_1(theme)
-        };
+        let gutter_background_color = internal_colors::fg_overlay_1(theme);
 
         let icon = ConstrainedBox::new(
             warpui::elements::Icon::new(
@@ -1617,18 +1612,14 @@ impl<V: EditorView> Element for EditorWrapper<V> {
             Some(Event::MouseMoved { position, .. }) => {
                 let only_check_y_axis =
                     matches!(self.gutter_element_hover_target, GutterHoverTarget::Line);
-                let precise_hovered_range =
-                    self.gutter_element_range_containing_position(*position, false);
-                let broad_hovered_range =
+                let hovered_range =
                     self.gutter_element_range_containing_position(*position, only_check_y_axis);
 
                 // The whole collapsed hidden-section row is clickable, so show a pointer
                 // cursor over it (reset on leave). Set on every move so the overlapping
                 // bar's `Hoverable` can't clear it when resetting later in this dispatch.
-                let over_hidden_section = matches!(
-                    &broad_hovered_range,
-                    Some(GutterRange::HiddenSection { .. })
-                );
+                let over_hidden_section =
+                    matches!(&hovered_range, Some(GutterRange::HiddenSection { .. }));
                 let was_over_hidden_section = self
                     .state_handle
                     .over_hidden_section
@@ -1639,17 +1630,6 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                     ctx.reset_cursor();
                 }
 
-                // Hidden-section rows use the full row as the double-click target, but the
-                // arrow hover state should only appear when the mouse is actually over the
-                // gutter control.
-                let hovered_range = if matches!(
-                    &broad_hovered_range,
-                    Some(GutterRange::HiddenSection { .. })
-                ) {
-                    precise_hovered_range
-                } else {
-                    broad_hovered_range
-                };
                 let hovered_line = hovered_range.map(|gutter_range| gutter_range.line().clone());
                 let mut hovered_diff_hunk = self.state_handle.hovered_diff_hunk.lock();
                 if hovered_diff_hunk.as_ref() != hovered_line.as_ref() {
