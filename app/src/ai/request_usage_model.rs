@@ -481,15 +481,6 @@ impl AIRequestUsageModel {
         }
     }
 
-    /// Returns whether the user has hit their maximum codebase allowance.
-    /// (If the user is allowed unlimited indices, this is vacuously false.)
-    pub fn hit_codebase_index_limit(&self, current_indices: usize) -> bool {
-        self.codebase_context_limits()
-            .max_indices_allowed
-            .map(|lim| current_indices >= lim)
-            .unwrap_or(false)
-    }
-
     pub fn next_refresh_time(&self) -> DateTime<Utc> {
         self.request_limit_info.next_refresh_time.utc()
     }

@@ -244,7 +244,6 @@ impl PersistedWorkspace {
                     CodebaseIndexManagerEvent::IndexMetadataUpdated { root_path, event } => {
                         me.handle_index_metadata_event(root_path, *event);
                     }
-                    CodebaseIndexManagerEvent::NewIndexCreated { .. } => {}
                     CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { expired_metadata } => {
                         // TODO: Disable expired metadata removal once we have other consumers of the workspace metadata.
                         me.clean_up_expired_metadata(expired_metadata.clone(), ctx);
