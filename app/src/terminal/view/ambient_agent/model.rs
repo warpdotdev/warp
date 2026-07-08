@@ -1188,16 +1188,14 @@ impl AmbientAgentViewModel {
 
         let oz_model = (selected_harness == Harness::Oz).then(|| {
             let prefs = LLMPreferences::as_ref(ctx);
-            let active_id = prefs
+            let active_id = &prefs
                 .get_active_base_model(ctx, Some(self.terminal_view_id))
-                .id
-                .clone();
-            // The cloud `start_agent` endpoint only accepts Oz model slugs.
-            // A custom-endpoint (BYOK) model or local custom router carries a
-            // non-slug id that the server would reject, so fall back to `auto`
-            // rather than forwarding an unsupported id. See
+                .id;
+            // The cloud `start_agent` endpoint only accepts Oz model slugs; a
+            // custom-endpoint (BYOK) model or local custom router id would be
+            // rejected, so fall back to `auto`. See
             // `LLMPreferences::is_cloud_runnable_oz_model_id`.
-            if prefs.is_cloud_runnable_oz_model_id(&active_id) {
+            if prefs.is_cloud_runnable_oz_model_id(active_id) {
                 active_id.to_string()
             } else {
                 CLOUD_FALLBACK_OZ_MODEL_ID.to_owned()

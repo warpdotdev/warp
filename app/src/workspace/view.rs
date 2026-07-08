@@ -13758,42 +13758,22 @@ impl Workspace {
         });
     }
 
-    /// Copy the model selection and execution profile from the source terminal
-    /// view to a new terminal view, reproducing the source pane's model
-    /// resolution on the new pane.
-    ///
-    /// Order matters: the execution profile is copied FIRST, then the per-pane
-    /// model override. `update_preferred_agent_mode_llm` only stores an override
-    /// when the id differs from the pane's *current* profile default (and
-    /// removes it otherwise). Copying the profile first makes that comparison
-    /// evaluate against the SOURCE profile's default — matching how the source
-    /// pane itself resolves — so an explicit selection is preserved. Setting the
-    /// override first would compare against the new pane's prior default and
-    /// could silently drop the carried selection (re-introducing the handoff
-    /// invalid-model-id bug when the source profile default is a custom
-    /// endpoint).
-    pub(crate) fn copy_model_and_profile_to_terminal_view(
+    /// Copy the execution profile and per-pane model override from the source
+    /// terminal view to a new terminal view, reproducing the source pane's
+    /// model resolution on the new pane.
+    fn copy_model_and_profile_to_terminal_view(
         source_terminal_view_id: EntityId,
         new_terminal_view_id: EntityId,
         ctx: &mut AppContext,
     ) {
-        // Resolve the source pane's active model and execution profile up front.
-        let source_llm_id = LLMPreferences::as_ref(ctx)
-            .get_active_base_model(ctx, Some(source_terminal_view_id))
-            .id
-            .clone();
         let source_profile_id = *AIExecutionProfilesModel::as_ref(ctx)
             .active_profile(Some(source_terminal_view_id), ctx)
             .id();
-
-        // Copy the execution profile FIRST (see doc comment for why order matters).
         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
             profiles.set_active_profile(new_terminal_view_id, source_profile_id, ctx);
         });
-
-        // Then set the per-pane model override.
         LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-            prefs.update_preferred_agent_mode_llm(&source_llm_id, new_terminal_view_id, ctx);
+            prefs.copy_agent_mode_selection(source_terminal_view_id, new_terminal_view_id, ctx);
         });
     }
 
@@ -15324,12 +15304,8 @@ impl Workspace {
             return;
         };
 
-        // Carry the source conversation's selected model (and execution
-        // profile) onto the fresh cloud pane so an explicit cloud-runnable pick
-        // is honored instead of silently reverting to the profile default. The
-        // new pane has its own terminal_view_id, so without this it would
-        // resolve to the profile default. `build_default_spawn_config` still
-        // guards non-cloud-runnable ids (Part A).
+        // Carry the source pane's model selection and execution profile onto
+        // the new cloud pane, which otherwise resolves to the profile default.
         Self::copy_model_and_profile_to_terminal_view(
             source_view.id(),
             model_handle.as_ref(ctx).terminal_view_id(),
@@ -15753,12 +15729,8 @@ impl Workspace {
             return;
         };
 
-        // Carry the source conversation's selected model (and execution
-        // profile) onto the new cloud pane so an explicit cloud-runnable pick
-        // is honored instead of silently reverting to the profile default. The
-        // new pane has its own terminal_view_id, so without this it would
-        // resolve to the profile default. `build_default_spawn_config` still
-        // guards non-cloud-runnable ids (Part A).
+        // Carry the source pane's model selection and execution profile onto
+        // the new cloud pane, which otherwise resolves to the profile default.
         Self::copy_model_and_profile_to_terminal_view(
             source_view.id(),
             model_handle.as_ref(ctx).terminal_view_id(),

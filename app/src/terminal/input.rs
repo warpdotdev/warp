@@ -2602,12 +2602,8 @@ impl Input {
                     ctx.emit(Event::OpenPluginInstructionsPane(*agent, *kind));
                 }
                 AgentInputFooterEvent::HandoffChipClicked => {
-                    // Cloud handoff is Oz-only; block up front (with a toast) if
-                    // the active model can't run in the cloud, rather than
-                    // entering compose / failing at spawn time.
                     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-                    if me.active_model_blocks_cloud_handoff(ctx) {
-                        me.show_cloud_handoff_unsupported_model_toast(ctx);
+                    if me.block_cloud_handoff_if_model_unsupported(ctx) {
                         return;
                     }
 
@@ -4274,36 +4270,30 @@ impl Input {
             .is_some_and(|c| !c.is_empty())
     }
 
-    /// True when this pane's active Agent Mode model cannot run in a Warp cloud
-    /// (Oz) agent (e.g. a custom-endpoint/BYOK model or local custom router).
-    /// Local→cloud handoff is Oz-only, so such a model would make the cloud
-    /// spawn fail. Shared by the `&`, footer-chip, and `/handoff` entry points
-    /// to block the handoff up front instead of failing at spawn time.
+    /// Cloud handoff is Oz-only. When this pane's active Agent Mode model can't
+    /// run in a Warp cloud (Oz) agent (e.g. a custom-endpoint/BYOK model or
+    /// local custom router), shows an explanatory error toast and returns true
+    /// so the `&`, footer-chip, and `/handoff` entry points can bail out up
+    /// front instead of failing at spawn time.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    fn active_model_blocks_cloud_handoff(&self, ctx: &AppContext) -> bool {
-        let prefs = LLMPreferences::as_ref(ctx);
-        let active_id = prefs
-            .get_active_base_model(ctx, Some(self.terminal_view_id))
-            .id
-            .clone();
-        !prefs.is_cloud_runnable_oz_model_id(&active_id)
-    }
-
-    /// Emits the error toast shown when a handoff entry point is blocked by
-    /// [`Self::active_model_blocks_cloud_handoff`].
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    fn show_cloud_handoff_unsupported_model_toast(&self, ctx: &mut ViewContext<Self>) {
+    fn block_cloud_handoff_if_model_unsupported(&self, ctx: &mut ViewContext<Self>) -> bool {
+        if LLMPreferences::as_ref(ctx)
+            .is_active_base_model_cloud_runnable(self.terminal_view_id, ctx)
+        {
+            return false;
+        }
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |ts, ctx| {
             ts.add_ephemeral_toast(
                 DismissibleToast::error(
-                    "Custom-endpoint models can't run in the cloud. Switch to a Warp model to hand off."
-                        .to_string(),
+                    "Custom models can't run in the cloud. Switch to a Warp model to hand off."
+                        .to_owned(),
                 ),
                 window_id,
                 ctx,
             );
         });
+        true
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -4318,11 +4308,9 @@ impl Input {
             return false;
         }
 
-        // Cloud handoff is Oz-only; block up front (with a toast) if the active
-        // model can't run in the cloud, rather than failing at spawn time.
-        if self.active_model_blocks_cloud_handoff(ctx) {
-            self.show_cloud_handoff_unsupported_model_toast(ctx);
-            self.exit_cloud_handoff_compose_and_clear(ctx);
+        if self.block_cloud_handoff_if_model_unsupported(ctx) {
+            // Keep compose state, the typed prompt, and attachments so the user
+            // can switch models and resubmit.
             return true;
         }
 

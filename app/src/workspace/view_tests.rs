@@ -432,45 +432,22 @@ fn test_tools_panel_does_not_suppress_vertical_tab_bar_traffic_light_padding() {
         assert_vertical_tabs_tools_panel_preserves_padding(config);
     }
 }
-/// Regression test for the Part B ordering bug: `copy_model_and_profile_to_terminal_view`
-/// must copy the execution profile BEFORE setting the per-pane model override.
-/// Scenario: the source pane has an explicit selection M that differs from its
-/// own profile default D, while the destination pane's CURRENT profile default
-/// already equals M. If the override were set first, it would be compared
-/// against the destination's (still-M) default and dropped, and after the
-/// profile copy the destination would resolve to D instead of M.
+/// Regression test for the handoff model carry-over: the copy must preserve
+/// the source pane's explicit selection M even when M equals the destination
+/// pane's current profile default — the case where re-normalizing the resolved
+/// id against the destination's default (instead of copying the raw override)
+/// would drop the override and let the source profile's default D win.
 #[test]
 fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default() {
     use warpui::EntityId;
 
-    use crate::ai::llms::{
-        AvailableLLMs, LLMId, LLMInfo, LLMProvider, LLMUsageMetadata, ModelsByFeature,
-    };
+    use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, ModelsByFeature};
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
         let m = LLMId::from("auto-genius");
         let d = LLMId::from("auto");
-
-        let make = |id: &str| LLMInfo {
-            display_name: id.to_owned(),
-            base_model_name: id.to_owned(),
-            id: id.into(),
-            reasoning_level: None,
-            usage_metadata: LLMUsageMetadata {
-                request_multiplier: 1,
-                credit_multiplier: None,
-            },
-            description: None,
-            disable_reason: None,
-            vision_supported: true,
-            spec: None,
-            provider: LLMProvider::Unknown,
-            host_configs: Default::default(),
-            discount_percentage: None,
-            context_window: Default::default(),
-        };
 
         let source_id = EntityId::new();
         let new_id = EntityId::new();
@@ -481,7 +458,10 @@ fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default()
                 let models = ModelsByFeature {
                     agent_mode: AvailableLLMs::new(
                         "auto".into(),
-                        vec![make("auto"), make("auto-genius")],
+                        vec![
+                            LLMInfo::new_for_test("auto"),
+                            LLMInfo::new_for_test("auto-genius"),
+                        ],
                         None,
                     )
                     .expect("valid available llms"),

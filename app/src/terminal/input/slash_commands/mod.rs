@@ -937,15 +937,7 @@ impl Input {
                 if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
                     return false;
                 }
-                // Cloud handoff is Oz-only; block up front (with a toast) if the
-                // active model can't run in the cloud, rather than failing at
-                // spawn time.
-                if self.active_model_blocks_cloud_handoff(ctx) {
-                    show_error_toast(
-                        "Custom-endpoint models can't run in the cloud. Switch to a Warp model to hand off."
-                            .to_owned(),
-                        ctx,
-                    );
+                if self.block_cloud_handoff_if_model_unsupported(ctx) {
                     return true;
                 }
                 let prompt = argument

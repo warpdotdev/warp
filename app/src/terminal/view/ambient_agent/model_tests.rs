@@ -3,10 +3,7 @@ use warpui::{App, EntityId};
 
 use super::*;
 use crate::ai::blocklist::handoff::HandoffLaunchAttachments;
-use crate::ai::llms::{
-    AvailableLLMs, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
-    ModelsByFeature,
-};
+use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn attachment() -> AttachmentInput {
@@ -530,28 +527,6 @@ fn handoff_request_carries_universal_orchestration_handoff_marker() {
     });
 }
 
-/// Builds a minimal Agent Mode `LLMInfo` with the given id/display for tests.
-fn agent_mode_model(id: &str, display_name: &str, description: Option<&str>) -> LLMInfo {
-    LLMInfo {
-        display_name: display_name.to_owned(),
-        base_model_name: display_name.to_owned(),
-        id: id.into(),
-        reasoning_level: None,
-        usage_metadata: LLMUsageMetadata {
-            request_multiplier: 1,
-            credit_multiplier: None,
-        },
-        description: description.map(str::to_owned),
-        disable_reason: None,
-        vision_supported: true,
-        spec: None,
-        provider: LLMProvider::Unknown,
-        host_configs: Default::default(),
-        discount_percentage: None,
-        context_window: LLMContextWindow::default(),
-    }
-}
-
 /// Installs a single-model Agent Mode catalog (also used as the default) so
 /// `get_active_base_model` resolves to it via the profile-default fallback.
 fn install_default_agent_mode_model(
@@ -575,89 +550,39 @@ fn install_default_agent_mode_model(
 /// The local→cloud handoff "invalid model_id" regression: when the pane's
 /// active Agent Mode model is not cloud-runnable (custom-endpoint/BYOK model or
 /// local custom router), `build_default_spawn_config` must fall back to the
-/// `auto` slug instead of forwarding the unsupported id (which the cloud
-/// `start_agent` endpoint rejects). A local custom-router id exercises the same
-/// `is_cloud_runnable_oz_model_id` guard as a custom-endpoint UUID without
-/// requiring `ApiKeyManager` setup; the custom-endpoint UUID case is covered by
-/// the `is_cloud_runnable_oz_model_id` unit tests in `llms_tests.rs`.
+/// `auto` slug instead of forwarding an id the cloud `start_agent` endpoint
+/// rejects, while a server-accepted Oz slug is forwarded unchanged. A local
+/// custom-router id stands in for the custom-endpoint UUID case, which the
+/// `is_cloud_runnable_oz_model_id` unit tests in `llms_tests.rs` cover.
 #[test]
-fn handoff_falls_back_to_auto_for_non_cloud_runnable_model() {
+fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let model = add_model(&mut app);
 
-        install_default_agent_mode_model(
-            &model,
-            &mut app,
-            agent_mode_model("custom-router:local:byok", "My BYOK router", None),
-        );
-
-        // Put the pane in local→cloud handoff mode so `selected_harness()` == Oz
-        // and the Oz model-id branch of `build_default_spawn_config` runs.
+        // Handoff mode makes `selected_harness()` == Oz so the Oz model-id
+        // branch of `build_default_spawn_config` runs.
         model.update(&mut app, |model, ctx| {
             model.set_pending_handoff(Some(pending_handoff()), ctx);
         });
 
+        install_default_agent_mode_model(
+            &model,
+            &mut app,
+            LLMInfo::new_for_test("custom-router:local:byok"),
+        );
         model.read(&app, |model, app| {
-            let config = model.build_default_spawn_config(app);
             assert_eq!(
-                config.model_id.as_deref(),
+                model.build_default_spawn_config(app).model_id.as_deref(),
                 Some("auto"),
                 "a non-cloud-runnable model must fall back to the `auto` slug"
             );
         });
-    });
-}
 
-/// The Part A fallback also protects the regular (non-handoff) cloud spawn
-/// path, since `spawn_agent` shares `build_default_spawn_config`.
-#[test]
-fn spawn_agent_falls_back_to_auto_for_non_cloud_runnable_model() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        install_default_agent_mode_model(
-            &model,
-            &mut app,
-            agent_mode_model("custom-router:local:byok", "My BYOK router", None),
-        );
-
-        model.update(&mut app, |model, ctx| {
-            model.spawn_agent("do work".to_owned(), vec![], ctx);
-        });
-
-        model.read(&app, |model, _| {
-            let request = model.request().expect("request should be populated");
-            let config = request.config.as_ref().expect("config should be present");
-            assert_eq!(config.model_id.as_deref(), Some("auto"));
-        });
-    });
-}
-
-/// Positive control for the handoff model_id path: when the active Agent Mode
-/// model's id IS a server-accepted Oz slug (e.g. `auto-genius`), the slug is
-/// forwarded verbatim as the cloud `config.model_id` and the spawn is valid.
-#[test]
-fn handoff_forwards_slug_model_id_for_builtin_model() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let model = add_model(&mut app);
-
-        install_default_agent_mode_model(
-            &model,
-            &mut app,
-            agent_mode_model("auto-genius", "auto", Some("genius")),
-        );
-
-        model.update(&mut app, |model, ctx| {
-            model.set_pending_handoff(Some(pending_handoff()), ctx);
-        });
-
+        install_default_agent_mode_model(&model, &mut app, LLMInfo::new_for_test("auto-genius"));
         model.read(&app, |model, app| {
-            let config = model.build_default_spawn_config(app);
             assert_eq!(
-                config.model_id.as_deref(),
+                model.build_default_spawn_config(app).model_id.as_deref(),
                 Some("auto-genius"),
                 "a server-accepted Oz slug should be forwarded unchanged"
             );
@@ -665,11 +590,10 @@ fn handoff_forwards_slug_model_id_for_builtin_model() {
     });
 }
 
-/// Part B mechanism: the handoff carries the source conversation's selected
-/// model onto the new pane by seeding a per-pane override on the new pane's
-/// `terminal_view_id` (via `update_preferred_agent_mode_llm`). This verifies
-/// that such a per-pane override is honored by `build_default_spawn_config`
-/// (instead of reverting to the profile default).
+/// The handoff carries the source conversation's selected model onto the new
+/// pane by seeding a per-pane override on the new pane's `terminal_view_id`.
+/// This verifies that such an override is honored by
+/// `build_default_spawn_config` (instead of reverting to the profile default).
 #[test]
 fn handoff_honors_pane_model_override() {
     App::test((), |mut app| async move {
@@ -683,8 +607,8 @@ fn handoff_honors_pane_model_override() {
                 agent_mode: AvailableLLMs::new(
                     "auto".into(),
                     vec![
-                        agent_mode_model("auto", "auto", None),
-                        agent_mode_model("auto-genius", "auto", Some("genius")),
+                        LLMInfo::new_for_test("auto"),
+                        LLMInfo::new_for_test("auto-genius"),
                     ],
                     None,
                 )
@@ -696,7 +620,7 @@ fn handoff_honors_pane_model_override() {
             });
         });
 
-        // Seed the source selection onto this pane, as the handoff open path does.
+        // Seed a per-pane selection, as the handoff open path's carry-over does.
         model.update(&mut app, |_model, ctx| {
             LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                 prefs.update_preferred_agent_mode_llm(
@@ -712,9 +636,8 @@ fn handoff_honors_pane_model_override() {
         });
 
         model.read(&app, |model, app| {
-            let config = model.build_default_spawn_config(app);
             assert_eq!(
-                config.model_id.as_deref(),
+                model.build_default_spawn_config(app).model_id.as_deref(),
                 Some("auto-genius"),
                 "the carried per-pane model override must be honored over the profile default"
             );

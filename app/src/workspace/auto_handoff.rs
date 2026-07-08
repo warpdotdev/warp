@@ -14,6 +14,7 @@ use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrT
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::blocklist::orchestration_topology::has_local_orchestrated_children;
+use crate::ai::llms::LLMPreferences;
 use crate::settings::AISettings;
 use crate::system::{SystemStats, SystemStatsEvent};
 use crate::terminal::view::TerminalView;
@@ -27,6 +28,7 @@ pub(crate) enum AutoCloudHandoffSkipReason {
     MissingServerConversationToken,
     SharedSessionViewer,
     CloudHandoffUnavailable,
+    ModelNotCloudRunnable,
     OrchestratorWithLocalChildren,
     AlreadyAttempted,
     NoFocusedConversation,
@@ -48,6 +50,11 @@ pub(crate) struct AutoCloudHandoffEligibility {
     /// active local child agent. Handing such a session off to the cloud would
     /// fork only the parent and orphan its local children, so we skip it.
     pub(crate) has_local_orchestrated_children: bool,
+    /// True when the pane's active Agent Mode model can't run in a Warp cloud
+    /// (Oz) agent (e.g. a custom-endpoint/BYOK model or local custom router).
+    /// Handing off would silently swap the run onto a different model, so we
+    /// skip instead.
+    pub(crate) active_model_not_cloud_runnable: bool,
 }
 
 impl AutoCloudHandoffEligibility {
@@ -56,6 +63,7 @@ impl AutoCloudHandoffEligibility {
         can_handoff_to_cloud: bool,
         already_attempted: bool,
         has_local_orchestrated_children: bool,
+        active_model_not_cloud_runnable: bool,
     ) -> Self {
         Self {
             is_empty: conversation.is_empty(),
@@ -65,6 +73,7 @@ impl AutoCloudHandoffEligibility {
             can_handoff_to_cloud,
             already_attempted,
             has_local_orchestrated_children,
+            active_model_not_cloud_runnable,
         }
     }
 
@@ -89,6 +98,9 @@ impl AutoCloudHandoffEligibility {
         }
         if !self.can_handoff_to_cloud {
             return Some(AutoCloudHandoffSkipReason::CloudHandoffUnavailable);
+        }
+        if self.active_model_not_cloud_runnable {
+            return Some(AutoCloudHandoffSkipReason::ModelNotCloudRunnable);
         }
         None
     }
@@ -323,11 +335,14 @@ impl AutoCloudHandoffController {
         };
 
         let can_handoff_to_cloud = AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx);
+        let active_model_not_cloud_runnable =
+            !LLMPreferences::as_ref(ctx).is_active_base_model_cloud_runnable(terminal_view_id, ctx);
         if let Some(reason) = AutoCloudHandoffEligibility::from_conversation(
             conversation,
             can_handoff_to_cloud,
             self.attempted_conversation_ids.contains(&conversation_id),
             has_local_orchestrated_children(history, conversation_id),
+            active_model_not_cloud_runnable,
         )
         .skip_reason()
         {
