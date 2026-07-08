@@ -31,7 +31,6 @@ use pathfinder_geometry::vector::{vec2f, vec2i, Vector2F, Vector2I};
 use resvg::usvg::fontdb;
 use resvg::usvg::fontdb::Query;
 use vec1::Vec1;
-use warp_errors::report_error;
 use warpui_core::fonts::{Style, Weight};
 #[cfg(target_os = "windows")]
 use windows::loader;
