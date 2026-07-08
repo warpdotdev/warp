@@ -1121,7 +1121,6 @@ impl AgentConversationSummary {
             .filter(|desc| !desc.is_empty())
             .unwrap_or_else(|| initial_query.clone());
 
-        // TODO: search tasks in correct order once we've implemented task ordering.
         let initial_working_directory = tasks
             .iter()
             .find_map(|task| api_task_initial_working_directory(task));
