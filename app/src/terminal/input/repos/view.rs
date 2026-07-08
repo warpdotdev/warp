@@ -17,6 +17,16 @@ use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
 
+#[cfg(feature = "local_fs")]
+use std::collections::HashMap;
+#[cfg(feature = "local_fs")]
+use std::sync::{Arc, Mutex};
+
+#[cfg(feature = "local_fs")]
+use crate::ai::persisted_workspace::PersistedWorkspace;
+#[cfg(feature = "local_fs")]
+use crate::terminal::input::repos::data_source::GitSummaryCache;
+
 /// Events emitted by InlineReposMenuView.
 #[derive(Debug, Clone)]
 pub enum InlineReposMenuEvent {
@@ -31,6 +41,9 @@ pub struct InlineReposMenuView {
     mixer: ModelHandle<SearchMixer<AcceptRepo>>,
     input_suggestions_model: ModelHandle<InputSuggestionsModeModel>,
     input_buffer_model: ModelHandle<InputBufferModel>,
+    /// Git summaries shared with the data source, populated in the background.
+    #[cfg(feature = "local_fs")]
+    git_summaries: GitSummaryCache,
 }
 
 impl InlineReposMenuView {
@@ -41,7 +54,19 @@ impl InlineReposMenuView {
         positioner: &ModelHandle<InlineMenuPositioner>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let data_source = ctx.add_model(|_| RepoMenuDataSource::new());
+        #[cfg(feature = "local_fs")]
+        let git_summaries: GitSummaryCache = Arc::new(Mutex::new(HashMap::new()));
+
+        let data_source = ctx.add_model(|_| {
+            #[cfg(feature = "local_fs")]
+            {
+                RepoMenuDataSource::new(git_summaries.clone())
+            }
+            #[cfg(not(feature = "local_fs"))]
+            {
+                RepoMenuDataSource::new()
+            }
+        });
 
         let mixer = ctx.add_model(|ctx| {
             let mut mixer = SearchMixer::<AcceptRepo>::new();
@@ -96,6 +121,10 @@ impl InlineReposMenuView {
                             ctx,
                         );
                     });
+                    // Kick off the background git-summary load so branch/diff
+                    // stats fill in without blocking the initial repo list.
+                    #[cfg(feature = "local_fs")]
+                    me.load_git_summaries_in_background(ctx);
                 }
             },
         );
@@ -114,7 +143,61 @@ impl InlineReposMenuView {
             mixer,
             input_suggestions_model,
             input_buffer_model: input_buffer_model.clone(),
+            #[cfg(feature = "local_fs")]
+            git_summaries,
         }
+    }
+
+    /// Loads git summaries (branch + diff stats) for all known repos in the
+    /// background, then re-runs the query so the freshly-loaded data renders.
+    ///
+    /// The initial repo list is shown immediately without git data (see
+    /// [`RepoMenuDataSource`]); this fills it in a moment later. We load all
+    /// summaries and refresh once (rather than per-repo) to avoid repeatedly
+    /// resetting the user's selection while data streams in.
+    #[cfg(feature = "local_fs")]
+    fn load_git_summaries_in_background(&self, ctx: &mut ViewContext<Self>) {
+        let paths: Vec<PathBuf> = PersistedWorkspace::as_ref(ctx)
+            .workspaces()
+            .map(|m| m.path)
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+
+        ctx.spawn(
+            async move {
+                use crate::util::git::get_repo_git_summary;
+                let futures = paths.into_iter().map(|path| async move {
+                    let summary = get_repo_git_summary(&path).await;
+                    (path, summary)
+                });
+                futures::future::join_all(futures).await
+            },
+            move |me, results, ctx| {
+                let mut updated = false;
+                {
+                    let mut cache = me.git_summaries.lock().unwrap_or_else(|e| e.into_inner());
+                    for (path, summary) in results {
+                        if let Some(summary) = summary {
+                            cache.insert(path, summary);
+                            updated = true;
+                        }
+                    }
+                }
+
+                // Only refresh if the repos menu is still open, so we don't
+                // stomp on whatever the user is doing next.
+                if updated && me.input_suggestions_model.as_ref(ctx).is_repos_menu() {
+                    me.mixer.update(ctx, |mixer, ctx| {
+                        mixer.run_query(
+                            repos_query(me.input_buffer_model.as_ref(ctx).current_value()),
+                            ctx,
+                        );
+                    });
+                }
+            },
+        );
     }
 
     pub fn select_up(&self, ctx: &mut ViewContext<Self>) {
