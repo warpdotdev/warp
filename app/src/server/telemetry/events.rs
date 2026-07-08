@@ -2838,12 +2838,6 @@ pub enum TelemetryEvent {
     },
     /// Emitted when a warp://linear deeplink is opened.
     LinearIssueLinkOpened,
-    /// Emitted when the free tier limit hit interstitial is displayed.
-    FreeTierLimitHitInterstitialDisplayed,
-    /// Emitted when the user clicks the "Upgrade" button in the free tier limit hit interstitial.
-    FreeTierLimitHitInterstitialUpgradeButtonClicked,
-    /// Emitted when the user clicks close on the free tier limit hit interstitial.
-    FreeTierLimitHitInterstitialClosed,
     /// Emitted when the remote server binary check completes.
     RemoteServerBinaryCheck {
         found: bool,
@@ -4778,9 +4772,6 @@ impl TelemetryEvent {
                 "server_conversation_id": server_conversation_id,
                 "ambient_agent_task_id": ambient_agent_task_id.map(|id| id.to_string()),
             })),
-            TelemetryEvent::FreeTierLimitHitInterstitialDisplayed => None,
-            TelemetryEvent::FreeTierLimitHitInterstitialUpgradeButtonClicked => None,
-            TelemetryEvent::FreeTierLimitHitInterstitialClosed => None,
             TelemetryEvent::LoginButtonClicked { source }
             | TelemetryEvent::LoginLaterButtonClicked { source }
             | TelemetryEvent::LoginLaterConfirmationButtonClicked { source }
@@ -5262,9 +5253,6 @@ impl TelemetryEvent {
             | TelemetryEvent::CloudAgentCapacityModalUpgradeClicked
             | TelemetryEvent::ComputerUseApproved { .. }
             | TelemetryEvent::ComputerUseCancelled { .. }
-            | TelemetryEvent::FreeTierLimitHitInterstitialDisplayed
-            | TelemetryEvent::FreeTierLimitHitInterstitialUpgradeButtonClicked
-            | TelemetryEvent::FreeTierLimitHitInterstitialClosed
             | TelemetryEvent::RemoteServerBinaryCheck { .. }
             | TelemetryEvent::RemoteServerInstallation { .. }
             | TelemetryEvent::RemoteServerInitialization { .. }
@@ -5824,11 +5812,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ComputerUseApproved | Self::ComputerUseCancelled => {
                 EnablementState::Flag(FeatureFlag::AgentModeComputerUse)
             }
-            Self::FreeTierLimitHitInterstitialDisplayed { .. } => EnablementState::Always,
-            Self::FreeTierLimitHitInterstitialUpgradeButtonClicked { .. } => {
-                EnablementState::Always
-            }
-            Self::FreeTierLimitHitInterstitialClosed { .. } => EnablementState::Always,
             Self::RemoteServerBinaryCheck
             | Self::RemoteServerInstallation
             | Self::RemoteServerInitialization
@@ -6393,15 +6376,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ComputerUseApproved => "ComputerUse.Approved",
             Self::ComputerUseCancelled => "ComputerUse.Cancelled",
-            Self::FreeTierLimitHitInterstitialDisplayed { .. } => {
-                "FreeTierLimitHitInterstitial.Displayed"
-            }
-            Self::FreeTierLimitHitInterstitialUpgradeButtonClicked { .. } => {
-                "FreeTierLimitHitInterstitial.UpgradeButtonClicked"
-            }
-            Self::FreeTierLimitHitInterstitialClosed { .. } => {
-                "FreeTierLimitHitInterstitial.Closed"
-            }
         }
     }
 
@@ -7252,15 +7226,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "A RequestComputerUse action was approved (manually or auto-executed)"
             }
             Self::ComputerUseCancelled => "A RequestComputerUse action was cancelled/rejected",
-            Self::FreeTierLimitHitInterstitialDisplayed { .. } => {
-                "The free tier limit hit interstitial was displayed"
-            }
-            Self::FreeTierLimitHitInterstitialUpgradeButtonClicked { .. } => {
-                "User clicked the 'Upgrade' button in the free tier limit hit interstitial"
-            }
-            Self::FreeTierLimitHitInterstitialClosed { .. } => {
-                "User closed the free tier limit hit interstitial"
-            }
             Self::RemoteServerBinaryCheck => {
                 "Remote server binary check completed (found, not found, or error)"
             }
