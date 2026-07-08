@@ -220,7 +220,7 @@ impl TerminalManager {
 
         let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
 
-        let block_spacing = BlockSpacing::from_settings(ctx);
+        let block_spacing = BlockSpacing::for_gui(ctx);
         let show_memory_stats = block_spacing.show_memory_stats;
 
         // TODO: we have to figure out what prompt the viewer will see.

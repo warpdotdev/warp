@@ -1,3 +1,4 @@
+
 //! [`TuiInputView`] — ratatui-rendered TUI prompt input.
 //!
 //! Implements [`TuiView`] + [`TypedActionView`]. The view:
@@ -558,9 +559,8 @@ pub enum TuiInputAction {
 pub struct TuiInputView {
     /// The backing code editor in char-cell (terminal) mode.
     model: ModelHandle<CodeEditorModel>,
-    /// Shared input-mode state; `None` disables shell-mode handling entirely
-    /// (e.g. in the standalone input demo).
-    input_mode: Option<ModelHandle<BlocklistAIInputModel>>,
+    /// Shared input-mode state driving `!` shell-mode handling.
+    input_mode: ModelHandle<BlocklistAIInputModel>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
     kill_buffer: KillBuffer,
     /// First visible visual row (0-indexed).
@@ -584,15 +584,14 @@ impl TuiInputView {
     /// mode). The model carries the terminal width (set via
     /// [`CodeEditorModel::new_tui`]); the view does not keep its own copy.
     ///
-    /// `input_mode` enables `!` shell-mode handling backed by the shared
-    /// input-mode model, re-rendering whenever the mode changes; `None`
-    /// disables shell-mode handling entirely.
+    /// `input_mode` is the shared input-mode model backing `!` shell-mode
+    /// handling; the view re-renders whenever the mode changes.
     ///
     /// Subscribes to [`CodeEditorModelEvent::ContentChanged`] to trigger re-renders
     /// whenever the buffer changes from outside `handle_action`.
     pub fn new(
         model: ModelHandle<CodeEditorModel>,
-        input_mode: Option<ModelHandle<BlocklistAIInputModel>>,
+        input_mode: ModelHandle<BlocklistAIInputModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
@@ -600,9 +599,9 @@ impl TuiInputView {
                 ctx.notify();
             }
         });
-        if let Some(input_mode) = &input_mode {
-            ctx.subscribe_to_model(input_mode, |_, _, _, ctx| ctx.notify());
-        }
+        // The model only emits on real config changes, and rendering branches
+        // on the config (shell-mode gutter/border), so every event re-renders.
+        ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
         Self {
             model,
             input_mode,
@@ -616,9 +615,7 @@ impl TuiInputView {
 
     /// Whether the input is in `!` shell mode (locked shell input).
     pub(crate) fn is_shell_mode(&self, ctx: &AppContext) -> bool {
-        self.input_mode
-            .as_ref()
-            .is_some_and(|input_mode| input_mode_policy::is_shell_mode(input_mode.as_ref(ctx)))
+        input_mode_policy::is_shell_mode(self.input_mode.as_ref(ctx))
     }
 
     /// Returns a handle to the backing [`CodeEditorModel`].
@@ -638,35 +635,9 @@ impl TuiInputView {
         ctx.notify();
     }
 
-    /// Builds the concrete `TuiInputElement` for this frame. `render` wraps it in
-    /// a `Box`; tests construct it directly to exercise mouse dispatch.
-    ///
-    /// Only width-independent state is gathered here; width-dependent layout (row
-    /// wrapping, cursor placement, selection spans) happens later in
-    /// `TuiInputElement::layout`, the first point that knows the terminal width.
-    fn render_element(&self, ctx: &AppContext) -> TuiInputElement {
-        let text = self.plain_text(ctx);
-        let cursor_offset = self.cursor_offset(ctx);
-        let sel_char_range = self.selection_range(ctx).map(|r| {
-            let start = r.start.as_usize().saturating_sub(1);
-            let end = r.end.as_usize().saturating_sub(1);
-            (start, end)
-        });
-
-        TuiInputElement {
-            model: self.model.clone(),
-            text,
-            cursor_offset,
-            sel_char_range,
-            scroll_offset: self.scroll_offset,
-            max_visible_rows: self.max_visible_rows,
-            is_selecting: self.is_selecting,
-            column: TuiFlex::column(),
-            cursor_col: 0,
-            cursor_row_in_view: 0,
-            cursor_visible: false,
-            selected_spans: Vec::new(),
-        }
+    /// The editor element for this frame, boxed for the render tree.
+    fn render_input(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        TuiInputElement::new(self, ctx).finish()
     }
 
     /// Composes the shell-mode input row: the accent-styled `!` affordance in a
@@ -688,7 +659,7 @@ impl TuiInputView {
         });
         TuiFlex::row()
             .child(prefix.finish())
-            .flex_child(Box::new(self.render_element(ctx)))
+            .flex_child(self.render_input(ctx))
             .finish()
     }
 }
@@ -702,7 +673,7 @@ impl TuiView for TuiInputView {
         if self.is_shell_mode(ctx) {
             self.shell_element(ctx)
         } else {
-            Box::new(self.render_element(ctx))
+            self.render_input(ctx)
         }
     }
 
@@ -723,11 +694,7 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::InsertChar(c) => {
                 // A `!` typed at the very start of the input enters shell mode
                 // instead of inserting (matching the GUI's typed-only trigger).
-                if *c == '!'
-                    && self.input_mode.is_some()
-                    && !self.is_shell_mode(ctx)
-                    && self.is_cursor_at_start(ctx)
-                {
+                if *c == '!' && !self.is_shell_mode(ctx) && self.is_cursor_at_start(ctx) {
                     self.enter_shell_mode(ctx);
                 } else {
                     let s = c.to_string();
@@ -1034,16 +1001,14 @@ impl TuiInputView {
     /// Locks the shared input mode to shell with the `!` shell-prefix source.
     fn enter_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
-        if let Some(input_mode) = self.input_mode.clone() {
-            input_mode.update(ctx, |input_mode, ctx| {
-                input_mode.set_input_config(
-                    SHELL_LOCKED_CONFIG,
-                    is_input_buffer_empty,
-                    Some(InputTypeAutoDetectionSource::ShellPrefix),
-                    ctx,
-                );
-            });
-        }
+        self.input_mode.clone().update(ctx, |input_mode, ctx| {
+            input_mode.set_input_config(
+                SHELL_LOCKED_CONFIG,
+                is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::ShellPrefix),
+                ctx,
+            );
+        });
     }
 
     /// Restores the TUI's default agent input mode; any typed text is
@@ -1051,11 +1016,9 @@ impl TuiInputView {
     /// submission clears the input.
     pub(crate) fn exit_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
-        if let Some(input_mode) = self.input_mode.clone() {
-            input_mode.update(ctx, |input_mode, ctx| {
-                input_mode.set_input_config(AI_LOCKED_CONFIG, is_input_buffer_empty, None, ctx);
-            });
-        }
+        self.input_mode.clone().update(ctx, |input_mode, ctx| {
+            input_mode.set_input_config(AI_LOCKED_CONFIG, is_input_buffer_empty, None, ctx);
+        });
     }
 
     // ── Submit ────────────────────────────────────────────────────────────────
@@ -1280,6 +1243,34 @@ struct TuiInputElement {
 }
 
 impl TuiInputElement {
+    /// Captures `view`'s width-independent state for this frame; width-dependent
+    /// layout (row wrapping, cursor placement, selection spans) happens later in
+    /// [`TuiElement::layout`], the first point that knows the terminal width.
+    fn new(view: &TuiInputView, ctx: &AppContext) -> Self {
+        let text = view.plain_text(ctx);
+        let cursor_offset = view.cursor_offset(ctx);
+        let sel_char_range = view.selection_range(ctx).map(|r| {
+            let start = r.start.as_usize().saturating_sub(1);
+            let end = r.end.as_usize().saturating_sub(1);
+            (start, end)
+        });
+
+        Self {
+            model: view.model.clone(),
+            text,
+            cursor_offset,
+            sel_char_range,
+            scroll_offset: view.scroll_offset,
+            max_visible_rows: view.max_visible_rows,
+            is_selecting: view.is_selecting,
+            column: TuiFlex::column(),
+            cursor_col: 0,
+            cursor_row_in_view: 0,
+            cursor_visible: false,
+            selected_spans: Vec::new(),
+        }
+    }
+
     /// Builds the visible rows, cursor position, and selection spans for
     /// `terminal_width`, storing them for `render`/`cursor_position`.
     fn build(&mut self, terminal_width: u16, visible_rows: u32) {

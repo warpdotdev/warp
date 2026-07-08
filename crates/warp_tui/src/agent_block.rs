@@ -449,7 +449,9 @@ impl TuiAIBlock {
         // `BLOCK_TOP_PADDING_ROWS` baked into terminal block heights — so
         // every adjacent block pair (terminal or agent) is separated by
         // exactly that many rows.
-        Box::new(TuiContainer::new(column.finish()).with_padding_top(BLOCK_TOP_PADDING_ROWS))
+        TuiContainer::new(column.finish())
+            .with_padding_top(BLOCK_TOP_PADDING_ROWS)
+            .finish()
     }
 }
 

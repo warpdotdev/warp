@@ -4,8 +4,11 @@
 //! [`TuiInputView`] so they exercise the exact render/layout/cursor path the
 //! presenter uses, not a reimplementation of it.
 
+use std::rc::Rc;
+
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
+use warp::tui_export::BlocklistAIInputModel;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
@@ -18,7 +21,8 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::platform::WindowStyle;
 use warpui_core::{AddWindowOptions, App, AppContext, TuiView, TypedActionView, ViewHandle};
 
-use super::{TuiInputAction, TuiInputElement, TuiInputView};
+use super::{SHELL_MODE_INPUT_FLAG, TuiInputAction, TuiInputElement, TuiInputView};
+use crate::input_mode_policy::TuiInputModePolicy;
 
 const W: u16 = 80;
 
@@ -29,6 +33,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
     // Double-click word selection reads the `SemanticSelection` singleton for
     // its word-boundary policy, so register a mock one too.
     ctx.add_singleton_model(|_| SemanticSelection::mock(true, ""));
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,
@@ -36,7 +41,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         },
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            TuiInputView::new(model, None, ctx)
+            TuiInputView::new(model, input_mode, ctx)
         },
     );
     view
@@ -476,13 +481,15 @@ fn type_lines(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, n: usize) {
     }
 }
 
-/// Renders + lays out the view's element at width `W` (height capped by the
-/// view), returning the concrete element and the area it occupies.
+/// Builds + lays out the view's concrete element at width `W` (height capped
+/// by the view), returning the element and the area it occupies. Built via
+/// [`TuiInputElement::new`] (the same constructor `render_input` boxes) so
+/// tests can drive the element's inherent `mouse_action` mapping.
 fn laid_out_element(
     view: &ViewHandle<TuiInputView>,
     ctx: &AppContext,
 ) -> (TuiInputElement, TuiRect) {
-    let mut element = view.as_ref(ctx).render_element(ctx);
+    let mut element = TuiInputElement::new(view.as_ref(ctx), ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -713,19 +720,34 @@ fn wheel_outside_area_is_ignored() {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Mode *transitions* live on the shared `BlocklistAIInputModel` (exercised by
-// the app crate's `input_model` tests); these tests cover the view's inert
-// default without an input-mode model, the submit/clear split, and the
-// shell-mode gutter geometry of the composed `!`-affordance row (built
-// directly via `TuiInputView::shell_element`).
+// the app crate's `input_model` tests; the view tests drive it through
+// [`BlocklistAIInputModel::mock`]); these tests cover the view's `!` trigger,
+// the submit/clear split, and the shell-mode gutter geometry of the composed
+// `!`-affordance row (built directly via `TuiInputView::shell_element`).
 
-/// Without an input-mode model, `!` is a plain character — no shell mode.
+/// A `!` typed at the start of the buffer enters shell mode without inserting;
+/// subsequent text lands in the buffer.
 #[test]
-fn bang_inserts_literally_without_input_mode_model() {
+fn bang_at_start_enters_shell_mode() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, "!ls");
-            assert_eq!(text(&view, ctx), "!ls");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(text(&view, ctx), "ls", "the `!` must not be inserted");
+        });
+    });
+}
+
+/// A `!` typed anywhere but the buffer start inserts literally.
+#[test]
+fn bang_mid_text_inserts_literally() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "a!b");
+            assert!(!view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(text(&view, ctx), "a!b");
         });
     });
 }
@@ -749,8 +771,7 @@ fn submit_keeps_buffer_until_cleared() {
 
 /// Esc is never consumed by the element — the shell-mode exit is the
 /// `tui:input:exit_shell_mode` keymap binding, gated on the shell-mode
-/// keymap-context flag — and `ExitShellMode` is a no-op without an
-/// input-mode model.
+/// keymap-context flag — and `ExitShellMode` is a no-op outside shell mode.
 #[test]
 fn escape_is_not_consumed_by_the_element() {
     App::test((), |mut app| async move {
@@ -779,15 +800,15 @@ fn escape_is_not_consumed_by_the_element() {
             );
 
             dispatch(&view, ctx, &[TuiInputAction::ExitShellMode]);
-            assert_eq!(text(&view, ctx), "ab", "no-op without an input-mode model");
+            assert_eq!(text(&view, ctx), "ab", "no-op outside shell mode");
         });
     });
 }
 
-/// Without an input-mode model the view's keymap context carries no
-/// shell-mode flag, so the Esc binding cannot match.
+/// The keymap context carries the shell-mode flag exactly while in shell
+/// mode, gating the Esc binding.
 #[test]
-fn keymap_context_has_no_shell_mode_flag_without_input_mode_model() {
+fn keymap_context_flags_shell_mode() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
@@ -795,6 +816,11 @@ fn keymap_context_has_no_shell_mode_flag_without_input_mode_model() {
                 view.as_ref(ctx).keymap_context(ctx),
                 TuiInputView::default_keymap_context()
             );
+
+            type_str(&view, ctx, "!");
+            let mut expected = TuiInputView::default_keymap_context();
+            expected.set.insert(SHELL_MODE_INPUT_FLAG);
+            assert_eq!(view.as_ref(ctx).keymap_context(ctx), expected);
         });
     });
 }
@@ -820,7 +846,7 @@ fn laid_out_shell_content_slot(
     view: &ViewHandle<TuiInputView>,
     ctx: &AppContext,
 ) -> (TuiInputElement, TuiRect) {
-    let mut element = view.as_ref(ctx).render_element(ctx);
+    let mut element = TuiInputElement::new(view.as_ref(ctx), ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,

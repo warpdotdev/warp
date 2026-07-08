@@ -49,7 +49,7 @@ impl MockTerminalManager {
             initial_size,
             channel_event_proxy,
             shell_state,
-            BlockSpacing::from_settings(ctx),
+            BlockSpacing::for_gui(ctx),
             ctx,
         );
         let colors = model.colors();

@@ -114,3 +114,62 @@ pub trait ConversationSelection {
 impl Entity for Box<dyn ConversationSelection> {
     type Event = ConversationSelectionEvent;
 }
+
+/// Inert [`ConversationSelection`] stub for tests: no selection, no-op writes.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) struct MockConversationSelection;
+
+#[cfg(any(test, feature = "test-util"))]
+impl ConversationSelection for MockConversationSelection {
+    fn selected_conversation_id(&self, _: &AppContext) -> Option<AIConversationId> {
+        None
+    }
+
+    fn is_conversation_active(&self, _: &AppContext) -> bool {
+        false
+    }
+
+    fn is_conversation_fullscreen(&self, _: &AppContext) -> bool {
+        false
+    }
+
+    fn select_existing_conversation(
+        &mut self,
+        _: AIConversationId,
+        _: AgentViewEntryOrigin,
+        _: &mut ModelContext<Box<dyn ConversationSelection>>,
+    ) {
+    }
+
+    fn select_new_conversation(
+        &mut self,
+        _: AgentViewEntryOrigin,
+        _: &mut ModelContext<Box<dyn ConversationSelection>>,
+    ) {
+    }
+
+    fn try_start_new_conversation(
+        &mut self,
+        _: AgentViewEntryOrigin,
+        _: &mut ModelContext<Box<dyn ConversationSelection>>,
+    ) -> Result<AIConversationId, EnterAgentViewError> {
+        Ok(AIConversationId::new())
+    }
+
+    fn pending_query_autoexecute_override(&self, _: &AppContext) -> AIConversationAutoexecuteMode {
+        AIConversationAutoexecuteMode::default()
+    }
+
+    fn toggle_pending_query_autoexecute(
+        &mut self,
+        _: &mut ModelContext<Box<dyn ConversationSelection>>,
+    ) {
+    }
+
+    fn handle_history_event(
+        &mut self,
+        _: &BlocklistAIHistoryEvent,
+        _: &mut ModelContext<Box<dyn ConversationSelection>>,
+    ) {
+    }
+}

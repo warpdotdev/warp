@@ -195,7 +195,7 @@ impl<S> TerminalManager<S> {
             initial_size,
             model_event_sender,
             chosen_shell,
-            BlockSpacing::from_settings(ctx),
+            BlockSpacing::for_gui(ctx),
             ctx,
             create_surface,
             |manager| Box::new(manager),
