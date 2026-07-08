@@ -378,6 +378,7 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
 fn stream_token_usage(
     model_id: &str,
     total_input: u32,
+    input_cache_read: u32,
     output: u32,
     cost_in_cents: f32,
 ) -> api::response_event::stream_finished::TokenUsage {
@@ -385,7 +386,7 @@ fn stream_token_usage(
         model_id: model_id.to_string(),
         total_input,
         output,
-        input_cache_read: 0,
+        input_cache_read,
         input_cache_write: 0,
         cost_in_cents,
     }
@@ -405,8 +406,8 @@ fn usage_totals_accumulates_tokens_and_cost_across_requests_and_models() {
                 .update_cost_and_usage_for_request(
                     None,
                     vec![
-                        stream_token_usage("model-a", 100, 20, 1.5),
-                        stream_token_usage("model-b", 10, 5, 0.5),
+                        stream_token_usage("model-a", 100, 0, 20, 1.5),
+                        stream_token_usage("model-b", 10, 0, 5, 0.5),
                     ],
                     None,
                     false,
@@ -416,7 +417,7 @@ fn usage_totals_accumulates_tokens_and_cost_across_requests_and_models() {
             conversation
                 .update_cost_and_usage_for_request(
                     None,
-                    vec![stream_token_usage("model-a", 50, 10, 1.2)],
+                    vec![stream_token_usage("model-a", 50, 0, 10, 1.2)],
                     None,
                     false,
                     ctx,
@@ -427,6 +428,30 @@ fn usage_totals_accumulates_tokens_and_cost_across_requests_and_models() {
         let totals = conversation.usage_totals();
         assert_eq!(totals.total_tokens, 195);
         assert!((totals.cost_in_cents - 3.2).abs() < 1e-6);
+    });
+}
+
+/// Cached input reads re-count the whole context every request at a steep
+/// discount; the compact footer count excludes them so tokens track cost.
+#[test]
+fn usage_totals_excludes_cached_input_reads() {
+    App::test((), |app| async move {
+        let mut conversation = AIConversation::new(false, false);
+
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    // 40k input of which 39k were cache reads, plus 100 output.
+                    vec![stream_token_usage("model-a", 40_000, 39_000, 100, 0.9)],
+                    None,
+                    false,
+                    ctx,
+                )
+                .expect("token usage should update");
+        });
+
+        assert_eq!(conversation.usage_totals().total_tokens, 1_100);
     });
 }
 

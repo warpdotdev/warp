@@ -26,7 +26,7 @@ Data plumbing that already exists app-side (unused by the TUI):
 
 ### 1. App-side: conversation usage totals + exports (`app/`)
 
-- New `ConversationUsageTotals { total_tokens: u64, cost_in_cents: f64 }` plus `AIConversation::usage_totals()` summing `total_input + output` and `cost_in_cents` across `total_token_usage_by_model`.
+- New `ConversationUsageTotals { total_tokens: u64, cost_in_cents: f64 }` plus `AIConversation::usage_totals()` summing tokens and `cost_in_cents` across `total_token_usage_by_model`. The token count is `(total_input - input_cache_read) + output`: the server's `total_input` includes cached reads (see `ExactTokenUsage` construction in warp-server), which re-count the entire discounted context every request — ballooning the number (e.g. `100k tok` next to `$0.05`) while barely moving the cost.
 - `update_conversation_cost_and_usage_for_request` now also emits `ConversationUsageMetadataUpdated` for token-only updates (previously only for request-cost/metadata updates).
 - Export `ConversationUsageTotals` through `tui_export.rs` — `BlocklistAIHistoryEvent` is already exported.
 - Per-exchange capture (`token_usage`/`cost_in_cents` on `AIAgentExchange`, mirroring `time_to_first_token_ms`) is **deferred to PR 2** with its consumer: it touches ~14 `AIAgentExchange` construction sites and its request→exchange attribution semantics are best decided alongside the summary row.
@@ -70,5 +70,6 @@ Parallel child agents are not proposed: CODE-1832 is hard-blocked on PR #13442, 
 ## Risks and mitigations
 
 - Small responses show tiny counts (`4 tok`) while real conversations reach thousands — abbreviation is part of the formatter from day one so the footer width stays stable.
+- The hand pointer requires host-terminal OSC 22 support. Warp's own terminal doesn't parse OSC 22 today, so the pointer shows in kitty/WezTerm/foot/xterm but not in Warp until terminal-side support lands (tracked separately; the TUI-side emission is unit-tested).
 - Restored/persisted conversations predate per-exchange capture, so old exchanges have no summary row — acceptable; render nothing when `token_usage` is `None`. Persisting per-exchange usage is a follow-up if product wants history parity.
 - Footer click is the TUI's first mouse-interactive footer element; keep the hit target to the entry's cells only so text selection elsewhere in the footer is unaffected.

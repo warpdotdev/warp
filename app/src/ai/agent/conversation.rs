@@ -164,7 +164,11 @@ fn footer_model_token_usage(
 /// `warp_multi_agent_api::TokenUsage` rows don't leak through `tui_export`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ConversationUsageTotals {
-    /// Total input + output tokens across all models.
+    /// Freshly processed tokens across all models: input excluding cached
+    /// reads, plus output. Cache reads are excluded because `total_input`
+    /// re-counts the entire (mostly cached, steeply discounted) context on
+    /// every request — including them balloons the count while barely moving
+    /// the cost.
     pub total_tokens: u64,
     /// Total cost across all models, in US cents.
     pub cost_in_cents: f64,
@@ -3511,11 +3515,15 @@ impl AIConversation {
 
     /// Sums the existing `total_token_usage_by_model` state into compact
     /// cross-model totals for lightweight displays (e.g. the TUI footer's
-    /// usage entry).
+    /// usage entry). Cached input reads are excluded from the token count —
+    /// `total_input` includes them (see the server's `ExactTokenUsage`
+    /// construction), and re-counting the cached context every request
+    /// balloons the number while barely moving the cost.
     pub fn usage_totals(&self) -> ConversationUsageTotals {
         let mut totals = ConversationUsageTotals::default();
         for usage in self.total_token_usage_by_model.values() {
-            totals.total_tokens += u64::from(usage.total_input) + u64::from(usage.output);
+            let fresh_input = usage.total_input.saturating_sub(usage.input_cache_read);
+            totals.total_tokens += u64::from(fresh_input) + u64::from(usage.output);
             totals.cost_in_cents += f64::from(usage.cost_in_cents);
         }
         totals
