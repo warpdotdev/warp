@@ -371,11 +371,11 @@ pub trait RichTextAction<V>: Sized {
         ctx: &AppContext,
     ) -> Option<Self>;
 
-    /// Dispatch an event when a hidden-section bar is double-clicked, to fully
+    /// Dispatch an event when a hidden-section bar is clicked, to fully
     /// expand the entire hidden section it represents. `line_range` is the
     /// section's complete hidden line range. Defaults to no action; only the
     /// code-review editor implements it.
-    fn hidden_section_double_clicked(
+    fn hidden_section_clicked(
         _line_range: Range<LineCount>,
         _parent_view: &WeakViewHandle<V>,
         _ctx: &AppContext,
@@ -924,7 +924,9 @@ impl<V: EditorView> RichTextElement<V> {
                         RenderableHiddenSection::new(
                             item,
                             config.mouse_state(),
+                            config.line_count(),
                             full_line_range,
+                            styles,
                             self.parent_view.clone(),
                             ctx,
                         )

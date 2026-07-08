@@ -1311,7 +1311,7 @@ impl RichTextAction<CodeEditorView> for CodeEditorViewAction {
         None
     }
 
-    fn hidden_section_double_clicked(
+    fn hidden_section_clicked(
         line_range: Range<LineCount>,
         _parent_view: &WeakViewHandle<CodeEditorView>,
         _ctx: &AppContext,
