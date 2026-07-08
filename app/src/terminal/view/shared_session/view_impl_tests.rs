@@ -140,6 +140,49 @@ fn test_on_ambient_agent_execution_ended_enables_followup_input_for_editable_non
 }
 
 #[test]
+fn test_enable_cloud_followup_input_preserves_typed_draft() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+        let task = create_cloud_mode_task_for_user("another-user");
+        let task_id = task.task_id;
+
+        insert_cloud_mode_task_with_server_metadata(
+            &mut app,
+            terminal.id(),
+            task,
+            AIAgentHarness::Oz,
+            current_user_owner_permissions(),
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            let mut model = view.model.lock();
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
+            model.set_shared_session_status(SharedSessionStatus::FinishedViewer);
+            drop(model);
+
+            // Simulate the user typing a draft followup while viewing the session.
+            view.input().update(ctx, |input, ctx| {
+                input.replace_buffer_content("my draft followup", ctx);
+            });
+
+            view.on_ambient_agent_execution_ended(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.input().as_ref(ctx).buffer_text(ctx),
+                "my draft followup"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_shared_session_banners() {
     let _flag = FeatureFlag::CreatingSharedSessions.override_enabled(true);
 
