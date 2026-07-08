@@ -42,7 +42,7 @@ use crate::input_suggestions::HistoryOrder;
 use crate::persistence::model::{AgentConversation, AgentConversationData};
 use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
@@ -307,7 +307,7 @@ impl BlocklistAIHistoryModel {
         multi_agent_conversations: &[AgentConversation],
     ) -> Self {
         #[cfg(feature = "local_fs")]
-        let db_connection = database_file_path_for_scope(&PersistenceScope::App)
+        let db_connection = database_file_path_for_current_scope()
             .to_str()
             .and_then(|db_url| {
                 establish_ro_connection(db_url)

@@ -1382,11 +1382,13 @@ pub(crate) fn initialize_app(
                 identity_key: identity_key.clone(),
             }
         }
+        // The TUI keeps its own database so GUI/TUI version skew can never
+        // migrate a shared database out from under the older binary.
+        LaunchMode::Tui { .. } => persistence::PersistenceScope::Tui,
         LaunchMode::App { .. }
         | LaunchMode::CommandLine { .. }
         | LaunchMode::RemoteServerProxy
-        | LaunchMode::Test { .. }
-        | LaunchMode::Tui { .. } => persistence::PersistenceScope::App,
+        | LaunchMode::Test { .. } => persistence::PersistenceScope::App,
     };
     // Only read the subsets of persisted data this launch mode actually
     // consumes; loading everything is expensive on large databases.

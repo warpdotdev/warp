@@ -42,7 +42,7 @@ use crate::cloud_object::{
 };
 use crate::drive::CloudObjectTypeAndId;
 use crate::persistence::{
-    database_file_path_for_scope, establish_ro_connection, ModelEvent, PersistenceScope,
+    database_file_path_for_current_scope, establish_ro_connection, ModelEvent,
 };
 use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, SyncId};
@@ -330,13 +330,14 @@ impl TemplatableMCPServerManager {
             _ => {}
         });
 
-        let database_connection = database_file_path_for_scope(&PersistenceScope::App)
-            .to_str()
-            .and_then(|db_url| {
-                establish_ro_connection(db_url)
-                    .ok()
-                    .map(|conn| Arc::new(Mutex::new(conn)))
-            });
+        let database_connection =
+            database_file_path_for_current_scope()
+                .to_str()
+                .and_then(|db_url| {
+                    establish_ro_connection(db_url)
+                        .ok()
+                        .map(|conn| Arc::new(Mutex::new(conn)))
+                });
 
         let mut me = Self {
             cloud_templatable_mcp_servers: Default::default(),

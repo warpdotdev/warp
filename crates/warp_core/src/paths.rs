@@ -208,6 +208,19 @@ pub fn secure_state_dir() -> Option<PathBuf> {
     None
 }
 
+/// Returns the path to the directory where non-portable application state
+/// data for the TUI front-end (`warp-tui`) should be stored.
+///
+/// This is intentionally distinct from the GUI's state directory (see
+/// [`state_dir`] / [`secure_state_dir`]) so the two front-ends never share a
+/// SQLite database: they can be on different versions with different
+/// persistence schemas, and whichever binary is newer would otherwise migrate
+/// the shared database out from under the older one. Like other on-disk
+/// names, the `tui` directory name must not be changed once established.
+pub fn tui_state_dir() -> PathBuf {
+    secure_state_dir().unwrap_or_else(state_dir).join("tui")
+}
+
 /// Returns the path to the directory containing the user's custom themes.
 pub fn themes_dir() -> PathBuf {
     data_dir().join("themes")
