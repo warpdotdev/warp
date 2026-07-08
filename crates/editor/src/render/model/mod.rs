@@ -40,6 +40,7 @@ use warpui_core::text_selection_utils::{
 use warpui_core::units::{IntoPixels, Pixels};
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
+pub use self::char_cell_display::{DisplayRow, DisplayRowKind};
 use self::location::WrapDirection;
 pub use self::location::{HitTestOptions, Location};
 pub use self::offset_map::{OffsetMap, SelectableTextRun};
@@ -64,6 +65,7 @@ use crate::editor::EmbeddedItemModel;
 use crate::render::model::debug::Describe;
 
 pub mod bounds;
+mod char_cell_display;
 pub(crate) mod debug;
 mod location;
 mod offset_map;
@@ -405,6 +407,45 @@ impl<'a> RenderContentTreeRef<'a> {
     }
 }
 
+/// A ghost line (deleted/replaced diff content) to interleave when rendering a
+/// diff in char-cell mode. The char-cell analogue of laying a [`TemporaryBlock`]
+/// into the GUI's block tree: GUI-only fill/decoration types are flattened down
+/// to the plain colors a TUI row renderer needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CharCellTemporaryBlock {
+    /// The ghost line's text. Not present in the buffer, so it has no char
+    /// offsets in `line_starts`/`char_widths`.
+    pub content: String,
+    /// The buffer line this block should be displayed before.
+    pub insert_before: LineCount,
+    /// Whole-line color.
+    pub line_decoration: Option<ColorU>,
+    /// Char-index sub-ranges of `content` with their own colors.
+    pub inline_decorations: Vec<(Range<usize>, ColorU)>,
+}
+
+impl From<TemporaryBlock> for CharCellTemporaryBlock {
+    fn from(block: TemporaryBlock) -> Self {
+        let inline_decorations = block
+            .inline_text_decorations
+            .into_iter()
+            .filter_map(|decoration| {
+                let color = decoration.background?.into_solid();
+                Some((
+                    decoration.start.as_usize()..decoration.end.as_usize(),
+                    color,
+                ))
+            })
+            .collect();
+        Self {
+            content: block.content,
+            insert_before: block.insert_before,
+            line_decoration: block.line_decoration.map(|fill| fill.into_solid()),
+            inline_decorations,
+        }
+    }
+}
+
 /// All state specific to the TUI char-cell rendering path.
 ///
 /// Bundled into a single struct so the [`LayoutMode`] enum cleanly separates
@@ -428,6 +469,12 @@ pub struct CharCellState {
     /// byte per char (0 for zero-width/combining marks, 2 for wide CJK/emoji, 1
     /// otherwise). Rebuilt via [`CharCellState::update_text`].
     pub(crate) char_widths: RefCell<Vec<u8>>,
+    /// Diff ghost lines (deleted/replaced content) to interleave at their
+    /// `insert_before` line positions when rendering. Replaced wholesale on
+    /// each diff refresh; empty when no diff is displayed. Deliberately not
+    /// part of the wrap tables above: ghost rows are interleaved by row
+    /// renderers at render time, so buffer offset math is unaffected.
+    temporary_blocks: RefCell<Vec<CharCellTemporaryBlock>>,
 }
 
 impl CharCellState {
@@ -440,7 +487,20 @@ impl CharCellState {
             // scroll happens before the first edit.
             line_starts: RefCell::new(vec![0]),
             char_widths: RefCell::new(Vec::new()),
+            temporary_blocks: RefCell::new(Vec::new()),
         }
+    }
+
+    /// The current set of diff ghost lines, in ascending `insert_before` order
+    /// as produced by the diff model. Empty when no diff is displayed.
+    pub fn temporary_blocks(&self) -> Ref<'_, Vec<CharCellTemporaryBlock>> {
+        self.temporary_blocks.borrow()
+    }
+
+    /// Replace the stored ghost lines. Replace-all semantics, mirroring the
+    /// GUI path's `reset_temporary_block`, so stale ghosts never linger.
+    fn set_temporary_blocks(&self, blocks: Vec<CharCellTemporaryBlock>) {
+        *self.temporary_blocks.borrow_mut() = blocks;
     }
 
     /// The terminal width (in cells) used for char-cell wrapping.
@@ -454,6 +514,88 @@ impl CharCellState {
     /// don't depend on the width, so nothing else is rebuilt here.
     pub fn set_terminal_width(&self, terminal_width: u16) {
         self.terminal_width.set(terminal_width);
+    }
+
+    /// The display-row list at the current wrap tables, ghost blocks, and the
+    /// given hidden line ranges: buffer rows soft-wrapped, ghosts interleaved,
+    /// hidden lines elided into gap rows. See [`char_cell_display`] for the
+    /// full semantics.
+    ///
+    /// `hidden_line_ranges` is a parameter (not internal state) so painting
+    /// and geometry provably see the same overlays: pass the model-derived
+    /// set from [`RenderState::hidden_line_ranges`], plus any structural
+    /// extras (e.g. a diff view eliding the buffer's final empty line).
+    pub fn display_rows(&self, hidden_line_ranges: &[Range<usize>]) -> Vec<DisplayRow> {
+        char_cell_display::display_rows(
+            &self.line_starts.borrow(),
+            &self.char_widths.borrow(),
+            self.terminal_width.get(),
+            &self.temporary_blocks.borrow(),
+            hidden_line_ranges,
+        )
+    }
+
+    /// The `(display_row, display_col)` of the gap before 0-based char index
+    /// `char_idx`, over the same rows as [`Self::display_rows`]. Used for
+    /// cursor placement; see [`char_cell_display::offset_to_display_point`].
+    pub fn offset_to_display_point(
+        &self,
+        char_idx: usize,
+        hidden_line_ranges: &[Range<usize>],
+    ) -> (u32, u16) {
+        char_cell_display::offset_to_display_point(
+            char_idx,
+            &self.line_starts.borrow(),
+            &self.char_widths.borrow(),
+            self.terminal_width.get(),
+            &self.temporary_blocks.borrow(),
+            hidden_line_ranges,
+        )
+    }
+
+    /// The 0-based char index at `(display_row, display_col)`, over the same
+    /// rows as [`Self::display_rows`]. Used for mouse hit-testing; non-buffer
+    /// rows resolve to the nearest buffer offset (see
+    /// [`char_cell_display::display_point_to_offset`]).
+    pub fn display_point_to_offset(
+        &self,
+        display_row: u32,
+        display_col: usize,
+        hidden_line_ranges: &[Range<usize>],
+    ) -> usize {
+        char_cell_display::display_point_to_offset(
+            display_row,
+            display_col,
+            &self.line_starts.borrow(),
+            &self.char_widths.borrow(),
+            self.terminal_width.get(),
+            &self.temporary_blocks.borrow(),
+            hidden_line_ranges,
+        )
+    }
+
+    /// The 0-based char range of the soft-wrapped visual row containing the
+    /// gap at 0-based char index `char_idx`, excluding any trailing newline.
+    ///
+    /// Buffer visual-row space (no ghosts/hidden ranges); the row boundaries
+    /// follow the same display-width wrapping as everything else in this
+    /// state, so e.g. kill-to-visual-line-end ranges match the rendered rows.
+    pub fn visual_row_char_range(&self, char_idx: usize) -> Range<usize> {
+        let line_starts = self.line_starts.borrow();
+        let char_widths = self.char_widths.borrow();
+        let line_index = line_starts
+            .partition_point(|&start| start <= char_idx)
+            .saturating_sub(1);
+        let line_start = line_starts[line_index].min(char_widths.len());
+        let line = char_cell_logical_line(&line_starts, &char_widths, line_index);
+        let row_starts = char_cell_line_row_starts(line, self.terminal_width.get());
+        let pos_in_line = char_idx.min(char_widths.len()).saturating_sub(line_start);
+        let row = row_starts
+            .partition_point(|&start| start <= pos_in_line)
+            .saturating_sub(1);
+        let start = row_starts[row];
+        let end = row_starts.get(row + 1).copied().unwrap_or(line.len());
+        (line_start + start)..(line_start + end)
     }
 
     /// Rebuild the char-cell layout index — `line_starts` and the per-char display
@@ -496,6 +638,10 @@ impl std::fmt::Debug for CharCellState {
             .field("terminal_width", &self.terminal_width.get())
             .field("line_starts_len", &self.line_starts.borrow().len())
             .field("total_chars", &self.char_widths.borrow().len())
+            .field(
+                "temporary_blocks_len",
+                &self.temporary_blocks.borrow().len(),
+            )
             .finish()
     }
 }
@@ -1933,11 +2079,15 @@ impl RenderState {
     /// don't cause panics), but `BufferEdit` actions are no-ops — the caller must drive layout
     /// updates via [`Self::update_char_cell_text`].
     ///
+    /// `hidden_lines` backs [`Self::hidden_line_ranges`]; pass the owning editor's
+    /// [`HiddenLinesModel`] so char-cell consumers see model-driven line hiding.
+    ///
     /// `styles` is stored on the struct for API compatibility but is **not used** for rendering
     /// in CharCell mode. Callers (e.g. `warp_tui`) should supply a minimal stub.
     pub fn new_tui(
         terminal_width: u16,
         styles: RichTextStyles,
+        hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (element_tx, element_rx) = async_channel::unbounded();
@@ -1970,7 +2120,7 @@ impl RenderState {
             pending_selection_change: Mutex::new(None),
             layout_options: Default::default(),
             document_path: None,
-            hidden_lines: None,
+            hidden_lines,
             layout_mode: LayoutMode::CharCell(CharCellState::new(terminal_width)),
         }
     }
@@ -2052,6 +2202,36 @@ impl RenderState {
             LayoutMode::CharCell(cc) => Some(cc),
             LayoutMode::Pixels => None,
         }
+    }
+
+    /// Char-cell only: the hidden line ranges from the attached
+    /// [`HiddenLinesModel`], projected to 0-based logical line indices via the
+    /// char-cell line table — the shape [`CharCellState::with_display_lattice`]
+    /// consumes. Empty in pixel mode, with no attached model, or with nothing
+    /// hidden.
+    pub fn hidden_line_ranges(&self, app: &AppContext) -> Vec<Range<usize>> {
+        let (Some(char_cell), Some(hidden_lines)) = (self.char_cell(), self.hidden_lines.as_ref())
+        else {
+            return Vec::new();
+        };
+        let line_starts = char_cell.line_starts.borrow();
+        hidden_lines
+            .as_ref(app)
+            .hidden_ranges_at_latest(app)
+            .iter()
+            .filter_map(|range| {
+                // Anchor offsets are 1-based gaps sitting at line starts;
+                // convert to 0-based char indices, then to line indices. The
+                // end offset is the start of the first line *after* the run.
+                let start_char = range.start.as_usize().saturating_sub(1);
+                let end_char = range.end.as_usize().saturating_sub(1);
+                let start_line = line_starts
+                    .partition_point(|&start| start <= start_char)
+                    .saturating_sub(1);
+                let end_line = line_starts.partition_point(|&start| start < end_char);
+                (start_line < end_line).then_some(start_line..end_line)
+            })
+            .collect()
     }
 
     fn final_trailing_newline_cursor(styles: &RichTextStyles) -> BlockItem {
@@ -2676,29 +2856,25 @@ impl RenderState {
                 }
             }
             LayoutAction::LayoutTemporaryBlock(blocks) => {
-                // CharCell mode skips font layout for temporary blocks.
+                // Temporary blocks are interleaved deleted/replaced lines in diff
+                // views (only created by `CodeEditorModel::refresh_diff_state`).
                 //
-                // Temporary blocks represent interleaved deleted/replaced lines in diff
-                // views (only created by `CodeEditorModel::refresh_diff_state` for code
-                // review). They are not needed for M1 (basic TUI text input).
-                //
-                // TODO(TUI-diff): When a TUI diff/code-review view is built, add:
-                //   `temporary_blocks: Vec<CharCellTemporaryBlock>` to `CharCellState`
-                //   with fields: `{ content: String, insert_before: LineCount,
-                //   line_decoration: Option<ColorU>, inline_decorations: Vec<(Range<usize>, ColorU)> }`.
-                //   Populate it here instead of no-op'ing. The `TuiInputView` render loop
-                //   then merges them as extra `TuiText` rows with `Style::bg(color)`,
-                //   interleaved at their `insert_before` line positions. No SumTree or
-                //   font-shaping changes needed — the GUI path is unaffected.
-                if matches!(self.layout_mode, LayoutMode::CharCell(_)) {
-                    ctx.emit(RenderEvent::LayoutUpdated);
-                    ctx.notify();
-                    return;
-                }
-
-                // If we are performing layout lazily, push the temporary blocks to the pending edits queue which is flushed
-                // at editor element layout time
-                if self.lazy_layout {
+                // CharCell mode skips font layout: the blocks are stored on
+                // `CharCellState` (flattened to plain colors) for the display-row
+                // projection to interleave at their `insert_before` positions.
+                // No early return: the outstanding-layouts bookkeeping below the
+                // match must run for every action.
+                if let LayoutMode::CharCell(char_cell) = &self.layout_mode {
+                    char_cell.set_temporary_blocks(
+                        blocks
+                            .into_iter()
+                            .map(CharCellTemporaryBlock::from)
+                            .collect(),
+                    );
+                } else if self.lazy_layout {
+                    // If we are performing layout lazily, push the temporary
+                    // blocks to the pending edits queue which is flushed at
+                    // editor element layout time.
                     self.pending_edits
                         .lock()
                         .push(PendingLayout::TemporaryBlocks(blocks));
@@ -5255,7 +5431,11 @@ fn char_cell_line_rows(char_widths: &[u8], terminal_width: u16) -> u32 {
 
 /// The `\n`-free slice of per-char display widths for logical line `i`, given
 /// the line-start indices and the full per-char width buffer.
-fn char_cell_logical_line<'a>(line_starts: &[usize], char_widths: &'a [u8], i: usize) -> &'a [u8] {
+pub(crate) fn char_cell_logical_line<'a>(
+    line_starts: &[usize],
+    char_widths: &'a [u8],
+    i: usize,
+) -> &'a [u8] {
     let start = line_starts[i].min(char_widths.len());
     // The next line starts just after this line's '\n'; exclude that newline.
     let end = line_starts

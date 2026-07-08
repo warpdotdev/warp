@@ -371,10 +371,16 @@ impl CodeEditorModel {
             false, // lazy_layout_enabled: no lazy layout in TUI
             true,  // lazy_layout_initialized: no lazy layout in TUI
             ctx,
-            |_hidden_lines, ctx| {
+            |hidden_lines, ctx| {
+                let hidden_lines = hidden_lines.clone();
                 // CharCell layout never consults `RichTextStyles`, so pass a stub.
                 ctx.add_model(|ctx| {
-                    RenderState::new_tui(terminal_width, Self::tui_stub_text_styles(), ctx)
+                    RenderState::new_tui(
+                        terminal_width,
+                        Self::tui_stub_text_styles(),
+                        Some(hidden_lines),
+                        ctx,
+                    )
                 })
             },
         )
@@ -387,7 +393,7 @@ impl CodeEditorModel {
     /// and event subscriptions are identical and wired up here.
     ///
     /// `build_render_state` receives the freshly-created `hidden_lines` handle so
-    /// the GUI path can attach it; the TUI path ignores it.
+    /// both paths can attach it to their `RenderState`.
     fn from_content(
         content: ModelHandle<Buffer>,
         show_current_line_highlights: bool,

@@ -1714,3 +1714,61 @@ mod char_cell {
         assert_eq!(char_cell_line_row_starts(&widths, 0), vec![0]);
     }
 }
+
+mod char_cell_temporary_blocks {
+    use string_offset::CharOffset;
+    use warp_core::ui::theme::Fill as ThemeFill;
+    use warpui_core::color::ColorU;
+
+    use crate::content::edit::TemporaryBlock;
+    use crate::render::model::{CharCellState, CharCellTemporaryBlock, Decoration, LineCount};
+
+    fn block(content: &str, insert_before: usize) -> TemporaryBlock {
+        TemporaryBlock {
+            content: content.to_string(),
+            insert_before: LineCount(insert_before),
+            line_decoration: None,
+            inline_text_decorations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn conversion_flattens_fills_to_solid_colors() {
+        let red = ColorU::new(255, 0, 0, 255);
+        let blue = ColorU::new(0, 0, 255, 255);
+        let converted = CharCellTemporaryBlock::from(TemporaryBlock {
+            line_decoration: Some(ThemeFill::Solid(red)),
+            inline_text_decorations: vec![
+                Decoration::new(CharOffset::from(1), CharOffset::from(3))
+                    .with_background(ThemeFill::Solid(blue)),
+                // No background → nothing a fg/bg terminal cell can render; dropped.
+                Decoration::new(CharOffset::from(4), CharOffset::from(5)),
+            ],
+            ..block("removed line", 7)
+        });
+
+        assert_eq!(converted.content, "removed line");
+        assert_eq!(converted.insert_before, LineCount(7));
+        assert_eq!(converted.line_decoration, Some(red));
+        assert_eq!(converted.inline_decorations, vec![(1..3, blue)]);
+    }
+
+    #[test]
+    fn set_temporary_blocks_replaces_wholesale() {
+        let state = CharCellState::new(80);
+        assert!(state.temporary_blocks().is_empty());
+
+        state.set_temporary_blocks(vec![
+            CharCellTemporaryBlock::from(block("one", 1)),
+            CharCellTemporaryBlock::from(block("two", 2)),
+        ]);
+        assert_eq!(state.temporary_blocks().len(), 2);
+
+        // A subsequent diff refresh replaces the whole set; stale ghosts never linger.
+        state.set_temporary_blocks(vec![CharCellTemporaryBlock::from(block("three", 3))]);
+        let blocks = state.temporary_blocks();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].content, "three");
+        assert_eq!(blocks[0].insert_before, LineCount(3));
+    }
+}

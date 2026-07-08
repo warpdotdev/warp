@@ -18,6 +18,7 @@ mod tui_builder;
 mod ui;
 
 mod conversation_selection;
+mod editor_element;
 mod exit_confirmation;
 mod input_mode_policy;
 mod keybindings;

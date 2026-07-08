@@ -22,7 +22,8 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::platform::WindowStyle;
 use warpui_core::{AddWindowOptions, App, AppContext, TuiView, TypedActionView, ViewHandle};
 
-use super::{TuiInputAction, TuiInputElement, TuiInputView, SHELL_MODE_INPUT_FLAG};
+use super::{TuiInputAction, TuiInputView, SHELL_MODE_INPUT_FLAG};
+use crate::editor_element::TuiEditorElement;
 use crate::input_mode_policy::TuiInputModePolicy;
 
 const W: u16 = 80;
@@ -486,13 +487,13 @@ fn type_lines(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, n: usize) {
 
 /// Builds + lays out the view's concrete element at width `W` (height capped
 /// by the view), returning the element and the area it occupies. Built via
-/// [`TuiInputElement::new`] (the same constructor `render_input` boxes) so
-/// tests can drive the element's inherent `mouse_action` mapping.
+/// `render_element` (the same element `render_input` boxes) so tests can
+/// drive the element's `mouse_action` mapping.
 fn laid_out_element(
     view: &ViewHandle<TuiInputView>,
     ctx: &AppContext,
-) -> (TuiInputElement, TuiRect) {
-    let mut element = TuiInputElement::new(view.as_ref(ctx), ctx);
+) -> (TuiEditorElement, TuiRect) {
+    let mut element = view.as_ref(ctx).render_element(ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -502,8 +503,8 @@ fn laid_out_element(
 }
 
 /// Drives the full mouse path for `event`: lay out the element, map the event to
-/// its [`TuiInputAction`], and apply that action to the view. Returns whether an
-/// action fired (i.e. the event was not ignored).
+/// its editor action, and apply the corresponding [`TuiInputAction`] to the view.
+/// Returns whether an action fired (i.e. the event was not ignored).
 fn mouse(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, event: &TuiEvent) -> bool {
     let action = {
         let (element, area) = laid_out_element(view, ctx);
@@ -511,7 +512,7 @@ fn mouse(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, event: &TuiEvent
     };
     match action {
         Some(action) => {
-            dispatch(view, ctx, &[action]);
+            dispatch(view, ctx, &[TuiInputAction::from(action)]);
             true
         }
         None => false,
@@ -848,8 +849,8 @@ fn laid_out_shell_row(
 fn laid_out_shell_content_slot(
     view: &ViewHandle<TuiInputView>,
     ctx: &AppContext,
-) -> (TuiInputElement, TuiRect) {
-    let mut element = TuiInputElement::new(view.as_ref(ctx), ctx);
+) -> (TuiEditorElement, TuiRect) {
+    let mut element = view.as_ref(ctx).render_element(ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -888,7 +889,9 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             type_str(&view, ctx, "hello world");
             let action = {
                 let (element, area) = laid_out_shell_content_slot(&view, ctx);
-                element.mouse_action(&left_down(2 + 3, 0, 1, false), area, ctx)
+                element
+                    .mouse_action(&left_down(2 + 3, 0, 1, false), area, ctx)
+                    .map(TuiInputAction::from)
             };
             let Some(TuiInputAction::SelectionStartAt { offset }) = action else {
                 panic!("expected SelectionStartAt, got {action:?}");
