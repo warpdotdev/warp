@@ -138,6 +138,9 @@ pub(crate) struct Props<'a> {
     pub(super) action_buttons: &'a HashMap<AIAgentActionId, ActionButtons>,
     pub(super) view_screenshot_buttons: &'a HashMap<AIAgentActionId, ui_components::button::Button>,
     pub(super) open_recording_buttons: &'a HashMap<AIAgentActionId, ui_components::button::Button>,
+    /// Whether this block's output contains recording-related actions, so
+    /// rendering can skip deriving recording spans for unrelated blocks.
+    pub(super) has_recording_related_actions: bool,
     pub(crate) action_model: &'a ModelHandle<BlocklistAIActionModel>,
     pub(crate) active_session: &'a ModelHandle<ActiveSession>,
     pub(super) editor_views: &'a [EmbeddedCodeEditorView],
@@ -202,6 +205,9 @@ pub(crate) struct Props<'a> {
     pub(super) is_cloud_agent_pre_first_exchange: bool,
 }
 
+/// A `UseComputer` call with no actions is a screenshot-only capture rather
+/// than a user-visible interaction, so it shouldn't be labeled as captured in
+/// a recording.
 fn should_decorate_recorded_use_computer(request: &UseComputerRequest) -> bool {
     !request.actions.is_empty()
 }
@@ -243,14 +249,22 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
         | AIBlockOutputStatus::Failed { .. } => {
             if let Some(output) = status.output_to_render() {
                 let output = output.get();
-                let recording_spans_by_action_id = props
-                    .model
-                    .conversation(app)
-                    .map(|conversation| {
-                        conversation
-                            .recording_spans_by_action_id(Some(props.action_model.as_ref(app)))
-                    })
-                    .unwrap_or_default();
+                // TODO(vkodithala): Blocks with recording-related actions still
+                // recompute this conversation-wide map on every render. Cache
+                // spans on BlocklistAIActionModel keyed by conversation and
+                // refresh on action/result mutations instead.
+                let recording_spans_by_action_id = if props.has_recording_related_actions {
+                    props
+                        .model
+                        .conversation(app)
+                        .map(|conversation| {
+                            conversation
+                                .recording_spans_by_action_id(Some(props.action_model.as_ref(app)))
+                        })
+                        .unwrap_or_default()
+                } else {
+                    HashMap::new()
+                };
                 let is_complete = matches!(status, AIBlockOutputStatus::Complete { .. });
                 let is_output_for_static_prompt_suggestions =
                     props.model.contains_static_prompt_suggestion_input(app);
@@ -1867,7 +1881,9 @@ fn render_read_skill(
     renderable_action.render(app).finish()
 }
 
-fn render_small_secondary_action_button(
+/// Renders the small secondary button placed on the trailing edge of a
+/// [`RenderableAction`] row (e.g. "View screenshot", "Open recording").
+fn render_inline_action_secondary_button(
     appearance: &Appearance,
     button: &ui_components::button::Button,
     label: &'static str,
@@ -2917,7 +2933,7 @@ fn render_upload_artifact(
     renderable_action.render(app).finish()
 }
 fn recording_summary(props: Props, app: &AppContext) -> String {
-    // TODO: Replace conversation.title() with StartRecording's agent-supplied description once available.
+    // TODO(vkodithala): Replace conversation.title() with StartRecording's agent-supplied description once available.
     props
         .model
         .conversation(app)
@@ -2966,7 +2982,7 @@ fn stop_recording_card_text(result: Option<&StopRecordingResult>) -> RecordingCa
             ) {
                 duration
             } else {
-                // TODO: Switch to typed, user-facing termination copy once finalization emits structured reasons.
+                // TODO(vkodithala): Switch to typed, user-facing termination copy once finalization emits structured reasons.
                 format!("Partial recording • {duration}")
             };
             RecordingCardText {
@@ -3096,7 +3112,7 @@ fn render_stop_recording(
         if !stopped.artifact_uid.trim().is_empty() {
             let artifact_uid = stopped.artifact_uid.clone();
             action_button = props.open_recording_buttons.get(action_id).map(|btn| {
-                render_small_secondary_action_button(
+                render_inline_action_secondary_button(
                     appearance,
                     btn,
                     "Open recording",
@@ -3149,7 +3165,7 @@ fn render_use_computer(
     if has_screenshot {
         let action_id_clone = action_id.clone();
         let view_screenshot_button = props.view_screenshot_buttons.get(action_id).map(|btn| {
-            render_small_secondary_action_button(
+            render_inline_action_secondary_button(
                 appearance,
                 btn,
                 "View screenshot",

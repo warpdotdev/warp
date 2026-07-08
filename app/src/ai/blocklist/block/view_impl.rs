@@ -1084,6 +1084,7 @@ impl View for AIBlock {
                 action_buttons: &self.action_buttons,
                 view_screenshot_buttons: &self.view_screenshot_buttons,
                 open_recording_buttons: &self.open_recording_buttons,
+                has_recording_related_actions: self.has_recording_related_actions,
                 action_model: &self.action_model,
                 active_session: &self.active_session,
                 editor_views: &self.code_editor_views,

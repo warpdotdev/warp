@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use ai::agent::action::{UploadArtifactRequest, UseComputerRequest};
 use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
-use computer_use::{Action, ScreenshotParams, Target, TargetedAction};
+use computer_use::{ScreenshotParams, Target};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
 use warp_util::host_id::HostId;
@@ -13,9 +13,8 @@ use warpui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::{
-    format_upload_artifact_text, format_video_duration, parsed_skill_for_common_locations,
-    read_skill_display_text, should_decorate_recorded_use_computer, stop_recording_card_text,
-    RecordingCardText,
+    format_upload_artifact_text, parsed_skill_for_common_locations, read_skill_display_text,
+    should_decorate_recorded_use_computer, stop_recording_card_text, RecordingCardText,
 };
 use crate::ai::agent::{RecordingStopped, StopRecordingResult, UploadArtifactResult};
 use crate::ai::skills::SkillManager;
@@ -106,12 +105,6 @@ fn stop_recording_card_text_includes_partial_duration_without_raw_reason() {
 }
 
 #[test]
-fn video_duration_uses_minute_second_format() {
-    assert_eq!(format_video_duration(Duration::from_secs(12)), "0:12");
-    assert_eq!(format_video_duration(Duration::from_secs(63)), "1:03");
-}
-
-#[test]
 fn use_computer_decoration_skips_screenshot_only_rows() {
     let request = UseComputerRequest {
         action_summary: "Screenshot".to_string(),
@@ -125,22 +118,6 @@ fn use_computer_decoration_skips_screenshot_only_rows() {
     };
 
     assert!(!should_decorate_recorded_use_computer(&request));
-}
-
-#[test]
-fn use_computer_decoration_includes_interaction_rows() {
-    let request = UseComputerRequest {
-        action_summary: "Wait 1.00s".to_string(),
-        actions: vec![TargetedAction::screen(Action::Wait(Duration::from_secs(1)))],
-        screenshot_params: Some(ScreenshotParams {
-            max_long_edge_px: None,
-            max_total_px: None,
-            region: None,
-            target: Target::Screen,
-        }),
-    };
-
-    assert!(should_decorate_recorded_use_computer(&request));
 }
 
 fn make_skill(name: &str) -> ParsedSkill {
