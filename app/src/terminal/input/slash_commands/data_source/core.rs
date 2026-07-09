@@ -248,19 +248,6 @@ pub trait SlashCommandDataSource {
         availability
     }
 
-    /// View-related availability bits given whether the agent view is active. When the AgentView
-    /// feature flag is disabled, both bits are set so either requirement is satisfied (other
-    /// requirements like REPOSITORY and LOCAL still apply).
-    fn view_availability(&self, is_agent_view_active: bool) -> Availability {
-        if !FeatureFlag::AgentView.is_enabled() {
-            Availability::AGENT_VIEW | Availability::TERMINAL_VIEW
-        } else if is_agent_view_active {
-            Availability::AGENT_VIEW
-        } else {
-            Availability::TERMINAL_VIEW
-        }
-    }
-
     /// Whether a command should be shown given the availability set and the shared gates.
     fn command_passes_common_gates(
         &self,

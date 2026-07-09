@@ -80,7 +80,7 @@ impl TuiSlashCommandDataSource {
 
     fn availability(&self, ctx: &AppContext) -> Availability {
         self.base_availability(ctx)
-            | self.view_availability(true)
+            | Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
             | Availability::NOT_CLOUD_AGENT
     }

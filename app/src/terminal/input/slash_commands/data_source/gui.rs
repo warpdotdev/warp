@@ -178,7 +178,7 @@ impl GuiSlashCommandDataSource {
     fn availability(&self, ctx: &AppContext) -> Availability {
         let is_agent_view_active = self.is_agent_view_active(ctx);
         let mut availability =
-            self.base_availability(ctx) | self.view_availability(is_agent_view_active);
+            self.base_availability(ctx) | Self::view_availability(is_agent_view_active);
 
         if self.has_active_conversation(is_agent_view_active, ctx) {
             availability |= Availability::ACTIVE_CONVERSATION;
@@ -195,6 +195,19 @@ impl GuiSlashCommandDataSource {
         }
 
         availability
+    }
+
+    /// View-related availability bits for the GUI's legacy terminal-view and agent-view
+    /// modalities. When the AgentView feature flag is disabled, both bits are set so either
+    /// requirement is satisfied.
+    fn view_availability(is_agent_view_active: bool) -> Availability {
+        if !FeatureFlag::AgentView.is_enabled() {
+            Availability::AGENT_VIEW | Availability::TERMINAL_VIEW
+        } else if is_agent_view_active {
+            Availability::AGENT_VIEW
+        } else {
+            Availability::TERMINAL_VIEW
+        }
     }
 
     fn command_passes_gui_gates(
