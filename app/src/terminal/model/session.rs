@@ -64,6 +64,25 @@ pub enum ReadHistoryContentsError {
     AsyncFsError(std::io::Error),
 }
 
+impl ReadHistoryContentsError {
+    /// Whether this error was already reported to Sentry where it originated, so the read sink in
+    /// `read_history_for_local_session` must not report it again. PowerShell read failures are
+    /// reported in `read_powershell_history_contents`.
+    fn reported_at_origin(&self) -> bool {
+        #[cfg(windows)]
+        {
+            matches!(
+                self,
+                Self::PowerShellError(_) | Self::PowerShellAndAsyncFsError { .. }
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+}
+
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
 pub use warp_core::SessionId;
 
@@ -1376,8 +1395,13 @@ impl Session {
                 {
                     Ok(contents) => contents,
                     Err(e) => {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Failed to read history contents for file"));
+                        // Skip errors already reported at their origin (PowerShell read failures
+                        // are reported in `read_powershell_history_contents`) so we don't
+                        // double-report them here.
+                        if !e.reported_at_origin() {
+                            report_error!(anyhow::Error::new(e)
+                                .context("Failed to read history contents for file"));
+                        }
                         continue;
                     }
                 };
@@ -1429,6 +1453,16 @@ impl Session {
             Err(e) => e,
         };
 
+        // The PowerShell read failed. Report it here, at the origin, so we get a clean signal on
+        // how reliable reading history via PowerShell is — regardless of whether the `async_fs`
+        // fallback below recovers. The detailed error rides along as a Sentry breadcrumb via
+        // `log::error!`, which keeps the `report_error!` message a stable, static grouping key for
+        // the event. The error variants that carry this failure onward are skipped by the read
+        // sink (see `ReadHistoryContentsError::reported_at_origin`) so we don't double-report. If
+        // this turns out to be noisy, we can remove it.
+        log::error!("Failed to read history using PowerShell commands: {powershell_error:?}");
+        report_error!("Failed to read history using PowerShell commands");
+
         // If Kaspersky is running, early return since we can't use [`async_fs`] to read the history
         // file.
         if is_kaspersky_running {
@@ -1437,17 +1471,7 @@ impl Session {
 
         // Otherwise, fall back to using [`async_fs`] to read the history file.
         match async_fs::read(history_file).await {
-            Ok(contents) => {
-                // Report this so we have some data on whether running PowerShell commands is a
-                // reliable way to read history. If this turns out to be noisy, we can remove it.
-                // The detailed error rides along as a Sentry breadcrumb via `log::error!`, which
-                // keeps the `report_error!` message a stable, static grouping key for the event.
-                log::error!(
-                    "Failed to read history using PowerShell commands: {powershell_error:?}"
-                );
-                report_error!("Failed to read history using PowerShell commands");
-                Ok(contents)
-            }
+            Ok(contents) => Ok(contents),
             Err(e) => Err(ReadHistoryContentsError::PowerShellAndAsyncFsError {
                 powershell_error,
                 async_fs_error: e,
