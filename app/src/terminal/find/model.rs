@@ -89,7 +89,8 @@ impl<'a> BlockFindRenderData<'a> {
             })
             .unwrap_or_default();
 
-        // Convert output grid matches.
+        // Convert output grid matches, skipping any hidden by an active block
+        // filter so highlights match the (filtered) visible content.
         let output_matches = output_grid
             .and_then(|grid| {
                 controller
@@ -97,6 +98,7 @@ impl<'a> BlockFindRenderData<'a> {
                     .map(|matches| {
                         matches
                             .iter()
+                            .filter(|m| !m.is_filtered)
                             .filter_map(|m| m.to_range(grid))
                             .collect::<Vec<_>>()
                     })
@@ -602,8 +604,13 @@ impl TerminalFindModel {
         block_index: BlockIndex,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Async find handles block invalidation differently via invalidate_block().
-        if self.async_find_controller.is_some() {
+        // On the async path, recompute which matches are hidden by the
+        // (already-applied) block filter and treat filtered rows as if they do
+        // not exist for search — mirroring the sync path below. This keeps the
+        // match count, focus traversal, and highlights consistent with sync.
+        if let Some(controller) = self.async_find_controller.as_mut() {
+            controller.recompute_filtered_for_block(block_index);
+            ctx.emit(FindEvent::RanFind);
             return;
         }
 
