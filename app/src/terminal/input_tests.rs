@@ -22,7 +22,6 @@ use warp_completer::completer::{
 use warp_completer::meta::Span;
 use warp_util::user_input::UserInput;
 use warpui::platform::WindowStyle;
-use warpui::r#async::Timer;
 use warpui::text::SelectionType;
 use warpui::{App, ReadModel, UpdateView, WindowId};
 use watcher::HomeDirectoryWatcher;
