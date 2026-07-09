@@ -8855,6 +8855,21 @@ impl SettingsWidget for ApiKeysWidget {
                 show_custom_inference,
                 app,
             ));
+        } else if managed_byok_byoe_enabled {
+            column.add_child(
+                build_sub_header(
+                    appearance,
+                    "Custom Inference",
+                    Some(styles::header_font_color(is_any_ai_enabled, app)),
+                )
+                .with_padding_bottom(HEADER_PADDING)
+                .finish(),
+            );
+            column.add_child(render_ai_setting_description(
+                "Your organization manages custom inference. Personal API keys and custom endpoints are currently unavailable.",
+                is_any_ai_enabled,
+                app,
+            ));
         } else {
             // Fallback: old "API Keys" header only
             column.add_child(
