@@ -653,16 +653,21 @@ impl TypedActionView for AppearanceSettingsPageView {
                 CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.show_project_explorer.toggle_and_save_value(ctx));
                 });
+                // The Appearance page does not subscribe to these settings
+                // groups, so notify explicitly to refresh the switch state.
+                ctx.notify();
             }
             ToggleToolsPanelGlobalSearch => {
                 CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.show_global_search.toggle_and_save_value(ctx));
                 });
+                ctx.notify();
             }
             ToggleToolsPanelWarpDrive => {
                 WarpDriveSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.enable_warp_drive.toggle_and_save_value(ctx));
                 });
+                ctx.notify();
             }
             ToggleToolsPanelConversationHistory => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -670,6 +675,7 @@ impl TypedActionView for AppearanceSettingsPageView {
                         .show_conversation_history
                         .toggle_and_save_value(ctx));
                 });
+                ctx.notify();
             }
             SetInputMode {
                 new_mode,
