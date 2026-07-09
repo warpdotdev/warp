@@ -65,6 +65,25 @@ pub fn create_actor() -> Box<dyn Actor> {
 /// Returns whether background, per-window control (driving a specific window without raising it
 /// or moving the cursor) is available on this client and OS. When false, callers should target
 /// the whole screen / frontmost application.
+///
+/// How faithfully "background" holds varies by platform:
+///
+/// - macOS: events are posted directly to the owning process (`CGEventPostToPid`), so a window
+///   can be driven even while fully covered, and nothing user-visible changes.
+/// - Linux X11: events come from a dedicated second input seat (an XInput2/MPX master pair), so
+///   the user's cursor, keyboard focus, and modifier state are untouched and applications see
+///   real (non-synthetic) input. The trade-offs, inherent to X11's position-routed event
+///   delivery, are:
+///   - Pointer actions land on the topmost window at the target point. If the target window is
+///     covered there, the actor first raises it *without* taking the user's focus; the action
+///     fails if the raise does not take effect. Keyboard input needs no raise: it follows the
+///     agent seat's own focus even while the window is covered.
+///   - A second visible cursor appears on screen while window-targeted actions run.
+///   - Under a click-to-focus window manager, the WM itself may react to an agent click by
+///     focusing/raising the target for the user too. WM-less servers (e.g. Xvfb in cloud
+///     environments) have no such side effect.
+/// - Linux Wayland and Windows: unsupported (this returns false); only whole-screen control is
+///   available.
 pub fn background_supported() -> bool {
     if cfg!(feature = "test-util") {
         noop::background_supported()
@@ -76,17 +95,18 @@ pub fn background_supported() -> bool {
 /// Enumerates the on-screen windows, returning their metadata so a caller can pick one to
 /// target. Returns an empty list on platforms where window enumeration is unsupported.
 pub fn enumerate_windows() -> Vec<WindowInfo> {
-    #[cfg(macos)]
+    #[cfg(any(macos, linux))]
     {
         imp::enumerate_windows()
     }
-    #[cfg(not(macos))]
+    #[cfg(not(any(macos, linux)))]
     {
         Vec::new()
     }
 }
 
-/// Experimental: lists on-screen windows as a formatted diagnostic string. macOS only.
+/// Experimental: lists on-screen windows as a formatted diagnostic string. macOS and Linux
+/// (X11) only.
 ///
 /// Unlike [`enumerate_windows`], which returns slim [`WindowInfo`] records for window selection
 /// and wire serialization, this function returns richer data including window bounds, formatted
@@ -98,17 +118,27 @@ pub fn experimental_list_windows() -> Result<String, String> {
     Ok(imp::list_windows())
 }
 
-/// Experimental: lists on-screen windows. Unsupported on this platform.
-#[cfg(not(macos))]
+/// Experimental: lists on-screen windows as a formatted diagnostic string. macOS and Linux
+/// (X11) only.
+#[cfg(linux)]
 pub fn experimental_list_windows() -> Result<String, String> {
-    Err("Window listing is only supported on macOS.".to_string())
+    imp::list_windows()
+}
+
+/// Experimental: lists on-screen windows. Unsupported on this platform.
+#[cfg(not(any(macos, linux)))]
+pub fn experimental_list_windows() -> Result<String, String> {
+    Err("Window listing is only supported on macOS and Linux (X11).".to_string())
 }
 
 /// The surface that a computer-use action or screenshot targets.
 ///
 /// `Screen` reproduces the legacy behavior of acting on the whole screen / frontmost
 /// application. `Window` drives a specific background window of a specific process without
-/// raising it or moving the global cursor.
+/// moving the global cursor or taking the user's keyboard focus. On macOS the window is never
+/// raised; on Linux X11 pointer events are routed by screen position, so a window that is
+/// covered at the action point is raised (without focus) before clicks and scrolls — see
+/// [`background_supported`] for the full per-platform semantics.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Target {
     /// Target the whole screen / frontmost application (legacy behavior).
@@ -116,12 +146,13 @@ pub enum Target {
     Screen,
     /// Target a specific background window of a specific process.
     Window {
-        /// The platform window id (a `CGWindowID` on macOS). Must be a concrete, non-zero id
-        /// selected from the enumerated window list. `0` is the "unknown" sentinel and is
-        /// rejected by the actor, since coordinate remapping and window capture both require a
-        /// known window.
+        /// The platform window id (a `CGWindowID` on macOS, an X window id on Linux X11). Must
+        /// be a concrete, non-zero id selected from the enumerated window list. `0` is the
+        /// "unknown" sentinel and is rejected by the actor, since coordinate remapping and
+        /// window capture both require a known window.
         window_id: u32,
-        /// The pid of the process that owns the window.
+        /// The pid of the process that owns the window. Used for event delivery on macOS;
+        /// informational on Linux X11, where events are addressed by window id.
         pid: i32,
     },
 }
@@ -151,7 +182,7 @@ impl TargetedAction {
 /// Mirrors the fields of the `WindowInfo` API message.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WindowInfo {
-    /// The platform window id (a `CGWindowID` on macOS).
+    /// The platform window id (a `CGWindowID` on macOS, an X window id on Linux X11).
     pub window_id: u32,
     /// The pid of the process that owns the window.
     pub pid: i32,

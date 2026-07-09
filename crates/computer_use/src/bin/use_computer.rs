@@ -12,14 +12,16 @@ use computer_use::{
 #[command(name = "use_computer")]
 #[command(about = "Manually test computer use actions")]
 struct Cli {
-    /// Experimental (macOS only): target a specific background window/process instead of the
-    /// screen. Deliver events directly to this process ID (and `--window-id`, if given) without
-    /// moving the real cursor or raising the window.
+    /// Experimental (macOS and Linux X11): target a specific background window/process instead
+    /// of the screen, without moving the real cursor. On macOS events are delivered to this
+    /// process ID; on Linux X11 delivery is addressed by `--window-id` and the pid is
+    /// informational.
     #[arg(long, global = true)]
     pid: Option<i32>,
 
-    /// Experimental (macOS only): the CGWindowID of the window to target. Required when `--pid`
-    /// is given. Use the `windows` subcommand to list window ids.
+    /// Experimental (macOS and Linux X11): the platform window id to target (a CGWindowID on
+    /// macOS, an X window id on Linux). Required when `--pid` is given. Use the `windows`
+    /// subcommand to list window ids.
     #[arg(long, global = true)]
     window_id: Option<u32>,
 
@@ -73,8 +75,8 @@ enum Command {
         /// The key to press. Can be a single character (e.g., "a") or a keycode (e.g., "0x24" for Return on macOS).
         key: String,
     },
-    /// Experimental (macOS only): list on-screen windows with their window number, owner PID,
-    /// owner name, layer, and bounds, to help identify the right target PID/window.
+    /// Experimental (macOS and Linux X11): list on-screen windows with their window number,
+    /// owner PID, owner name, and bounds, to help identify the right target PID/window.
     Windows,
 }
 
