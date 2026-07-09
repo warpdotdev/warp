@@ -517,6 +517,7 @@ impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
                 .map(|l| l.max_size_bytes)
                 .filter(|&bytes| bytes > 0)
                 .map(|bytes| bytes as u64),
+            summary: (!value.summary.trim().is_empty()).then_some(value.summary),
         }
     }
 }

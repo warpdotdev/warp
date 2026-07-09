@@ -8,14 +8,13 @@ use strum::IntoEnumIterator;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::AppearanceEvent;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warp_errors::report_error;
 use warpui::elements::{
-    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
-    MainAxisSize, ParentElement, Radius, Text,
+    Align, Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Fill, Flex,
+    FormattedTextElement, HighlightedHyperlink, MainAxisAlignment, MainAxisSize, ParentElement,
+    Text,
 };
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
@@ -161,26 +160,6 @@ impl MCPServersListPageView {
         });
 
         let appearance = Appearance::handle(ctx);
-        ctx.subscribe_to_model(&appearance, move |me, _, event, ctx| {
-            if let AppearanceEvent::ThemeChanged = event {
-                let appearance = Appearance::as_ref(ctx);
-                let search_bar_styles = UiComponentStyles {
-                    background: Some(internal_colors::neutral_2(appearance.theme()).into()),
-                    border_color: Some(internal_colors::neutral_4(appearance.theme()).into()),
-                    border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
-                    padding: Some(Coords {
-                        top: 8.,
-                        bottom: 8.,
-                        left: 12.,
-                        right: 12.,
-                    }),
-                    ..Default::default()
-                };
-                me.search_bar.update(ctx, |search_bar, _| {
-                    search_bar.with_style(search_bar_styles)
-                });
-            }
-        });
 
         let update_modal_body = ctx.add_typed_action_view(UpdateModalBody::new);
         ctx.subscribe_to_view(&update_modal_body, |me, _, event, ctx| {
@@ -206,7 +185,11 @@ impl MCPServersListPageView {
             });
         }
 
-        let search_editor_text = TextOptions::ui_text(None, appearance.as_ref(ctx));
+        // Match the standard settings search fields (e.g. the API keys search): use the UI font
+        // family at the UI font size. Without an explicit size override the editor falls back to the
+        // (larger) monospace size, which made this field render bigger than the others.
+        let ui_font_size = appearance.as_ref(ctx).ui_font_size();
+        let search_editor_text = TextOptions::ui_text(Some(ui_font_size), appearance.as_ref(ctx));
         let search_editor = {
             let options = SingleLineEditorOptions {
                 text: search_editor_text,

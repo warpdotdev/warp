@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use ai::agent::action::{UploadArtifactRequest, UseComputerRequest};
 use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
@@ -14,9 +14,13 @@ use watcher::HomeDirectoryWatcher;
 
 use super::{
     format_upload_artifact_text, parsed_skill_for_common_locations, read_skill_display_text,
-    should_decorate_recorded_use_computer, stop_recording_card_text, RecordingCardText,
+    should_decorate_recorded_use_computer, start_recording_card_text, stop_recording_card_text,
+    RecordingCardText,
 };
-use crate::ai::agent::{RecordingStopped, StopRecordingResult, UploadArtifactResult};
+use crate::ai::agent::{
+    RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
+    UploadArtifactResult,
+};
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -79,6 +83,64 @@ fn format_upload_artifact_text_includes_terminal_status() {
     let cancelled_text =
         format_upload_artifact_text(&request, Some(&UploadArtifactResult::Cancelled));
     assert_eq!(cancelled_text, "Upload artifact: reports/daily.txt");
+}
+
+#[test]
+fn start_recording_card_text_uses_static_title_and_description_subtext() {
+    let result = StartRecordingResult::Success(RecordingStarted {
+        recording_id: "rec-1".to_string(),
+        started_at: SystemTime::UNIX_EPOCH,
+        width_px: 1280,
+        height_px: 720,
+    });
+
+    let text = start_recording_card_text("Demo checkout flow", Some(&result));
+
+    assert_eq!(
+        text,
+        RecordingCardText {
+            primary: "Recording started".to_string(),
+            subtext: Some("Demo checkout flow".to_string()),
+        }
+    );
+}
+
+#[test]
+fn start_recording_card_text_includes_failure_copy() {
+    let result = StartRecordingResult::Error("unsupported platform".to_string());
+
+    let text = start_recording_card_text("Demo checkout flow", Some(&result));
+
+    assert_eq!(
+        text,
+        RecordingCardText {
+            primary: "Recording failed to start".to_string(),
+            subtext: Some("unsupported platform".to_string()),
+        }
+    );
+}
+
+#[test]
+fn stop_recording_card_text_includes_complete_duration() {
+    let result = StopRecordingResult::Success(RecordingStopped {
+        artifact_uid: "artifact-1".to_string(),
+        duration: Duration::from_secs(2),
+        width_px: 1280,
+        height_px: 720,
+        size_bytes: 42,
+        completion_status: computer_use::RecordingCompletionStatus::Completed,
+        termination_reason: "Stopped by agent".to_string(),
+    });
+
+    let text = stop_recording_card_text(Some(&result));
+
+    assert_eq!(
+        text,
+        RecordingCardText {
+            primary: "Recording saved".to_string(),
+            subtext: Some("0:02".to_string()),
+        }
+    );
 }
 
 #[test]
