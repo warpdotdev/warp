@@ -20,7 +20,7 @@ use warpui_core::{AppContext, ViewContext, WindowInvalidation};
 
 use super::TuiTranscriptView;
 use crate::agent_block::TuiAIBlock;
-use crate::test_fixtures::{add_test_action_model, add_test_model_events};
+use crate::test_fixtures::add_test_action_model_and_events;
 
 #[test]
 fn transcript_view_renders_terminal_blocks_from_canonical_order() {
@@ -29,8 +29,7 @@ fn transcript_view_renders_terminal_blocks_from_canonical_order() {
         terminal_model.simulate_block("echo 1", "1\r\n");
         let terminal_model = Arc::new(FairMutex::new(terminal_model));
         let model_for_view = terminal_model.clone();
-        let action_model = add_test_action_model(&mut app);
-        let model_events = add_test_model_events(&mut app);
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
         let (_, transcript) = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {
@@ -113,8 +112,7 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
     App::test((), |mut app| async move {
         let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
         let model_for_view = terminal_model.clone();
-        let action_model = add_test_action_model(&mut app);
-        let model_events = add_test_model_events(&mut app);
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
         let (_, transcript) = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {
@@ -193,8 +191,7 @@ fn transcript_view_scrolls_only_with_the_mouse_wheel() {
         }
         let terminal_model = Arc::new(FairMutex::new(terminal_model));
         let model_for_view = terminal_model.clone();
-        let action_model = add_test_action_model(&mut app);
-        let model_events = add_test_model_events(&mut app);
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
         let (_, transcript) = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {
@@ -247,8 +244,7 @@ fn presenter_draw_resolves_agent_blocks_from_cached_elements() {
         app.add_singleton_model(|_| Appearance::mock());
         let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
         let model_for_view = terminal_model.clone();
-        let action_model = add_test_action_model(&mut app);
-        let model_events = add_test_model_events(&mut app);
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
         let (window_id, transcript) = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {
@@ -305,6 +301,7 @@ fn insert_test_agent_block(
 ) -> EntityId {
     transcript.update(app, |view, ctx| {
         let action_model = view.action_model.clone();
+        let model_events = view.model_events.clone();
         let terminal_model = view.model.clone();
         let agent_block = ctx.add_tui_view(|ctx| {
             TuiAIBlock::new(
@@ -312,6 +309,7 @@ fn insert_test_agent_block(
                 exchange_id,
                 Rc::new(FakeAgentBlockModel { inputs }),
                 action_model,
+                &model_events,
                 terminal_model,
                 ctx,
             )

@@ -25,7 +25,7 @@ use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext, ViewHandl
 
 use super::{TuiAIBlock, TuiAIBlockSection};
 use crate::agent_block_sections::render_fallback_tool_call_section;
-use crate::test_fixtures::{add_test_action_model, TestHostView};
+use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
@@ -623,7 +623,7 @@ struct FakeAgentBlockModel {
 /// Builds an agent block with fresh test identity, registered in a fresh TUI
 /// window and backed by a real action model.
 fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<TuiAIBlock> {
-    let action_model = add_test_action_model(app);
+    let (action_model, model_events) = add_test_action_model_and_events(app);
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
@@ -639,6 +639,7 @@ fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<Tui
                 AIAgentExchangeId::new(),
                 Rc::new(model),
                 action_model,
+                &model_events,
                 terminal_model,
                 ctx,
             )

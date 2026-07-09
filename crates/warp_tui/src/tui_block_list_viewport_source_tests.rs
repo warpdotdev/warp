@@ -20,7 +20,7 @@ use warpui_core::{App, AppContext, TuiView, ViewContext};
 use super::{AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource};
 use crate::agent_block::TuiAIBlock;
 use crate::terminal_block::should_render_terminal_block;
-use crate::test_fixtures::{add_test_action_model, TestHostView};
+use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
 
 #[test]
 fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
@@ -260,7 +260,7 @@ fn measured_height(app: &App, agent_block: &ViewHandle<TuiAIBlock>) -> f64 {
 /// window and returns its handle.
 fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
     let query = query.to_owned();
-    let action_model = add_test_action_model(app);
+    let (action_model, model_events) = add_test_action_model_and_events(app);
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
@@ -278,6 +278,7 @@ fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
                     inputs: vec![query_input(&query)],
                 }),
                 action_model,
+                &model_events,
                 terminal_model,
                 ctx,
             )
