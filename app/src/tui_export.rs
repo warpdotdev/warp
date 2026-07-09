@@ -46,8 +46,12 @@ pub use crate::ai::blocklist::{
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
+pub use crate::ai::skills::SkillManager;
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
+pub use crate::changelog_model::{
+    ChangelogModel, ChangelogRequestType, ChangelogState, Event as ChangelogModelEvent,
+};
 pub use crate::code::DiffResult;
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};

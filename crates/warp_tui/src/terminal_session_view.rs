@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
@@ -11,12 +12,12 @@ use warp::tui_export::{
     detect_possible_git_repo, throttle, AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent,
     AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, CommandExecutionSource,
-    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
-    ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent,
-    ModelEvent, PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
-    ShellCommandExecutorEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
-    WAKEUP_THROTTLE_PERIOD,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, ChangelogModel,
+    ChangelogModelEvent, ChangelogRequestType, CommandExecutionSource, ConversationSelection,
+    ConversationSelectionHandle, ConversationUsageTotals, ExecuteCommandEvent,
+    GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
+    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit, WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
@@ -44,6 +45,7 @@ use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 use crate::usage::UsageToggle;
 use crate::warping_indicator::render_warping_indicator;
+use crate::zero_state::render_zero_state;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
@@ -234,6 +236,29 @@ impl TuiTerminalSessionView {
             |view, _, event, ctx| view.handle_history_event(event, ctx),
         );
         ctx.subscribe_to_model(&conversation_selection, |_, _, _, ctx| ctx.notify());
+
+        // The zero state's "What's new" section: fetch the changelog once at
+        // startup and re-render when it arrives. The model no-ops when a
+        // changelog is already cached; the other changelog events (request
+        // failed, image fetched) don't change what the zero state renders.
+        ChangelogModel::handle(ctx).update(ctx, |changelog, ctx| {
+            changelog.check_for_changelog(ChangelogRequestType::WindowLaunch, ctx);
+        });
+        ctx.subscribe_to_model(&ChangelogModel::handle(ctx), |_, _, event, ctx| {
+            if let ChangelogModelEvent::ChangelogRequestComplete { .. } = event {
+                ctx.notify();
+            }
+        });
+        // The zero state's project section: rules/skills discovery is
+        // asynchronous, so re-render as indexed results land. `PathIndexed`
+        // accompanies every project-rules mutation (`KnownRulesChanged` is a
+        // persistence-oriented duplicate), and `GlobalRulesChanged` covers
+        // global rules, which the zero state doesn't show.
+        ctx.subscribe_to_model(&ProjectContextModel::handle(ctx), |_, _, event, ctx| {
+            if let ProjectContextModelEvent::PathIndexed = event {
+                ctx.notify();
+            }
+        });
 
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
         let shell_command_executor = action_model.as_ref(ctx).shell_command_executor(ctx);
@@ -482,20 +507,7 @@ impl TuiTerminalSessionView {
         footer = footer
             .flex_child(TuiFlex::row().finish())
             .child(TuiText::new(model_name).truncate().finish());
-        // The session's cwd only arrives once shell metadata flows (warpified
-        // sessions); until then fall back to the process cwd the TUI's shell
-        // was spawned with.
-        let cwd = self
-            .active_session
-            .as_ref(ctx)
-            .current_working_directory()
-            .cloned()
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|cwd| cwd.to_string_lossy().into_owned())
-            });
-        if let Some(cwd) = cwd {
+        if let Some(cwd) = self.current_working_directory(ctx) {
             footer = footer.child(
                 TuiText::new(format!(" {}", abbreviate_home_prefix(&cwd)))
                     .with_style(dim)
@@ -547,6 +559,21 @@ impl TuiTerminalSessionView {
             .selected_conversation(ctx)?
             .usage_totals();
         (totals != ConversationUsageTotals::default()).then_some(totals)
+    }
+
+    /// The session's working directory. The cwd only arrives once shell
+    /// metadata flows (warpified sessions); until then fall back to the
+    /// process cwd the TUI's shell was spawned with.
+    fn current_working_directory(&self, ctx: &AppContext) -> Option<String> {
+        self.active_session
+            .as_ref(ctx)
+            .current_working_directory()
+            .cloned()
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|cwd| cwd.to_string_lossy().into_owned())
+            })
     }
 
     /// Whether the input is in `!` shell mode (locked shell input).
@@ -754,7 +781,19 @@ impl TuiView for TuiTerminalSessionView {
         // Ctrl-c (cancel/clear/exit) is handled by the keymap pass via the
         // fixed binding registered in [`Self::init`], so no element-level key
         // handling is needed here.
-        let mut column = TuiFlex::column().flex_child(TuiChildView::new(&self.transcript).finish());
+        //
+        // While the transcript has nothing to show, the zero state fills its
+        // slot; the first accepted submission produces a visible block, which
+        // swaps the transcript back in.
+        let mut column = TuiFlex::column();
+        if self.transcript.as_ref(ctx).is_empty() {
+            column = column.flex_child(render_zero_state(
+                self.current_working_directory(ctx).as_deref(),
+                ctx,
+            ));
+        } else {
+            column = column.flex_child(TuiChildView::new(&self.transcript).finish());
+        }
 
         // While the selected conversation is in progress (the GUI warping
         // indicator's core condition), the animated warping indicator sits
