@@ -4,9 +4,9 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
-    CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Empty, Flex, Image, MainAxisSize, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Stack, Text,
+    Border, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Empty, Expanded, Flex, Image, MainAxisAlignment, MainAxisSize,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::{
@@ -14,11 +14,14 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::settings_view::{custom_model_routers_widget_id, SettingsSection};
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, PrimaryTheme};
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, PrimaryTheme,
+};
 
-const MODAL_WIDTH: f32 = 420.;
-const HERO_HEIGHT: f32 = 92.;
+const MODAL_WIDTH: f32 = 340.;
+const HERO_HEIGHT: f32 = 110.;
 
 /// Identifies a single feature announced through the reusable feature-intro
 /// popover. The string form ([`FeatureIntroId::as_key`]) is the persisted
@@ -37,6 +40,13 @@ impl FeatureIntroId {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum FeatureIntroCtaTarget {
+    SettingsWidget {
+        page: SettingsSection,
+        widget_id: fn() -> &'static str,
+    },
+}
 /// A data-driven description of a single feature-intro popover. New feature
 /// announcements are added by appending an entry to [`FEATURE_INTROS`]; no new
 /// view, model, settings, or workspace wiring is required.
@@ -47,15 +57,17 @@ pub struct FeatureIntro {
     pub flag: FeatureFlag,
     /// Bundled hero image shown at the top of the card.
     pub hero_image_path: &'static str,
-    /// Optional pill rendered above the title (e.g. "New").
+    /// Optional metadata label rendered above the title (e.g. "NEW").
     pub badge: Option<&'static str>,
     pub title: &'static str,
     pub description: &'static str,
+    /// Optional icon rendered to the left of the description.
+    pub description_icon: Option<Icon>,
     /// Label for the primary call-to-action button.
     pub cta_label: &'static str,
-    /// URL opened when the user clicks the call-to-action. `None` simply
-    /// dismisses the popover.
-    pub cta_url: Option<&'static str>,
+    /// Destination opened when the user clicks the call-to-action. `None`
+    /// simply dismisses the popover.
+    pub cta_target: Option<FeatureIntroCtaTarget>,
 }
 
 /// The registry of feature-intro popovers, in priority order. On startup the
@@ -65,11 +77,15 @@ pub const FEATURE_INTROS: &[FeatureIntro] = &[FeatureIntro {
     id: FeatureIntroId::CustomModelRouter,
     flag: FeatureFlag::CustomModelRouterIntro,
     hero_image_path: "async/png/onboarding/custom_model_router_intro_banner.png",
-    badge: Some("New"),
-    title: "Build a custom model router for the Warp Agent",
+    badge: Some("NEW"),
+    title: "Build a custom model router for the Warp Agent.",
     description: "Custom routers can be complexity-based, where tasks are routed based on how difficult they are, or rule-based, where they are routed based on a set of natural language prompts.",
+    description_icon: Some(Icon::Compass),
     cta_label: "Get started",
-    cta_url: Some("https://docs.warp.dev/agent-platform/inference/custom-routers/"),
+    cta_target: Some(FeatureIntroCtaTarget::SettingsWidget {
+        page: SettingsSection::WarpAgent,
+        widget_id: custom_model_routers_widget_id,
+    }),
 }];
 
 /// Looks up a feature-intro descriptor by its id.
@@ -95,13 +111,21 @@ fn modal_text_sub(appearance: &Appearance) -> ColorU {
         .into_solid()
 }
 
-fn modal_terminal_magenta(appearance: &Appearance) -> ColorU {
-    appearance.theme().terminal_colors().normal.magenta.into()
-}
+struct CloseButtonTheme;
 
-fn modal_terminal_magenta_overlay_1(appearance: &Appearance) -> ColorU {
-    let magenta = appearance.theme().terminal_colors().normal.magenta;
-    appearance.theme().ansi_overlay_1(magenta)
+impl ActionButtonTheme for CloseButtonTheme {
+    fn background(&self, hovered: bool, appearance: &Appearance) -> Option<Fill> {
+        NakedTheme.background(hovered, appearance)
+    }
+
+    fn text_color(
+        &self,
+        _hovered: bool,
+        _background: Option<Fill>,
+        _appearance: &Appearance,
+    ) -> ColorU {
+        ColorU::black()
+    }
 }
 
 pub fn init(_app: &mut AppContext) {
@@ -138,7 +162,7 @@ pub struct FeatureIntroModal {
 impl FeatureIntroModal {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let close_button = ctx.add_view(|_ctx| {
-            ActionButton::new("", NakedTheme)
+            ActionButton::new("", CloseButtonTheme)
                 .with_icon(Icon::X)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| ctx.dispatch_typed_action(FeatureIntroModalAction::Close))
@@ -146,7 +170,6 @@ impl FeatureIntroModal {
 
         let cta_button = ctx.add_view(|_ctx| {
             ActionButton::new("Get started", PrimaryTheme)
-                .with_full_width(true)
                 .on_click(|ctx| ctx.dispatch_typed_action(FeatureIntroModalAction::GetStarted))
         });
 
@@ -213,26 +236,10 @@ impl FeatureIntroModal {
     }
 
     fn render_badge(label: &'static str, appearance: &Appearance) -> Box<dyn Element> {
-        let text_color = modal_terminal_magenta(appearance);
-        let background_color = modal_terminal_magenta_overlay_1(appearance);
-        let text = Text::new_inline(label.to_string(), appearance.ui_font_family(), 14.)
-            .with_color(text_color)
-            .finish();
-        ConstrainedBox::new(
-            Container::new(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_main_axis_size(MainAxisSize::Min)
-                    .with_child(text)
-                    .finish(),
-            )
-            .with_horizontal_padding(8.)
-            .with_background(Fill::Solid(background_color))
-            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
-            .finish(),
-        )
-        .with_height(24.)
-        .finish()
+        Text::new_inline(label.to_string(), appearance.ui_font_family(), 11.)
+            .with_color(modal_text_sub(appearance))
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .finish()
     }
 
     fn render_title(title: &'static str, appearance: &Appearance) -> Box<dyn Element> {
@@ -242,10 +249,33 @@ impl FeatureIntroModal {
             .finish()
     }
 
-    fn render_description(description: &'static str, appearance: &Appearance) -> Box<dyn Element> {
-        Text::new(description, appearance.ui_font_family(), 14.)
+    fn render_description(intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
+        let description = Text::new(intro.description, appearance.ui_font_family(), 14.)
             .with_color(modal_text_sub(appearance))
-            .finish()
+            .finish();
+
+        if let Some(icon) = intro.description_icon {
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(
+                    Container::new(
+                        ConstrainedBox::new(
+                            icon.to_warpui_icon(Fill::Solid(modal_text_sub(appearance)))
+                                .finish(),
+                        )
+                        .with_width(16.)
+                        .with_height(16.)
+                        .finish(),
+                    )
+                    .with_margin_top(2.)
+                    .with_margin_right(8.)
+                    .finish(),
+                )
+                .with_child(Expanded::new(1., description).finish())
+                .finish()
+        } else {
+            description
+        }
     }
 
     fn render_body(&self, intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
@@ -256,24 +286,33 @@ impl FeatureIntroModal {
             header.add_child(Self::render_badge(badge, appearance));
         }
         header.add_child(Self::render_title(intro.title, appearance));
-        header.add_child(Self::render_description(intro.description, appearance));
+        header.add_child(Self::render_description(intro, appearance));
 
-        Container::new(
-            Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_child(header.finish())
-                .with_child(
-                    Container::new(ChildView::new(&self.cta_button).finish())
-                        .with_margin_top(24.)
-                        .finish(),
-                )
+        let body = Container::new(header.finish())
+            .with_horizontal_padding(16.)
+            .with_vertical_padding(16.)
+            .with_background(modal_background(appearance))
+            .finish();
+        let footer = Container::new(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::End)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(ChildView::new(&self.cta_button).finish())
                 .finish(),
         )
-        .with_horizontal_padding(20.)
-        .with_vertical_padding(20.)
+        .with_horizontal_padding(16.)
+        .with_vertical_padding(12.)
         .with_background(modal_background(appearance))
+        .with_border(Border::top(1.).with_border_fill(appearance.theme().outline()))
         .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
-        .finish()
+        .finish();
+
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(body)
+            .with_child(footer)
+            .finish()
     }
 }
 

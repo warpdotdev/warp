@@ -1705,6 +1705,7 @@ define_settings_group!(AISettings, settings: [
         default: HashMap::default(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 ]);

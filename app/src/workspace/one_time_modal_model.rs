@@ -666,6 +666,9 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_feature_intro_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
+            return false;
+        }
         // Show the first registered feature intro whose flag is enabled and that the
         // user hasn't seen yet (see `FEATURE_INTROS`).
         let next_id = FEATURE_INTROS

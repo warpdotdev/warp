@@ -506,7 +506,8 @@ use crate::workspace::view::cloud_agent_capacity_modal::{
 };
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
 use crate::workspace::view::feature_intro_modal::{
-    feature_intro_by_id, FeatureIntroId, FeatureIntroModal, FeatureIntroModalEvent,
+    feature_intro_by_id, FeatureIntroCtaTarget, FeatureIntroId, FeatureIntroModal,
+    FeatureIntroModalEvent,
 };
 use crate::workspace::view::free_ai_removal_modal::{
     FreeAiRemovalModal, FreeAiRemovalModalEvent, FreeAiRemovalModalTelemetryEvent,
@@ -15869,7 +15870,19 @@ impl Workspace {
             pane_group::Event::Escape => {
                 if self.current_workspace_state.is_resource_center_open {
                     self.current_workspace_state.is_resource_center_open = false;
-                    ctx.notify()
+                    ctx.notify();
+                } else {
+                    let should_dismiss_feature_intro = {
+                        let one_time = OneTimeModalModel::as_ref(ctx);
+                        one_time.target_window_id() == Some(self.window_id)
+                            && one_time.active_feature_intro().is_some()
+                    };
+                    if should_dismiss_feature_intro {
+                        OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.mark_feature_intro_dismissed(ctx);
+                        });
+                        ctx.notify();
+                    }
                 }
             }
             pane_group::Event::Exited { add_to_undo_stack } => {
@@ -18874,17 +18887,26 @@ impl Workspace {
         event: &FeatureIntroModalEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Both Close and GetStarted dismiss the popover; GetStarted additionally
-        // opens the feature's call-to-action URL when one is configured.
-        if let FeatureIntroModalEvent::GetStarted(id) = event {
-            if let Some(url) = feature_intro_by_id(*id).and_then(|intro| intro.cta_url) {
-                ctx.open_url(url);
-            }
-        }
+        let cta_target = if let FeatureIntroModalEvent::GetStarted(id) = event {
+            feature_intro_by_id(*id).and_then(|intro| intro.cta_target)
+        } else {
+            None
+        };
         OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
             model.mark_feature_intro_dismissed(ctx);
         });
         self.focus_active_tab(ctx);
+
+        if let Some(cta_target) = cta_target {
+            match cta_target {
+                FeatureIntroCtaTarget::SettingsWidget { page, widget_id } => {
+                    self.open_settings_pane(Some(page), None, ctx);
+                    self.settings_pane.update(ctx, |settings, ctx| {
+                        settings.scroll_to_settings_widget(page, widget_id(), ctx);
+                    });
+                }
+            }
+        }
         ctx.notify();
     }
 
