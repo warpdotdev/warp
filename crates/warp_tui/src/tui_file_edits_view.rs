@@ -31,7 +31,8 @@ use warp::tui_export::{
 };
 use warp_editor::content::buffer::InitialBufferState;
 use warpui_core::elements::tui::{
-    Modifier, TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiParentElement, TuiStyle, TuiText,
+    tui_disclosure_chevron, Modifier, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
+    TuiParentElement, TuiStyle, TuiText,
 };
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
@@ -43,10 +44,6 @@ use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageEvent, TuiDiffStorag
 
 /// Unchanged context lines rendered on each side of a hunk.
 const CONTEXT_LINES: usize = 3;
-/// Chevron shown on an expanded file header.
-const CHEVRON_EXPANDED: &str = "▾";
-/// Chevron shown on a collapsed file header.
-const CHEVRON_COLLAPSED: &str = "▸";
 
 /// A per-action view backing one `RequestFileEdits` tool call in the transcript.
 pub(super) struct TuiFileEditsView {
@@ -390,11 +387,7 @@ impl TuiFileEditsView {
             ));
         }
         if show_chevron {
-            let chevron = if self.section_states.is_collapsed(key) {
-                CHEVRON_COLLAPSED
-            } else {
-                CHEVRON_EXPANDED
-            };
+            let chevron = tui_disclosure_chevron(self.section_states.is_collapsed(key));
             spans.push((format!("  {chevron}"), embolden(name_style)));
         }
         let row = TuiText::from_spans(spans).truncate();
