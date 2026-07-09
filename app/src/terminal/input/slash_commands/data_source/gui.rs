@@ -10,10 +10,13 @@ use super::core::subscribe_to_shared_dependencies;
 use super::{
     InlineItem, SlashCommandDataSource, SlashCommandDataSourceState, UpdatedActiveCommands,
 };
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIConversationId;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
@@ -155,7 +158,12 @@ impl GuiSlashCommandDataSource {
         let availability = self.availability(ctx);
         let gates = self.common_command_gates(ctx);
         self.command_passes_common_gates(command, availability, &gates)
-            && self.command_passes_gui_gates(command, availability, ctx)
+            && self.command_passes_gui_gates(
+                command,
+                availability,
+                #[cfg(not(target_family = "wasm"))]
+                ctx,
+            )
     }
 
     fn recompute_active_commands(&mut self, ctx: &mut ModelContext<Self>) {
@@ -166,7 +174,12 @@ impl GuiSlashCommandDataSource {
                 .all_commands_by_id()
                 .filter(|(_, command)| {
                     self.command_passes_common_gates(command, availability, &gates)
-                        && self.command_passes_gui_gates(command, availability, ctx)
+                        && self.command_passes_gui_gates(
+                            command,
+                            availability,
+                            #[cfg(not(target_family = "wasm"))]
+                            ctx,
+                        )
                 })
                 .map(|(id, command)| (id, command.clone())),
         );
@@ -214,7 +227,7 @@ impl GuiSlashCommandDataSource {
         &self,
         command: &StaticCommand,
         availability: Availability,
-        ctx: &AppContext,
+        #[cfg(not(target_family = "wasm"))] ctx: &AppContext,
     ) -> bool {
         if command.name == commands::FORK.name
             && availability.contains(Availability::CLOUD_MODE_V2_COMPOSER)
@@ -241,6 +254,7 @@ impl GuiSlashCommandDataSource {
                     .is_some_and(|model| model.as_ref(ctx).is_ambient_agent()))
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn active_conversation_id(&self, ctx: &AppContext) -> Option<AIConversationId> {
         self.agent_view_controller
             .as_ref(ctx)
