@@ -3068,10 +3068,6 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             user_display_message,
         } => {
             if let Some(message) = user_display_message {
-                // For Free / non-paid users who are out of credits, surface an inline
-                // Subscribe CTA next to the message. Paid users, and the enterprise
-                // spend-limit variant of this message (which asks the user to contact an
-                // admin), fall through to plain text.
                 if should_show_subscribe_cta(app) {
                     return render_out_of_credits_error(
                         message,
@@ -3190,18 +3186,15 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         .finish()
 }
 
-/// Whether to show the inline Subscribe CTA on the out-of-credits error. We show it for
-/// Free / non-paid users (the audience the "subscribe to a Warp plan" message targets) and
-/// hide it for paid users and the enterprise spend-limit variant of this message (which asks
-/// the user to contact an admin instead).
+/// Whether to show the out-of-credits CTAs: only for non-paid users. Paid users and the
+/// enterprise spend-limit variant of this message fall back to plain text.
 fn should_show_subscribe_cta(app: &AppContext) -> bool {
     UserWorkspaces::as_ref(app)
         .current_team()
         .is_none_or(|team| !team.billing_metadata.is_user_on_paid_plan())
 }
 
-/// Builds one of the out-of-credits CTA buttons, matching the styling of the
-/// invalid-API-key error's "Edit API Keys" button (grey outlined, subtle hover/click).
+/// Builds an out-of-credits CTA button, styled like the invalid-API-key error's button.
 fn out_of_credits_cta_button(
     label: &str,
     state_handle: &MouseStateHandle,
@@ -3233,10 +3226,8 @@ fn out_of_credits_cta_button(
         .with_cursor(Some(Cursor::PointingHand))
 }
 
-/// Renders the out-of-credits failure with inline CTAs: a Subscribe button that opens the
-/// upgrade flow, and a "Bring your own AI" button that opens the API key settings. Mirrors
-/// the plain failed-output layout (alert icon + message) and appends the buttons below the
-/// message, indented to align with the text.
+/// Renders the out-of-credits failure: alert icon + message with Subscribe and
+/// "Bring your own AI" CTAs below.
 fn render_out_of_credits_error(
     message: &str,
     subscribe_button_handle: &MouseStateHandle,
