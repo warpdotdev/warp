@@ -43,10 +43,14 @@ use crate::{App, AppContext, TuiView, ViewHandle, WindowId};
 
 mod event_conversion;
 mod renderer;
+mod terminal_probe;
 
 pub use event_conversion::crossterm_event_to_tui_event;
 use event_conversion::ClickTracker;
 pub use renderer::TuiFrameRenderer;
+pub use terminal_probe::{
+    probe_terminal_colors, BackgroundLuminance, ProbedRgb, ProbedTerminalColors,
+};
 use warp_errors::report_error;
 
 /// The host terminal the runtime draws to and reads input from. Abstracted so

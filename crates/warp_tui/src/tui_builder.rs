@@ -8,6 +8,7 @@
 use pathfinder_color::ColorU;
 use warp::tui_export::Appearance;
 use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::Opacity;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -15,6 +16,8 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::AppContext;
+
+use crate::terminal_background::probed_colors;
 
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
 /// `UiBuilder` (minus fonts, which terminal cells don't have). Cheap to
@@ -32,18 +35,32 @@ impl TuiUiBuilder {
         }
     }
 
-    /// Style for primary response/body text.
+    /// Style for primary response/body text: the theme foreground at the
+    /// theme's main-text strength (the GUI's `text_main` recipe). The ANSI
+    /// palette's "white" slot is tuned for dark backgrounds only, so it would
+    /// wash out on light themes.
     pub(crate) fn primary_text_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().normal.white,
-        )))
+        TuiStyle::default()
+            .fg(self.foreground_text_color(self.warp_theme.details().main_text_opacity))
     }
 
-    /// Style for muted secondary text (e.g. thinking headers and bodies).
+    /// Style for muted secondary text (e.g. thinking headers and bodies): the
+    /// theme foreground at the theme's sub-text strength (the GUI's
+    /// `text_sub` recipe). The ANSI palette's "bright black" slot is only a
+    /// muted grey on dark backgrounds.
     pub(crate) fn muted_text_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().bright.black,
-        )))
+        TuiStyle::default()
+            .fg(self.foreground_text_color(self.warp_theme.details().sub_text_opacity))
+    }
+
+    /// The theme foreground over the transcript's base background at
+    /// `opacity` percent. Pre-blended to a solid because terminal cells drop
+    /// the alpha channel that the GUI's text tokens rely on.
+    fn foreground_text_color(&self, opacity: Opacity) -> Color {
+        cell_color(
+            self.base_background()
+                .blend(&self.warp_theme.foreground().with_opacity(opacity)),
+        )
     }
 
     /// Muted and dimmed: de-emphasized status rows (e.g. tool-call stubs).
@@ -86,7 +103,18 @@ impl TuiUiBuilder {
     /// The accent-tinted background behind the user-input section.
     pub(crate) fn input_background(&self) -> Color {
         let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
-        cell_color(self.warp_theme.background().blend(&accent.with_opacity(20)))
+        cell_color(self.base_background().blend(&accent.with_opacity(20)))
+    }
+
+    /// The background the transcript actually renders over: default cells
+    /// stay bg-unset, so it is the terminal's *own* background when the
+    /// startup probe captured it, else the theme background as the closest
+    /// approximation.
+    fn base_background(&self) -> ThemeFill {
+        match probed_colors().bg {
+            Some(bg) => ThemeFill::Solid(ColorU::new(bg.r, bg.g, bg.b, u8::MAX)),
+            None => self.warp_theme.background(),
+        }
     }
 
     /// Accent-colored border style for focused/primary containers.
@@ -114,10 +142,11 @@ impl TuiUiBuilder {
         self.warping_base_fill().into_solid()
     }
 
-    /// The peak color the "Warping" shimmer band lerps toward: the terminal
-    /// palette's bright white.
+    /// The peak color the "Warping" shimmer band lerps toward: the theme
+    /// foreground, the highest-contrast color over the theme's background
+    /// (the palette's bright white would vanish on light backgrounds).
     pub(crate) fn warping_shimmer_color(&self) -> ColorU {
-        ThemeFill::from(self.warp_theme.terminal_colors().bright.white).into_solid()
+        self.warp_theme.foreground().into_solid()
     }
 
     /// Style for the warping indicator's spinner glyph.
