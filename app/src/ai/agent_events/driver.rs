@@ -6,10 +6,9 @@ use async_trait::async_trait;
 use futures::future::Either;
 use futures::StreamExt;
 use instant::Instant;
-use warp_core::errors::AnyhowErrorExt as _;
+use warp_errors::{report_error, AnyhowErrorExt as _};
 use warpui::r#async::Timer;
 
-use crate::report_error;
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ai::AgentRunEvent;
 use crate::server::server_api::presigned_upload::HttpStatusError;

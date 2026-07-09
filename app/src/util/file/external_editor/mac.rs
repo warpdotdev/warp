@@ -8,10 +8,10 @@ use objc2_app_kit::NSWorkspace;
 use objc2_foundation::{NSBundle, NSString, NSURL};
 use warp_core::channel::ChannelState;
 use warp_core::AppId;
+use warp_errors::report_error;
 use warpui::ApplicationBundleInfo;
 
 use super::*;
-use crate::report_error;
 
 /// The executable we use to launch the editor.
 #[derive(Debug)]

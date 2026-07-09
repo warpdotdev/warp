@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
 use regex::Regex;
+use warp_errors::report_error;
 use warp_graphql::billing::{
     AiAutonomyPolicy as GqlAiAutonomyPolicy, AmbientAgentsPolicy as GqlAmbientAgentsPolicy,
     BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
@@ -66,6 +67,7 @@ use crate::ai::execution_profiles::{
 };
 use crate::ai::{BonusGrant, BonusGrantScope};
 use crate::auth::UserUid;
+use crate::convert_to_server_experiment;
 use crate::server::cloud_objects::listener::ObjectUpdateMessage;
 use crate::server::experiments::ServerExperiment;
 use crate::server::graphql::schema::object_action_history_from_gql;
@@ -76,7 +78,6 @@ use crate::workspaces::workspace::{
     EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, ManagedByokByoePolicy,
     MultiAdminPolicy, PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
 };
-use crate::{convert_to_server_experiment, report_error};
 
 pub const PLACEHOLDER_WORKSPACE_UID: &str = "NOT_A_REAL_WORKSPACE_UID";
 
@@ -292,7 +293,7 @@ impl From<GqlUgcCollectionEnablementSetting> for UgcCollectionEnablementSetting 
                 report_error!(
                     "Invalid UgcCollectionEnablementSetting. Make sure to update client GraphQL types!",
                     extra: { "value" => %value },
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 UgcCollectionEnablementSetting::RespectUserSetting
             }
@@ -339,7 +340,7 @@ impl From<GqlAdminEnablementSetting> for AdminEnablementSetting {
                 report_error!(
                     "Invalid AdminEnablementSetting. Make sure to update client GraphQL types!",
                     extra: { "value" => %value },
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 AdminEnablementSetting::RespectUserSetting
             }
@@ -358,7 +359,7 @@ impl From<GqlHostEnablementSetting> for HostEnablementSetting {
                 report_error!(
                     "Invalid HostEnablementSetting. Make sure to update client GraphQL types!",
                     extra: { "value" => %value },
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 HostEnablementSetting::RespectUserSetting
             }
@@ -530,7 +531,7 @@ impl From<GqlUsageVisibilityGranularity> for UsageVisibilityGranularity {
                 report_error!(
                     "Invalid UsageVisibilityGranularity. Make sure to update client GraphQL types!",
                     extra: { "value" => %value },
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 // Fail closed to the most restrictive granularity.
                 UsageVisibilityGranularity::OwnOnly
@@ -736,7 +737,7 @@ fn convert_gql_ai_autonomy_value_to_action_permission(
             report_error!(
                 "Invalid AiAutonomyValue. Make sure to update client GraphQL types!",
                 extra: { "value" => %value },
-                warp_core::errors::ReportErrorLogMode::OncePerRun
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
             None
         }
@@ -755,7 +756,7 @@ fn convert_gql_write_to_pty_autonomy_value_to_write_to_pty_permission(
             report_error!(
                 "Invalid WriteToPtyAutonomyValue. Make sure to update client GraphQL types!",
                 extra: { "value" => %value },
-                warp_core::errors::ReportErrorLogMode::OncePerRun
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
             None
         }
@@ -774,7 +775,7 @@ fn convert_gql_computer_use_autonomy_value_to_computer_use_permission(
             report_error!(
                 "Invalid ComputerUseAutonomyValue. Make sure to update client GraphQL types!",
                 extra: { "value" => %value },
-                warp_core::errors::ReportErrorLogMode::OncePerRun
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
             None
         }

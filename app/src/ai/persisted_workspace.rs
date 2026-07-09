@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "local_fs")]
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_if_error;
 #[cfg(feature = "local_fs")]
 use warp_util::{local_or_remote_path::LocalOrRemotePath, standardized_path::StandardizedPath};
 #[cfg(feature = "local_fs")]
@@ -43,7 +44,6 @@ use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager
 #[cfg(feature = "local_fs")]
 use crate::code::lsp_telemetry::LspTelemetryEvent;
 use crate::persistence::ModelEvent;
-use crate::report_if_error;
 #[cfg(feature = "local_fs")]
 use crate::send_telemetry_from_ctx;
 #[cfg(feature = "local_fs")]

@@ -11,7 +11,7 @@ macro_rules! safe_assert {
         match &$cond {
             (cond) => {
                 if !(*cond) {
-                    $crate::report_error!($crate::__anyhow::anyhow!("Assertion `{}` failed", stringify!($cond)));
+                    $crate::__warp_errors::report_error!($crate::__anyhow::anyhow!("Assertion `{}` failed", stringify!($cond)));
                 }
             }
         }
@@ -21,7 +21,7 @@ macro_rules! safe_assert {
         match &$cond {
             (cond) => {
                 if !(*cond) {
-                    $crate::report_error!($crate::__anyhow::anyhow!("Assertion `{}` failed: {}", stringify!($cond), format_args!($($arg)+)));
+                    $crate::__warp_errors::report_error!($crate::__anyhow::anyhow!("Assertion `{}` failed: {}", stringify!($cond), format_args!($($arg)+)));
                 }
             }
         }
@@ -42,7 +42,7 @@ macro_rules! safe_assert_eq {
         match (&$left, &$right) {
             (left_val, right_val) => {
                 if !(*left_val == *right_val) {
-                    $crate::report_error!($crate::__anyhow::anyhow!("Assertion `{} == {}` failed: expected {left_val}, found {right_val}.", stringify!($left), stringify!($right)));
+                    $crate::__warp_errors::report_error!($crate::__anyhow::anyhow!("Assertion `{} == {}` failed: expected {left_val}, found {right_val}.", stringify!($left), stringify!($right)));
                 }
             }
         }
@@ -52,7 +52,7 @@ macro_rules! safe_assert_eq {
         match (&$left, &$right) {
             (left_val, right_val) => {
                 if !(*left_val == *right_val) {
-                    $crate::report_error!($crate::__anyhow::anyhow!("Assertion `{} == {}` failed: expected {left_val}, found {right_val}. {}", stringify!($left), stringify!($right), format_args!($($arg)+)));
+                    $crate::__warp_errors::report_error!($crate::__anyhow::anyhow!("Assertion `{} == {}` failed: expected {left_val}, found {right_val}. {}", stringify!($left), stringify!($right), format_args!($($arg)+)));
                 }
             }
         }

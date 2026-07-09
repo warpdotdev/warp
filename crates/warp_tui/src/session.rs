@@ -10,17 +10,18 @@ use std::ffi::OsString;
 use anyhow::Result;
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
-    dark_theme, Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
-    TerminalManagerTrait, TerminalSurfaceResult,
+    Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager, TerminalManagerTrait,
+    TerminalSurfaceResult,
 };
 use warp::{TuiLoginModel, TuiLoginPhase};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warpui::SingletonEntity;
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
 use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, ViewHandle};
 
 use crate::root_view::RootTuiView;
+use crate::terminal_background::probe_and_select_theme;
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 
@@ -59,11 +60,12 @@ fn init(ctx: &mut AppContext) {
     // `autoupdate` module docs).
     crate::autoupdate::TuiAutoupdater::register(ctx);
 
-    // The current TUI transcript design is dark-mode-only. Keep this scoped to
+    // Theme the transcript to match the host terminal. Keep this scoped to
     // the TUI process by overriding the already-initialized Appearance theme at
     // mount time, without changing normal GUI theme selection or font settings.
+    let theme = probe_and_select_theme();
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
-        appearance.set_theme(dark_theme(), ctx);
+        appearance.set_theme(theme, ctx);
     });
 
     let banner = ctx.add_model(|_| BannerState::default());

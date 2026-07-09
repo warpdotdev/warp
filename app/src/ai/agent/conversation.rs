@@ -18,6 +18,7 @@ use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_errors::report_error;
 use warp_multi_agent_api::response_event::stream_finished;
 use warp_multi_agent_api::response_event::stream_finished::TokenUsage;
 use warp_multi_agent_api::{self as api};
@@ -33,10 +34,11 @@ use super::task::{
 };
 use super::task_store::TaskStore;
 use super::{
-    AIAgentAction, AIAgentActionId, AIAgentContext, AIAgentExchange, AIAgentExchangeId,
-    AIAgentInput, AIAgentOutput, AIAgentOutputStatus, AIAgentTodo, AIAgentTodoId,
-    FinishedAIAgentOutput, MessageId, OutputModelInfo, RenderableAIError, RequestCost,
-    ServerOutputId, Shared, SuggestedLoggingId, Suggestions,
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentContext,
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
+    AIAgentTodo, AIAgentTodoId, FinishedAIAgentOutput, MessageId, OutputModelInfo,
+    RenderableAIError, RequestCost, ServerOutputId, Shared, StartRecordingResult,
+    StopRecordingResult, SuggestedLoggingId, Suggestions,
 };
 use crate::ai::agent::api::convert_conversation::{
     compute_time_to_first_token_ms_from_messages, proto_timestamp_to_local_datetime,
@@ -74,7 +76,7 @@ use crate::terminal::model::block::{
 };
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfileWithUID;
-use crate::{report_error, BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
+use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoStatus {
@@ -89,6 +91,18 @@ impl TodoStatus {
     pub fn is_cancelled(&self) -> bool {
         matches!(self, TodoStatus::Cancelled)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingSpanInfo {
+    pub recording_id: String,
+    pub status: RecordingSpanStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingSpanStatus {
+    Active,
+    Captured,
 }
 
 fn footer_model_token_usage(
@@ -1704,6 +1718,151 @@ impl AIConversation {
                         .collect::<Vec<_>>()
                 })
         })
+    }
+
+    #[cfg(test)]
+    pub fn recording_span_for_action(
+        &self,
+        action_id: &AIAgentActionId,
+        action_model: Option<&crate::ai::blocklist::BlocklistAIActionModel>,
+    ) -> Option<RecordingSpanInfo> {
+        self.recording_spans_by_action_id(action_model)
+            .get(action_id)
+            .cloned()
+    }
+
+    /// Maps action IDs to the recording span containing them, derived from the
+    /// conversation transcript so restored/cloud conversations render the same
+    /// as live ones.
+    ///
+    /// Walks all exchanges in order: a successful `StartRecording` result opens
+    /// a span; the start action and any `UseComputer` actions inside an open
+    /// span are buffered; a matching successful `StopRecording` result marks
+    /// the span as captured and flushes the buffer into the map; a failed or
+    /// cancelled stop drops the buffer, since no recording was saved; a span
+    /// still open at the end of the scan is flushed as active so in-progress
+    /// recordings decorate their rows. Exchanges that finished in an error
+    /// expose no output and are skipped.
+    pub fn recording_spans_by_action_id(
+        &self,
+        action_model: Option<&crate::ai::blocklist::BlocklistAIActionModel>,
+    ) -> HashMap<AIAgentActionId, RecordingSpanInfo> {
+        // Transcript-held action results, collected once up front. These are
+        // conversation-scoped, covering restored/cloud transcripts. The action
+        // model is only a fallback for live results not yet drained into a
+        // follow-up request's inputs: its maps are keyed globally by action ID
+        // across conversations, so it must not take precedence.
+        let mut results_by_action_id: HashMap<&AIAgentActionId, &AIAgentActionResultType> =
+            HashMap::new();
+        for exchange in self.all_exchanges() {
+            for input in &exchange.input {
+                if let AIAgentInput::ActionResult { result, .. } = input {
+                    results_by_action_id.insert(&result.id, &result.result);
+                }
+            }
+        }
+        let result_for_action = |action_id: &AIAgentActionId| {
+            results_by_action_id.get(action_id).copied().or_else(|| {
+                action_model
+                    .and_then(|model| model.get_action_result(action_id))
+                    .map(|result| &result.result)
+            })
+        };
+
+        let mut active_span: Option<RecordingSpanInfo> = None;
+        let mut buffered_action_ids: Vec<AIAgentActionId> = Vec::new();
+        let mut spans_by_action_id = HashMap::new();
+        let flush_buffer =
+            |span: RecordingSpanInfo,
+             buffered: &mut Vec<AIAgentActionId>,
+             map: &mut HashMap<AIAgentActionId, RecordingSpanInfo>| {
+                for action_id in buffered.drain(..) {
+                    map.insert(action_id, span.clone());
+                }
+            };
+
+        for exchange in self.all_exchanges() {
+            let Some(output) = exchange.output_status.output() else {
+                continue;
+            };
+            for output_message in &output.get().messages {
+                let AIAgentOutputMessageType::Action(action) = &output_message.message else {
+                    continue;
+                };
+
+                match &action.action {
+                    AIAgentActionType::StartRecording { .. } => {
+                        if let Some(AIAgentActionResultType::StartRecording(
+                            StartRecordingResult::Success(started),
+                        )) = result_for_action(&action.id)
+                        {
+                            // A new successful start while another span is open
+                            // can't happen live (the runtime enforces a single
+                            // recording), but flush defensively so the prior
+                            // span's rows keep their open attribution.
+                            if let Some(prior_span) = active_span.take() {
+                                flush_buffer(
+                                    prior_span,
+                                    &mut buffered_action_ids,
+                                    &mut spans_by_action_id,
+                                );
+                            }
+                            active_span = Some(RecordingSpanInfo {
+                                recording_id: started.recording_id.clone(),
+                                status: RecordingSpanStatus::Active,
+                            });
+                            buffered_action_ids = vec![action.id.clone()];
+                        }
+                    }
+                    AIAgentActionType::UseComputer(_) => {
+                        if active_span.is_some() {
+                            buffered_action_ids.push(action.id.clone());
+                        }
+                    }
+                    AIAgentActionType::StopRecording { recording_id } => {
+                        let Some(span) = active_span.as_ref() else {
+                            continue;
+                        };
+                        if span.recording_id != *recording_id {
+                            continue;
+                        }
+
+                        match result_for_action(&action.id) {
+                            Some(AIAgentActionResultType::StopRecording(
+                                StopRecordingResult::Success(_),
+                            )) => {
+                                let mut stopped_span = span.clone();
+                                stopped_span.status = RecordingSpanStatus::Captured;
+                                buffered_action_ids.push(action.id.clone());
+                                flush_buffer(
+                                    stopped_span,
+                                    &mut buffered_action_ids,
+                                    &mut spans_by_action_id,
+                                );
+                                active_span = None;
+                            }
+                            Some(AIAgentActionResultType::StopRecording(
+                                StopRecordingResult::Error(_) | StopRecordingResult::Cancelled,
+                            )) => {
+                                // The stop saved no recording, so the buffered
+                                // rows must not be labeled as captured.
+                                buffered_action_ids.clear();
+                                active_span = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // A span that never closed is still recording: flush it as open.
+        if let Some(span) = active_span {
+            flush_buffer(span, &mut buffered_action_ids, &mut spans_by_action_id);
+        }
+
+        spans_by_action_id
     }
 
     pub fn contains_action(&self, action_id: &AIAgentActionId) -> bool {

@@ -5,11 +5,11 @@ use anyhow::Result;
 use channel_versions::{Changelog, ChannelVersions};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng as _};
+use warp_errors::report_error;
 
 use super::channel_versions::fetch_channel_versions;
 use super::release_assets_directory_url;
 use crate::channel::{Channel, ChannelState};
-use crate::report_error;
 use crate::server::server_api::ServerApi;
 
 pub async fn get_current_changelog(server_api: Arc<ServerApi>) -> Result<Option<Changelog>> {

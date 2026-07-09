@@ -5,8 +5,8 @@ use deltae::*;
 use kmeans_colors::{get_kmeans_hamerly, Calculate, CentroidData, Sort};
 use palette::{FromColor, IntoColor, Lab, Pixel, Srgb, Srgba};
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 
-use crate::report_error;
 use crate::util::color::hex_color::coloru_from_hex_string;
 
 /// Uses a k-means algorithm to identify the 5 most average colors in an image.

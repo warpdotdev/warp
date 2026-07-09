@@ -16,7 +16,7 @@ use rmcp::ServiceExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
-use warp_core::report_error;
+use warp_errors::report_error;
 
 use super::TemplatableMCPServerInfo;
 

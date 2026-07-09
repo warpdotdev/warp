@@ -12,6 +12,7 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::MouseStateHandle;
 use warpui::platform::Cursor;
@@ -67,7 +68,7 @@ use crate::terminal::view::{
 };
 use crate::terminal::TerminalModel;
 use crate::view_components::{DismissibleToast, ToastFlavor};
-use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 impl TerminalView {
     pub fn sharer_session_kind(&self) -> Option<&Kind> {

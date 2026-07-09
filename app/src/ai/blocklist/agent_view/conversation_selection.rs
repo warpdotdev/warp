@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::{AppContext, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
@@ -8,7 +9,6 @@ use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use crate::report_error;
 
 /// GUI conversation selection backed unconditionally by Agent View.
 pub(crate) struct AgentViewConversationSelection {

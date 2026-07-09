@@ -372,6 +372,7 @@ dependencies = [
  "uuid",
  "virtual-fs",
  "warp_core",
+ "warp_errors",
  "warp_graphql",
  "warp_multi_agent_api",
  "warp_terminal",
@@ -2921,6 +2922,7 @@ dependencies = [
  "warp-workflows",
  "warp_cli",
  "warp_core",
+ "warp_errors",
  "warp_graphql",
  "warp_util",
 ]
@@ -6414,6 +6416,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "warp_core",
+ "warp_errors",
  "wasm-bindgen-futures",
 ]
 
@@ -6427,6 +6430,7 @@ dependencies = [
  "tower",
  "tower-http",
  "warp_core",
+ "warp_errors",
  "warpui_core",
 ]
 
@@ -7877,6 +7881,7 @@ dependencies = [
  "tokio",
  "url",
  "warp_core",
+ "warp_errors",
  "warp_util",
  "warpui_core",
 ]
@@ -8134,6 +8139,7 @@ dependencies = [
  "url",
  "uuid",
  "warp_core",
+ "warp_errors",
  "warpui",
  "warpui_extras",
  "windows 0.62.2",
@@ -9378,6 +9384,7 @@ dependencies = [
  "ui_components",
  "uuid",
  "warp_core",
+ "warp_errors",
  "warp_logging",
  "warpui",
  "warpui_core",
@@ -11309,6 +11316,7 @@ dependencies = [
  "tokio-util",
  "uuid",
  "warp_core",
+ "warp_errors",
  "warp_util",
  "warpui_core",
 ]
@@ -11354,6 +11362,7 @@ dependencies = [
  "virtual-fs",
  "walkdir",
  "warp_core",
+ "warp_errors",
  "warp_util",
  "warpui",
  "warpui_core",
@@ -15265,6 +15274,7 @@ dependencies = [
  "warp_completer",
  "warp_core",
  "warp_editor",
+ "warp_errors",
  "warp_files",
  "warp_graphql",
  "warp_isolation_platform",
@@ -15462,8 +15472,6 @@ dependencies = [
  "regex",
  "reqwest",
  "schemars",
- "sentry",
- "sentry-log",
  "serde",
  "serde_json",
  "serde_with",
@@ -15535,6 +15543,7 @@ dependencies = [
  "vec1",
  "vim",
  "warp_core",
+ "warp_errors",
  "warp_util",
  "warpui",
  "warpui_core",
@@ -15660,6 +15669,7 @@ dependencies = [
  "sentry-log",
  "tempfile",
  "warp_core",
+ "warp_errors",
  "warp_web_event_bus",
  "wasm-bindgen",
  "web-sys",
@@ -15697,7 +15707,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=4de32f256901e34905817e5d88081130a54b6384#4de32f256901e34905817e5d88081130a54b6384"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=2d0e8ddf5a946a663f7e0952144ccbced0068a81#2d0e8ddf5a946a663f7e0952144ccbced0068a81"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -15770,6 +15780,7 @@ dependencies = [
  "strum_macros 0.27.1",
  "tantivy",
  "warp_core",
+ "warp_errors",
  "warpui_core",
 ]
 
@@ -15788,6 +15799,7 @@ dependencies = [
  "thiserror 2.0.17",
  "uuid",
  "warp_core",
+ "warp_errors",
  "warp_graphql",
  "warp_managed_secrets",
  "warpui_core",
@@ -15839,6 +15851,7 @@ dependencies = [
  "url",
  "uuid",
  "warp_core",
+ "warp_errors",
  "warp_graphql",
  "warp_isolation_platform",
  "warp_server_auth",
@@ -15877,6 +15890,7 @@ dependencies = [
  "vte",
  "warp_completer",
  "warp_core",
+ "warp_errors",
  "warp_util",
  "warpui_core",
 ]
@@ -15914,6 +15928,7 @@ dependencies = [
  "warp_channel_config",
  "warp_core",
  "warp_editor",
+ "warp_errors",
  "warp_files",
  "warp_terminal",
  "warp_util",
@@ -16099,6 +16114,7 @@ dependencies = [
  "instant",
  "itertools 0.14.0",
  "lazy_static",
+ "libc",
  "log",
  "markdown_parser",
  "minimp4",

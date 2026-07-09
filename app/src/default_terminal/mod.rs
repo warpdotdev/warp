@@ -27,8 +27,7 @@ mod non_mac {
 #[allow(unused_imports)]
 #[cfg(not(target_os = "macos"))]
 use non_mac::*;
-
-use crate::report_error;
+use warp_errors::report_error;
 
 pub struct DefaultTerminal {
     /// Whether the OS will treat Warp as the default app for scripts/executables.

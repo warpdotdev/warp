@@ -6,6 +6,7 @@ use itertools::Itertools;
 use pathfinder_color::ColorU;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::Icon;
+use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
     resizable_state_handle, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
@@ -40,7 +41,6 @@ use crate::pane_group::pane::view::header::PANE_HEADER_HEIGHT;
 use crate::pane_group::{
     Event as PaneGroupEvent, PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel,
 };
-use crate::report_error;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::MenuPositioning;

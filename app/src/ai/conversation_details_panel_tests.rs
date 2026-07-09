@@ -6,7 +6,7 @@ use warp_cli::agent::Harness;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
 
-use super::{ConversationDetailsData, PanelMode};
+use super::{ConversationDetailsData, ConversationDetailsPanel, PanelMode};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
@@ -423,6 +423,48 @@ fn test_from_conversation_populates_local_conversation_fields() {
             assert_eq!(data.source_prompt.as_deref(), Some("test query"));
             assert!(data.credits.is_some());
         });
+    });
+}
+
+#[test]
+fn test_oz_run_url_present_for_task_and_absent_for_conversation() {
+    // The Status chip is only clickable (navigating to the Oz run view) when
+    // `oz_run_url` yields a URL, which happens for task-backed runs but not for
+    // plain local conversations.
+    App::test((), |mut app| async move {
+        let _history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let task_id = "550e8400-e29b-41d4-a716-000000004050";
+        let task = create_test_task(task_id);
+
+        app.update(|ctx| {
+            // Task mode → the chip should link to the Oz run view.
+            let task_data = ConversationDetailsData::from_task(&task, None, None, ctx);
+            let url = ConversationDetailsPanel::oz_run_url(&task_data)
+                .expect("a task with a task_id should produce an Oz run URL");
+            assert!(
+                url.ends_with(&format!("/runs/{task_id}")),
+                "unexpected Oz run URL: {url}"
+            );
+        });
+
+        // Conversation mode → there is no run view to navigate to.
+        let conversation_data = ConversationDetailsData::from_conversation_metadata(
+            AIConversationId::new(),
+            "Title".to_string(),
+            None,
+            Utc::now().with_timezone(&Local),
+            None,
+            None,
+            None,
+            vec![],
+            None,
+            None,
+            None,
+            None,
+            Some(Harness::Oz),
+        );
+        assert!(ConversationDetailsPanel::oz_run_url(&conversation_data).is_none());
     });
 }
 

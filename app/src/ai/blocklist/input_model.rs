@@ -88,6 +88,8 @@ impl From<InputClassifierDecisionSource> for InputTypeAutoDetectionSource {
     }
 }
 
+use warp_errors::report_if_error;
+
 use super::context_model::BlocklistAIContextModel;
 use super::history_model::BlocklistAIHistoryModel;
 use super::input_mode_policy::{InputModePolicyHandle, PolicyConfigUpdate};
@@ -102,7 +104,7 @@ use crate::terminal::input::decorations::ParsedTokensSnapshot;
 use crate::terminal::model::rich_content::RichContentType;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::{History, TerminalModel};
-use crate::{report_if_error, send_telemetry_from_ctx, PrivacySettings, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, PrivacySettings, TelemetryEvent};
 
 /// Cutoff score for deciding an user input matches a history command entry.
 const HISTORY_ENTRY_MATCH_CUTOFF: f32 = 0.9;

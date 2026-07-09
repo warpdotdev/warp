@@ -6,7 +6,7 @@ use warp_cli::agent::OutputFormat;
 use warp_cli::federate::{FederateCommand, IssueGcpTokenArgs, IssueTokenArgs};
 use warp_cli::GlobalOptions;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity as _};

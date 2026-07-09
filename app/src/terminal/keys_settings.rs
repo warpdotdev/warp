@@ -1,5 +1,6 @@
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+use warp_errors::{report_error, report_if_error};
 use warpui::keymap::Keystroke;
 use warpui::{AppContext, DisplayIdx, ModelContext};
 
@@ -8,7 +9,6 @@ use crate::settings::{
     CtrlTabBehavior, ExtraMetaKeys as ExtraMetaKeysEnum, GlobalHotkeyMode, SizePercentages,
     DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
 };
-use crate::{report_error, report_if_error};
 
 define_settings_group!(KeysSettings, settings: [
     quake_mode_settings: QuakeModeSettings {

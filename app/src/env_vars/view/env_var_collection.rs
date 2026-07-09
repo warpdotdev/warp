@@ -1,5 +1,6 @@
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, AnchorPair, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
@@ -55,9 +56,7 @@ use crate::util::bindings::CustomAction;
 use crate::view_components::alert::AlertConfig;
 use crate::view_components::{Alert, DismissibleToast, ToastType};
 use crate::workspace::ToastStack;
-use crate::{
-    report_error, send_telemetry_from_ctx, Appearance, CloudObjectTypeAndId, TelemetryEvent,
-};
+use crate::{send_telemetry_from_ctx, Appearance, CloudObjectTypeAndId, TelemetryEvent};
 
 // Universal
 pub(super) const CORE_HORIZONATAL_MARGIN: f32 = 24.;

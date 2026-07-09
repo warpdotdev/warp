@@ -1,4 +1,6 @@
 use registry::register_uri_handler;
+#[cfg(feature = "release_bundle")]
+use warp_errors::report_error;
 use warpui::AppContext;
 #[cfg(feature = "release_bundle")]
 use {
@@ -6,9 +8,6 @@ use {
     single_instance_manager::SingleInstanceManager, thiserror::Error, url::Url,
     warp_core::channel::ChannelState,
 };
-
-#[cfg(feature = "release_bundle")]
-use crate::report_error;
 
 mod registry;
 #[cfg(feature = "release_bundle")]

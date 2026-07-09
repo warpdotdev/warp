@@ -4,6 +4,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use shell_words::split as split_shell_words;
 use warp_cli::agent::Harness;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -15,7 +16,6 @@ use crate::ai::agent::{
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
-use crate::report_error;
 
 /// Per-request outcome of a StartAgent dispatch.
 #[derive(Debug, Clone)]

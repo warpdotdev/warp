@@ -14,8 +14,8 @@ use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_errors::report_error;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui_core::fonts::Weight;
 use warpui_core::image_cache::ImageType;
@@ -580,7 +580,7 @@ impl EditDelta {
                 if let (BlockItem::Hidden(running_config), BlockItem::Hidden(config)) =
                     (last, &item)
                 {
-                    *running_config += *config;
+                    *running_config += config.clone();
                     return acc;
                 }
             }

@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::elements::{
     Align, Container, CrossAxisAlignment, Flex, MouseStateHandle, ParentElement, Text,
 };
@@ -7,7 +8,6 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
-use crate::report_error;
 use crate::server::ids::ServerId;
 
 pub struct TransferOwnershipConfirmationModal {

@@ -14,9 +14,9 @@ use std::thread::{self, JoinHandle};
 use log::error;
 use mio::{self, Events, Interest};
 use parking_lot::{FairMutex, FairMutexGuard};
+use warp_errors::report_error;
 
 use super::mio_channel::Receiver;
-use crate::report_error;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi;
 use crate::terminal::model::terminal_model::ExitReason;

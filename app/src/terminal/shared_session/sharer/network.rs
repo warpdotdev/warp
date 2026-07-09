@@ -39,6 +39,7 @@ use session_sharing_protocol::sharer::{
     UpstreamMessage,
 };
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_server_client::iap::IapManager;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
@@ -47,6 +48,8 @@ use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::server_api::ServerApiProvider;
+#[cfg(not(any(test, feature = "integration_tests")))]
+use crate::server::telemetry::telemetry_context;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shared_session::{
     connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
@@ -54,8 +57,6 @@ use crate::terminal::shared_session::{
 };
 use crate::terminal::TerminalModel;
 use crate::throttle::throttle;
-#[cfg(not(any(test, feature = "integration_tests")))]
-use crate::{report_error, server::telemetry::telemetry_context};
 
 /// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
@@ -101,7 +102,7 @@ macro_rules! sharer_warn {
 macro_rules! sharer_error {
     ($network:expr, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
-        $crate::report_error!(
+        warp_errors::report_error!(
             anyhow::anyhow!("{}", format_args!($($arg)+)),
             extra: {
                 "session_id" => ?session_id,
@@ -1254,7 +1255,7 @@ impl Network {
                 }
                 log::info!("Closing websocket to session sharing server as sharer");
                 if let Err(e) = sink.close().await {
-                    crate::report_error!(anyhow::Error::new(e)
+                    report_error!(anyhow::Error::new(e)
                         .context("Failed to close session sharing websocket as sharer"));
                 }
                 startup_send_failed

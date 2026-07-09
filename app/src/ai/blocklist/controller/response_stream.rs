@@ -6,6 +6,7 @@ use anyhow::anyhow;
 use chrono::{DateTime, Local, TimeDelta};
 use futures::channel::oneshot;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warp_multi_agent_api::response_event;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
@@ -13,8 +14,8 @@ use crate::ai::agent::api::{self, generate_multi_agent_output, ConvertToAPITypeE
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIIdentifiers, CancellationReason};
 use crate::network::NetworkStatus;
+use crate::send_telemetry_from_ctx;
 use crate::server::server_api::{AIApiError, ServerApiProvider};
-use crate::{report_error, send_telemetry_from_ctx};
 
 /// Maximum number of times a single MAA request is re-sent before the failure is
 /// surfaced.

@@ -2,7 +2,7 @@ use std::fmt;
 
 use bounded_vec_deque::BoundedVecDeque;
 use chrono::{DateTime, FixedOffset};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext, SingletonEntity};
 
 /// Maximum number of network log items retained in memory. Matches the

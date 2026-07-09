@@ -81,6 +81,7 @@ pub fn init(app: &mut AppContext) {
 
 #[cfg(feature = "local_fs")]
 use anyhow::Context as _;
+use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 
@@ -89,7 +90,6 @@ use crate::code::editor_management::CodeSource;
 // Import keybinding constants from code view to ensure consistency
 use crate::code::view::{SAVE_FILE_BINDING_DESCRIPTION, SAVE_FILE_BINDING_NAME};
 use crate::notebooks::file::MarkdownDisplayMode;
-use crate::report_error;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::settings::EditorLayout;
 #[cfg(feature = "local_fs")]

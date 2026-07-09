@@ -9,10 +9,10 @@ use std::cmp::min;
 use std::ops::{Index, IndexMut, Range};
 
 use serde::{Deserialize, Serialize};
+use warp_errors::report_error;
 pub use warp_terminal::model::grid::Dimensions;
 
 use crate::features::FeatureFlag;
-use crate::report_error;
 use crate::terminal::model::ansi::{CharsetIndex, StandardCharset};
 use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::grid::row::Row;

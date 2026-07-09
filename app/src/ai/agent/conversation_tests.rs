@@ -7,7 +7,8 @@ use warpui::{App, SingletonEntity};
 
 use super::{
     artifact_from_fork_proto, footer_model_token_usage, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, RestoreConversationError,
+    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, RecordingSpanStatus,
+    RestoreConversationError,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
@@ -68,6 +69,142 @@ fn user_query_message(id: &str, request_id: &str, query: &str) -> api::Message {
         request_id: request_id.to_string(),
         timestamp: None,
     }
+}
+
+fn tool_call_message(
+    id: &str,
+    request_id: &str,
+    tool_call_id: &str,
+    tool: api::message::tool_call::Tool,
+) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+            tool_call_id: tool_call_id.to_string(),
+            tool: Some(tool),
+        })),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+fn tool_call_result_message(
+    id: &str,
+    request_id: &str,
+    tool_call_id: &str,
+    result: api::message::tool_call_result::Result,
+) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCallResult(
+            api::message::ToolCallResult {
+                tool_call_id: tool_call_id.to_string(),
+                context: None,
+                result: Some(result),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+fn start_recording_tool_call() -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::StartRecording(api::message::tool_call::StartRecording {
+        frame_rate: 15,
+        limits: None,
+        summary: String::new(),
+    })
+}
+
+fn start_recording_success_result(recording_id: &str) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::StartRecording(api::StartRecordingResult {
+        result: Some(api::start_recording_result::Result::Success(
+            api::start_recording_result::Success {
+                recording_id: recording_id.to_string(),
+                started_at: None,
+                settings: Some(api::start_recording_result::CaptureSettings {
+                    width_px: 1280,
+                    height_px: 720,
+                }),
+            },
+        )),
+    })
+}
+
+fn start_recording_error_result(message: &str) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::StartRecording(api::StartRecordingResult {
+        result: Some(api::start_recording_result::Result::Error(
+            api::start_recording_result::Error {
+                message: message.to_string(),
+            },
+        )),
+    })
+}
+
+fn use_computer_tool_call(summary: &str) -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::UseComputer(api::message::tool_call::UseComputer {
+        actions: vec![],
+        post_actions_screenshot_params: None,
+        action_summary: summary.to_string(),
+    })
+}
+
+fn stop_recording_tool_call(recording_id: &str) -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::StopRecording(api::message::tool_call::StopRecording {
+        recording_id: recording_id.to_string(),
+    })
+}
+
+fn stop_recording_success_result(artifact_uid: &str) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::StopRecording(api::StopRecordingResult {
+        result: Some(api::stop_recording_result::Result::Success(
+            api::stop_recording_result::Success {
+                artifact_uid: artifact_uid.to_string(),
+                duration: Some(prost_types::Duration {
+                    seconds: 2,
+                    nanos: 0,
+                }),
+                width_px: 1280,
+                height_px: 720,
+                size_bytes: 42,
+                completion_status: api::stop_recording_result::CompletionStatus::Complete as i32,
+                termination_reason: "Stopped by agent".to_string(),
+            },
+        )),
+    })
+}
+
+fn stop_recording_error_result(message: &str) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::StopRecording(api::StopRecordingResult {
+        result: Some(api::stop_recording_result::Result::Error(
+            api::stop_recording_result::Error {
+                message: message.to_string(),
+            },
+        )),
+    })
+}
+fn restored_conversation_with_messages(messages: Vec<api::Message>) -> AIConversation {
+    AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![api::Task {
+            id: "root-task".to_string(),
+            messages,
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        None,
+    )
+    .unwrap()
 }
 
 fn agent_output_message(id: &str, request_id: &str) -> api::Message {
@@ -185,6 +322,166 @@ fn title_falls_back_to_initial_query_when_root_description_is_empty() {
     let conversation = restored_conversation_with_queries(&["Initial query"]);
 
     assert_eq!(conversation.title().as_deref(), Some("Initial query"));
+}
+
+#[test]
+fn recording_span_closes_on_matching_stop_result() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_message(
+            "stop-call",
+            "req-1",
+            "stop",
+            stop_recording_tool_call("rec-1"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_success_result("rec-1"),
+        ),
+        tool_call_result_message(
+            "stop-result",
+            "req-2",
+            "stop",
+            stop_recording_success_result("artifact-1"),
+        ),
+    ]);
+
+    let span = conversation
+        .recording_span_for_action(&"use".to_string().into(), None)
+        .expect("use action should be inside a recording span");
+
+    assert_eq!(span.recording_id, "rec-1");
+    assert_eq!(span.status, RecordingSpanStatus::Captured);
+}
+
+#[test]
+fn recording_span_stays_open_without_stop_result() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_success_result("rec-1"),
+        ),
+    ]);
+
+    let span = conversation
+        .recording_span_for_action(&"use".to_string().into(), None)
+        .expect("use action should be inside an open recording span");
+
+    assert_eq!(span.recording_id, "rec-1");
+    assert_eq!(span.status, RecordingSpanStatus::Active);
+}
+
+#[test]
+fn recording_span_ignores_failed_start() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_error_result("unsupported"),
+        ),
+    ]);
+
+    assert!(conversation
+        .recording_span_for_action(&"use".to_string().into(), None)
+        .is_none());
+}
+
+#[test]
+fn recording_span_ignores_mismatched_stop_id() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_message(
+            "stop-call",
+            "req-1",
+            "stop",
+            stop_recording_tool_call("other"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_success_result("rec-1"),
+        ),
+        tool_call_result_message(
+            "stop-result",
+            "req-2",
+            "stop",
+            stop_recording_success_result("artifact-1"),
+        ),
+    ]);
+
+    let span = conversation
+        .recording_span_for_action(&"use".to_string().into(), None)
+        .expect("mismatched stop should not close the span");
+
+    assert_eq!(span.recording_id, "rec-1");
+    assert_eq!(span.status, RecordingSpanStatus::Active);
+}
+
+#[test]
+fn recording_span_clears_when_stop_errors() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_message(
+            "stop-call",
+            "req-1",
+            "stop",
+            stop_recording_tool_call("rec-1"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_success_result("rec-1"),
+        ),
+        tool_call_result_message(
+            "stop-result",
+            "req-2",
+            "stop",
+            stop_recording_error_result("upload failed"),
+        ),
+    ]);
+
+    assert!(conversation
+        .recording_span_for_action(&"use".to_string().into(), None)
+        .is_none());
 }
 
 #[test]

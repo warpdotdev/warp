@@ -3,6 +3,10 @@
 #[cfg_attr(windows, path = "windows/mod.rs")]
 #[cfg(not(noop))]
 mod imp;
+// Env-var-gated mock recorder for exercising the recording UI on macOS,
+// where real capture is unsupported.
+#[cfg(macos)]
+mod mock;
 mod noop;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
@@ -198,8 +202,13 @@ pub trait Actor: Send + Sync + 'static {
 ///
 /// A real recorder is only available on Linux (X11); every other platform, and
 /// any `test-util` build, gets a no-op recorder that reports recording as
-/// unsupported.
+/// unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a mock
+/// recorder for UI testing (see `mock`).
 pub fn create_recorder() -> Box<dyn Recorder> {
+    #[cfg(macos)]
+    if std::env::var_os("WARP_MOCK_RECORDER").is_some() {
+        return Box::new(mock::Recorder::new());
+    }
     if cfg!(feature = "test-util") {
         Box::new(noop::Recorder::new())
     } else {
@@ -411,6 +420,18 @@ pub enum Action {
     KeyUp {
         key: Key,
     },
+}
+
+impl Action {
+    /// Whether this action is a no-op placeholder rather than a real
+    /// interaction. Agents that only want the post-actions screenshot emit a
+    /// zero-duration wait, since `use_computer` requires at least one action.
+    /// This cannot catch every semantically inert batch (e.g. a mouse move to
+    /// the current position), but the zero-wait idiom is the documented
+    /// screenshot pattern.
+    pub fn is_no_op(&self) -> bool {
+        matches!(self, Action::Wait(duration) if duration.is_zero())
+    }
 }
 
 /// The direction of a scroll action.

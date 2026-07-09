@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warpui_extras::secure_storage::AppContextExt as _;
 
 pub const TEMPLATABLE_MCP_CREDENTIALS_KEY: &str = "TemplatableMcpCredentials";

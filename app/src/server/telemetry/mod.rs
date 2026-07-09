@@ -23,6 +23,7 @@ use rudder_message::{
     BatchMessageItem as RudderBatchMessage, Message as RudderMessage,
 };
 use warp_core::channel::RudderStackDestination;
+use warp_errors::report_error;
 use warpui::telemetry::Event;
 
 use crate::auth::UserUid;
@@ -30,7 +31,7 @@ use crate::features::FeatureFlag;
 use crate::server::telemetry::context::AttachContext;
 use crate::server::telemetry_ext::TelemetryExt;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::{report_error, ChannelState};
+use crate::ChannelState;
 
 /// Filename for file where telemetry events are written on app quit.
 const RUDDER_TELEMETRY_EVENTS_FILE_NAME: &str = "rudder_telemetry_events.json";

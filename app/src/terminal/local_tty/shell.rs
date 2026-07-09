@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use typed_path::UnixPathBuf;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::session_id::SessionId;
+use warp_errors::report_error;
 use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
 
-use crate::report_error;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::bootstrap::{generate_session_id, init_shell_script_for_shell};
 use crate::terminal::local_tty::docker_sandbox::DockerSandboxShellStarter;

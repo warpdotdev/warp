@@ -8,9 +8,9 @@ use mio::Interest;
 use parking_lot::Mutex;
 use signal_hook_mio::v1_0::Signals;
 use warp_cli::TerminalServerArgs;
+use warp_errors::report_error;
 
 use super::{api, logging, protocol, RECV_SOCKET_FILENO, SEND_SOCKET_FILENO};
-use crate::report_error;
 use crate::terminal::local_tty::server::protocol::NonblockingSocketFd;
 use crate::terminal::local_tty::{self};
 use crate::terminal::platform;

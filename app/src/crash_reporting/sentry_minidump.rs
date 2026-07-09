@@ -26,7 +26,7 @@ use sentry::protocol::{Attachment, AttachmentType};
 use sentry::{Breadcrumb, Level};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use warp_core::report_error;
+use warp_errors::report_error;
 
 use super::ToSentryTags;
 

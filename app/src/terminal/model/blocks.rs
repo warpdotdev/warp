@@ -4058,6 +4058,7 @@ impl ToTotalIndex for BlockIndex {
 #[cfg(test)]
 #[path = "blocks_tests.rs"]
 mod tests;
+use warp_errors::report_error;
+
 #[cfg(test)]
 pub use self::tests::insert_block;
-use crate::report_error;

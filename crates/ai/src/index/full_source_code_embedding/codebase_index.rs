@@ -13,7 +13,8 @@ use instant::Instant;
 #[cfg(feature = "local_fs")]
 use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy};
 use repo_metadata::Repository;
-use warp_core::{report_error, safe_error};
+use warp_core::safe_error;
+use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext, ModelHandle};
 
 use super::fragment_metadata::{

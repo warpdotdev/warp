@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::FutureExt as AsyncFutureExt;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -27,7 +28,7 @@ use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::{shell_quote_arg, ExecuteCommandOptions, Session};
 use crate::terminal::shell::ShellType;
 use crate::terminal::ShellLaunchData;
-use crate::{report_error, send_telemetry_from_app_ctx, PrivacySettings, TelemetryEvent};
+use crate::{send_telemetry_from_app_ctx, PrivacySettings, TelemetryEvent};
 
 const GREP_TIMEOUT: Duration = Duration::from_secs(10);
 const NON_ZERO_EXIT_CODE_ERROR: &str = "Grep command exited with non-zero exit code";

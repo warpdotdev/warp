@@ -2,11 +2,10 @@
 //! such as the dimensions of a grid cell and the baseline position of text within a cell.
 use num_traits::Zero;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_errors::report_error;
 use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
 use warpui::fonts::{Cache as FontCache, FamilyId};
 use warpui::text_layout::ComputeBaselinePositionFn;
-
-use crate::report_error;
 
 /// Computes the grid cell size given the font and size at which the grid should
 /// be rendered. We use a similar algorithm to Alacritty to do this, where the

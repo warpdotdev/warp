@@ -1,5 +1,6 @@
 use chrono::Local;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::report_error;
 use warp_graphql::queries::get_conversation_usage::ConversationUsage;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
@@ -12,7 +13,6 @@ use crate::ai::blocklist::format_credits;
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, DisplayMode,
 };
-use crate::report_error;
 use crate::settings_view::billing_and_usage_page::BillingAndUsagePageAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;

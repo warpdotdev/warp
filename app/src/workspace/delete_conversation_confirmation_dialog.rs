@@ -1,5 +1,6 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ChildAnchor, ChildView, Container, OffsetPositioning, ParentAnchor, ParentOffsetBounds,
     Stack,
@@ -12,7 +13,6 @@ use warpui::{
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::appearance::Appearance;
-use crate::report_error;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::view_components::action_button::{
     ActionButton, DangerPrimaryTheme, KeystrokeSource, NakedTheme,

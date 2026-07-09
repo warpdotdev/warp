@@ -242,7 +242,7 @@ pub fn teardown() {
         .map_err(Into::into)
         .and_then(write_pprof_report)
     {
-        crate::report_error!(err.context("Failed to write pprof data"));
+        warp_errors::report_error!(err.context("Failed to write pprof data"));
     }
 }
 

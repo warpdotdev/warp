@@ -1,9 +1,8 @@
 use std::ffi::OsString;
 
 use warp_core::channel::ChannelState;
+use warp_errors::report_error;
 use windows_registry::{CURRENT_USER, HSTRING};
-
-use crate::report_error;
 
 pub(super) fn register_uri_handler() {
     // To change the settings for the user, changes must be made under

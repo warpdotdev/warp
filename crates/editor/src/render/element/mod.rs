@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -9,8 +10,8 @@ use parking_lot::Mutex;
 use string_offset::CharOffset;
 use temporary_block::RenderableTemporaryBlock;
 use vim::vim::VimMode;
-use warp_core::report_error;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_errors::report_error;
 use warpui_core::color::ColorU;
 use warpui_core::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
 use warpui_core::elements::{
@@ -42,7 +43,8 @@ use self::text_block::RenderableTextBlock;
 use self::unordered_list::RenderableBulletList;
 use super::model::viewport::{SizeInfo, ViewportItem};
 use super::model::{
-    BlockItem, ElementUpdate, HitTestOptions, Location, RenderState, RichTextStyles, UNIT_MARGIN,
+    BlockItem, ElementUpdate, HitTestOptions, LineCount, Location, RenderState, RichTextStyles,
+    UNIT_MARGIN,
 };
 use crate::content::version::BufferVersion;
 use crate::editor::EditorView;
@@ -369,6 +371,18 @@ pub trait RichTextAction<V>: Sized {
         parent_view: &WeakViewHandle<V>,
         ctx: &AppContext,
     ) -> Option<Self>;
+
+    /// Dispatch an event when a hidden-section bar is clicked, to fully
+    /// expand the entire hidden section it represents. `line_range` is the
+    /// section's complete hidden line range. Defaults to no action; only the
+    /// code-review editor implements it.
+    fn hidden_section_clicked(
+        _line_range: Range<LineCount>,
+        _parent_view: &WeakViewHandle<V>,
+        _ctx: &AppContext,
+    ) -> Option<Self> {
+        None
+    }
 
     /// Dispatch an event when the mouse wheel is clicked.
     fn middle_mouse_down(ctx: &AppContext) -> Option<Self>;
@@ -906,7 +920,19 @@ impl<V: EditorView> RichTextElement<V> {
                     BlockItem::Image { .. } => RenderableImage::new(item).finish(),
                     BlockItem::Table { .. } => RenderableTable::new(item).finish(),
                     BlockItem::TrailingNewLine(_) => Empty::new(item).finish(),
-                    BlockItem::Hidden { .. } => RenderableHiddenSection::new(item, ctx).finish(),
+                    BlockItem::Hidden(config) => {
+                        let full_line_range = model.line_range_at_offset(item.block_offset);
+                        RenderableHiddenSection::new(
+                            item,
+                            config.mouse_state(),
+                            config.line_count(),
+                            full_line_range,
+                            styles,
+                            self.parent_view.clone(),
+                            ctx,
+                        )
+                        .finish()
+                    }
                     BlockItem::Embedded(embed) => {
                         let start_offset = item.block_offset;
                         let child_model = parent.embedded_item_at(start_offset, ctx);
