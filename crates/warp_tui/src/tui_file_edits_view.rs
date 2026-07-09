@@ -11,15 +11,12 @@
 use ai::agent::action_result::{AIAgentActionResultType, RequestFileEditsResult};
 use itertools::Itertools;
 use warp::tui_export::{
-    AIAgentActionId, Appearance, BlocklistAIActionEvent, BlocklistAIActionModel, DiffSessionType,
-    FileDiff,
+    AIAgentActionId, BlocklistAIActionEvent, BlocklistAIActionModel, DiffSessionType, FileDiff,
 };
-use warp_core::ui::theme::Fill as ThemeFill;
-use warpui::SingletonEntity;
-use warpui_core::elements::tui::{Modifier, TuiContainer, TuiElement, TuiStyle, TuiText};
-use warpui_core::elements::Fill;
+use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiText};
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
+use crate::tui_builder::TuiUiBuilder;
 use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageEvent, TuiDiffStorageHandle};
 
 /// A per-action view backing one `RequestFileEdits` tool call in the transcript.
@@ -146,15 +143,9 @@ impl TuiView for TuiFileEditsView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        let theme = Appearance::as_ref(app).theme();
-        let text_color = Fill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into();
         let label = self.label(app);
         TuiContainer::new(Box::new(
-            TuiText::new(label).with_style(
-                TuiStyle::default()
-                    .fg(text_color)
-                    .add_modifier(Modifier::DIM),
-            ),
+            TuiText::new(label).with_style(TuiUiBuilder::from_app(app).dim_text_style()),
         ))
         .finish()
     }

@@ -10,17 +10,21 @@ use std::ffi::OsString;
 use anyhow::Result;
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
-    dark_theme, Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
-    TerminalManagerTrait, TerminalSurfaceResult,
+    dark_theme, light_theme, Appearance, BannerState, IsSharedSessionCreator,
+    LocalTtyTerminalManager, TerminalManagerTrait, TerminalSurfaceResult,
 };
 use warp::{TuiLoginModel, TuiLoginPhase};
+use warp_core::ui::theme::WarpTheme;
 use warp_errors::report_error;
 use warpui::SingletonEntity;
 use warpui_core::platform::{TerminationMode, WindowStyle};
-use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
+use warpui_core::runtime::{
+    probe_terminal_colors, spawn_tui_driver, BackgroundLuminance, TuiDriverHandle,
+};
 use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, ViewHandle};
 
 use crate::root_view::RootTuiView;
+use crate::terminal_background::set_probed_colors;
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 
@@ -59,11 +63,12 @@ fn init(ctx: &mut AppContext) {
     // `autoupdate` module docs).
     crate::autoupdate::TuiAutoupdater::register(ctx);
 
-    // The current TUI transcript design is dark-mode-only. Keep this scoped to
+    // Theme the transcript to match the host terminal. Keep this scoped to
     // the TUI process by overriding the already-initialized Appearance theme at
     // mount time, without changing normal GUI theme selection or font settings.
+    let theme = transcript_theme();
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
-        appearance.set_theme(dark_theme(), ctx);
+        appearance.set_theme(theme, ctx);
     });
 
     let banner = ctx.add_model(|_| BannerState::default());
@@ -106,6 +111,21 @@ fn init(ctx: &mut AppContext) {
             report_error!(&error);
             ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
         }
+    }
+}
+
+/// Picks the transcript's theme: the host terminal's default colors are
+/// probed (via OSC 10/11, before the TUI driver takes over stdin) and a light
+/// background selects the light theme; dark and undetectable backgrounds keep
+/// the dark theme, the TUI's historical dark-only default. The probed colors
+/// are also cached process-wide so styling can blend against the terminal's
+/// real background.
+fn transcript_theme() -> WarpTheme {
+    let probed = probe_terminal_colors();
+    set_probed_colors(probed);
+    match probed.background_luminance() {
+        BackgroundLuminance::Light => light_theme(),
+        BackgroundLuminance::Dark | BackgroundLuminance::Unknown => dark_theme(),
     }
 }
 

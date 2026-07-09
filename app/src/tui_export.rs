@@ -79,7 +79,7 @@ pub use crate::terminal::{
     BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData,
     TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
 };
-pub use crate::themes::default_themes::dark_theme;
+pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;

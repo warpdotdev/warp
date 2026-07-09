@@ -108,12 +108,24 @@ fn expected_input_background(app: &AppContext) -> Color {
 
 fn expected_output_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()
+    let opacity = theme.details().main_text_opacity;
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(opacity)),
+    )
+    .into()
 }
 
 fn expected_tool_call_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into()
+    let opacity = theme.details().sub_text_opacity;
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(opacity)),
+    )
+    .into()
 }
 
 #[test]
@@ -263,10 +275,8 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
                 CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.yellow)).into();
             let red: Color =
                 CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.red)).into();
-            let white: Color =
-                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into();
-            let grey: Color =
-                CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into();
+            let primary = expected_output_text_color(app_ctx);
+            let muted = expected_tool_call_text_color(app_ctx);
 
             let render = |action: &AIAgentAction, status: Option<&AIActionStatus>| {
                 let mut presenter = TuiPresenter::new();
@@ -286,14 +296,14 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
                 "✓ Init project — done"
             );
             assert_eq!(frame.buffer[(0, 0)].fg, green);
-            assert_eq!(frame.buffer[(2, 0)].fg, white);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
             assert!(!frame.buffer[(2, 0)].modifier.contains(Modifier::DIM));
 
             // Running: yellow dot.
             let frame = render(&action, Some(&AIActionStatus::RunningAsync));
             assert_eq!(frame.buffer.to_lines()[0].trim_end(), "● Init project…");
             assert_eq!(frame.buffer[(0, 0)].fg, yellow);
-            assert_eq!(frame.buffer[(2, 0)].fg, white);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
 
             // Failed (denylisted command): red x, normal-foreground label.
             let command_action = test_command_action("action-2", "git status");
@@ -311,7 +321,7 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
                 "✗ `git status` denied (denylisted)"
             );
             assert_eq!(frame.buffer[(0, 0)].fg, red);
-            assert_eq!(frame.buffer[(2, 0)].fg, white);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
 
             // Cancelled: grey block, normal-foreground label.
             let cancelled = finished_status(
@@ -325,9 +335,9 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
                 frame.buffer.to_lines()[0].trim_end(),
                 "■ Cancelled `git status`"
             );
-            assert_eq!(frame.buffer[(0, 0)].fg, grey);
+            assert_eq!(frame.buffer[(0, 0)].fg, muted);
             assert!(!frame.buffer[(0, 0)].modifier.contains(Modifier::DIM));
-            assert_eq!(frame.buffer[(2, 0)].fg, white);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
         });
     });
 }
