@@ -124,6 +124,7 @@ impl Describe for BlockItem {
             )?,
             BlockItem::TrailingNewLine(_) => f.write_str("Trailing Newline")?,
             BlockItem::Embedded(_) => f.write_str("Embedded Item")?,
+            BlockItem::EmbeddedComment { .. } => f.write_str("Embedded Comment")?,
             BlockItem::Hidden { .. } => f.write_str("Hidden")?,
         }
 

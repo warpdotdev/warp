@@ -179,9 +179,6 @@ impl RenderableBlock for RenderableEmbeddedCommentSpace {
         false
     }
 
-    fn is_embedded_comment(&self) -> bool {
-        true
-    }
 }
 
 /// The embedded item transformation for comments.
