@@ -61,7 +61,7 @@ use warpui::elements::{
 use warpui::text::point::Point;
 use warpui::text::TextBuffer;
 use warpui::units::{IntoPixels, Pixels};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
 use super::super::DiffResult;
 use super::comments::{EditorCommentsModel, PendingComment, PendingCommentEvent};
@@ -1924,6 +1924,123 @@ impl CodeEditorModel {
     pub fn cut(&mut self, ctx: &mut ModelContext<Self>) {
         self.copy(ctx);
         self.backspace(ctx);
+    }
+
+    // ── Char-cell (TUI) viewport scroll ──────────────────────────────────────
+    //
+    // The scroll offset itself lives on `CharCellState` (the char-cell arm of
+    // the render state, mirroring how the GUI keeps scroll on `RenderState`);
+    // these wrappers gather the inputs the mechanism needs — the primary
+    // cursor and the model-derived hidden line ranges — so consumers only
+    // supply viewport policy.
+
+    /// Scrolls the char-cell viewport the minimal amount needed to keep the
+    /// primary cursor visible within `viewport_rows` display rows. No-op
+    /// outside char-cell (TUI) mode.
+    pub fn char_cell_follow_cursor(&self, viewport_rows: u32, app: &AppContext) {
+        let render = self.render_state.as_ref(app);
+        let Some(char_cell) = render.char_cell() else {
+            return;
+        };
+        let cursor_idx = self.primary_cursor_gap(app).as_usize().saturating_sub(1);
+        let hidden = render.hidden_line_ranges(app);
+        char_cell.follow_cursor(cursor_idx, viewport_rows, &hidden);
+    }
+
+    /// Scrolls the char-cell viewport by `rows` display rows (negative
+    /// scrolls toward the top) without moving the cursor, clamped to the
+    /// scrollable range for `viewport_rows`. No-op outside char-cell (TUI)
+    /// mode.
+    pub fn char_cell_scroll_by(&self, rows: isize, viewport_rows: u32, app: &AppContext) {
+        let render = self.render_state.as_ref(app);
+        let Some(char_cell) = render.char_cell() else {
+            return;
+        };
+        let cursor_idx = self.primary_cursor_gap(app).as_usize().saturating_sub(1);
+        let hidden = render.hidden_line_ranges(app);
+        char_cell.scroll_by(rows, viewport_rows, cursor_idx, &hidden);
+    }
+
+    // ── Char-cell (TUI) visual-row kill ──────────────────────────────────────
+
+    /// Deletes from the primary cursor to the end of its soft-wrapped visual
+    /// row, returning the deleted text; `None` when the cursor is already at
+    /// the row end. Char-cell (TUI) mode only — visual rows follow the
+    /// terminal-width wrap math.
+    pub fn kill_to_visual_row_end(&mut self, ctx: &mut ModelContext<Self>) -> Option<String> {
+        // `cursor_gap` is a 1-indexed gap position (gap 1 sits before the
+        // first character); `text_in_range` / `Delete` use those same
+        // coordinates, so the kill range starts exactly at `cursor_gap`.
+        let cursor_gap = self.primary_cursor_gap(ctx).as_usize();
+        let cursor_idx = cursor_gap.saturating_sub(1);
+        let row = self.cursor_visual_row_range(cursor_idx, ctx)?;
+        if row.end <= cursor_idx {
+            return None;
+        }
+        // `text[i]` lives at gap `i + 1`, so the exclusive end gap is `row.end + 1`.
+        Some(self.delete_range_returning_text(
+            CharOffset::from(cursor_gap)..CharOffset::from(row.end + 1),
+            ctx,
+        ))
+    }
+
+    /// Deletes from the start of the primary cursor's soft-wrapped visual row
+    /// up to the cursor, returning the deleted text; `None` when the cursor
+    /// is already at the row start. Char-cell (TUI) mode only.
+    pub fn kill_to_visual_row_start(&mut self, ctx: &mut ModelContext<Self>) -> Option<String> {
+        let cursor_gap = self.primary_cursor_gap(ctx).as_usize();
+        let cursor_idx = cursor_gap.saturating_sub(1);
+        let row = self.cursor_visual_row_range(cursor_idx, ctx)?;
+        if row.start >= cursor_idx {
+            return None;
+        }
+        Some(self.delete_range_returning_text(
+            CharOffset::from(row.start + 1)..CharOffset::from(cursor_gap),
+            ctx,
+        ))
+    }
+
+    /// The primary cursor as a 1-indexed gap offset.
+    fn primary_cursor_gap(&self, ctx: &impl ModelAsRef) -> CharOffset {
+        *self.selection.as_ref(ctx).cursors(ctx).first()
+    }
+
+    /// The soft-wrapped visual row containing 0-based char index `cursor_idx`
+    /// as 0-based char indices; `None` outside char-cell (TUI) mode.
+    fn cursor_visual_row_range(
+        &self,
+        cursor_idx: usize,
+        ctx: &impl ModelAsRef,
+    ) -> Option<Range<usize>> {
+        let render = self.render_state.as_ref(ctx);
+        Some(render.char_cell()?.visual_row_char_range(cursor_idx))
+    }
+
+    /// Deletes `range` (1-indexed gap offsets) as a user edit, returning the
+    /// deleted text.
+    fn delete_range_returning_text(
+        &mut self,
+        range: Range<CharOffset>,
+        ctx: &mut ModelContext<Self>,
+    ) -> String {
+        let deleted = self
+            .content
+            .as_ref(ctx)
+            .text_in_range(range.clone())
+            .into_string();
+        let selection_model = self.selection_model.clone();
+        self.update_content(
+            |mut content, ctx| {
+                content.apply_edit(
+                    BufferEditAction::Delete(vec1![range]),
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        deleted
     }
 
     pub fn reset_content(&mut self, state: InitialBufferState, ctx: &mut ModelContext<Self>) {

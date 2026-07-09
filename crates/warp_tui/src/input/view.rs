@@ -4,7 +4,7 @@
 //!
 //! - Holds a [`ModelHandle<CodeEditorModel>`] constructed in `LayoutMode::CharCell`.
 //! - Renders the core [`TuiEditorElement`] verbatim (editable, scroll-windowed).
-//! - Owns all TUI-specific session state: kill buffer, scroll offset.
+//! - Owns the kill buffer and the `!` shell-mode composition.
 //! - Dispatches keystrokes as [`TuiInputAction`] typed actions.
 //! - Emits [`TuiInputViewEvent::Submitted`] when the user presses Enter.
 //!
@@ -13,13 +13,14 @@
 //! The view works directly with [`CodeEditorModel`] (char-cell mode) so that future
 //! TUI features — vim, syntax highlighting, diff, hidden lines — come for free from
 //! the shared editor infrastructure. Rendering and mouse interaction come from the
-//! shared core element ([`crate::editor_element`]); TUI-specific concepts (kill
-//! ring, terminal viewport scroll policy, readline keybindings) belong to this view
-//! layer, not to the element or the underlying editor model.
+//! shared core element ([`crate::editor_element`]). Editor session mechanisms live
+//! model-side, mirroring the GUI split: viewport scroll state on the char-cell
+//! render state (`CharCellState`), drag-selection state on the selection model,
+//! visual-row kill edits on `CodeEditorModel`. What stays here is input policy:
+//! the readline keybinding table, the kill buffer, submit, and shell mode.
 //!
 //! See `specs/tui-input-view/TECH.md` for the full keybinding table.
 
-use std::cmp;
 use std::ops::Range;
 
 use string_offset::CharOffset;
@@ -551,19 +552,16 @@ pub enum TuiInputAction {
 
 /// The `TuiView`-implementing entry point for the TUI prompt input.
 pub struct TuiInputView {
-    /// The backing code editor in char-cell (terminal) mode.
+    /// The backing code editor in char-cell (terminal) mode. Also owns the
+    /// editor session state the input drives: viewport scroll (char-cell
+    /// render state) and drag-selection state (selection model).
     model: ModelHandle<CodeEditorModel>,
     /// Shared input-mode state driving `!` shell-mode handling.
     input_mode: ModelHandle<BlocklistAIInputModel>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
     kill_buffer: KillBuffer,
-    /// First visible display row (0-indexed).
-    scroll_offset: u32,
     /// Maximum number of visible rows before the input scrolls.
     max_visible_rows: u32,
-    /// Whether a mouse drag-selection is in progress (set on mouse-down, cleared
-    /// on mouse-up). Mirrors the GUI editor's `is_selecting`.
-    is_selecting: bool,
     /// Mouse state for the shell-mode `!` gutter; created once here (not inline
     /// during render) so mouse tracking survives per-frame element rebuilds.
     prefix_mouse_state: MouseStateHandle,
@@ -600,9 +598,7 @@ impl TuiInputView {
             model,
             input_mode,
             kill_buffer: KillBuffer::default(),
-            scroll_offset: 0,
             max_visible_rows: 6,
-            is_selecting: false,
             prefix_mouse_state: MouseStateHandle::default(),
         }
     }
@@ -625,7 +621,11 @@ impl TuiInputView {
     /// Clears the input buffer and resets the viewport scroll.
     pub fn clear(&mut self, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |m, ctx| m.clear_buffer(ctx));
-        self.scroll_offset = 0;
+        // The cursor is back at the buffer start, so following it scrolls the
+        // viewport back to the top.
+        self.model
+            .as_ref(ctx)
+            .char_cell_follow_cursor(self.max_visible_rows, ctx);
         ctx.notify();
     }
 
@@ -636,8 +636,7 @@ impl TuiInputView {
     fn render_element(&self, ctx: &AppContext) -> TuiEditorElement {
         TuiEditorElement::new(&self.model, ctx)
             .editable()
-            .with_scroll(self.scroll_offset, self.max_visible_rows)
-            .with_drag_in_progress(self.is_selecting)
+            .with_viewport_rows(self.max_visible_rows)
             .on_action(|action, event_ctx| {
                 event_ctx.dispatch_typed_action(TuiInputAction::from(action))
             })
@@ -836,8 +835,22 @@ impl TypedActionView for TuiInputView {
                     )
                 });
             }
-            TuiInputAction::KillToLineEnd => self.kill_to_line_end(ctx),
-            TuiInputAction::KillToLineStart => self.kill_to_line_start(ctx),
+            TuiInputAction::KillToLineEnd => {
+                if let Some(killed) = self
+                    .model
+                    .update(ctx, |m, ctx| m.kill_to_visual_row_end(ctx))
+                {
+                    self.kill_buffer.kill(killed);
+                }
+            }
+            TuiInputAction::KillToLineStart => {
+                if let Some(killed) = self
+                    .model
+                    .update(ctx, |m, ctx| m.kill_to_visual_row_start(ctx))
+                {
+                    self.kill_buffer.kill(killed);
+                }
+            }
             TuiInputAction::Yank => self.yank(ctx),
             TuiInputAction::Undo => {
                 self.model.update(ctx, |m, ctx| m.undo(ctx));
@@ -851,7 +864,6 @@ impl TypedActionView for TuiInputView {
                 }
             }
             TuiInputAction::SelectionStartAt { offset } => {
-                self.is_selecting = true;
                 self.model
                     .update(ctx, |m, ctx| m.select_at(*offset, false, ctx));
             }
@@ -860,26 +872,21 @@ impl TypedActionView for TuiInputView {
                     .update(ctx, |m, ctx| m.set_last_selection_head(*offset, ctx));
             }
             TuiInputAction::SelectWordAt { offset } => {
-                self.is_selecting = true;
                 self.model
                     .update(ctx, |m, ctx| m.select_word_at(*offset, false, ctx));
             }
             TuiInputAction::SelectLineAt { offset } => {
-                self.is_selecting = true;
                 self.model
                     .update(ctx, |m, ctx| m.select_line_at(*offset, false, ctx));
             }
+            // Both are model-side no-ops unless a drag selection is pending
+            // (begun by a mouse-down on the element), so no gating is needed.
             TuiInputAction::SelectionUpdateTo { offset } => {
-                if self.is_selecting {
-                    self.model
-                        .update(ctx, |m, ctx| m.update_pending_selection(*offset, ctx));
-                }
+                self.model
+                    .update(ctx, |m, ctx| m.update_pending_selection(*offset, ctx));
             }
             TuiInputAction::SelectionEnd => {
-                if self.is_selecting {
-                    self.is_selecting = false;
-                    self.model.update(ctx, |m, ctx| m.end_selection(ctx));
-                }
+                self.model.update(ctx, |m, ctx| m.end_selection(ctx));
             }
             TuiInputAction::SetCursor { offset } => {
                 self.model.update(ctx, |m, ctx| {
@@ -889,16 +896,19 @@ impl TypedActionView for TuiInputView {
             }
             TuiInputAction::Scroll { rows } => {
                 // Wheel scrolling moves the viewport only; it must NOT snap back
-                // to the cursor, so it returns early (skipping `scroll_to_cursor`).
-                self.scroll_by(*rows, ctx);
+                // to the cursor, so it returns early (skipping the follow-cursor
+                // tail below).
+                self.model
+                    .as_ref(ctx)
+                    .char_cell_scroll_by(*rows, self.max_visible_rows, ctx);
                 ctx.notify();
                 return;
             }
         }
 
-        let (cursor_row, total_rows) = self.display_geometry(ctx);
-        let visible_rows = cmp::min(total_rows, self.max_visible_rows);
-        self.scroll_to_cursor(cursor_row, total_rows, visible_rows.max(1));
+        self.model
+            .as_ref(ctx)
+            .char_cell_follow_cursor(self.max_visible_rows, ctx);
         ctx.notify();
     }
 }
@@ -953,60 +963,6 @@ impl TuiInputView {
         self.cursor_offset(ctx).as_usize() <= 1 && self.selection_range(ctx).is_none()
     }
 
-    /// The cursor's row and the total row count in *display-row* space — the
-    /// same rows [`TuiEditorElement`] windows by — so scroll policy and
-    /// rendering can never disagree about which rows exist. The total includes
-    /// the "phantom" row the cursor wraps onto when a logical line exactly
-    /// fills the terminal width (deferred wrap): the lattice's rows never
-    /// count it, but the cursor legitimately sits there, so sizing and
-    /// scrolling must include it or the viewport scrolls to a row that is
-    /// never rendered.
-    fn display_geometry(&self, ctx: &AppContext) -> (u32, u32) {
-        let cursor_idx = self.cursor_offset(ctx).as_usize().saturating_sub(1);
-        let inner = self.model.as_ref(ctx);
-        let render = inner.render_state().as_ref(ctx);
-        let Some(char_cell) = render.char_cell() else {
-            return (0, 1);
-        };
-        let hidden = render.hidden_line_ranges(ctx);
-        char_cell.with_display_lattice(&hidden, |lattice| {
-            let cursor_row = lattice.offset_to_display_point(cursor_idx).row;
-            let total_rows = (lattice.rows().len() as u32).max(cursor_row + 1);
-            (cursor_row, total_rows)
-        })
-    }
-
-    // ── Scroll ────────────────────────────────────────────────────────────────────
-
-    /// Clamps a stale scroll offset, then moves the viewport the minimal
-    /// amount needed to keep `cursor_row` visible. Rows are display rows from
-    /// [`Self::display_geometry`].
-    fn scroll_to_cursor(&mut self, cursor_row: u32, total_rows: u32, visible_rows: u32) {
-        // A stale offset can point past the last remaining row (e.g. after a
-        // deletion shrank the content); clamp it so the visible window always
-        // overlaps real rows before following the cursor.
-        self.scroll_offset = self
-            .scroll_offset
-            .min(total_rows.saturating_sub(visible_rows));
-
-        if cursor_row < self.scroll_offset {
-            self.scroll_offset = cursor_row;
-        } else if cursor_row >= self.scroll_offset + visible_rows {
-            self.scroll_offset = cursor_row.saturating_sub(visible_rows - 1);
-        }
-    }
-
-    /// Scrolls the viewport by `rows` display rows (negative scrolls toward the
-    /// top), clamped to `[0, max_scroll]`. Independent of the cursor, so callers
-    /// must not follow it with `scroll_to_cursor`.
-    fn scroll_by(&mut self, rows: isize, ctx: &AppContext) {
-        let (_, total_rows) = self.display_geometry(ctx);
-        let visible_rows = cmp::min(total_rows, self.max_visible_rows).max(1);
-        let max_scroll = total_rows.saturating_sub(visible_rows) as isize;
-        let new_offset = (self.scroll_offset as isize + rows).clamp(0, max_scroll);
-        self.scroll_offset = new_offset as u32;
-    }
-
     // ── Shell mode ────────────────────────────────────────────────────────────
 
     /// Locks the shared input mode to shell with the `!` shell-prefix source.
@@ -1042,105 +998,15 @@ impl TuiInputView {
     }
 
     // ── Kill / yank ───────────────────────────────────────────────────────────
-
-    fn kill_to_line_end(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(range) = self.range_to_visual_line_end(ctx) {
-            let killed = self
-                .model
-                .as_ref(ctx)
-                .content()
-                .as_ref(ctx)
-                .text_in_range(range.clone())
-                .into_string();
-            self.kill_buffer.kill(killed);
-            self.model.update(ctx, |inner, ctx| {
-                use warp_editor::content::buffer::{BufferEditAction, EditOrigin};
-                inner.update_content(
-                    |mut content, ctx| {
-                        content.apply_edit(
-                            BufferEditAction::Delete(vec1::vec1![range]),
-                            EditOrigin::UserInitiated,
-                            inner.buffer_selection_model().clone(),
-                            ctx,
-                        );
-                    },
-                    ctx,
-                );
-            });
-        }
-    }
-
-    fn kill_to_line_start(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(range) = self.range_from_visual_line_start(ctx) {
-            let killed = self
-                .model
-                .as_ref(ctx)
-                .content()
-                .as_ref(ctx)
-                .text_in_range(range.clone())
-                .into_string();
-            self.kill_buffer.kill(killed);
-            self.model.update(ctx, |inner, ctx| {
-                use warp_editor::content::buffer::{BufferEditAction, EditOrigin};
-                inner.update_content(
-                    |mut content, ctx| {
-                        content.apply_edit(
-                            BufferEditAction::Delete(vec1::vec1![range]),
-                            EditOrigin::UserInitiated,
-                            inner.buffer_selection_model().clone(),
-                            ctx,
-                        );
-                    },
-                    ctx,
-                );
-            });
-        }
-    }
+    //
+    // The kill *edits* (visual-row range computation and deletion) live on
+    // `CodeEditorModel::kill_to_visual_row_end` / `_start`; the view owns only
+    // the kill buffer the deleted text lands in.
 
     fn yank(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(text) = self.kill_buffer.yank().map(str::to_owned) {
             self.model.update(ctx, |m, ctx| m.user_insert(&text, ctx));
         }
-    }
-
-    // ── Kill range helpers ────────────────────────────────────────────────────
-    //
-    // The soft-wrapped row containing the cursor comes from the render state
-    // (`CharCellState::visual_row_char_range`, 0-based char indices); these
-    // helpers convert between that and the buffer's 1-indexed `CharOffset`
-    // gap convention used by `text_in_range` / `Delete`.
-
-    /// The soft-wrapped row containing the cursor, as 0-based char indices
-    /// (excluding any trailing newline).
-    fn cursor_visual_row_range(&self, ctx: &AppContext) -> Option<Range<usize>> {
-        let cursor_idx = self.cursor_offset(ctx).as_usize().saturating_sub(1);
-        let model = self.model.as_ref(ctx);
-        let render = model.render_state().as_ref(ctx);
-        Some(render.char_cell()?.visual_row_char_range(cursor_idx))
-    }
-
-    fn range_to_visual_line_end(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
-        // `cursor_offset` is a 1-indexed gap position (gap 1 sits before the
-        // first character); the buffer's `text_in_range` / `Delete` use those
-        // same coordinates, so the kill range starts exactly at `cursor_gap`.
-        let cursor_gap = self.cursor_offset(ctx).as_usize();
-        let cursor_idx = cursor_gap.saturating_sub(1);
-        let end_idx = self.cursor_visual_row_range(ctx)?.end;
-        if end_idx <= cursor_idx {
-            return None;
-        }
-        // `text[i]` lives at gap `i + 1`, so the exclusive end gap is `end_idx + 1`.
-        Some(CharOffset::from(cursor_gap)..CharOffset::from(end_idx + 1))
-    }
-
-    fn range_from_visual_line_start(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
-        let cursor_gap = self.cursor_offset(ctx).as_usize();
-        let cursor_idx = cursor_gap.saturating_sub(1);
-        let start_idx = self.cursor_visual_row_range(ctx)?.start;
-        if start_idx >= cursor_idx {
-            return None;
-        }
-        Some(CharOffset::from(start_idx + 1)..CharOffset::from(cursor_gap))
     }
 }
 

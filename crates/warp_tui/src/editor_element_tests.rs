@@ -1,6 +1,7 @@
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect,
@@ -100,7 +101,16 @@ fn scroll_windows_the_visible_rows() {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
             let model = model(ctx, "l0\nl1\nl2\nl3\nl4");
-            let element = TuiEditorElement::new(&model, ctx).with_scroll(2, 2);
+            // Scroll state lives on the char-cell render state; push the wrap
+            // width first so the row math matches the layout below.
+            {
+                let render = model.as_ref(ctx).render_state().as_ref(ctx);
+                let char_cell = render.char_cell().expect("char-cell model");
+                char_cell.set_terminal_width(10);
+                char_cell.scroll_by(2, 2, 0, &[]);
+                assert_eq!(char_cell.scroll_offset(), 2);
+            }
+            let element = TuiEditorElement::new(&model, ctx).with_viewport_rows(2);
             assert_eq!(render_lines(ctx, element, 10, 10), vec!["l2", "l3"]);
         });
     });

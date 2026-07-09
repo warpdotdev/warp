@@ -1772,3 +1772,53 @@ mod char_cell_temporary_blocks {
         assert_eq!(blocks[0].insert_before, LineCount(3));
     }
 }
+
+mod char_cell_scroll {
+    use crate::render::model::CharCellState;
+
+    /// A 4-column state with five one-row logical lines ("l0".."l4").
+    fn five_row_state() -> CharCellState {
+        let state = CharCellState::new(4);
+        state.update_text("l0\nl1\nl2\nl3\nl4");
+        state
+    }
+
+    #[test]
+    fn scroll_by_clamps_to_scrollable_range() {
+        let state = five_row_state();
+        // 5 rows, 2 visible → max scroll 3.
+        state.scroll_by(-5, 2, 0, &[]);
+        assert_eq!(state.scroll_offset(), 0);
+        state.scroll_by(2, 2, 0, &[]);
+        assert_eq!(state.scroll_offset(), 2);
+        state.scroll_by(100, 2, 0, &[]);
+        assert_eq!(state.scroll_offset(), 3);
+    }
+
+    #[test]
+    fn follow_cursor_moves_minimally_in_both_directions() {
+        let state = five_row_state();
+        // Cursor on the last row (char 12 = start of "l4") with a 2-row
+        // viewport scrolls just enough to keep it at the bottom.
+        state.follow_cursor(12, 2, &[]);
+        assert_eq!(state.scroll_offset(), 3);
+        // A cursor already visible does not move the viewport.
+        state.follow_cursor(9, 2, &[]);
+        assert_eq!(state.scroll_offset(), 3);
+        // Cursor back on row 0 scrolls the viewport to the top.
+        state.follow_cursor(0, 2, &[]);
+        assert_eq!(state.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn follow_cursor_clamps_stale_offset_after_content_shrinks() {
+        let state = five_row_state();
+        state.scroll_by(3, 2, 0, &[]);
+        assert_eq!(state.scroll_offset(), 3);
+        // Content shrinks to two rows; the stale offset is clamped before
+        // following the cursor.
+        state.update_text("l0\nl1");
+        state.follow_cursor(0, 2, &[]);
+        assert_eq!(state.scroll_offset(), 0);
+    }
+}

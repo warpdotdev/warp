@@ -475,6 +475,11 @@ pub struct CharCellState {
     /// part of the wrap tables above: ghost rows are interleaved by row
     /// renderers at render time, so buffer offset math is unaffected.
     temporary_blocks: RefCell<Vec<CharCellTemporaryBlock>>,
+    /// First visible display row (0-indexed) of a scroll-windowed viewport
+    /// (e.g. the TUI prompt input); stays 0 for consumers that render full
+    /// height. Lives here — with the display-row math it windows — mirroring
+    /// how the GUI keeps scroll state on `RenderState` rather than in views.
+    scroll_offset: Cell<u32>,
 }
 
 impl CharCellState {
@@ -488,6 +493,7 @@ impl CharCellState {
             line_starts: RefCell::new(vec![0]),
             char_widths: RefCell::new(Vec::new()),
             temporary_blocks: RefCell::new(Vec::new()),
+            scroll_offset: Cell::new(0),
         }
     }
 
@@ -572,6 +578,73 @@ impl CharCellState {
         (line_start + start)..(line_start + end)
     }
 
+    /// The first visible display row of the scroll-windowed viewport.
+    pub fn scroll_offset(&self) -> u32 {
+        self.scroll_offset.get()
+    }
+
+    /// Scrolls the viewport by `rows` display rows (negative scrolls toward
+    /// the top), clamped to `[0, total_rows - visible_rows]`. Independent of
+    /// the cursor: wheel scrolling must not snap the viewport back to it.
+    ///
+    /// `cursor_char_idx` (0-based) only sizes the row total — the cursor's
+    /// deferred-wrap phantom row is part of the scrollable layout.
+    pub fn scroll_by(
+        &self,
+        rows: isize,
+        viewport_rows: u32,
+        cursor_char_idx: usize,
+        hidden_line_ranges: &[Range<usize>],
+    ) {
+        let (_, total_rows) = self.display_geometry(cursor_char_idx, hidden_line_ranges);
+        let visible_rows = total_rows.min(viewport_rows).max(1);
+        let max_scroll = total_rows.saturating_sub(visible_rows) as isize;
+        let offset = (self.scroll_offset.get() as isize + rows).clamp(0, max_scroll);
+        self.scroll_offset.set(offset as u32);
+    }
+
+    /// Clamps a stale scroll offset, then moves the viewport the minimal
+    /// amount needed to keep the display row of the cursor at 0-based char
+    /// index `cursor_char_idx` visible within `viewport_rows` rows.
+    pub fn follow_cursor(
+        &self,
+        cursor_char_idx: usize,
+        viewport_rows: u32,
+        hidden_line_ranges: &[Range<usize>],
+    ) {
+        let (cursor_row, total_rows) = self.display_geometry(cursor_char_idx, hidden_line_ranges);
+        let visible_rows = total_rows.min(viewport_rows).max(1);
+        // A stale offset can point past the last remaining row (e.g. after a
+        // deletion shrank the content); clamp it so the visible window always
+        // overlaps real rows before following the cursor.
+        let mut offset = self
+            .scroll_offset
+            .get()
+            .min(total_rows.saturating_sub(visible_rows));
+        if cursor_row < offset {
+            offset = cursor_row;
+        } else if cursor_row >= offset + visible_rows {
+            offset = cursor_row.saturating_sub(visible_rows - 1);
+        }
+        self.scroll_offset.set(offset);
+    }
+
+    /// The cursor's display row and the total display-row count — including
+    /// the deferred-wrap phantom row the cursor sits on when a logical line
+    /// exactly fills the terminal width, which the lattice's rows never count
+    /// but sizing and scrolling must include.
+    fn display_geometry(
+        &self,
+        cursor_char_idx: usize,
+        hidden_line_ranges: &[Range<usize>],
+    ) -> (u32, u32) {
+        self.with_display_lattice(hidden_line_ranges, |lattice| {
+            let cursor_row = lattice.offset_to_display_point(cursor_char_idx).row;
+            let total_rows = (lattice.rows().len() as u32).max(cursor_row + 1);
+            (cursor_row, total_rows)
+        })
+    }
+
     /// Rebuild the char-cell layout index — `line_starts` and the per-char display
     /// `char_widths` — from the current buffer `text` (O(n) char scan).
     ///
@@ -616,6 +689,7 @@ impl std::fmt::Debug for CharCellState {
                 "temporary_blocks_len",
                 &self.temporary_blocks.borrow().len(),
             )
+            .field("scroll_offset", &self.scroll_offset.get())
             .finish()
     }
 }

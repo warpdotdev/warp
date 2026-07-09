@@ -100,6 +100,28 @@ fn selected_text(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> Option<St
     Some(full.chars().skip(start).take(end - start).collect())
 }
 
+/// The char-cell viewport's first visible display row (model-owned scroll).
+fn scroll_offset(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> u32 {
+    view.as_ref(ctx)
+        .model()
+        .as_ref(ctx)
+        .render_state()
+        .as_ref(ctx)
+        .char_cell()
+        .expect("TUI editor model is char-cell")
+        .scroll_offset()
+}
+
+/// Whether a mouse drag-selection is pending on the selection model.
+fn is_drag_selecting(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> bool {
+    view.as_ref(ctx)
+        .model()
+        .as_ref(ctx)
+        .selection_model()
+        .as_ref(ctx)
+        .has_pending_selection()
+}
+
 #[test]
 fn cursor_at_origin_when_empty() {
     App::test((), |mut app| async move {
@@ -297,14 +319,14 @@ fn clear_empties_buffer_and_resets_scroll() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_lines(&view, ctx, 10); // 10 rows > 6-row viewport
-            assert_eq!(view.as_ref(ctx).scroll_offset, 4);
+            assert_eq!(scroll_offset(&view, ctx), 4);
             assert!(!view.as_ref(ctx).is_empty(ctx));
 
             view.update(ctx, |v, ctx| v.clear(ctx));
 
             assert!(view.as_ref(ctx).is_empty(ctx));
             assert_eq!(text(&view, ctx), "");
-            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+            assert_eq!(scroll_offset(&view, ctx), 0);
             assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
         });
     });
@@ -402,11 +424,7 @@ fn input_grows_when_line_exactly_fills_width() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, &"a".repeat(W as usize));
-            assert_eq!(
-                view.as_ref(ctx).scroll_offset,
-                0,
-                "first row must stay visible"
-            );
+            assert_eq!(scroll_offset(&view, ctx), 0, "first row must stay visible");
             let (cursor, height) = cursor_and_height(&view, ctx);
             assert_eq!(height, 2, "wrapped cursor row must be shown");
             assert_eq!(cursor, Some((0, 1)), "cursor wraps to start of next row");
@@ -422,11 +440,7 @@ fn input_grows_when_first_line_softwraps() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, &"a".repeat(W as usize + 5));
-            assert_eq!(
-                view.as_ref(ctx).scroll_offset,
-                0,
-                "first row must stay visible"
-            );
+            assert_eq!(scroll_offset(&view, ctx), 0, "first row must stay visible");
             let (cursor, height) = cursor_and_height(&view, ctx);
             assert_eq!(height, 2, "two visual rows expected");
             assert_eq!(cursor, Some((5, 1)), "cursor on second row after wrap");
@@ -641,7 +655,7 @@ fn drag_past_last_visible_row_autoscrolls() {
             for _ in 0..9 {
                 dispatch(&view, ctx, &[TuiInputAction::MoveUp]);
             }
-            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+            assert_eq!(scroll_offset(&view, ctx), 0);
 
             // Begin a selection at the top, then drag well below the viewport.
             mouse(&view, ctx, &left_down(0, 0, 1, false));
@@ -649,7 +663,7 @@ fn drag_past_last_visible_row_autoscrolls() {
 
             // The head followed the drag to the last row, scrolling the viewport.
             assert!(
-                view.as_ref(ctx).scroll_offset > 0,
+                scroll_offset(&view, ctx) > 0,
                 "drag past the last visible row should auto-scroll"
             );
             assert!(selected_text(&view, ctx).is_some());
@@ -664,17 +678,17 @@ fn wheel_scrolls_viewport_without_moving_cursor() {
             let view = build_view(ctx);
             type_lines(&view, ctx, 10); // 10 rows > 6-row viewport
                                         // Typing leaves the cursor at the end, scrolled to the bottom.
-            assert_eq!(view.as_ref(ctx).scroll_offset, 4);
+            assert_eq!(scroll_offset(&view, ctx), 4);
             let cursor_before = view.as_ref(ctx).cursor_offset(ctx);
 
             // Wheel up (delta +1) scrolls toward the top by WHEEL_STEP (2) rows.
             assert!(mouse(&view, ctx, &scroll_wheel(0, 0, 1)));
-            assert_eq!(view.as_ref(ctx).scroll_offset, 2);
+            assert_eq!(scroll_offset(&view, ctx), 2);
             // Further wheel-ups clamp at the top.
             mouse(&view, ctx, &scroll_wheel(0, 0, 1));
-            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+            assert_eq!(scroll_offset(&view, ctx), 0);
             mouse(&view, ctx, &scroll_wheel(0, 0, 1));
-            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+            assert_eq!(scroll_offset(&view, ctx), 0);
 
             // Scrolling never moved the cursor.
             assert_eq!(view.as_ref(ctx).cursor_offset(ctx), cursor_before);
@@ -691,16 +705,16 @@ fn wheel_scroll_down_clamps_at_bottom() {
             // Scroll to the top first.
             mouse(&view, ctx, &scroll_wheel(0, 0, 1));
             mouse(&view, ctx, &scroll_wheel(0, 0, 1));
-            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+            assert_eq!(scroll_offset(&view, ctx), 0);
 
             // Wheel down (delta -1) scrolls toward the bottom, clamped at
             // max_scroll = 10 rows - 6 visible = 4.
             mouse(&view, ctx, &scroll_wheel(0, 0, -1));
-            assert_eq!(view.as_ref(ctx).scroll_offset, 2);
+            assert_eq!(scroll_offset(&view, ctx), 2);
             mouse(&view, ctx, &scroll_wheel(0, 0, -1));
-            assert_eq!(view.as_ref(ctx).scroll_offset, 4);
+            assert_eq!(scroll_offset(&view, ctx), 4);
             mouse(&view, ctx, &scroll_wheel(0, 0, -1));
-            assert_eq!(view.as_ref(ctx).scroll_offset, 4);
+            assert_eq!(scroll_offset(&view, ctx), 4);
         });
     });
 }
@@ -711,10 +725,10 @@ fn wheel_outside_area_is_ignored() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_lines(&view, ctx, 10);
-            let before = view.as_ref(ctx).scroll_offset;
+            let before = scroll_offset(&view, ctx);
             // Row 50 is well outside the 6-row viewport.
             assert!(!mouse(&view, ctx, &scroll_wheel(0, 50, 1)));
-            assert_eq!(view.as_ref(ctx).scroll_offset, before);
+            assert_eq!(scroll_offset(&view, ctx), before);
         });
     });
 }
@@ -945,7 +959,7 @@ fn gutter_click_places_cursor_without_selecting() {
                 }],
             );
             assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
-            assert!(!view.as_ref(ctx).is_selecting);
+            assert!(!is_drag_selecting(&view, ctx));
             assert_eq!(selected_text(&view, ctx), None);
 
             // With no press on the editor itself, a drag maps to no action and

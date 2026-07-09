@@ -103,17 +103,16 @@ pub(crate) struct TuiEditorElement {
 
     // ── Config ──────────────────────────────────────────────────────────────
     editable: bool,
-    /// `(first_visible_row, max_visible_rows)`; `None` renders full height.
-    scroll: Option<(u32, u32)>,
+    /// Maximum visible rows for a scroll-windowed consumer; the first visible
+    /// row comes from the render state's char-cell scroll offset. `None`
+    /// renders full height.
+    viewport_rows: Option<u32>,
     /// Whether to render a line-number gutter sized to the largest number.
     line_number_gutter: bool,
     /// Whether to elide the buffer's final empty line (see
     /// [`Self::hide_trailing_empty_line`]).
     hide_trailing_empty_line: bool,
     styles: TuiEditorStyles,
-    /// Whether a mouse drag-selection is in progress (snapshot from the view);
-    /// gates drag/up handling in `dispatch_event`.
-    drag_in_progress: bool,
     on_action: Option<TuiEditorActionHandler>,
 
     // ── Built during layout ─────────────────────────────────────────────────
@@ -163,11 +162,10 @@ impl TuiEditorElement {
             sel_char_range,
             hidden_line_ranges,
             editable: false,
-            scroll: None,
+            viewport_rows: None,
             line_number_gutter: false,
             hide_trailing_empty_line: false,
             styles: TuiEditorStyles::default(),
-            drag_in_progress: false,
             on_action: None,
             column: TuiFlex::column(),
             gutter_cols: 0,
@@ -186,11 +184,13 @@ impl TuiEditorElement {
         self
     }
 
-    /// Window the rows to `max_visible_rows` starting at `first_visible_row`.
+    /// Window the rows to `max_visible_rows`, starting at the render state's
+    /// char-cell scroll offset (owned model-side; consumers drive it via
+    /// `CodeEditorModel::char_cell_follow_cursor` / `char_cell_scroll_by`).
     /// Omitted = render all rows (e.g. the diff body, which scrolls with the
     /// transcript).
-    pub(crate) fn with_scroll(mut self, first_visible_row: u32, max_visible_rows: u32) -> Self {
-        self.scroll = Some((first_visible_row, max_visible_rows));
+    pub(crate) fn with_viewport_rows(mut self, max_visible_rows: u32) -> Self {
+        self.viewport_rows = Some(max_visible_rows);
         self
     }
 
@@ -226,13 +226,6 @@ impl TuiEditorElement {
     #[allow(dead_code)]
     pub(crate) fn hide_trailing_empty_line(mut self) -> Self {
         self.hide_trailing_empty_line = true;
-        self
-    }
-
-    /// Whether a mouse drag-selection is in progress (view state), gating
-    /// drag/up handling.
-    pub(crate) fn with_drag_in_progress(mut self, drag_in_progress: bool) -> Self {
-        self.drag_in_progress = drag_in_progress;
         self
     }
 
@@ -288,6 +281,13 @@ impl TuiEditorElement {
 
         let chars: Vec<char> = self.text.chars().collect();
         let cursor_idx = self.cursor_offset.as_usize().saturating_sub(1);
+        // The first visible row is model-side scroll state; unwindowed
+        // consumers always render from the top.
+        let first_visible_row = if self.viewport_rows.is_some() {
+            char_cell.scroll_offset()
+        } else {
+            0
+        };
 
         // One projection serves rows, cursor placement, and selection spans,
         // so everything below is geometry over the same lattice.
@@ -304,10 +304,11 @@ impl TuiEditorElement {
                     rows.len()
                 };
 
-                let (visible_start, visible_rows) = match self.scroll {
-                    Some((offset, max_rows)) => {
-                        (offset as usize, (max_rows as usize).min(total_rows))
-                    }
+                let (visible_start, visible_rows) = match self.viewport_rows {
+                    Some(max_rows) => (
+                        first_visible_row as usize,
+                        (max_rows as usize).min(total_rows),
+                    ),
                     None => (0, total_rows),
                 };
                 let visible_end = (visible_start + visible_rows).min(total_rows);
@@ -350,9 +351,9 @@ impl TuiEditorElement {
         self.column = column;
         self.selected_spans = selected_spans;
         self.cursor_col = cursor.col + self.gutter_cols;
-        self.cursor_row_in_view = cursor.row.saturating_sub(self.scroll_offset()) as u16;
+        self.cursor_row_in_view = cursor.row.saturating_sub(first_visible_row) as u16;
         self.cursor_visible = self.editable
-            && cursor.row >= self.scroll_offset()
+            && cursor.row >= first_visible_row
             && (cursor.row as usize) < visible_end.max(1);
     }
 
@@ -456,10 +457,6 @@ impl TuiEditorElement {
         (end_col > start_col).then_some((start_col, end_col))
     }
 
-    fn scroll_offset(&self) -> u32 {
-        self.scroll.map_or(0, |(offset, _)| offset)
-    }
-
     // ── Event internals ──────────────────────────────────────────────────────
 
     /// Maps a terminal cell `position` to the 1-based buffer [`CharOffset`]
@@ -486,9 +483,14 @@ impl TuiEditorElement {
             buffer.text().into_string()
         };
         let hidden = self.effective_hidden_ranges(&text, render_state.hidden_line_ranges(app));
+        let first_visible_row = if self.viewport_rows.is_some() {
+            char_cell.scroll_offset()
+        } else {
+            0
+        };
 
         let row_in_view = i64::from(position.y) - i64::from(area.y);
-        let display_row = (i64::from(self.scroll_offset()) + row_in_view).max(0) as u32;
+        let display_row = (i64::from(first_visible_row) + row_in_view).max(0) as u32;
         let col = position
             .x
             .saturating_sub(area.x)
@@ -550,19 +552,19 @@ impl TuiEditorElement {
             }
             // Drags continue even outside the element's bounds (drag-to-scroll),
             // but only while a selection that began inside it is active.
-            TuiEvent::LeftMouseDragged { position, .. } if self.drag_in_progress => {
+            TuiEvent::LeftMouseDragged { position, .. } if self.drag_in_progress(app) => {
                 Some(TuiEditorAction::SelectionUpdateTo {
                     offset: self.offset_at(*position, area, app),
                 })
             }
-            TuiEvent::LeftMouseUp { .. } if self.drag_in_progress => {
+            TuiEvent::LeftMouseUp { .. } if self.drag_in_progress(app) => {
                 Some(TuiEditorAction::SelectionEnd)
             }
             // Mouse wheel scrolls the viewport (cursor unmoved); only
             // meaningful for scroll-windowed consumers.
             TuiEvent::ScrollWheel {
                 position, delta, ..
-            } if self.scroll.is_some() && area.contains_point(*position) => {
+            } if self.viewport_rows.is_some() && area.contains_point(*position) => {
                 // crossterm reports ScrollUp as +1 row / ScrollDown as -1;
                 // negate so wheel-up scrolls toward the top.
                 Some(TuiEditorAction::Scroll {
@@ -571,6 +573,17 @@ impl TuiEditorElement {
             }
             _ => None,
         }
+    }
+
+    /// Whether a mouse drag-selection is in progress, read fresh from the
+    /// selection model's pending-selection state (the element may be cached
+    /// across frames while the drag progresses).
+    fn drag_in_progress(&self, app: &AppContext) -> bool {
+        self.model
+            .as_ref(app)
+            .selection_model()
+            .as_ref(app)
+            .has_pending_selection()
     }
 }
 
