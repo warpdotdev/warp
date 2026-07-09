@@ -8879,6 +8879,60 @@ impl ApiKeysWidget {
     }
 }
 
+/// Visibility and enabled-state rules for the member-facing Custom Inference
+/// settings section (provider API keys + custom endpoints).
+#[derive(Clone, Copy)]
+struct CustomInferenceVisibility {
+    is_any_ai_enabled: bool,
+    is_byo_enabled: bool,
+    show_provider_keys: bool,
+    provider_keys_enabled: bool,
+    show_custom_inference: bool,
+    custom_inference_controls_enabled: bool,
+    managed_byok_byoe_enabled: bool,
+}
+
+impl CustomInferenceVisibility {
+    fn compute(app: &AppContext) -> Self {
+        let workspaces = UserWorkspaces::as_ref(app);
+        let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
+        let is_byo_enabled = workspaces.is_byo_api_key_enabled(app);
+        let is_custom_inference_enabled = workspaces.is_custom_inference_enabled(app);
+        let member_byo_keys_allowed = workspaces.are_member_byo_keys_allowed();
+        let member_byo_endpoints_allowed = workspaces.are_member_byo_endpoints_allowed();
+
+        // BYOK: shown even when BYO is off so the upgrade CTA can render.
+        let show_provider_keys = member_byo_keys_allowed;
+        let provider_keys_enabled = show_provider_keys && is_any_ai_enabled && is_byo_enabled;
+
+        // BYOE (custom endpoints).
+        let show_custom_inference = is_custom_inference_enabled && member_byo_endpoints_allowed;
+        let custom_inference_controls_enabled = show_custom_inference && is_any_ai_enabled;
+
+        Self {
+            is_any_ai_enabled,
+            is_byo_enabled,
+            show_provider_keys,
+            provider_keys_enabled,
+            show_custom_inference,
+            custom_inference_controls_enabled,
+            managed_byok_byoe_enabled: workspaces
+                .current_workspace()
+                .is_some_and(|workspace| workspace.billing_metadata.is_managed_byok_byoe_enabled()),
+        }
+    }
+
+    /// Whether any member-facing Custom Inference content renders at all.
+    fn show_section(&self) -> bool {
+        self.show_provider_keys || self.show_custom_inference
+    }
+
+    /// Whether the section header renders in the enabled color.
+    fn section_enabled(&self) -> bool {
+        self.provider_keys_enabled || self.custom_inference_controls_enabled
+    }
+}
+
 impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
@@ -8892,29 +8946,20 @@ impl SettingsWidget for ApiKeysWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-        let is_byo_enabled = UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app);
-        let is_custom_inference_enabled =
-            UserWorkspaces::as_ref(app).is_custom_inference_enabled(app);
-        let member_byo_keys_allowed = UserWorkspaces::as_ref(app).are_member_byo_keys_allowed();
-        let member_byo_endpoints_allowed =
-            UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed();
-        let provider_keys_enabled = is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed;
-        let show_provider_keys = member_byo_keys_allowed;
-        let custom_inference_controls_enabled =
-            is_any_ai_enabled && is_custom_inference_enabled && member_byo_endpoints_allowed;
-        let show_custom_inference = is_custom_inference_enabled && member_byo_endpoints_allowed;
-        let show_custom_inference_section = show_provider_keys || show_custom_inference;
-        let custom_inference_section_enabled =
-            provider_keys_enabled || custom_inference_controls_enabled;
-        let managed_byok_byoe_enabled = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .is_some_and(|workspace| workspace.billing_metadata.is_managed_byok_byoe_enabled());
+        let visibility = CustomInferenceVisibility::compute(app);
+        let CustomInferenceVisibility {
+            is_any_ai_enabled,
+            is_byo_enabled,
+            show_provider_keys,
+            provider_keys_enabled,
+            show_custom_inference,
+            custom_inference_controls_enabled,
+            managed_byok_byoe_enabled,
+        } = visibility;
 
         let mut column = Flex::column().with_child(render_separator(appearance));
 
-        if show_custom_inference_section {
+        if visibility.show_section() {
             // Header row: "Custom Inference" + info icon on left, "+ Add custom model" on right
             let header_left = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -8922,10 +8967,7 @@ impl SettingsWidget for ApiKeysWidget {
                     build_sub_header(
                         appearance,
                         "Custom Inference",
-                        Some(styles::header_font_color(
-                            custom_inference_section_enabled,
-                            app,
-                        )),
+                        Some(styles::header_font_color(visibility.section_enabled(), app)),
                     )
                     .with_margin_bottom(0.)
                     .finish(),
@@ -8970,7 +9012,7 @@ impl SettingsWidget for ApiKeysWidget {
                 .finish(),
             );
             column.add_child(render_ai_setting_description(
-                "Your organization manages custom inference. Personal API keys and custom endpoints are currently unavailable.",
+                "Your organization manages custom inference. Personal API keys and custom endpoints are currently disabled.",
                 is_any_ai_enabled,
                 app,
             ));
