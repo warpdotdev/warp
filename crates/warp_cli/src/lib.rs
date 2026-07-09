@@ -370,7 +370,7 @@ impl Args {
                     .mut_subcommand("run-cloud", |cloud_cmd| {
                         cloud_cmd
                             .mut_arg("harness", |arg| arg.hide(false))
-                            .mut_arg("claude-auth-secret", |arg| arg.hide(false))
+                            .mut_arg("claude_auth_secret", |arg| arg.hide(false))
                     })
             });
         }

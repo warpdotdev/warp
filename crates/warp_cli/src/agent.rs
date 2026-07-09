@@ -404,7 +404,7 @@ pub struct RunAgentArgs {
     /// Controls which agent CLI executes the prompt:
     /// - "oz" (default): Warp's built-in agent infrastructure
     /// - "claude" (alias "claude-code"): delegates to the `claude` CLI
-    /// - "opencode" (alias "open-code"): delegates to the `opencode` CLI
+    /// - "gemini": delegates to the `gemini` CLI
     /// - "codex": delegates to the `codex` CLI
     #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
     pub harness: Harness,
