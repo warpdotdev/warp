@@ -8,7 +8,7 @@ use futures::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWr
 use futures::lock::Mutex;
 use jsonrpc::Transport;
 use simple_logger::SimpleLogger;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warpui_core::r#async::executor::{Background, BackgroundTask};
 use warpui_core::r#async::Timer;
 

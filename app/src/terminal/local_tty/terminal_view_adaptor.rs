@@ -21,6 +21,7 @@ use session_sharing_protocol::sharer::{
 };
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
@@ -68,7 +69,7 @@ use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as Termi
 use crate::terminal::writeable_pty::terminal_manager_util::wire_up_remote_server_controller_with_view;
 use crate::terminal::{TerminalManager as TerminalManagerTrait, TerminalModel, TerminalView};
 use crate::view_components::ToastFlavor;
-use crate::{report_error, NetworkStatus};
+use crate::NetworkStatus;
 
 const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
 

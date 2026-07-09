@@ -5,6 +5,7 @@ use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use itertools::Itertools;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
@@ -23,7 +24,7 @@ use crate::ai::get_relevant_files::controller::{
 };
 use crate::features::FeatureFlag;
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 pub struct SearchCodebaseExecutor {
     active_session: ModelHandle<ActiveSession>,

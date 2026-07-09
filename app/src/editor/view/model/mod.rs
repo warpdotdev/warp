@@ -35,6 +35,7 @@ use vim::{
     vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
     vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
+use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::text::point::Point;
 use warpui::text::word_boundaries::WordBoundariesPolicy;
@@ -45,7 +46,6 @@ use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, Singleto
 use self::buffer::Peer;
 use super::{movement, PlainTextEditorViewAction, SelectionInsertion, ValidInputType};
 use crate::editor::RangeExt;
-use crate::report_error;
 use crate::vim_registers::VimRegisters;
 
 lazy_static! {

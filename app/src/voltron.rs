@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use enclose::enclose;
 use pathfinder_geometry::vector::Vector2F;
 use vec1::Vec1;
+use warp_errors::report_error;
 use warpui::accessibility::AccessibilityContent;
 use warpui::elements::{
     resizable_state_handle, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
@@ -40,7 +41,6 @@ use crate::editor::{
     SingleLineEditorOptions,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::report_error;
 use crate::terminal::input::MenuPositioning;
 use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_VOLTRON_WIDTH};
 use crate::util::bindings::{self, CustomAction};

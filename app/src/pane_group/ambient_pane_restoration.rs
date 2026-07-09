@@ -1,5 +1,6 @@
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::agent::api::ServerConversationToken;
@@ -9,7 +10,6 @@ use crate::ai::agent_conversations_model::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{PaneGroup, PaneId, TerminalPane, TerminalViewResources};
-use crate::report_error;
 use crate::terminal::TerminalView;
 use crate::workspace::WorkspaceAction;
 

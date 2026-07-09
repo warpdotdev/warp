@@ -57,10 +57,10 @@ use parent_bridge::{MessageBridge, MessageBridgeCleanupDisposition};
 use shell_words::quote as shell_quote;
 #[cfg(test)]
 use wake_driver::{ClaudeWakeRemoteContext, CLAUDE_WAKE_PROMPT_FILE_NAME};
+use warp_errors::report_error;
 
 #[cfg(test)]
 use super::super::OZ_MESSAGE_LISTENER_STATE_ROOT_ENV;
-use crate::report_error;
 
 pub(crate) struct ClaudeHarness;
 #[cfg_attr(not(target_family = "wasm"), async_trait)]

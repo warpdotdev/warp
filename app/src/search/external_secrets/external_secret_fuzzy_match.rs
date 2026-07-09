@@ -1,7 +1,6 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-
-use crate::report_error;
+use warp_errors::report_error;
 
 #[derive(Clone, Debug)]
 pub struct FuzzyMatchExternalSecretResult {

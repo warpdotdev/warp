@@ -8,6 +8,7 @@ use itertools::Itertools;
 use warp_completer::completer::CommandExitStatus;
 use warp_core::r#async::debounce;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
@@ -28,7 +29,6 @@ use crate::context_chips::display_chip::GitLineChanges;
 use crate::editor::EditorView;
 use crate::features::FeatureFlag;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::report_error;
 use crate::settings::{InputSettings, WarpPromptSeparator};
 use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::block::{Block, BlockMetadata};

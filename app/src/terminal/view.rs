@@ -137,6 +137,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::r#async::debounce;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
@@ -540,9 +541,9 @@ use crate::workspace::{
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
 use crate::{
-    report_error, report_if_error, safe_error, safe_warn, send_telemetry_from_ctx,
-    send_telemetry_on_executor, send_telemetry_sync_from_ctx, AIAgentActionResultType,
-    AIRequestUsageModel, ActiveSession as WindowActiveSession,
+    safe_error, safe_warn, send_telemetry_from_ctx, send_telemetry_on_executor,
+    send_telemetry_sync_from_ctx, AIAgentActionResultType, AIRequestUsageModel,
+    ActiveSession as WindowActiveSession,
 };
 
 lazy_static! {

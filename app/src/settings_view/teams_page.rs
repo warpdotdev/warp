@@ -12,6 +12,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
@@ -61,6 +62,7 @@ use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::NetworkStatus;
 use crate::pricing::PricingInfoModel;
+use crate::send_telemetry_from_ctx;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
@@ -78,7 +80,6 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{
     BillingMetadata, CustomerType, DelinquencyStatus, WorkspaceSizePolicy,
 };
-use crate::{report_error, send_telemetry_from_ctx};
 
 const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header";
 // Styling for team create page

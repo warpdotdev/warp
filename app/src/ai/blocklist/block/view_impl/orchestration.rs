@@ -2,6 +2,7 @@
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, FormattedTextElement,
     Hoverable, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
@@ -38,7 +39,6 @@ use crate::ai::blocklist::inline_action::requested_action::{
 };
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
-use crate::report_error;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;

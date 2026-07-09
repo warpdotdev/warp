@@ -916,6 +916,11 @@ pub enum FeatureFlag {
     /// compute (docker image, instance shape, setup commands) by runner ID.
     CloudRunners,
 
+    /// Enables the one-time "custom model router" feature-intro popover. This is
+    /// the first feature announced through the reusable feature-intro framework
+    /// (see `FEATURE_INTROS`); each registry entry is gated by its own flag.
+    CustomModelRouterIntro,
+
     /// Renders MCP tool-call request and response JSON as an interactive
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
@@ -994,6 +999,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::CustomModelRouterIntro,
     FeatureFlag::McpJsonTreeView,
 ];
 

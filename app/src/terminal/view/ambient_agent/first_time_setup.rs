@@ -5,6 +5,7 @@
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
+use warp_errors::report_error;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
     Align, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
@@ -18,7 +19,6 @@ use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectT
 use crate::ai::request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD;
 use crate::ai::{cloud_environments, AIRequestUsageModel};
 use crate::appearance::Appearance;
-use crate::report_error;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ClientId;
 use crate::settings_view::update_environment_form::{

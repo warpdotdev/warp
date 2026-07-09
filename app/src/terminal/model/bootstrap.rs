@@ -1,4 +1,4 @@
-use crate::report_error;
+use warp_errors::report_error;
 /// Stages during the course of bootstrapping the shell.  
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum BootstrapStage {

@@ -5,9 +5,9 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use enum_iterator::{cardinality, Sequence};
+use warp_errors::report_error;
 
 use crate::channel::ChannelState;
-use crate::report_error;
 
 /// All ContextFlag flag are enabled by default. Environments can conditionally disable flags.
 ///

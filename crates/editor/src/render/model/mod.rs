@@ -20,9 +20,9 @@ use sum_tree::{SeekBias, SumTree};
 use vec1::Vec1;
 use vim::vim::{MotionType, VimMode};
 use warp_core::channel::ChannelState;
-use warp_core::report_error;
 use warp_core::ui::Icon;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_errors::report_error;
 use warpui_core::assets::asset_cache::AssetSource;
 use warpui_core::color::ColorU;
 use warpui_core::elements::{

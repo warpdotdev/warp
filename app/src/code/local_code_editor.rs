@@ -168,8 +168,9 @@ struct LoadedFileMetadata {
     location: BufferFileLocation,
 }
 
+use warp_errors::report_error;
+
 pub use super::diff_viewer::DisplayMode;
-use crate::report_error;
 
 type TerminalTargetFn = dyn Fn(WindowId, &AppContext) -> Option<ViewHandle<TerminalView>>;
 

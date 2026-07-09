@@ -37,7 +37,7 @@ use futures::future::join_all;
 use tokio::fs::{self as tokio_fs, OpenOptions};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{mpsc, oneshot};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warpui::r#async::executor::Background;
 use warpui::r#async::FutureExt as _;
 

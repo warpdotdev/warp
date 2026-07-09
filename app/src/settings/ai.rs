@@ -22,13 +22,13 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_if_error;
 use warpui::platform::keyboard::KeyCode;
 use warpui::platform::OperatingSystem;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
-use crate::report_if_error;
 use crate::settings::PrivacySettings;
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -1693,6 +1693,21 @@ define_settings_group!(AISettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     }
+
+    // Not a user-visible setting - it tracks which one-time feature-intro popups the
+    // user has already seen, keyed by the feature-intro id (see `FEATURE_INTROS`).
+    //
+    // We model it as a globally-synced setting (not respecting the user's sync setting)
+    // so each feature is announced at most once per user, regardless of how many devices
+    // they use. A feature is considered seen when its id is present and mapped to `true`.
+    seen_feature_intro_ids: SeenFeatureIntroIds {
+        type: HashMap<String, bool>,
+        default: HashMap::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
+    }
 ]);
 
 impl AISettings {
@@ -2151,6 +2166,25 @@ impl AISettings {
         report_if_error!(self
             .cli_agent_footer_enabled_commands
             .set_value(ToolbarCommandMap::new(map), ctx));
+    }
+
+    /// Whether the feature-intro popover with the given id key has been seen.
+    pub fn is_feature_intro_seen(&self, key: &str) -> bool {
+        self.seen_feature_intro_ids
+            .get(key)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Records that the feature-intro popover with the given id key has been seen,
+    /// so it is never shown again. No-op if already recorded.
+    pub fn mark_feature_intro_seen(&mut self, key: &str, ctx: &mut ModelContext<Self>) {
+        if self.is_feature_intro_seen(key) {
+            return;
+        }
+        let mut map = self.seen_feature_intro_ids.clone();
+        map.insert(key.to_owned(), true);
+        report_if_error!(self.seen_feature_intro_ids.set_value(map, ctx));
     }
 
     /// Whether the plugin install chip was dismissed for the given agent/host.

@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use similar::DiffableStr;
+use warp_errors::report_error;
 use warpui::elements::{MouseStateHandle, PartialClickableElement, SecretRange};
 use warpui::platform::Cursor;
 
 use super::{AIBlockAction, TextLocation};
 use crate::ai::agent::{AIAgentOutput, AIAgentTextSection, AgentOutputText};
-use crate::report_error;
 use crate::terminal::model::secrets::{SecretLevel, SecretsRegex, SECRETS_REGEX};
 
 pub const SECRET_REDACTION_REPLACEMENT_CHARACTER: &str = "*";

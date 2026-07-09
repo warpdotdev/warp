@@ -17,8 +17,10 @@ pub use crate::ai::agent::{
     StartAgentExecutionMode, SuggestNewConversationResult, UserQueryMode,
 };
 pub use crate::ai::blocklist::agent_view::{
-    AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
+    AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
+    EphemeralMessageModel,
 };
+pub use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 pub use crate::ai::blocklist::block::model::{
     AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
 };
@@ -49,6 +51,11 @@ pub use crate::code::DiffResult;
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::event::AfterBlockCompletedEvent;
+pub use crate::terminal::input::slash_commands::{
+    build_slash_command_mixer, slash_command_query, AcceptSlashCommandOrSavedPrompt, InlineItem,
+    SlashCommandDataSource, SlashCommandMixer, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
+    TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
+};
 pub use crate::terminal::input::CommandExecutionSource;
 pub use crate::terminal::local_tty::{
     TerminalManager as LocalTtyTerminalManager, TerminalManagerInit, TerminalSurfaceInit,

@@ -9,11 +9,11 @@ use futures::channel::oneshot::channel;
 use futures::future::BoxFuture;
 use tokio::sync::Mutex;
 use vec1::vec1;
+use warp_errors::report_error;
 use warp_managed_secrets::client::IdentityTokenOptions;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
-use crate::report_error;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, UserBlockCompleted};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};

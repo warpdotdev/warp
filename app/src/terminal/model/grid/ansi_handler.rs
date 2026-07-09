@@ -20,13 +20,13 @@ use tab_stops::TabStops;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_terminal::model::ansi::CharsetIndex;
 use warp_terminal::model::grid::cell;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::image_cache::{resize_dimensions, FitType};
 
 use super::{AbsolutePoint, FullGridClearBehavior, GridHandler, PerformResetGridChecks, TermMode};
-use crate::report_error;
 use crate::server::telemetry::ImageProtocol;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;

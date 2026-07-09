@@ -25,6 +25,7 @@ use std::time::Duration;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
 use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
 use warp_core::settings::Setting;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::contrast::{
@@ -32,7 +33,7 @@ use warp_core::ui::color::contrast::{
 };
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill as ThemeFill;
-use warp_core::{report_error, send_telemetry_from_ctx};
+use warp_errors::report_error;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
 use warpify_footer::{WarpifyFooterView, WarpifyFooterViewEvent};
 use warpui::elements::{

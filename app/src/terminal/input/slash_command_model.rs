@@ -11,7 +11,9 @@ use crate::ai::skills::SkillManager;
 use crate::search::slash_command_menu::StaticCommand;
 use crate::settings::InputSettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
-use crate::terminal::input::slash_commands::SlashCommandDataSource;
+use crate::terminal::input::slash_commands::{
+    GuiSlashCommandDataSource, SlashCommandDataSource as _,
+};
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// Event emitted by the slash command model when its entry state is updated.
@@ -122,7 +124,7 @@ pub struct SlashCommandModel {
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     active_session: ModelHandle<ActiveSession>,
     state: SlashCommandEntryState,
-    data_source: ModelHandle<SlashCommandDataSource>,
+    data_source: ModelHandle<GuiSlashCommandDataSource>,
 }
 
 impl SlashCommandModel {
@@ -130,7 +132,7 @@ impl SlashCommandModel {
         buffer_model: &ModelHandle<InputBufferModel>,
         ai_input_model: &ModelHandle<BlocklistAIInputModel>,
         active_session: ModelHandle<ActiveSession>,
-        data_source: ModelHandle<SlashCommandDataSource>,
+        data_source: ModelHandle<GuiSlashCommandDataSource>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(buffer_model, |me, _, event, ctx| {
@@ -422,7 +424,7 @@ impl Entity for SlashCommandModel {
     type Event = UpdatedSlashCommandModel;
 }
 
-impl SlashCommandDataSource {
+impl GuiSlashCommandDataSource {
     // Matches `buffer` against active slash commands, returning the detected command and
     // space-delimited argument (if provided).
     //

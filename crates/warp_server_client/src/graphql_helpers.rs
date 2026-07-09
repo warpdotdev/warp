@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use anyhow::{Result, anyhow};
 use http::StatusCode;
 use instant::Duration;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::client::{GraphQLError, Operation};
 use warpui_core::r#async::BoxFuture;
 

@@ -6,13 +6,13 @@ use diesel::prelude::*;
 use diesel::result::Error;
 use diesel::SqliteConnection;
 use prost::Message;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 
 use super::model::{AgentConversation, AgentConversationData, AgentConversationSummary};
 use super::ConversationSummaryBackfill;
 use crate::persistence::model::{AgentConversationRecord, AgentTaskRecord};
 use crate::persistence::schema::{self, agent_conversations, agent_tasks};
-use crate::report_error;
 
 #[derive(Debug, Insertable, AsChangeset)]
 #[diesel(table_name = agent_conversations)]

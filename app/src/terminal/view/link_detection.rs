@@ -26,9 +26,10 @@ cfg_if::cfg_if! {
     }
 }
 
-use super::{FindLinkArg, TerminalEditor};
 #[cfg(feature = "local_fs")]
-use crate::report_error;
+use warp_errors::report_error;
+
+use super::{FindLinkArg, TerminalEditor};
 
 // "a/" and "b/" are prefixes specific to Git Diff
 #[cfg(feature = "local_fs")]

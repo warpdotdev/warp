@@ -22,6 +22,7 @@ use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
 use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
@@ -126,7 +127,7 @@ use crate::view_components::compactible_action_button::{
     CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
 };
 use crate::workspace::WorkspaceAction;
-use crate::{report_error, AIAgentTodoList, FeatureFlag};
+use crate::{AIAgentTodoList, FeatureFlag};
 
 const BLOCKED_ACTION_MESSAGE_FOR_UPLOADING_ARTIFACT: &str = "Grant access to upload this artifact?";
 

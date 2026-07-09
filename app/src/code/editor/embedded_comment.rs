@@ -15,13 +15,13 @@ use warp_editor::render::model::{
     BlockSpacing, EmbeddedItem, EmbeddedItemHTMLRepresentation, EmbeddedItemRichFormat,
     LaidOutEmbeddedItem, RenderState,
 };
+use warp_errors::report_error;
 use warpui::event::DispatchedEvent;
 use warpui::units::Pixels;
 use warpui::{AppContext, EntityId, EventContext, LayoutContext, ViewHandle, WindowId};
 
 use crate::code::editor::comment_editor::CommentEditor;
 use crate::code_review::comments::CommentId;
-use crate::report_error;
 
 const COMMENT_ID_MAPPING_KEY: &str = "comment_id";
 const ENTITY_ID_MAPPING_KEY: &str = "entity_id";

@@ -7,6 +7,7 @@ use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use warp_core::ui::theme::Fill;
 use warp_editor::editor::NavigationKey;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
@@ -45,7 +46,6 @@ use crate::editor::{
 };
 use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
 use crate::network::NetworkStatus;
-use crate::report_error;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::server_api::ai::AIClient;

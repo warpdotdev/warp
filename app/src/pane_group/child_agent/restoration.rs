@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext};
 
 use super::{apply_hidden_child_agent_task_context, HiddenChildAgentTaskContext};
@@ -13,7 +14,6 @@ use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::pane_group::{
     AmbientAgentViewModelHandleExt, PaneGroup, PaneId, TerminalPane, TerminalViewResources,
 };
-use crate::report_error;
 use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,

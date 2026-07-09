@@ -14,7 +14,7 @@ use cloud_object_client::{
 pub use cloud_object_client::{GuestIdentifier, ObjectClient};
 use cloud_object_models::JsonSerializer;
 use cynic::{MutationBuilder, QueryBuilder, SubscriptionBuilder};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::error::UserFacingErrorInterface;
 use warp_graphql::generic_string_object::GenericStringObjectInput;
 use warp_graphql::mutations::add_object_guests::{

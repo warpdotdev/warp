@@ -13,6 +13,7 @@ use session_sharing_protocol::common::{
 use session_sharing_protocol::sharer::SessionSourceType;
 use session_sharing_protocol::viewer::SessionEndedReason;
 use settings::Setting as _;
+use warp_errors::report_error;
 use warpui::{
     AppContext, ModelContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle,
     WeakViewHandle, WindowId,
@@ -41,7 +42,6 @@ use crate::features::FeatureFlag;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::pane_group::pane::DetachType;
 use crate::pane_group::TerminalViewResources;
-use crate::report_error;
 use crate::settings::{InputModeSettings, WarpPromptSeparator};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,

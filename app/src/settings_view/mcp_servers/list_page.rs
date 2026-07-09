@@ -11,6 +11,7 @@ use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::AppearanceEvent;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
@@ -67,7 +68,7 @@ use crate::view_components::DismissibleToast;
 use crate::workflows::local_workflows::tail_command_for_shell;
 use crate::workspace::Workspace;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, ToastStack};
+use crate::ToastStack;
 
 const DESCRIPTION_TEXT: &str = "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ";
 

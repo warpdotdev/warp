@@ -10,12 +10,12 @@ use mime_guess::from_path;
 use tokio::fs;
 use tokio_util::io::StreamReader;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::task::{AttachmentInput, TaskAttachment};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
-use crate::report_error;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::server_api::ServerApi;

@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext};
 
 use crate::ai::agent::api::ServerConversationToken;
@@ -10,7 +11,6 @@ use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{AmbientAgentViewModelHandleExt, PaneGroup, PaneId};
-use crate::report_error;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };

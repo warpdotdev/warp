@@ -22,11 +22,12 @@ pub use improved_palette_search_layer::{ImprovedPaletteSearch, IMPROVED_PALETTE_
 use lazy_static::lazy_static;
 pub use login_layer::{AuthFlowInstructions, LOGIN_LAYER};
 use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::report_error;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::auth::auth_state::AuthStateProvider;
 use crate::channel::{Channel, ChannelState};
-use crate::{report_error, send_telemetry_sync_from_app_ctx};
+use crate::send_telemetry_sync_from_app_ctx;
 
 /// Number of buckets we are using to partition user traffic. The largest valid
 /// bucket index is NUM_BUCKETS - 1.

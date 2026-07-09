@@ -5,14 +5,14 @@ use std::sync::Arc;
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
 use thiserror::Error;
+#[cfg(feature = "local_fs")]
+use warp_errors::report_error;
 use warp_util::path::ShellFamily;
 use warpui::r#async::block_on;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::Message;
 use crate::ai::agent::AIAgentPtyWriteMode;
-#[cfg(feature = "local_fs")]
-use crate::report_error;
 use crate::terminal::input::CommandExecutionSource;
 use crate::terminal::line_editor_status::{LineEditorStatus, LineEditorStatusEvent};
 use crate::terminal::model::ansi::Handler;

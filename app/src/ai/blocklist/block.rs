@@ -47,6 +47,7 @@ use warp_editor::content::buffer::InitialBufferState;
 #[cfg(feature = "local_fs")]
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
 use warpui::assets::asset_cache::AssetCache;
@@ -203,8 +204,8 @@ use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, 
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    report_error, report_if_error, send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit,
-    LLMPreferences, PrivacySettings, ToastStack,
+    send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit, LLMPreferences,
+    PrivacySettings, ToastStack,
 };
 
 /// The default display name used for the user if they have no associated display name.

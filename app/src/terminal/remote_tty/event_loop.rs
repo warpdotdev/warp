@@ -5,10 +5,10 @@ use async_channel::Receiver;
 use futures_util::SinkExt;
 use parking_lot::FairMutex;
 use serde::Serialize;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 
-use crate::report_error;
 use crate::terminal::bootstrap::init_shell_script_for_shell;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::Processor;

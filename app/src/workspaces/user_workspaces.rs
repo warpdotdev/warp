@@ -4,6 +4,7 @@ use anyhow::Result;
 use regex::Regex;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::{ChangeEventReason, Setting};
+use warp_errors::report_error;
 use warp_graphql::workspace::FeatureModelChoice;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
 
@@ -20,7 +21,6 @@ use crate::channel::ChannelState;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, ObjectType, Owner, Space};
 use crate::pricing::PricingInfoModel;
-use crate::report_error;
 use crate::server::experiments::{ServerExperiment, ServerExperiments, ServerExperimentsEvent};
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::TeamClient;

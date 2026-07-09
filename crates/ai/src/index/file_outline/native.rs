@@ -12,7 +12,7 @@ use repo_metadata::entry::{is_file_parsable, BudgetExceededBehavior, IgnoredPath
 use repo_metadata::RepositoryUpdate;
 use streaming_iterator::StreamingIterator;
 use syntax_tree::TextSlice;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::index::file_outline::{FileOutline, Outline, Symbol};

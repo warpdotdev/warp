@@ -27,7 +27,7 @@ use cfg_if::cfg_if;
 use get_size::GetSize;
 use string_offset::ByteOffset;
 use thiserror::Error;
-use warp_core::report_error;
+use warp_errors::report_error;
 
 use super::grapheme::Grapheme;
 use crate::model::grid::CellType;

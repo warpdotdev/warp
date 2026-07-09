@@ -10,6 +10,7 @@ use warp_completer::parsers::classify_command;
 use warp_completer::parsers::hir::{Command, Expression};
 use warp_completer::parsers::simple::all_parsed_commands;
 use warp_completer::signatures::CommandRegistry;
+use warp_errors::report_if_error;
 use warp_util::path::EscapeChar;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::{SingletonEntity, ViewContext};
@@ -17,7 +18,6 @@ use warpui::{SingletonEntity, ViewContext};
 use super::{Event, InlineBannerItem, InlineBannerType, TerminalView};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
-use crate::report_if_error;
 use crate::terminal::event::UserBlockCompleted;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::session::Session;

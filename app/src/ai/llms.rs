@@ -10,6 +10,7 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -18,7 +19,6 @@ use super::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::report_error;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::AISettings;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};

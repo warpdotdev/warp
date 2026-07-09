@@ -16,6 +16,7 @@ use parking_lot::{FairMutex, Mutex};
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
 use warp_core::SessionId;
+use warp_errors::report_error;
 use warpui::r#async::executor::Background;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, ViewHandle};
 
@@ -33,6 +34,7 @@ use crate::context_chips::prompt::Prompt;
 use crate::context_chips::ContextChipKind;
 use crate::features::FeatureFlag;
 use crate::persistence::ModelEvent;
+use crate::send_telemetry_on_executor;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{DebugSettings, PrivacySettings, SshSettings};
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
@@ -63,7 +65,6 @@ use crate::terminal::{
     terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo,
     TerminalManager as TerminalManagerTrait, TerminalModel, PTY_READS_BROADCAST_CHANNEL_SIZE,
 };
-use crate::{report_error, send_telemetry_on_executor};
 
 type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
 type RemoteServerController =

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use onboarding::{ProjectOnboardingSettings, SelectedSettings};
 use warp_core::execution_mode::AppExecutionMode;
+use warp_errors::report_error;
 use warpui::{SingletonEntity as _, ViewContext};
 
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
@@ -12,7 +13,7 @@ use crate::terminal::view::{
     AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction,
 };
 use crate::workspace::Workspace;
-use crate::{report_error, terminal, FeatureFlag};
+use crate::{terminal, FeatureFlag};
 
 /// Configuration for starting the agent onboarding tutorial.
 #[derive(Debug, Clone)]

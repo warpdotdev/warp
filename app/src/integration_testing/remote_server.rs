@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use warp_core::{HostId, SessionId};
+use warp_errors::report_error;
 use warpui::integration::{
     AssertionCallback, AssertionOutcome, AssertionWithDataCallback, StepDataMap, TestStep,
 };
@@ -14,7 +15,6 @@ use crate::remote_server::manager::{
     RemoteServerErrorKind, RemoteServerManager, RemoteServerManagerEvent, RemoteServerOperation,
     RemoteSessionState,
 };
-use crate::report_error;
 use crate::terminal::model::session::command_executor::remote_server_executor::RemoteServerCommandExecutor;
 pub type RemoteServerActionCallback = Box<dyn Fn(&mut App, WindowId, &mut StepDataMap) + 'static>;
 

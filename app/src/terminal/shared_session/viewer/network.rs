@@ -28,6 +28,7 @@ use session_sharing_protocol::viewer::{
     ViewerRemovedReason,
 };
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_server_client::iap::IapManager;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
@@ -38,7 +39,6 @@ use websocket::{Message, Sink, Stream, WebsocketMessage as _};
 use crate::auth::auth_state::AuthState;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
-use crate::report_error;
 use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::telemetry_context;

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
+use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
     resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide,
@@ -62,7 +63,7 @@ use crate::workspace::view::{
     TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
 use crate::workspace::WorkspaceAction;
-use crate::{report_error, TelemetryEvent};
+use crate::TelemetryEvent;
 
 #[derive(Default)]
 struct MouseStateHandles {

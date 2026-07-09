@@ -8,6 +8,7 @@ use futures::channel::mpsc;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
@@ -27,7 +28,6 @@ use crate::ai::agent_events::{
     ServerApiAgentEventSource,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::report_error;
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ai::{AIClient, AgentRunEvent, TaskListFilter};
 use crate::server::server_api::{ServerApi, ServerApiProvider};

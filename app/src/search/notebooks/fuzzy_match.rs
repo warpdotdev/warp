@@ -1,5 +1,6 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+use warp_errors::report_error;
 use warpui::elements::{Highlight, Text};
 use warpui::{AppContext, SingletonEntity};
 
@@ -7,7 +8,6 @@ use crate::appearance::Appearance;
 use crate::cloud_object::CloudObject;
 use crate::notebooks::manager::NotebookManager;
 use crate::notebooks::CloudNotebook;
-use crate::report_error;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::server::ids::SyncId;
 

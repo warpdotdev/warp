@@ -4,10 +4,10 @@ use async_channel::Sender;
 use async_trait::async_trait;
 use ipc::{Client, ConnectionAddress};
 use url::Url;
+use warp_errors::report_error;
 use warpui::r#async::executor::Background;
 
 use super::single_instance_manager::uri_named_pipe_name;
-use crate::report_error;
 
 /// IPC Service to respond to URIs sent to the active Warp instance.
 pub(super) struct UriService {}

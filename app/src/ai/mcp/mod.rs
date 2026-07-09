@@ -66,9 +66,8 @@ pub use templatable_installation::{VariableType, VariableValue};
 pub mod parsing;
 #[cfg(not(target_family = "wasm"))]
 pub use parsing::ParsedTemplatableMCPServerResult;
-
 #[cfg(not(target_family = "wasm"))]
-use crate::report_error;
+use warp_errors::report_error;
 #[cfg(not(target_family = "wasm"))]
 pub mod reconnecting_peer;
 

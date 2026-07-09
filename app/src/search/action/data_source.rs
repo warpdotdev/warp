@@ -257,7 +257,7 @@ mod full_text_searcher {
 
         fn build_index(&mut self) {
             if self.rebuild_search_index().is_err() {
-                crate::report_error!("Failed to create search index writer for actions");
+                warp_errors::report_error!("Failed to create search index writer for actions");
                 self.clear_search_index();
             }
         }

@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 use ai::api_keys::{ApiKeyManager, AwsCredentials, AwsCredentialsState};
 use anyhow::{Context as _, Result};
 use vec1::vec1;
+use warp_errors::report_error;
 use warp_managed_secrets::client::IdentityTokenOptions;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::{ModelSpawner, SingletonEntity};
@@ -22,7 +23,6 @@ use super::agent_sdk::driver::AgentDriver;
 use super::aws_credentials::{
     aws_role_session_name, sts_client, AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION,
 };
-use crate::report_error;
 
 /// How long to wait between Bedrock credential refresh attempts — well ahead of the
 /// 1-hour STS temporary credential expiry, matching the approach used for git credentials.

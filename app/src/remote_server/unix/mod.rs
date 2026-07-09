@@ -16,11 +16,12 @@ pub(super) mod proxy;
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 
+use warp_errors::report_error;
 use warpui::r#async::executor;
 use warpui::SingletonEntity;
 
 use super::server_model::{ConnectionId, ServerModel};
-use crate::{report_error, send_telemetry_from_app_ctx, TelemetryEvent};
+use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
 
 /// Run the `remote-server-daemon` subcommand.
 ///

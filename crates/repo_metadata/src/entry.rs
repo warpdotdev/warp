@@ -11,7 +11,7 @@ use ignore::gitignore::Gitignore;
 #[cfg(feature = "local_fs")]
 use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::standing_queries::{StandingQueryDefinitions, StandingQueryResults};

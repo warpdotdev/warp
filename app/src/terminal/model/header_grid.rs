@@ -6,6 +6,7 @@ use std::io;
 
 use instant::Instant;
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::units::{IntoLines as _, Lines};
 
@@ -19,7 +20,6 @@ use super::grid::{Cursor, Dimensions as _, RespectDisplayedOutput};
 use super::index::{Point, VisibleRow};
 use super::selection::ScrollDelta;
 use super::{ObfuscateSecrets, RespectObfuscatedSecrets};
-use crate::report_error;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::SizeInfo;

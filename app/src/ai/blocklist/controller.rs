@@ -24,6 +24,7 @@ use pending_response_streams::PendingResponseStreams;
 use session_sharing_protocol::common::ParticipantId;
 pub use slash_command::*;
 use warp_core::assertions::safe_assert;
+use warp_errors::report_error;
 use warp_multi_agent_api::{message, Task, ToolType};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -65,6 +66,7 @@ use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::persistence::ModelEvent;
+use crate::send_telemetry_from_ctx;
 use crate::server::server_api::AIApiError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
@@ -80,7 +82,6 @@ use crate::terminal::ShellLaunchData;
 use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, send_telemetry_from_ctx};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {

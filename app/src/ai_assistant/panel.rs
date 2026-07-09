@@ -4,6 +4,7 @@ use std::time::Duration;
 use chrono::Local;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_editor::editor::NavigationKey;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     resizable_state_handle, Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius,
@@ -37,6 +38,7 @@ use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, TextOptions,
 };
 use crate::input_suggestions::{Event as InputSuggestionsEvent, InputSuggestions};
+use crate::send_telemetry_from_ctx;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{TelemetryEvent, WarpAIActionType};
@@ -46,7 +48,6 @@ use crate::ui_components::buttons::icon_button;
 use crate::util::bindings::{cmd_or_ctrl_shift, CustomAction};
 use crate::workspace::{ActiveSession, TAB_BAR_HEIGHT};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, send_telemetry_from_ctx};
 
 const INFO_ICON_SVG_PATH: &str = "bundled/svg/info.svg";
 pub const HEXAGON_ALERT_SVG_PATH: &str = "bundled/svg/alert-hexagon.svg";

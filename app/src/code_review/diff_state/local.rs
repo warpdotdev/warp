@@ -59,6 +59,9 @@ cfg_if::cfg_if! {
     }
 }
 #[cfg(feature = "local_fs")]
+use warp_errors::report_error;
+
+#[cfg(feature = "local_fs")]
 use super::DiffOperation;
 use super::{
     BackendOrigin, CommitChainMode, DiffHunk, DiffLine, DiffLineType, DiffMetadata,
@@ -66,8 +69,6 @@ use super::{
     FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData, GitDiffWithBaseContent,
     GitFileStatus, GitOpResult,
 };
-#[cfg(feature = "local_fs")]
-use crate::report_error;
 
 // Unicode bidirectional characters that should be flagged
 const BIDI_CHARS: [char; 9] = [

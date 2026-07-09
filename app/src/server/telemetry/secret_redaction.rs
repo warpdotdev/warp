@@ -23,8 +23,8 @@ use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use regex_automata::meta::Regex;
 use serde_json::Value;
+use warp_errors::report_error;
 
-use crate::report_error;
 use crate::terminal::model::secrets::regexes::DEFAULT_REGEXES_WITH_NAMES;
 const REDACTION_REPLACEMENT_CHARACTER: &str = "*";
 lazy_static! {

@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use chrono::{Local, TimeDelta};
 use history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use session_sharing_protocol::common::ParticipantId;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext};
 
 use super::{AIBlockModel, AIBlockOutputStatus, OutputStatusUpdateCallback};
@@ -15,7 +16,6 @@ use crate::ai::agent::{
 use crate::ai::blocklist::history_model;
 use crate::ai::blocklist::model::{AIRequestType, PassiveRequestType};
 use crate::ai::llms::LLMId;
-use crate::report_error;
 
 /// Standard [`AIBlock`] impl for live outputs corresponding to an `OutputStream`.
 pub struct AIBlockModelImpl<V> {

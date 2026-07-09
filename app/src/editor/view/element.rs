@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use vim::vim::{MotionType, VimMode};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
+use warp_errors::report_error;
 use warp_util::user_input::UserInput;
 use warpui::elements::{
     AfterLayoutContext, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -48,7 +49,6 @@ use crate::editor::accept_autosuggestion_keybinding_view::{
 use crate::editor::autosuggestion_ignore_view::AutosuggestionIgnore;
 use crate::editor::position_id_for_first_cursor;
 use crate::editor::view::AutosuggestionLocation;
-use crate::report_error;
 use crate::settings::CursorDisplayType;
 use crate::themes::theme::Fill;
 use crate::ui_components::blended_colors;

@@ -16,6 +16,7 @@ use anyhow::{anyhow, Context as _, Result};
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use rand::Rng as _;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_errors::{report_error, report_if_error};
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::platform::TerminationMode;
 use warpui::r#async::Timer;
@@ -30,10 +31,7 @@ use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApi;
 use crate::server::telemetry::TelemetryEvent;
 use crate::workspace::Workspace;
-use crate::{
-    report_error, report_if_error, send_telemetry_from_ctx, send_telemetry_sync_from_app_ctx,
-    ChannelState,
-};
+use crate::{send_telemetry_from_ctx, send_telemetry_sync_from_app_ctx, ChannelState};
 
 /// A successfully downloaded and unpacked target update.
 #[derive(Clone, Debug)]
@@ -983,7 +981,7 @@ where
                         autoupdate_state.relaunch_failed(ctx);
 
                         let err = anyhow!(err).context("Error applying installed update");
-                        crate::report_error!(&err);
+                        warp_errors::report_error!(&err);
                         callback(Err(err), ctx);
                     }
                 }

@@ -1,4 +1,5 @@
 use futures::Future;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, Flex, Hoverable, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
 };
@@ -28,7 +29,6 @@ use crate::env_vars::manager::EnvVarCollectionSource;
 use crate::env_vars::CloudEnvVarCollection;
 use crate::notebooks::manager::NotebookSource;
 use crate::notebooks::CloudNotebook;
-use crate::report_error;
 use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::telemetry::SharingDialogSource;

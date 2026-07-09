@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
+use warp_errors::{report_error, report_if_error};
 use warpui::r#async::Timer;
 use warpui::{
     duration_with_jitter, Entity, ModelContext, ModelHandle, RequestState, SingletonEntity,
@@ -27,7 +28,6 @@ use crate::server::retry_strategies::{
 };
 use crate::server::server_api::team::TeamClient;
 use crate::server::server_api::ServerApiProvider;
-use crate::{report_error, report_if_error};
 
 pub enum TeamUpdateManagerEvent {
     LeaveSuccess,

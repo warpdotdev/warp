@@ -7,6 +7,8 @@ use std::sync::mpsc::SyncSender;
 
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
+#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
+use warp_errors::report_error;
 #[cfg(feature = "local_tty")]
 use warpui::geometry::vector::Vector2F;
 #[cfg(not(target_family = "wasm"))]
@@ -32,8 +34,6 @@ use crate::banner::BannerState;
 use crate::pane_group::TerminalViewResources;
 #[cfg(feature = "local_tty")]
 use crate::persistence::ModelEvent;
-#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
-use crate::report_error;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 #[cfg(not(target_family = "wasm"))]

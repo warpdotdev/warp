@@ -16,6 +16,7 @@ use warp_completer::meta::Spanned;
 use warp_completer::parsers::hir::{Command, Expression, FlagType};
 use warp_completer::parsers::ParsedExpression;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -29,7 +30,6 @@ use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::completer::SessionContext;
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
-use crate::report_error;
 use crate::server::server_api::{AIApiError, ServerApi};
 use crate::settings::AISettings;
 use crate::terminal::event::UserBlockCompleted;

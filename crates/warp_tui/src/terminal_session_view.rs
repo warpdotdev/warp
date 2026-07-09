@@ -17,8 +17,8 @@ use warp::tui_export::{
     PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
     TerminalModel, TerminalSurface, TerminalSurfaceInit, WAKEUP_THROTTLE_PERIOD,
 };
-use warp_core::report_error;
 use warp_editor::model::CoreEditorModel;
+use warp_errors::report_error;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Modifier, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiStyle, TuiText,

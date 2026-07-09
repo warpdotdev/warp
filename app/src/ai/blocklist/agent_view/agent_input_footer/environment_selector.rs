@@ -6,6 +6,7 @@ use settings::Setting;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_if_error;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Stack,
@@ -26,7 +27,6 @@ use crate::cloud_object::CloudObjectLookup as _;
 use crate::context_chips::display_menu::{
     ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
 };
-use crate::report_if_error;
 use crate::server::ids::SyncId;
 use crate::terminal::input::{
     HandoffComposeState, HandoffComposeStateEvent, MenuPositioning, MenuPositioningProvider,

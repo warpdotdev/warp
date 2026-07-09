@@ -9,6 +9,7 @@ use session_sharing_protocol::common::{Guest, PendingGuest, SessionId, TeamAclDa
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warp_editor::editor::NavigationKey;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
@@ -60,7 +61,7 @@ use crate::word_block_editor::{
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 mod inheritance;
 

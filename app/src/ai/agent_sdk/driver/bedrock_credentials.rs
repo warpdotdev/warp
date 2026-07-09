@@ -22,7 +22,7 @@ use super::AgentDriver;
 use crate::ai::aws_credentials::{
     aws_role_session_name, sts_client, AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION,
 };
-use crate::report_error;
+use warp_errors::report_error;
 
 /// How long to wait between Bedrock credential refresh attempts — well ahead of the
 /// 1-hour STS temporary credential expiry, matching the approach used for git credentials.

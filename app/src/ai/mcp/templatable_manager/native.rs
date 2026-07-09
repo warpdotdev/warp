@@ -16,6 +16,7 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
 use warp_core::settings::Setting as _;
+use warp_errors::report_error;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
@@ -52,7 +53,7 @@ use crate::settings::AISettings;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, send_telemetry_from_ctx, GlobalResourceHandlesProvider};
+use crate::{send_telemetry_from_ctx, GlobalResourceHandlesProvider};
 
 /// Controls the behavior of `spawn_server_impl`.
 enum SpawnMode {

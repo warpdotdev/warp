@@ -14,7 +14,7 @@ use warp::tui_export::{
     TerminalManagerTrait, TerminalSurfaceResult,
 };
 use warp::{TuiLoginModel, TuiLoginPhase};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warpui::SingletonEntity;
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};

@@ -7,10 +7,11 @@ use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use warp_cli::RecoveryMechanism;
 use warp_core::channel::{Channel, ChannelState};
+use warp_errors::{report_error, report_if_error};
 use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
 use warpui_extras::user_preferences::UserPreferences;
 
-use crate::{report_error, report_if_error, settings};
+use crate::settings;
 
 /// Keep in sync with [`warp_cli::AppArgs`].
 pub const RECOVERY_MECHANISM_ARG: &str = "crash-recovery-mechanism";

@@ -5,6 +5,7 @@ use warp_core::ui::external_product_icon::ExternalProductIcon;
 use warp_core::ui::icons::{Icon, ICON_DIMENSIONS};
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_errors::report_error;
 use warpui::accessibility::ActionAccessibilityContent;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Fill, Flex,
@@ -23,7 +24,6 @@ use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
 use crate::ai::mcp::{MCPServerState, TemplatableMCPServerManager};
 use crate::appearance::Appearance;
 use crate::cloud_object::{CloudObject, CloudObjectUuidLookup as _};
-use crate::report_error;
 use crate::settings_view::mcp_servers::{style, ServerCardItemId};
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 use crate::ui_components::blended_colors;

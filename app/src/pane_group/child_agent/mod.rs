@@ -6,6 +6,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use warp_cli::agent::Harness;
+use warp_errors::report_error;
 use warpui::{EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -18,7 +19,7 @@ use crate::ai::llms::LLMPreferences;
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::TerminalView;
-use crate::{report_error, AIExecutionProfilesModel};
+use crate::AIExecutionProfilesModel;
 
 pub(crate) struct HiddenChildAgentConversation {
     pub terminal_view: ViewHandle<TerminalView>,

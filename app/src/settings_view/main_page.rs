@@ -8,6 +8,7 @@ use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
+use warp_errors::{report_error, report_if_error};
 #[cfg(not(target_family = "wasm"))]
 use warp_server_client::iap::{IapCredentialsState, IapManager, IapManagerEvent};
 use warpui::assets::asset_cache::AssetSource;
@@ -45,7 +46,7 @@ use crate::workspace::WorkspaceAction;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
-use crate::{report_error, report_if_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 const PHOTO_SIZE: f32 = 40.;
 const REFERRAL_CTA: &str = "Earn rewards by sharing Warp with friends & colleagues";

@@ -91,6 +91,7 @@ pub fn init(app: &mut AppContext) {
     view::launch_modal::oz_launch::init(app);
     view::openwarp_launch_modal::init(app);
     view::orchestration_launch_modal::init(app);
+    view::feature_intro_modal::init(app);
     view::auto_handoff_sleep_modal::init(app);
     view::cloud_agent_capacity_modal::init(app);
     view::codex_modal::init(app);
@@ -124,6 +125,13 @@ pub fn init(app: &mut AppContext) {
             "enter",
             WorkspaceAction::DismissSessionConfigTabConfigChip,
             id!("Workspace") & id!(flags::SESSION_CONFIG_TAB_CONFIG_CHIP_OPEN),
+        ),
+        // Feature intro never steals focus, so Escape must be handled at the workspace
+        // level while the popover is open rather than on FeatureIntroModal itself.
+        FixedBinding::new(
+            "escape",
+            WorkspaceAction::DismissFeatureIntroModal,
+            id!("Workspace") & id!(flags::FEATURE_INTRO_MODAL_OPEN),
         ),
     ]);
 
@@ -216,6 +224,18 @@ pub fn init(app: &mut AppContext) {
                     "workspace:reset_orchestration_launch_modal_state",
                     "[Debug] Reset Orchestration Launch Modal State",
                     WorkspaceAction::ResetOrchestrationLaunchModalState,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:open_feature_intro_modal",
+                    "[Debug] Open Feature Intro Modal",
+                    WorkspaceAction::OpenFeatureIntroModal,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:reset_feature_intro_modal_state",
+                    "[Debug] Reset Feature Intro Modal State",
+                    WorkspaceAction::ResetFeatureIntroModalState,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(

@@ -5,12 +5,12 @@
 //! proceeding with work that requires the plans to be server-backed.
 use std::time::Duration;
 
+use warp_errors::report_error;
 use warpui::r#async::FutureExt as WarpFutureExt;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentModelEvent};
-use crate::report_error;
 
 /// Bounded wait per plan so a failed or slow publication cannot stall callers
 /// indefinitely.

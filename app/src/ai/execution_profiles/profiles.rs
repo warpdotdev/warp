@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::{
@@ -24,7 +25,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, SyncId};
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, send_telemetry_from_ctx, CloudModel, LaunchMode, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, CloudModel, LaunchMode, TelemetryEvent};
 
 /// ExecutionProfileId is the identifier that users of the AIExecutionProfilesModel use
 /// to refer back to a specific profile. These are unique across the lifespan of the app.

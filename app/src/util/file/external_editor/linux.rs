@@ -5,11 +5,11 @@ use std::sync::OnceLock;
 
 use command::blocking::Command;
 use freedesktop_desktop_entry::DesktopEntry;
+use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::AppContext;
 
 use super::Editor;
-use crate::report_error;
 
 static INSTALLED_EDITOR_METADATA: OnceLock<HashMap<Editor, EditorMetadata>> = OnceLock::new();
 

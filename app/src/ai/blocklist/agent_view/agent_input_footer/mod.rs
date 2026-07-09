@@ -26,12 +26,14 @@ use toolbar_item::AgentToolbarItemKind;
 use voice_input::{StartListeningError, VoiceSessionResult};
 use warp_cli::agent::Harness;
 use warp_core::context_flag::ContextFlag;
-use warp_core::report_if_error;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::contrast::MinimumAllowedContrast;
 use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
+#[cfg(any(not(target_family = "wasm"), feature = "voice_input"))]
+use warp_errors::report_error;
+use warp_errors::report_if_error;
 use warpui::elements::{
     ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, Element, Empty, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
@@ -65,8 +67,6 @@ use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::{self, ContextChipKind};
 use crate::features::FeatureFlag;
 use crate::network::NetworkStatus;
-#[cfg(any(not(target_family = "wasm"), feature = "voice_input"))]
-use crate::report_error;
 use crate::send_telemetry_from_ctx;
 #[cfg(feature = "voice_input")]
 use crate::server::server_api::TranscribeError;

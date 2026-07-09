@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use chrono::{LocalResult, TimeZone, Utc};
 use warp_core::execution_mode::AppExecutionMode;
-use warp_core::{report_error, report_if_error};
+use warp_errors::{report_error, report_if_error};
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, Entity, ModelContext, SingletonEntity};
 
@@ -153,7 +153,7 @@ impl TelemetryCollector {
                     // case where we accidentally try to re-flush the events on the next app startup.
                     if let Err(e) = remove_file(&path) {
                         if e.kind() != std::io::ErrorKind::NotFound {
-                            warp_core::report_error!(
+                            report_error!(
                                 anyhow::anyhow!(e).context("Failed to remove persisted event file")
                             );
                         }
