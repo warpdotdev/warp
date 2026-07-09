@@ -690,7 +690,7 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
         # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
         # support.
         command ssh -o ControlMaster=$control_master_mode -o ControlPath="$control_path" \
-        -t $argv \
+        -tt $argv \
 "
 export TERM_PROGRAM='WarpTerminal'
 test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSION'

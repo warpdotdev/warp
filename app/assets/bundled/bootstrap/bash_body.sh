@@ -1068,7 +1068,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
             # support.
             command ssh -o ControlMaster=$control_master_mode -o ControlPath="$control_path" \
-            -t "${@:1}" \
+            -tt "${@:1}" \
 "
 export TERM_PROGRAM='WarpTerminal'
 # Mark the remote side of a Warp-managed SSH session so the bootstrap

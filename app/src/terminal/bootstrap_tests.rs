@@ -1,4 +1,5 @@
 use super::*;
+use crate::ASSETS;
 
 struct TestAssetProvider;
 
@@ -59,6 +60,28 @@ fn test_trims_powershell_specifics() {
     );
 }
 
+#[test]
+fn ssh_wrapper_forces_pty_allocation() {
+    let bash = decode_asset("bundled/bootstrap/bash_body.sh");
+    assert!(bash.contains(r#"-tt "${@:1}" \"#));
+    assert!(!bash.contains(r#"-t "${@:1}" \"#));
+
+    let zsh = decode_asset("bundled/bootstrap/zsh_body.sh");
+    assert!(zsh.contains(r#"-tt "${@:1}" \"#));
+    assert!(!zsh.contains(r#"-t "${@:1}" \"#));
+
+    let fish = decode_asset("bundled/bootstrap/fish.sh");
+    assert!(fish.contains("-tt $argv \\"));
+    assert!(!fish.contains("-t $argv \\"));
+}
+
 fn decode_script(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).expect("should not fail to decode")
+}
+
+fn decode_asset(path: &str) -> String {
+    let bytes = ASSETS.get(path).expect("asset should exist");
+    std::str::from_utf8(&bytes)
+        .expect("asset should be valid utf-8")
+        .to_string()
 }
