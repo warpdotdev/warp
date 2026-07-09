@@ -856,6 +856,10 @@ impl From<&Arc<AIApiError>> for RenderableAIError {
                 false,
                 TransientNetworkErrorKind::Api(value.clone()),
             ),
+            AIApiError::GrokSubscriptionTokenRefreshFailed => Self::other(
+                "Grok subscription token could not be refreshed. Please try reconnecting your subscription.",
+                true,
+            ),
             AIApiError::Deserialization(DeserializationError::Json(_))
             | AIApiError::NoContextFound
             | AIApiError::ErrorStatus(_, _)

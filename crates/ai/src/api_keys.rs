@@ -153,6 +153,17 @@ impl GrokTokens {
     }
 }
 
+/// Outcome of a Grok OAuth token refresh, delivered to each request blocked
+/// waiting on it so the request can either send with the freshly refreshed
+/// token or surface the failure instead of sending an expired one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrokRefreshOutcome {
+    /// The token was refreshed and the new value stored.
+    Refreshed,
+    /// The refresh failed; the stored token is unchanged (still expired).
+    Failed,
+}
+
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AwsCredentialsRefreshStrategy {
@@ -188,7 +199,7 @@ pub struct ApiKeyManager {
     /// may be empty for a proactive refresh with no waiters). `None` means no
     /// refresh is running. Always cleared when the refresh finishes.
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) grok_refresh_waiters: Option<Vec<oneshot::Sender<()>>>,
+    pub(crate) grok_refresh_waiters: Option<Vec<oneshot::Sender<GrokRefreshOutcome>>>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     /// In-memory Gemini Enterprise (GEAP) credential state.

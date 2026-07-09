@@ -24,7 +24,7 @@ use warpui_core::r#async::Timer;
 use warpui_core::ModelContext;
 
 use self::oauth::TokenResponse;
-use crate::api_keys::{ApiKeyManager, GrokTokens};
+use crate::api_keys::{ApiKeyManager, GrokRefreshOutcome, GrokTokens};
 
 /// Refresh the access token this long before its hard expiry so a request
 /// never races the expiration. Possibly-expired tokens are still sent (the
@@ -128,7 +128,7 @@ impl ApiKeyManager {
         &mut self,
         byo_allowed: bool,
         ctx: &mut ModelContext<Self>,
-    ) -> Option<oneshot::Receiver<()>> {
+    ) -> Option<oneshot::Receiver<GrokRefreshOutcome>> {
         let refresh_token = self.grok_expired_refresh_token(byo_allowed)?;
         let (tx, rx) = oneshot::channel();
         log::info!("Grok OAuth token is expired at request time; waiting for refresh before send");
@@ -213,7 +213,7 @@ fn schedule_grok_token_refresh(manager: &mut ApiKeyManager, ctx: &mut ModelConte
 fn spawn_grok_refresh(
     manager: &mut ApiKeyManager,
     refresh_token: String,
-    waiters: Vec<oneshot::Sender<()>>,
+    waiters: Vec<oneshot::Sender<GrokRefreshOutcome>>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
     // A refresh is already running; attach the new waiters to it instead of
@@ -228,7 +228,7 @@ fn spawn_grok_refresh(
         move |manager, result, ctx| {
             // Clear the in-flight guard and take the waiters to wake below.
             let waiters = manager.grok_refresh_waiters.take().unwrap_or_default();
-            match result {
+            let outcome = match result {
                 Ok(response) => {
                     log::info!(
                         "Refreshed Grok OAuth token (expires_in={:?}, has_refresh_token={})",
@@ -236,19 +236,20 @@ fn spawn_grok_refresh(
                         response.refresh_token.is_some(),
                     );
                     apply_grok_tokens(manager, response, ctx);
+                    GrokRefreshOutcome::Refreshed
                 }
                 Err(err) => {
-                    // Leave the existing (possibly expired) token in place; the
-                    // server remains the authority and will reject it if it's
-                    // truly invalid. A later request re-triggers a refresh via
-                    // `ApiKeyManager::begin_expired_grok_refresh`.
+                    // Leave the existing (possibly expired) token in place. The
+                    // waiting request surfaces this failure instead of sending
+                    // with the dead token; a later request re-triggers a refresh.
                     log::error!("Failed to refresh Grok OAuth token: {err:#}");
+                    GrokRefreshOutcome::Failed
                 }
-            }
-            // Wake every request blocked on this refresh, regardless of
-            // outcome. Dropped receivers (callers gone) are safe to ignore.
+            };
+            // Wake every request blocked on this refresh with the outcome.
+            // Dropped receivers (callers gone) are safe to ignore.
             for waiter in waiters {
-                let _ = waiter.send(());
+                let _ = waiter.send(outcome);
             }
         },
     );
