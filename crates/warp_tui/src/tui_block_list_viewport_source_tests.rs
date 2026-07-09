@@ -160,7 +160,7 @@ fn tui_agent_beyond_overhang_keeps_stale_height() {
         // A tall terminal block pushes the agent block beyond the overhang band.
         let (source, model, agent_block) = seeded_agent_block_source(&mut app, 30, 7.0);
 
-        request_top_window(&app, &source, &agent_block, 1);
+        request_top_window(&app, &source, 1);
 
         // Beyond OVERHANG_ROWS: not re-measured, so the stale height is retained.
         assert_eq!(rich_content_height(&model, agent_block.id()), Some(7.0));
