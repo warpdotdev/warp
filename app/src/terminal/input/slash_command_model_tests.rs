@@ -106,6 +106,14 @@ fn test_parse_rename_tab_slash_command_arguments() {
                 .parse_slash_command("/rename-tab ")
                 .expect("expected /rename-tab to parse once the required argument is started");
             assert_eq!(detected_with_empty_argument.argument.as_deref(), Some(""));
+
+            let detected_with_multiline_argument = data_source
+                .parse_slash_command("/rename-tab\nBackend API")
+                .expect("expected /rename-tab to parse when its argument starts on the next line");
+            assert_eq!(
+                detected_with_multiline_argument.argument.as_deref(),
+                Some("Backend API")
+            );
         });
     });
 }
@@ -392,6 +400,36 @@ fn test_detect_command_matches_buffer_driven_detection() {
                 buffer_is_slash, detect_is_slash,
                 "detect_command and buffer-driven detection should agree for '{command_name}'"
             );
+        });
+    });
+}
+
+#[test]
+fn test_buffer_redetects_slash_command_after_multiline_edit() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_natural_language_detection(ctx);
+            input.user_insert("/plan\nwrite a product spec", ctx);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.user_replace_editor_text("/rename-tab\nBackend API", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            let state = input.slash_command_model.as_ref(ctx).state();
+            match state {
+                SlashCommandEntryState::SlashCommand(detected) => {
+                    assert_eq!(detected.command.name, commands::RENAME_TAB.name);
+                    assert_eq!(detected.argument.as_deref(), Some("Backend API"));
+                }
+                other => panic!("expected edited multiline input to detect /rename-tab: {other:?}"),
+            }
         });
     });
 }
