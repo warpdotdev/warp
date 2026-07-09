@@ -8400,7 +8400,7 @@ impl ApiKeysWidget {
 
         if show_provider_keys {
             add_paragraph(vec![FormattedTextFragment::plain_text(
-                "Use your own API keys from model providers for Warp Agent. Adding an API key here will override any API key provided by your team admin. Models that use neither a personal nor team-provided key may consume Warp credits.",
+                "Use your own API keys from model providers for Warp Agent. API keys are used to make requests to your chosen model provider. Using auto models or models you do not have available API keys for will consume Warp credits.",
             )]);
         }
 
@@ -8412,7 +8412,7 @@ impl ApiKeysWidget {
 
         if show_provider_keys || show_custom_endpoints {
             add_paragraph(vec![FormattedTextFragment::plain_text(
-                "API keys and custom endpoint credentials you add here are stored only on this device, not on Warp's servers.",
+                "API keys added here are stored only on this device, not on Warp's servers.",
             )]);
             add_paragraph(vec![FormattedTextFragment::hyperlink(
                 "Learn more",

@@ -1966,7 +1966,13 @@ impl ProfileModelSelector {
                                 )
                                 .finish(),
                             )
-                            .with_child(ChildView::new(&self.manage_api_key_button).finish())
+                            .with_child(
+                                Container::new(
+                                    ChildView::new(&self.manage_api_key_button).finish(),
+                                )
+                                .with_margin_left(8.)
+                                .finish(),
+                            )
                             .finish(),
                     )
                     .finish(),
