@@ -891,21 +891,42 @@ pub enum PaneStackEvent<P: View> {
     ViewAdded(ViewHandle<P>),
     /// A view was removed from the stack.
     ViewRemoved(ViewHandle<P>),
+    /// The active (rendered) entry changed without a view being added or
+    /// removed — e.g. the user switched between pane tabs.
+    ActiveChanged,
 }
 
 /// A navigation stack of backing views for a pane.
 ///
-/// This model allows panes to support a stack of views, where only the topmost
-/// view is active/rendered. Views can be pushed onto the stack and popped to
-/// return to the previous view.
+/// This model allows panes to support a stack of views, where only the active
+/// view is rendered. It serves two roles:
+///
+/// * As a *navigation stack*: views can be pushed on top and popped to return
+///   to the previous view (used e.g. by nested cloud-mode agent views). Push
+///   and pop always leave the topmost view active.
+/// * As a set of *pane tabs*: several sibling views (each its own shell) can be
+///   held at once, with [`Self::set_active_index`] switching which one is
+///   rendered and [`Self::remove_at`] closing an individual tab.
 ///
 /// The stack is guaranteed to always have at least one view.
 ///
 /// Each view in the stack can have associated data of type [`BackingView::AssociatedData`].
 /// This is useful for storing per-view metadata that should be tied to the view's own lifetime.
 pub struct PaneStack<P: BackingView> {
-    /// The stack of backing views with associated data. The last element is the active (topmost) view.
+    /// The stack of backing views with associated data.
+    ///
+    /// The first `tab_count` entries are sibling *pane tabs*; any entries above
+    /// them are transient *navigation-stack pushes* (nested cloud-mode agents,
+    /// docker sandboxes, …). Keeping the two contiguous lets us tell "the pane
+    /// has multiple shells" apart from "a nested view is pushed on top", which
+    /// drive very different UI (a tab strip vs. an Esc-to-go-back affordance).
     children: vec1::Vec1<(P::AssociatedData, ViewHandle<P>)>,
+    /// Index into `children` of the active (rendered) entry. Push/pop keep this
+    /// pinned to the top of the stack, preserving the navigation-stack
+    /// semantics; pane-tab switching moves it freely within the tab region.
+    active_index: usize,
+    /// Number of leading `children` that are sibling pane tabs (always >= 1).
+    tab_count: usize,
 }
 
 impl<P: BackingView> Entity for PaneStack<P> {
@@ -933,22 +954,40 @@ impl<P: BackingView> PaneStack<P> {
         });
         Self {
             children: vec1::vec1![(data, initial_view)],
+            active_index: 0,
+            tab_count: 1,
         }
     }
 
-    /// Returns the topmost (active) view in the stack.
+    /// Returns the active (rendered) view in the stack.
     pub fn active_view(&self) -> &ViewHandle<P> {
-        &self.children.last().1
+        &self.children[self.active_index].1
     }
 
-    /// Returns the associated data for the topmost (active) view in the stack.
+    /// Returns the associated data for the active (rendered) view in the stack.
     pub fn active_data(&self) -> &P::AssociatedData {
-        &self.children.last().0
+        &self.children[self.active_index].0
     }
 
-    /// Returns a mutable reference to the associated data for the topmost (active) view.
+    /// Returns a mutable reference to the associated data for the active (rendered) view.
     pub fn active_data_mut(&mut self) -> &mut P::AssociatedData {
-        &mut self.children.last_mut().0
+        &mut self.children[self.active_index].0
+    }
+
+    /// The index of the active (rendered) entry.
+    pub fn active_index(&self) -> usize {
+        self.active_index
+    }
+
+    /// The number of sibling pane tabs (the leading entries of the stack).
+    pub fn tab_count(&self) -> usize {
+        self.tab_count
+    }
+
+    /// Whether a navigation-stack view (a nested cloud-mode agent, docker
+    /// sandbox, …) is currently pushed above the pane's tabs.
+    pub fn has_nav_entries(&self) -> bool {
+        self.children.len() > self.tab_count
     }
 
     /// Returns all views in the stack.
@@ -978,7 +1017,43 @@ impl<P: BackingView> PaneStack<P> {
             view.set_pane_stack(weak_handle, ctx);
         });
         self.children.push((data, view.clone()));
+        // A push makes the newly added view active (top of the stack). It is a
+        // navigation-stack entry, not a tab, so `tab_count` is left unchanged.
+        self.active_index = self.children.len() - 1;
         ctx.emit(PaneStackEvent::ViewAdded(view));
+    }
+
+    /// Adds a new sibling *tab* to the pane (as opposed to [`Self::push`], which
+    /// adds a transient navigation-stack view). The tab is inserted after the
+    /// existing tabs and becomes active when no navigation-stack view is
+    /// currently on top.
+    pub fn add_tab(
+        &mut self,
+        data: P::AssociatedData,
+        view: ViewHandle<P>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let weak_handle = ctx.handle();
+        view.update(ctx, |view, ctx| {
+            view.set_pane_stack(weak_handle, ctx);
+        });
+
+        let had_nav_entries = self.has_nav_entries();
+        let insert_at = self.tab_count;
+        self.children.insert(insert_at, (data, view.clone()));
+        self.tab_count += 1;
+
+        // Keep the active entry stable across the insertion, then focus the new
+        // tab unless a navigation-stack view is currently on top.
+        if self.active_index >= insert_at {
+            self.active_index += 1;
+        }
+        if !had_nav_entries {
+            self.active_index = insert_at;
+        }
+
+        ctx.emit(PaneStackEvent::ViewAdded(view));
+        ctx.emit(PaneStackEvent::ActiveChanged);
     }
 
     /// Pops the topmost view from the stack.
@@ -988,8 +1063,51 @@ impl<P: BackingView> PaneStack<P> {
         ctx: &mut ModelContext<Self>,
     ) -> Option<(P::AssociatedData, ViewHandle<P>)> {
         let popped = self.children.pop().ok()?;
+        // Keep the active index in bounds; popping leaves the new top active.
+        self.active_index = self.active_index.min(self.children.len() - 1);
+        // If a tab was popped (only possible once the nav-stack region is
+        // empty), keep `tab_count` in sync.
+        self.tab_count = self.tab_count.min(self.children.len());
         ctx.emit(PaneStackEvent::ViewRemoved(popped.1.clone()));
         Some(popped)
+    }
+
+    /// Switches the active (rendered) entry to `index`. No-op if `index` is out
+    /// of bounds or already active.
+    pub fn set_active_index(&mut self, index: usize, ctx: &mut ModelContext<Self>) {
+        if index >= self.children.len() || index == self.active_index {
+            return;
+        }
+        self.active_index = index;
+        ctx.emit(PaneStackEvent::ActiveChanged);
+    }
+
+    /// Removes the entry at `index`, returning it (with its associated data).
+    /// Returns `None` when removing it would empty the stack — a stack always
+    /// keeps at least one view — or when `index` is out of bounds.
+    pub fn remove_at(
+        &mut self,
+        index: usize,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<(P::AssociatedData, ViewHandle<P>)> {
+        if self.children.len() <= 1 || index >= self.children.len() {
+            return None;
+        }
+        let removed = self.children.remove(index).ok()?;
+
+        if index < self.tab_count {
+            self.tab_count -= 1;
+        }
+
+        // Keep `active_index` pointing at the same entry (or a neighbor when the
+        // active entry itself was removed).
+        if index < self.active_index || self.active_index >= self.children.len() {
+            self.active_index = self.active_index.saturating_sub(1);
+        }
+
+        ctx.emit(PaneStackEvent::ViewRemoved(removed.1.clone()));
+        ctx.emit(PaneStackEvent::ActiveChanged);
+        Some(removed)
     }
 }
 
@@ -1058,6 +1176,12 @@ pub trait BackingView: View {
 
     fn should_render_header(&self, _app: &AppContext) -> bool {
         true
+    }
+
+    /// Short label shown for this view in the pane's tab strip when the pane
+    /// holds more than one tab. Defaults to an empty string.
+    fn tab_title(&self, _app: &AppContext) -> String {
+        String::new()
     }
 
     /// Called when this view is added to a [`PaneStack`]. Views are given a handle to their owning stack so that they can:

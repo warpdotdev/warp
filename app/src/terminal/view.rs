@@ -4912,7 +4912,7 @@ impl TerminalView {
                 .pane_stack
                 .as_ref()
                 .and_then(|h| h.upgrade(ctx))
-                .filter(|stack| stack.as_ref(ctx).depth() > 1)
+                .filter(|stack| stack.as_ref(ctx).has_nav_entries())
             {
                 pane_stack.update(ctx, |stack, ctx| {
                     stack.pop(ctx);
@@ -21480,7 +21480,7 @@ impl TerminalView {
                 let initial_prompt = initial_prompt.clone();
 
                 if let Some(pane_stack) = self.pane_stack.as_ref().and_then(|h| h.upgrade(ctx)) {
-                    let should_pop = pane_stack.as_ref(ctx).depth() > 1;
+                    let should_pop = pane_stack.as_ref(ctx).has_nav_entries();
                     if should_pop {
                         pane_stack.update(ctx, |stack, ctx| {
                             stack.pop(ctx);

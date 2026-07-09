@@ -8062,3 +8062,150 @@ fn cmd_k_in_agent_view_cancels_in_progress_conversation_and_starts_new_one() {
         });
     })
 }
+
+#[test]
+fn pane_stack_supports_tab_switching_and_removal() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let t0 = add_window_with_terminal(&mut app, None);
+        let t1 = add_window_with_terminal(&mut app, None);
+        let t2 = add_window_with_terminal(&mut app, None);
+
+        let m0 = t0.read(&app, |view, _| view.model.clone());
+        let m1 = t1.read(&app, |view, _| view.model.clone());
+        let m2 = t2.read(&app, |view, _| view.model.clone());
+        let (v0, v1, v2) = (t0.clone(), t1.clone(), t2.clone());
+        let (v0b, v1b, v2b) = (t0.clone(), t1.clone(), t2.clone());
+
+        let pane_stack = app.update(move |ctx| {
+            let mgr0 = ctx.add_model(|_| {
+                let m: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
+                    model: m0,
+                    _view: v0,
+                });
+                m
+            });
+            let mgr1 = ctx.add_model(|_| {
+                let m: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
+                    model: m1,
+                    _view: v1,
+                });
+                m
+            });
+            let mgr2 = ctx.add_model(|_| {
+                let m: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
+                    model: m2,
+                    _view: v2,
+                });
+                m
+            });
+            let pane_stack = ctx.add_model(|ctx| PaneStack::new(mgr0, v0b, ctx));
+            pane_stack.update(ctx, |stack, ctx| {
+                stack.add_tab(mgr1, v1b, ctx);
+                stack.add_tab(mgr2, v2b, ctx);
+            });
+            pane_stack
+        });
+
+        pane_stack.read(&app, |stack, _| {
+            assert_eq!(stack.depth(), 3);
+            assert_eq!(stack.tab_count(), 3);
+            assert!(!stack.has_nav_entries());
+            assert_eq!(stack.active_index(), 2);
+            assert_eq!(stack.active_view().id(), t2.id());
+        });
+
+        pane_stack.update(&mut app, |stack, ctx| stack.set_active_index(0, ctx));
+        pane_stack.read(&app, |stack, _| {
+            assert_eq!(stack.active_index(), 0);
+            assert_eq!(stack.active_view().id(), t0.id());
+        });
+
+        pane_stack.update(&mut app, |stack, ctx| stack.set_active_index(2, ctx));
+        let removed = pane_stack.update(&mut app, |stack, ctx| stack.remove_at(0, ctx));
+        assert!(removed.is_some());
+        pane_stack.read(&app, |stack, _| {
+            assert_eq!(stack.depth(), 2);
+            assert_eq!(stack.tab_count(), 2);
+            assert_eq!(stack.active_index(), 1);
+            assert_eq!(stack.active_view().id(), t2.id());
+        });
+
+        let _ = pane_stack.update(&mut app, |stack, ctx| stack.remove_at(1, ctx));
+        pane_stack.read(&app, |stack, _| {
+            assert_eq!(stack.depth(), 1);
+            assert_eq!(stack.tab_count(), 1);
+            assert_eq!(stack.active_index(), 0);
+            assert_eq!(stack.active_view().id(), t1.id());
+        });
+
+        let none = pane_stack.update(&mut app, |stack, ctx| stack.remove_at(0, ctx));
+        assert!(none.is_none());
+    })
+}
+
+#[test]
+fn pane_stack_distinguishes_tabs_from_nav_pushes() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let t0 = add_window_with_terminal(&mut app, None);
+        let t1 = add_window_with_terminal(&mut app, None);
+        let t2 = add_window_with_terminal(&mut app, None);
+
+        let m0 = t0.read(&app, |view, _| view.model.clone());
+        let m1 = t1.read(&app, |view, _| view.model.clone());
+        let m2 = t2.read(&app, |view, _| view.model.clone());
+        let (v0, v1, v2) = (t0.clone(), t1.clone(), t2.clone());
+        let (v0b, v1b, v2b) = (t0.clone(), t1.clone(), t2.clone());
+
+        let pane_stack = app.update(move |ctx| {
+            let mgr0 = ctx.add_model(|_| {
+                let m: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
+                    model: m0,
+                    _view: v0,
+                });
+                m
+            });
+            let mgr1 = ctx.add_model(|_| {
+                let m: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
+                    model: m1,
+                    _view: v1,
+                });
+                m
+            });
+            let mgr2 = ctx.add_model(|_| {
+                let m: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
+                    model: m2,
+                    _view: v2,
+                });
+                m
+            });
+            let pane_stack = ctx.add_model(|ctx| PaneStack::new(mgr0, v0b, ctx));
+            pane_stack.update(ctx, |stack, ctx| {
+                // One sibling tab, then a nav-stack push on top (like cloud mode).
+                stack.add_tab(mgr1, v1b, ctx);
+                stack.push(mgr2, v2b, ctx);
+            });
+            pane_stack
+        });
+
+        // The push is a nav-stack entry, not a tab: two tabs, a nav entry on
+        // top, and the pushed view is active.
+        pane_stack.read(&app, |stack, _| {
+            assert_eq!(stack.depth(), 3);
+            assert_eq!(stack.tab_count(), 2);
+            assert!(stack.has_nav_entries());
+            assert_eq!(stack.active_view().id(), t2.id());
+        });
+
+        // Popping the nav entry returns to the tabs with nothing pushed.
+        let _ = pane_stack.update(&mut app, |stack, ctx| stack.pop(ctx));
+        pane_stack.read(&app, |stack, _| {
+            assert_eq!(stack.depth(), 2);
+            assert_eq!(stack.tab_count(), 2);
+            assert!(!stack.has_nav_entries());
+        });
+    })
+}

@@ -316,6 +316,10 @@ pub enum PaneGroupAction {
     ToggleMaximizePane,
     HandleFocusChange,
     FocusTerminalView(EntityId),
+    NewTabInPane,
+    NextPaneTab,
+    PrevPaneTab,
+    ClosePaneTab,
 }
 #[derive(PartialEq)]
 enum PaneRemovalReason {
@@ -484,6 +488,38 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
         .with_custom_action(CustomAction::ToggleMaximizePane),
+    ]);
+
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "pane_group:new_tab_in_pane",
+            "New tab in pane",
+            PaneGroupAction::NewTabInPane,
+        )
+        .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
+        .with_enabled(|| ContextFlag::CreateNewSession.is_enabled())
+        .with_key_binding("ctrl-shift-T"),
+        EditableBinding::new(
+            "pane_group:next_pane_tab",
+            "Next tab in pane",
+            PaneGroupAction::NextPaneTab,
+        )
+        .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
+        .with_key_binding("ctrl-shift-L"),
+        EditableBinding::new(
+            "pane_group:prev_pane_tab",
+            "Previous tab in pane",
+            PaneGroupAction::PrevPaneTab,
+        )
+        .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
+        .with_key_binding("ctrl-shift-H"),
+        EditableBinding::new(
+            "pane_group:close_pane_tab",
+            "Close tab in pane",
+            PaneGroupAction::ClosePaneTab,
+        )
+        .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
+        .with_key_binding("ctrl-shift-W"),
     ]);
 
     if ChannelState::channel() == Channel::Integration {
@@ -1276,6 +1312,21 @@ impl PaneGroup {
                     self.focus_pane_by_id(pane_id, ctx);
                     ctx.emit(Event::TerminalViewStateChanged);
                     ctx.notify();
+                }
+                PaneViewEvent::NewPaneTabRequested => {
+                    self.add_terminal_tab_in_pane(pane_id, ctx);
+                }
+                PaneViewEvent::SelectPaneTab { index } => {
+                    self.set_active_tab_in_pane(pane_id, *index, ctx);
+                }
+                PaneViewEvent::ClosePaneTab { index } => {
+                    self.close_tab_in_pane(pane_id, *index, ctx);
+                }
+                PaneViewEvent::CloseOtherPaneTabs { index } => {
+                    self.close_other_tabs_in_pane(pane_id, *index, ctx);
+                }
+                PaneViewEvent::ClosePaneTabsToRight { index } => {
+                    self.close_tabs_to_right_in_pane(pane_id, *index, ctx);
                 }
             }
         } else {
@@ -3878,6 +3929,218 @@ impl PaneGroup {
         new_pane_id
     }
 
+    /// Adds a new terminal tab (a nested shell) inside the pane identified by
+    /// `pane_id`, making it the active tab. No-op if the pane is not a terminal
+    /// pane. Unlike [`Self::add_terminal_pane`], this does not split the layout —
+    /// the new shell shares the same pane rectangle and is surfaced via the
+    /// pane's tab strip.
+    pub fn add_terminal_tab_in_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
+        let Some(terminal_pane) = self.terminal_session_by_id(pane_id) else {
+            return;
+        };
+        let pane_stack = terminal_pane.pane_stack(ctx);
+
+        // Inherit the shell and (where configured) the working directory of the
+        // pane's current session, matching split-pane behavior.
+        let chosen_shell = self
+            .terminal_view_from_pane_id(pane_id, ctx)
+            .and_then(|view| {
+                let model = view.as_ref(ctx).model.lock();
+                model.shell_launch_state().available_shell()
+            });
+
+        let base_session_id = pane_id.as_terminal_pane_id();
+        let ignore_custom_startup_directory =
+            self.should_ignore_custom_startup_directory(&chosen_shell, ctx);
+        let initial_directory_from_current_session =
+            self.startup_path_for_new_session(base_session_id, ctx);
+        let startup_directory = SessionSettings::handle(ctx).read(ctx, |settings, _ctx| {
+            settings
+                .working_directory_config
+                .initial_directory_for_new_session(
+                    NewSessionSource::SplitPane,
+                    initial_directory_from_current_session,
+                    ignore_custom_startup_directory,
+                )
+        });
+
+        let (view, terminal_manager) =
+            self.create_tab_terminal_session(startup_directory, chosen_shell, ctx);
+
+        pane_stack.update(ctx, |stack, ctx| {
+            stack.add_tab(terminal_manager, view, ctx);
+        });
+
+        self.focus_pane(pane_id, true, ctx);
+        ctx.emit(Event::AppStateChanged);
+    }
+
+    pub fn set_active_tab_in_pane(
+        &mut self,
+        pane_id: PaneId,
+        index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_pane) = self.terminal_session_by_id(pane_id) else {
+            return;
+        };
+        let pane_stack = terminal_pane.pane_stack(ctx);
+        pane_stack.update(ctx, |stack, ctx| stack.set_active_index(index, ctx));
+        self.focus_pane(pane_id, true, ctx);
+    }
+
+    /// Cycles the active tab within `pane_id` forward (or backward), wrapping
+    /// around. No-op when the pane has fewer than two tabs.
+    pub fn cycle_tab_in_pane(
+        &mut self,
+        pane_id: PaneId,
+        forward: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_pane) = self.terminal_session_by_id(pane_id) else {
+            return;
+        };
+        let pane_stack = terminal_pane.pane_stack(ctx);
+        let (tab_count, active) = {
+            let stack = pane_stack.as_ref(ctx);
+            (stack.tab_count(), stack.active_index())
+        };
+        if tab_count <= 1 {
+            return;
+        }
+        // Cycle within the tab region only. If a nav-stack view is on top, treat
+        // the last tab as the current position.
+        let current = active.min(tab_count - 1);
+        let next = if forward {
+            (current + 1) % tab_count
+        } else {
+            (current + tab_count - 1) % tab_count
+        };
+        pane_stack.update(ctx, |stack, ctx| stack.set_active_index(next, ctx));
+        self.focus_pane(pane_id, true, ctx);
+    }
+
+    pub fn close_active_tab_in_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
+        let Some(terminal_pane) = self.terminal_session_by_id(pane_id) else {
+            return;
+        };
+        let index = {
+            let stack = terminal_pane.pane_stack(ctx);
+            let stack = stack.as_ref(ctx);
+            if stack.has_nav_entries() {
+                return;
+            }
+            stack.active_index()
+        };
+        self.close_tab_in_pane(pane_id, index, ctx);
+    }
+
+    /// Closes every tab in `pane_id` except the one at `keep_index`.
+    pub fn close_other_tabs_in_pane(
+        &mut self,
+        pane_id: PaneId,
+        keep_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_pane) = self.terminal_session_by_id(pane_id) else {
+            return;
+        };
+        let pane_stack = terminal_pane.pane_stack(ctx);
+        // Remove from the highest tab index down so earlier indices stay valid,
+        // skipping the tab we're keeping.
+        let tab_count = pane_stack.as_ref(ctx).tab_count();
+        for index in (0..tab_count).rev() {
+            if index == keep_index {
+                continue;
+            }
+            pane_stack.update(ctx, |stack, ctx| {
+                stack.remove_at(index, ctx);
+            });
+        }
+        self.focus_pane(pane_id, true, ctx);
+        ctx.emit(Event::AppStateChanged);
+    }
+
+    /// Closes every tab in `pane_id` positioned after `index`.
+    pub fn close_tabs_to_right_in_pane(
+        &mut self,
+        pane_id: PaneId,
+        index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_pane) = self.terminal_session_by_id(pane_id) else {
+            return;
+        };
+        let pane_stack = terminal_pane.pane_stack(ctx);
+        let tab_count = pane_stack.as_ref(ctx).tab_count();
+        // Remove from the last tab down to just after `index`.
+        for tab_index in (index + 1..tab_count).rev() {
+            pane_stack.update(ctx, |stack, ctx| {
+                stack.remove_at(tab_index, ctx);
+            });
+        }
+        self.focus_pane(pane_id, true, ctx);
+        ctx.emit(Event::AppStateChanged);
+    }
+
+    /// Closes the tab at `index` within `pane_id`. When it is the pane's last
+    /// remaining tab, the whole pane is closed instead.
+    pub fn close_tab_in_pane(
+        &mut self,
+        pane_id: PaneId,
+        index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(terminal_pane) = self.terminal_session_by_id(pane_id) else {
+            return;
+        };
+        let pane_stack = terminal_pane.pane_stack(ctx);
+        if pane_stack.as_ref(ctx).tab_count() <= 1 {
+            self.close_pane_with_confirmation(pane_id, ctx);
+            return;
+        }
+        let _removed = pane_stack.update(ctx, |stack, ctx| stack.remove_at(index, ctx));
+        self.focus_pane(pane_id, true, ctx);
+        ctx.emit(Event::AppStateChanged);
+    }
+
+    /// Creates a new terminal session (view + manager) for use as a tab inside
+    /// an existing pane's [`PaneStack`]. Unlike [`Self::create_terminal_pane_data`],
+    /// it does not wrap the session in a new `TerminalPane`/pane-tree leaf.
+    fn create_tab_terminal_session(
+        &self,
+        startup_directory: Option<PathBuf>,
+        chosen_shell: Option<AvailableShell>,
+        ctx: &mut ViewContext<Self>,
+    ) -> (
+        ViewHandle<TerminalView>,
+        ModelHandle<Box<dyn TerminalManager>>,
+    ) {
+        let uuid = Uuid::new_v4();
+        let resources = TerminalViewResources {
+            tips_completed: self.tips_completed.clone(),
+            server_api: self.server_api.clone(),
+            model_event_sender: self.model_event_sender.clone(),
+        };
+        let view_bounds = Self::estimated_view_bounds(ctx);
+        PaneGroup::create_session(
+            startup_directory,
+            HashMap::new(),
+            uuid.as_bytes(),
+            IsSharedSessionCreator::No,
+            resources,
+            None, /* restored_blocks */
+            None, /* conversation_restoration */
+            self.user_default_shell_unsupported_banner_model_handle
+                .clone(),
+            view_bounds.size(),
+            self.model_event_sender.clone(),
+            chosen_shell,
+            None, /* initial_input_config */
+            ctx,
+        )
+    }
+
     /// Adds a terminal split pane without applying the user's default session mode.
     pub fn add_terminal_pane_ignoring_default_session_mode(
         &mut self,
@@ -5777,21 +6040,53 @@ impl PaneGroup {
         }
     }
 
+    /// Close the pane tab containing `terminal_view_id`, or the pane itself when
+    /// the view is not one of the pane's sibling tabs.
+    pub(in crate::pane_group) fn close_terminal_tab_for_view(
+        &mut self,
+        pane_id: PaneId,
+        terminal_view_id: EntityId,
+        confirm_last_tab: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(index) = self.terminal_tab_index_for_view(pane_id, terminal_view_id, ctx) else {
+            if self
+                .terminal_view_by_id_in_pane(pane_id, terminal_view_id, ctx)
+                .is_none()
+            {
+                return;
+            }
+
+            if confirm_last_tab {
+                self.close_pane_with_confirmation(pane_id, ctx);
+            } else {
+                self.close_pane(pane_id, ctx);
+            }
+            return;
+        };
+
+        let tab_count = self
+            .terminal_session_by_id(pane_id)
+            .map(|pane| pane.pane_stack(ctx).as_ref(ctx).tab_count())
+            .unwrap_or(0);
+        if tab_count > 1 {
+            self.close_tab_in_pane(pane_id, index, ctx);
+        } else if confirm_last_tab {
+            self.close_pane_with_confirmation(pane_id, ctx);
+        } else {
+            self.close_pane(pane_id, ctx);
+        }
+    }
+
     /// Focused the specified terminal view, if it belongs to this pane group.
     pub fn focus_terminal_view(&mut self, terminal_view_id: EntityId, ctx: &mut ViewContext<Self>) {
-        let pane_id = self
-            .pane_contents
-            .keys()
-            .find(|id| {
-                if let Some(terminal_view) = self.terminal_view_from_pane_id(**id, ctx) {
-                    terminal_view_id == terminal_view.id()
-                } else {
-                    false
-                }
-            })
-            .cloned();
+        let pane_id_and_tab_index = self.pane_contents.keys().find_map(|id| {
+            self.terminal_tab_index_for_view(*id, terminal_view_id, ctx)
+                .map(|index| (*id, index))
+        });
 
-        if let Some(pane_id) = pane_id {
+        if let Some((pane_id, index)) = pane_id_and_tab_index {
+            self.set_active_tab_in_pane(pane_id, index, ctx);
             self.focus_pane_by_id(pane_id, ctx);
         }
     }
@@ -6938,6 +7233,42 @@ impl PaneGroup {
             .map(|session| session.terminal_view(ctx))
     }
 
+    /// Given a pane ID and terminal view ID, retrieve that terminal view if it
+    /// belongs to the pane's stack.
+    pub(in crate::pane_group) fn terminal_view_by_id_in_pane(
+        &self,
+        pane_id: PaneId,
+        terminal_view_id: EntityId,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TerminalView>> {
+        let terminal_pane = self.terminal_session_by_id(pane_id)?;
+        terminal_pane
+            .pane_stack(ctx)
+            .as_ref(ctx)
+            .entries()
+            .iter()
+            .find_map(|(_, view)| (view.id() == terminal_view_id).then(|| view.clone()))
+    }
+
+    /// Given a pane ID and terminal view ID, retrieve the sibling pane-tab index
+    /// for that view. Navigation-stack entries are not pane tabs and do not
+    /// produce an index.
+    fn terminal_tab_index_for_view(
+        &self,
+        pane_id: PaneId,
+        terminal_view_id: EntityId,
+        ctx: &AppContext,
+    ) -> Option<usize> {
+        let terminal_pane = self.terminal_session_by_id(pane_id)?;
+        let pane_stack = terminal_pane.pane_stack(ctx);
+        let stack = pane_stack.as_ref(ctx);
+        stack
+            .entries()
+            .iter()
+            .take(stack.tab_count())
+            .position(|(_, view)| view.id() == terminal_view_id)
+    }
+
     pub fn attach_execution_session_to_ambient_pane(
         &mut self,
         pane_id: PaneId,
@@ -7998,6 +8329,22 @@ impl TypedActionView for PaneGroup {
             } => self.move_pane(*id, *target_pane_id, *direction, ctx),
             HandleFocusChange => self.handle_focus_change(ctx),
             FocusTerminalView(terminal_view_id) => self.focus_terminal_view(*terminal_view_id, ctx),
+            NewTabInPane => {
+                let pane_id = self.focused_pane_id(ctx);
+                self.add_terminal_tab_in_pane(pane_id, ctx);
+            }
+            NextPaneTab => {
+                let pane_id = self.focused_pane_id(ctx);
+                self.cycle_tab_in_pane(pane_id, true, ctx);
+            }
+            PrevPaneTab => {
+                let pane_id = self.focused_pane_id(ctx);
+                self.cycle_tab_in_pane(pane_id, false, ctx);
+            }
+            ClosePaneTab => {
+                let pane_id = self.focused_pane_id(ctx);
+                self.close_active_tab_in_pane(pane_id, ctx);
+            }
         }
     }
 }

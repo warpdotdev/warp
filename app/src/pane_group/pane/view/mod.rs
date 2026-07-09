@@ -9,9 +9,15 @@ pub use header_content::{
 };
 use pathfinder_geometry::rect::RectF;
 use warpui::elements::{
-    Border, Container, DropTarget, DropTargetData, Flex, MainAxisSize, ParentElement, SavePosition,
-    Shrinkable,
+    Border, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult,
+    DropTarget, DropTargetData, EventHandler, Flex, MainAxisSize, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Shrinkable, Stack, Text,
 };
+use warpui::geometry::vector::vec2f;
+use warpui::text_layout::ClipConfig;
+
+use crate::menu::{Event as MenuEvent, Menu, MenuItemFields};
+use crate::ui_components::blended_colors;
 use warpui::keymap::EditableBinding;
 use warpui::presenter::ChildView;
 use warpui::{
@@ -61,11 +67,30 @@ pub enum PaneViewEvent {
     PaneDraggedOutsideTabBarOrPaneGroup,
     PaneDragEnded,
     PaneHeaderClicked,
+    NewPaneTabRequested,
+    SelectPaneTab {
+        index: usize,
+    },
+    ClosePaneTab {
+        index: usize,
+    },
+    CloseOtherPaneTabs {
+        index: usize,
+    },
+    ClosePaneTabsToRight {
+        index: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum PaneAction {
     ShareContents,
+    SelectTab(usize),
+    CloseTab(usize),
+    NewTab,
+    OpenTabContextMenu { index: usize },
+    CloseOtherTabs(usize),
+    CloseTabsToRight(usize),
 }
 
 impl<P: BackingView> Entity for PaneView<P> {
@@ -80,6 +105,8 @@ pub struct PaneView<P: BackingView> {
     header: ViewHandle<PaneHeader<P>>,
     is_being_dragged: bool,
     focus_handle: Option<PaneFocusHandle>,
+    tab_context_menu: ViewHandle<Menu<PaneAction>>,
+    tab_context_menu_anchor: Option<usize>,
 }
 
 impl<P: BackingView> PaneView<P> {
@@ -118,6 +145,17 @@ impl<P: BackingView> PaneView<P> {
             }
         });
 
+        let tab_context_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_safe_triangle()
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&tab_context_menu, |me, _, event, ctx| {
+            if let MenuEvent::Close { .. } = event {
+                me.close_tab_context_menu(ctx);
+            }
+        });
+
         Self {
             pane_id,
             pane_stack,
@@ -125,6 +163,45 @@ impl<P: BackingView> PaneView<P> {
             header,
             is_being_dragged: false,
             focus_handle: None,
+            tab_context_menu,
+            tab_context_menu_anchor: None,
+        }
+    }
+
+    fn tab_position_id(&self, index: usize) -> String {
+        format!("pane_tab:{}:{}", self.pane_id.position_id(), index)
+    }
+
+    fn open_tab_context_menu(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        let tab_count = self.pane_stack.as_ref(ctx).tab_count();
+        let is_last = index + 1 >= tab_count;
+        let items = vec![
+            MenuItemFields::new("Close")
+                .with_on_select_action(PaneAction::CloseTab(index))
+                .into_item(),
+            MenuItemFields::new("Close others")
+                .with_on_select_action(PaneAction::CloseOtherTabs(index))
+                .with_disabled(tab_count <= 1)
+                .into_item(),
+            MenuItemFields::new("Close to the right")
+                .with_on_select_action(PaneAction::CloseTabsToRight(index))
+                .with_disabled(is_last)
+                .into_item(),
+        ];
+        self.tab_context_menu.update(ctx, |menu, ctx| {
+            menu.set_items(items, ctx);
+        });
+        self.tab_context_menu_anchor = Some(index);
+        ctx.focus(&self.tab_context_menu);
+        ctx.notify();
+    }
+
+    fn close_tab_context_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.tab_context_menu_anchor.take().is_some() {
+            self.tab_context_menu.update(ctx, |menu, ctx| {
+                menu.reset_selection(ctx);
+            });
+            ctx.notify();
         }
     }
 
@@ -351,6 +428,122 @@ impl<P: BackingView> PaneView<P> {
     pub fn pane_id(&self) -> PaneId {
         self.pane_id
     }
+
+    fn render_pane_tab_strip(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let font_family = appearance.ui_font_family();
+        let font_size = appearance.ui_font_size();
+
+        let stack = self.pane_stack.as_ref(app);
+        let active_index = stack.active_index();
+        let tab_count = stack.tab_count();
+        let tabs: Vec<(usize, String, bool)> = stack
+            .entries()
+            .iter()
+            .take(tab_count)
+            .enumerate()
+            .map(|(index, (_, view))| {
+                let title = view.read(app, |view, app| view.tab_title(app));
+                (index, title, index == active_index)
+            })
+            .collect();
+
+        let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+        for (index, title, is_active) in tabs {
+            let label = if title.trim().is_empty() {
+                format!("Terminal {}", index + 1)
+            } else {
+                title
+            };
+            let background = if is_active {
+                theme.surface_1()
+            } else {
+                theme.background()
+            };
+            let text_color = if is_active {
+                blended_colors::text_main(&theme, background)
+            } else {
+                blended_colors::text_sub(&theme, background)
+            };
+
+            let mut tab_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+            tab_row.add_child(
+                Container::new(
+                    Text::new_inline(label, font_family, font_size)
+                        .with_color(text_color)
+                        .with_clip(ClipConfig::end())
+                        .finish(),
+                )
+                .with_margin_right(6.)
+                .finish(),
+            );
+            tab_row.add_child(
+                EventHandler::new(
+                    Text::new_inline("×", font_family, font_size)
+                        .with_color(text_color)
+                        .finish(),
+                )
+                .on_left_mouse_down(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(PaneAction::CloseTab(index));
+                    DispatchEventResult::StopPropagation
+                })
+                .finish(),
+            );
+
+            let tab = Container::new(tab_row.finish())
+                .with_horizontal_padding(10.)
+                .with_vertical_padding(4.)
+                .with_background_color(background.into())
+                .with_margin_right(2.)
+                .finish();
+
+            row.add_child(
+                SavePosition::new(
+                    ConstrainedBox::new(
+                        EventHandler::new(tab)
+                            .on_left_mouse_down(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(PaneAction::SelectTab(index));
+                                DispatchEventResult::StopPropagation
+                            })
+                            .on_right_mouse_down(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(PaneAction::OpenTabContextMenu { index });
+                                DispatchEventResult::StopPropagation
+                            })
+                            .finish(),
+                    )
+                    .with_max_width(200.)
+                    .finish(),
+                    &self.tab_position_id(index),
+                )
+                .finish(),
+            );
+        }
+
+        row.add_child(
+            EventHandler::new(
+                Container::new(
+                    Text::new_inline("+", font_family, font_size)
+                        .with_color(blended_colors::text_sub(&theme, theme.background()))
+                        .finish(),
+                )
+                .with_horizontal_padding(10.)
+                .with_vertical_padding(4.)
+                .finish(),
+            )
+            .on_left_mouse_down(|ctx, _, _| {
+                ctx.dispatch_typed_action(PaneAction::NewTab);
+                DispatchEventResult::StopPropagation
+            })
+            .finish(),
+        );
+
+        Container::new(row.finish())
+            .with_background_color(theme.background().into())
+            .with_border(Border::bottom(1.).with_border_fill(theme.surface_1()))
+            .finish()
+    }
 }
 
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -394,6 +587,16 @@ impl<P: BackingView> View for PaneView<P> {
             column.add_child(ChildView::new(&self.header).finish());
         }
 
+        // When the pane hosts more than one shell (tab), show a tab strip to
+        // switch between them. Suppress it while a navigation-stack view (e.g. a
+        // nested cloud-mode agent) is pushed on top.
+        {
+            let stack = self.pane_stack.as_ref(app);
+            if stack.tab_count() >= 2 && !stack.has_nav_entries() {
+                column.add_child(self.render_pane_tab_strip(app));
+            }
+        }
+
         // Add the underlying pane view.
         column.add_child(Shrinkable::new(1., ChildView::new(&active_child).finish()).finish());
 
@@ -422,11 +625,31 @@ impl<P: BackingView> View for PaneView<P> {
             container = container.with_foreground_overlay(appearance.theme().surface_2())
         }
 
-        SavePosition::new(
+        let pane_element = SavePosition::new(
             DropTarget::new(container.finish(), PaneDropTargetData { id: self.pane_id }).finish(),
             &self.pane_id.position_id(),
         )
-        .finish()
+        .finish();
+
+        // Overlay the tab context menu (if open), anchored just below the
+        // clicked tab element.
+        if let Some(index) = self.tab_context_menu_anchor {
+            let mut stack = Stack::new();
+            stack.add_child(pane_element);
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.tab_context_menu).finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    self.tab_position_id(index),
+                    vec2f(0., 4.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+            stack.finish()
+        } else {
+            pane_element
+        }
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> warpui::keymap::Context {
@@ -446,7 +669,7 @@ impl<P: BackingView> View for PaneView<P> {
         // it is transferred between windows; otherwise a backing view would
         // be orphaned in the source window and later trip a "circular view
         // reference" panic when accessed from its new window.
-        let mut ids = vec![self.header.id()];
+        let mut ids = vec![self.header.id(), self.tab_context_menu.id()];
         ids.extend(self.pane_stack.as_ref(app).views().map(|view| view.id()));
         ids
     }
@@ -460,6 +683,20 @@ impl<P: BackingView> TypedActionView for PaneView<P> {
             PaneAction::ShareContents => self.header.update(ctx, |header, ctx| {
                 header.share_pane_contents(SharingDialogSource::CommandPalette, ctx);
             }),
+            PaneAction::SelectTab(index) => {
+                ctx.emit(PaneViewEvent::SelectPaneTab { index: *index })
+            }
+            PaneAction::CloseTab(index) => ctx.emit(PaneViewEvent::ClosePaneTab { index: *index }),
+            PaneAction::NewTab => ctx.emit(PaneViewEvent::NewPaneTabRequested),
+            PaneAction::OpenTabContextMenu { index } => {
+                self.open_tab_context_menu(*index, ctx);
+            }
+            PaneAction::CloseOtherTabs(index) => {
+                ctx.emit(PaneViewEvent::CloseOtherPaneTabs { index: *index })
+            }
+            PaneAction::CloseTabsToRight(index) => {
+                ctx.emit(PaneViewEvent::ClosePaneTabsToRight { index: *index })
+            }
         }
     }
 }

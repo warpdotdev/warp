@@ -245,11 +245,14 @@ impl TerminalView {
             return Flex::row().finish();
         }
 
+        // Only a genuine navigation-stack push (a nested cloud-mode agent,
+        // docker sandbox, …) shows the "Esc for terminal" back button — sibling
+        // pane tabs also grow the stack but must not surface it.
         let in_nav_stack = self
             .pane_stack
             .as_ref()
             .and_then(|h| h.upgrade(app))
-            .is_some_and(|stack| stack.as_ref(app).depth() > 1);
+            .is_some_and(|stack| stack.as_ref(app).has_nav_entries());
 
         let is_transcript_viewer = self.model.lock().is_conversation_transcript_viewer();
         let is_ambient_agent = self.is_ambient_agent_session(app);
@@ -709,6 +712,24 @@ impl BackingView for TerminalView {
         }
 
         items
+    }
+
+    fn tab_title(&self, app: &AppContext) -> String {
+        let title = self
+            .pane_configuration
+            .as_ref(app)
+            .title()
+            .trim()
+            .to_owned();
+        if !title.is_empty() {
+            return title;
+        }
+        let raw = self.terminal_title.trim();
+        if !raw.is_empty() {
+            raw.to_owned()
+        } else {
+            "Terminal".to_owned()
+        }
     }
 
     fn should_render_header(&self, app: &AppContext) -> bool {
