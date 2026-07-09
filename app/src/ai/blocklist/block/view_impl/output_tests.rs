@@ -125,9 +125,12 @@ fn read_skill_display_text_no_double_slash_when_skill_not_found_with_path_refere
 
 #[test]
 fn read_skill_display_text_bundled_id_fallback_when_skill_not_found() {
+    // The fallback uses the user-facing label (the bare id), not the canonical
+    // `@warp-skill:<id>` reference form, so bundled-skill copy reads the same
+    // way as path-based skill copy.
     let reference = SkillReference::BundledSkillId("create-pr".to_string());
     let display = read_skill_display_text(None, &reference);
-    assert_eq!(display, "@warp-skill:create-pr");
+    assert_eq!(display, "create-pr");
 }
 
 fn remote_location(host_id: &HostId, path: &str) -> LocalOrRemotePath {
