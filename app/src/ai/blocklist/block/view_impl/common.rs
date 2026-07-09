@@ -3043,6 +3043,7 @@ pub(crate) fn resolve_absolute_file_path(
 pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
+    pub subscribe_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
@@ -3066,6 +3067,19 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             user_display_message,
         } => {
             if let Some(message) = user_display_message {
+                // For Free / non-paid users who are out of credits, surface an inline
+                // Subscribe CTA next to the message. Paid users, and the enterprise
+                // spend-limit variant of this message (which asks the user to contact an
+                // admin), fall through to plain text.
+                if should_show_subscribe_cta(app) {
+                    return render_out_of_credits_error(
+                        message,
+                        props.subscribe_button_handle,
+                        props.is_ai_input_enabled,
+                        props.icon_right_margin,
+                        app,
+                    );
+                }
                 format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
             } else {
                 let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
@@ -3169,6 +3183,99 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 })
                 .finish(),
             )
+            .finish(),
+        )
+        .finish()
+}
+
+/// Whether to show the inline Subscribe CTA on the out-of-credits error. We show it for
+/// Free / non-paid users (the audience the "subscribe to a Warp plan" message targets) and
+/// hide it for paid users and the enterprise spend-limit variant of this message (which asks
+/// the user to contact an admin instead).
+fn should_show_subscribe_cta(app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app)
+        .current_team()
+        .is_none_or(|team| !team.billing_metadata.is_user_on_paid_plan())
+}
+
+/// Renders the out-of-credits failure with an inline Subscribe button that opens the upgrade
+/// flow. Mirrors the plain failed-output layout (alert icon + message) and appends a primary
+/// CTA below the message, indented to align with the text.
+fn render_out_of_credits_error(
+    message: &str,
+    state_handle: &MouseStateHandle,
+    is_ai_input_enabled: bool,
+    icon_right_margin: f32,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+
+    let icon = Container::new(
+        ConstrainedBox::new(
+            warpui::elements::Icon::new(
+                Icon::AlertTriangle.into(),
+                error_color(appearance.theme()),
+            )
+            .finish(),
+        )
+        .with_width(icon_size(app))
+        .with_height(icon_size(app))
+        .finish(),
+    )
+    .with_margin_right(icon_right_margin)
+    .finish();
+
+    let text = Text::new(
+        format!("{ERROR_APOLOGY_TEXT}\n\n{message}"),
+        appearance.monospace_font_family(),
+        appearance.monospace_font_size(),
+    )
+    .with_color(blended_colors::text_sub(
+        appearance.theme(),
+        appearance.theme().surface_1(),
+    ))
+    .with_selection_color(if is_ai_input_enabled {
+        appearance
+            .theme()
+            .text_selection_as_context_color()
+            .into_solid()
+    } else {
+        appearance.theme().text_selection_color().into_solid()
+    })
+    .finish();
+
+    let subscribe_button = appearance
+        .ui_builder()
+        .button(
+            warpui::ui_components::button::ButtonVariant::Accent,
+            state_handle.clone(),
+        )
+        .with_text_label("Subscribe".to_string())
+        .with_cursor(Some(Cursor::PointingHand))
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+        })
+        .finish();
+
+    Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(12.)
+        .with_child(
+            Flex::row()
+                .with_child(icon)
+                .with_child(Shrinkable::new(1., text).finish())
+                .finish(),
+        )
+        .with_child(
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_main_axis_alignment(MainAxisAlignment::Start)
+                    .with_child(subscribe_button)
+                    .finish(),
+            )
+            .with_margin_left(icon_size(app) + icon_right_margin)
             .finish(),
         )
         .finish()
