@@ -48,12 +48,11 @@ Two coordinate spaces stay explicit:
 
 Hidden line ranges are a *parameter* to `with_display_lattice` rather than internal state, so consumers can append structural extras (e.g. eliding a trailing empty line) to the model-derived set. Because the lattice binds the hidden and ghost sets at construction and every query inside one closure runs against the same projection, painting and geometry cannot diverge — by construction rather than by caller discipline.
 
-### `app/src/code/editor/model.rs` — model-side editor session APIs
+### `app/src/code/editor/model.rs` — model-side kill edits
 
-`CodeEditorModel` gains the char-cell session operations that gather model-owned inputs (primary cursor, hidden line ranges) around the `CharCellState` mechanisms, so consumers supply only policy:
+- `kill_to_visual_row_end(ctx)` / `kill_to_visual_row_start(ctx)` — delete from the primary cursor to its soft-wrapped visual-row boundary (via `visual_row_char_range`) as a user edit, returning the deleted text for the caller's kill buffer; `None` when already at the boundary. Buffer mutation is model semantics, so the raw `BufferEditAction::Delete` plumbing lives behind these, not in views.
 
-- `char_cell_follow_cursor(viewport_rows, app)` / `char_cell_scroll_by(rows, viewport_rows, app)` — viewport scroll driven after edits/navigation (follow) and by the mouse wheel (scroll-by, cursor unmoved). No-ops outside char-cell mode.
-- `kill_to_visual_row_end(ctx)` / `kill_to_visual_row_start(ctx)` — delete from the primary cursor to its soft-wrapped visual-row boundary (via `visual_row_char_range`) as a user edit, returning the deleted text for the caller's kill buffer; `None` when already at the boundary. The raw `BufferEditAction::Delete` plumbing lives behind these, not in views.
+Scroll deliberately gets no model wrappers: it is read-side glue, so consumers gather the inputs (primary cursor, model-derived hidden ranges) through the public accessors and drive `CharCellState::follow_cursor` / `scroll_by` directly, keeping the shared model's TUI surface minimal.
 
 ### `crates/warp_tui` — the core element
 
@@ -76,7 +75,7 @@ The element *paints and interacts*; it does not compute row structure: at layout
 
 ### Input migration (`crates/warp_tui/src/input/view.rs`)
 
-`TuiInputView` renders the core element verbatim (`.editable().with_viewport_rows(...).on_action(map to TuiInputAction)`). Deleted: `TuiInputElement`, `char_cell_cursor_pos` (duplicate wrap math), the selection-span loop, `offset_at` internals, the kill-helper row segmentation and buffer-edit plumbing (now `CodeEditorModel::kill_to_visual_row_end/_start`), the view-held `scroll_offset` and scroll policy (now `CharCellState` scroll driven via `char_cell_follow_cursor` / `char_cell_scroll_by` — `handle_action` follows the cursor after every action except wheel scroll), and the mirrored `is_selecting` flag (derived from the selection model's pending selection; `update_pending_selection`/`end_selection` are already no-ops without one, so the view dispatches unconditionally). Kept — the input policy layer: `tui:input:*` keybindings, `KillBuffer`, `max_visible_rows` (viewport policy), submit/clear, focus, shell-mode composition. Scroll geometry is computed in display-row space inside `CharCellState` — the same space the element windows by — so viewport math and rendering agree even once overlays apply to an editable surface. Net **−600 lines** in the input view; input behavior unchanged.
+`TuiInputView` renders the core element verbatim (`.editable().with_viewport_rows(...).on_action(map to TuiInputAction)`). Deleted: `TuiInputElement`, `char_cell_cursor_pos` (duplicate wrap math), the selection-span loop, `offset_at` internals, the kill-helper row segmentation and buffer-edit plumbing (now `CodeEditorModel::kill_to_visual_row_end/_start`), the view-held `scroll_offset` and scroll policy (now `CharCellState` scroll; two thin view helpers gather the cursor and hidden ranges and call `follow_cursor` / `scroll_by` — `handle_action` follows the cursor after every action except wheel scroll), and the mirrored `is_selecting` flag (derived from the selection model's pending selection; `update_pending_selection`/`end_selection` are already no-ops without one, so the view dispatches unconditionally). Kept — the input policy layer: `tui:input:*` keybindings, `KillBuffer`, `max_visible_rows` (viewport policy), submit/clear, focus, shell-mode composition. Scroll geometry is computed in display-row space inside `CharCellState` — the same space the element windows by — so viewport math and rendering agree even once overlays apply to an editable surface. Net **−600 lines** in the input view; input behavior unchanged.
 
 ## Testing and validation
 

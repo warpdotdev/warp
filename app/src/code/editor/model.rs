@@ -1926,41 +1926,6 @@ impl CodeEditorModel {
         self.backspace(ctx);
     }
 
-    // ── Char-cell (TUI) viewport scroll ──────────────────────────────────────
-    //
-    // The scroll offset itself lives on `CharCellState` (the char-cell arm of
-    // the render state, mirroring how the GUI keeps scroll on `RenderState`);
-    // these wrappers gather the inputs the mechanism needs — the primary
-    // cursor and the model-derived hidden line ranges — so consumers only
-    // supply viewport policy.
-
-    /// Scrolls the char-cell viewport the minimal amount needed to keep the
-    /// primary cursor visible within `viewport_rows` display rows. No-op
-    /// outside char-cell (TUI) mode.
-    pub fn char_cell_follow_cursor(&self, viewport_rows: u32, app: &AppContext) {
-        let render = self.render_state.as_ref(app);
-        let Some(char_cell) = render.char_cell() else {
-            return;
-        };
-        let cursor_idx = self.primary_cursor_gap(app).as_usize().saturating_sub(1);
-        let hidden = render.hidden_line_ranges(app);
-        char_cell.follow_cursor(cursor_idx, viewport_rows, &hidden);
-    }
-
-    /// Scrolls the char-cell viewport by `rows` display rows (negative
-    /// scrolls toward the top) without moving the cursor, clamped to the
-    /// scrollable range for `viewport_rows`. No-op outside char-cell (TUI)
-    /// mode.
-    pub fn char_cell_scroll_by(&self, rows: isize, viewport_rows: u32, app: &AppContext) {
-        let render = self.render_state.as_ref(app);
-        let Some(char_cell) = render.char_cell() else {
-            return;
-        };
-        let cursor_idx = self.primary_cursor_gap(app).as_usize().saturating_sub(1);
-        let hidden = render.hidden_line_ranges(app);
-        char_cell.scroll_by(rows, viewport_rows, cursor_idx, &hidden);
-    }
-
     // ── Char-cell (TUI) visual-row kill ──────────────────────────────────────
 
     /// Deletes from the primary cursor to the end of its soft-wrapped visual

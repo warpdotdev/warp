@@ -623,9 +623,7 @@ impl TuiInputView {
         self.model.update(ctx, |m, ctx| m.clear_buffer(ctx));
         // The cursor is back at the buffer start, so following it scrolls the
         // viewport back to the top.
-        self.model
-            .as_ref(ctx)
-            .char_cell_follow_cursor(self.max_visible_rows, ctx);
+        self.follow_cursor(ctx);
         ctx.notify();
     }
 
@@ -898,17 +896,13 @@ impl TypedActionView for TuiInputView {
                 // Wheel scrolling moves the viewport only; it must NOT snap back
                 // to the cursor, so it returns early (skipping the follow-cursor
                 // tail below).
-                self.model
-                    .as_ref(ctx)
-                    .char_cell_scroll_by(*rows, self.max_visible_rows, ctx);
+                self.scroll_viewport_by(*rows, ctx);
                 ctx.notify();
                 return;
             }
         }
 
-        self.model
-            .as_ref(ctx)
-            .char_cell_follow_cursor(self.max_visible_rows, ctx);
+        self.follow_cursor(ctx);
         ctx.notify();
     }
 }
@@ -961,6 +955,39 @@ impl TuiInputView {
     /// selection (the position where `!` toggles shell mode).
     fn is_cursor_at_start(&self, ctx: &AppContext) -> bool {
         self.cursor_offset(ctx).as_usize() <= 1 && self.selection_range(ctx).is_none()
+    }
+
+    // ── Scroll ─────────────────────────────────────────────────────────────
+    //
+    // The scroll offset and its clamping/follow policy live on the char-cell
+    // render state (`CharCellState`); these helpers gather the inputs the
+    // mechanism needs — the primary cursor and the model-derived hidden line
+    // ranges — and apply the input's viewport policy (`max_visible_rows`).
+
+    /// Scrolls the viewport the minimal amount needed to keep the cursor
+    /// visible.
+    fn follow_cursor(&self, ctx: &AppContext) {
+        let model = self.model.as_ref(ctx);
+        let render = model.render_state().as_ref(ctx);
+        let Some(char_cell) = render.char_cell() else {
+            return;
+        };
+        let cursor_idx = self.cursor_offset(ctx).as_usize().saturating_sub(1);
+        let hidden = render.hidden_line_ranges(ctx);
+        char_cell.follow_cursor(cursor_idx, self.max_visible_rows, &hidden);
+    }
+
+    /// Scrolls the viewport by `rows` display rows (negative scrolls toward
+    /// the top) without moving the cursor.
+    fn scroll_viewport_by(&self, rows: isize, ctx: &AppContext) {
+        let model = self.model.as_ref(ctx);
+        let render = model.render_state().as_ref(ctx);
+        let Some(char_cell) = render.char_cell() else {
+            return;
+        };
+        let cursor_idx = self.cursor_offset(ctx).as_usize().saturating_sub(1);
+        let hidden = render.hidden_line_ranges(ctx);
+        char_cell.scroll_by(rows, self.max_visible_rows, cursor_idx, &hidden);
     }
 
     // ── Shell mode ────────────────────────────────────────────────────────────

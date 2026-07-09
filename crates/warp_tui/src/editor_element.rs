@@ -186,9 +186,8 @@ impl TuiEditorElement {
 
     /// Window the rows to `max_visible_rows`, starting at the render state's
     /// char-cell scroll offset (owned model-side; consumers drive it via
-    /// `CodeEditorModel::char_cell_follow_cursor` / `char_cell_scroll_by`).
-    /// Omitted = render all rows (e.g. the diff body, which scrolls with the
-    /// transcript).
+    /// `CharCellState::follow_cursor` / `scroll_by`). Omitted = render all
+    /// rows (e.g. the diff body, which scrolls with the transcript).
     pub(crate) fn with_viewport_rows(mut self, max_visible_rows: u32) -> Self {
         self.viewport_rows = Some(max_visible_rows);
         self
