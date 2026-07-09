@@ -13,10 +13,10 @@ use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstraint, TuiElement, TuiLayoutContext, TuiSize, TuiViewportContent,
-    TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
+    TuiElement, TuiLayoutContext, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
+    TuiVisibleViewportItem,
 };
-use warpui_core::AppContext;
+use warpui_core::{AppContext, TuiView};
 
 use super::agent_block::TuiAIBlock;
 use super::terminal_block::{should_render_terminal_block, TerminalBlockVisibleRowsElement};
@@ -107,9 +107,7 @@ impl TuiBlockListViewportSource {
     }
 
     /// Measures each agent block's wrapped height at `width`, returning heights
-    /// in the block list's native line unit. Measurement lays out a
-    /// [`TuiChildView`] so it resolves the presenter's cached element for the
-    /// block instead of re-rendering it.
+    /// in the block list's native line unit.
     fn measured_agent_heights(
         &self,
         view_ids: HashSet<EntityId>,
@@ -122,16 +120,11 @@ impl TuiBlockListViewportSource {
             .into_iter()
             .filter_map(|view_id| {
                 let view = agent_blocks.get(&view_id)?;
-                let height = TuiChildView::new(view)
-                    .layout(
-                        TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
-                        ctx,
-                        app,
-                    )
-                    .height;
                 Some((
                     view_id,
-                    BlockHeight::from(usize::from(height).max(1) as f64),
+                    BlockHeight::from(
+                        view.as_ref(app).desired_height(width, ctx, app).max(1) as f64
+                    ),
                 ))
             })
             .collect()
@@ -288,7 +281,7 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         let (content_height, visible_items) = self.visible_items_in_window(window);
         let items = visible_items
             .into_iter()
-            .map(|item| item.render(&self.model, window, available_width))
+            .map(|item| item.render(&self.model, window, available_width, app))
             .collect();
 
         TuiViewportContent {
@@ -316,6 +309,7 @@ impl TuiBlockListVisibleItem {
         model: &Arc<FairMutex<TerminalModel>>,
         window: TuiViewportWindow,
         available_width: u16,
+        app: &AppContext,
     ) -> TuiVisibleViewportItem {
         let visible_rows = self.visible_rows(window);
         // Terminal blocks get pre-sliced below; rich content stays whole and lets `TuiClipped`
@@ -328,7 +322,7 @@ impl TuiBlockListVisibleItem {
         };
         TuiVisibleViewportItem {
             origin_y,
-            element: self.render_element(model, visible_rows, available_width),
+            element: self.render_element(model, visible_rows, available_width, app),
         }
     }
 
@@ -337,6 +331,7 @@ impl TuiBlockListVisibleItem {
         model: &Arc<FairMutex<TerminalModel>>,
         visible_rows: Range<usize>,
         width: u16,
+        app: &AppContext,
     ) -> Box<dyn TuiElement> {
         match self.kind {
             TuiBlockListVisibleItemKind::TerminalBlock(block_id) => {
@@ -344,10 +339,7 @@ impl TuiBlockListVisibleItem {
                 TerminalBlockVisibleRowsElement::new(model.clone(), block_id, visible_rows, width)
                     .finish()
             }
-            // Resolved from the presenter's `rendered_views` at layout/render
-            // time, so unchanged agent blocks are not re-rendered per frame;
-            // they refresh when the block view itself notifies.
-            TuiBlockListVisibleItemKind::AgentBlock(view) => TuiChildView::new(&view).finish(),
+            TuiBlockListVisibleItemKind::AgentBlock(view) => view.as_ref(app).render(app),
         }
     }
 }

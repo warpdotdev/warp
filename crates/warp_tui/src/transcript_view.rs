@@ -270,7 +270,6 @@ impl TuiTranscriptView {
         };
         agent_block.update(ctx, |view, ctx| {
             view.replace_model(conversation_id, Rc::new(block_model));
-            // Refresh the presenter's cached element for the block.
             ctx.notify();
         });
         self.model

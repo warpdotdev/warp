@@ -20,7 +20,8 @@ use warp::tui_export::{
     ModelEvent, ModelEventDispatcher, RequestCommandOutputResult, TerminalModel,
 };
 use warpui_core::elements::tui::{
-    TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement,
+    TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
+    TuiParentElement, TuiSize,
 };
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, EntityId, ModelHandle, TuiView, ViewContext, ViewHandle};
@@ -210,9 +211,6 @@ impl TuiAIBlock {
         block.block_model.on_updated_output(
             Box::new(move |me, ctx| {
                 me.sync_action_views(&action_model, ctx);
-                // The presenter caches this block's rendered element; new
-                // output must invalidate the view or the transcript keeps
-                // painting the stale element.
                 ctx.notify();
             }),
             ctx,
@@ -281,7 +279,7 @@ impl TuiAIBlock {
         self.action_ids.contains(action_id)
     }
 
-    /// Requests height remeasurement and refreshes this block's cached element.
+    /// Requests height remeasurement and redraws this block.
     fn invalidate_layout(&self, ctx: &mut ViewContext<Self>) {
         ctx.emit(TuiAIBlockEvent::LayoutInvalidated);
         ctx.notify();
@@ -347,6 +345,25 @@ impl TuiAIBlock {
             command: (!command.is_empty()).then_some(command),
             state,
         })
+    }
+
+    /// Returns this block's wrapped height using the live layout context.
+    pub(super) fn desired_height(
+        &self,
+        width: u16,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> usize {
+        let mut element = self.render_element(app);
+        usize::from(
+            element
+                .layout(
+                    TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                    ctx,
+                    app,
+                )
+                .height,
+        )
     }
 
     /// Extracts this exchange's visible input/output into logical render sections,

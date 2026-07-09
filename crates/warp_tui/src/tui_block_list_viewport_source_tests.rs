@@ -123,7 +123,7 @@ fn tui_agent_overhang_remeasures_visible_non_dirty_height() {
 
         // The visible block is re-measured during `visible_items`, so its height
         // is corrected before windowing without any post-layout pass.
-        let content = request_top_window(&app, &source, &agent_block, 10);
+        let content = request_top_window(&app, &source, 10);
 
         assert_ne!(expected, 99.0);
         assert_eq!(content.content_height, expected as usize);
@@ -143,7 +143,7 @@ fn tui_agent_overhang_remeasures_near_offscreen_non_dirty_height() {
         let (source, model, agent_block) = seeded_agent_block_source(&mut app, 3, 99.0);
         let expected = measured_height(&app, &agent_block);
 
-        request_top_window(&app, &source, &agent_block, 1);
+        request_top_window(&app, &source, 1);
 
         assert_ne!(expected, 99.0);
         assert_eq!(
@@ -208,18 +208,13 @@ fn seeded_agent_block_source(
 }
 
 /// Runs the overhang + windowing pass for a top-anchored viewport at width 80.
-/// The agent block's element is pre-rendered into the layout context,
-/// mirroring the presenter's `invalidate` pass, so `TuiChildView` measurement
-/// can resolve it.
 fn request_top_window(
     app: &App,
     source: &TuiBlockListViewportSource,
-    agent_block: &ViewHandle<TuiAIBlock>,
     viewport_height: u16,
 ) -> TuiViewportContent {
     app.read(|app| {
         let mut rendered_views = EntityIdMap::default();
-        rendered_views.insert(agent_block.id(), agent_block.as_ref(app).render(app));
         let mut ctx = TuiLayoutContext {
             rendered_views: &mut rendered_views,
         };
@@ -235,9 +230,7 @@ fn request_top_window(
     })
 }
 
-/// Measures the agent block at width 80 by laying out its rendered element,
-/// matching what `TuiChildView`-based measurement produces for its cached
-/// element.
+/// Measures the agent block at width 80 by laying out its rendered element.
 fn measured_height(app: &App, agent_block: &ViewHandle<TuiAIBlock>) -> f64 {
     app.read(|app| {
         let mut rendered_views = EntityIdMap::default();

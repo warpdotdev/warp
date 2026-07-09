@@ -305,13 +305,8 @@ pub struct CodeEditorModel {
     hovered_symbol_range: Option<HoverableLink>,
     /// Automatically hide lines outside of the active diff with X context lines.
     hide_lines_outside_of_active_diff: Option<usize>,
-    /// One-shot request to recalculate hidden lines once a diff computes for
-    /// this buffer version or later. Set when hiding is enabled: enabling it
-    /// after content is seeded (e.g. the TUI diff view) sees no content
-    /// replacement or hidden-range edit — the triggers that otherwise drive
-    /// recalculation. Version-gated so an in-flight compute for stale content
-    /// (e.g. the seeding reset's empty diff) can't consume it early.
-    pending_hidden_lines_recalculation: Option<BufferVersion>,
+    /// Recalculate hidden lines after a diff for this buffer version or later completes.
+    recalculate_hidden_lines_after_diff: Option<BufferVersion>,
     /// Whether this editor was configured to use lazy layout.
     lazy_layout_enabled: bool,
     /// Whether the editor has completed at least one layout cycle.
@@ -470,7 +465,7 @@ impl CodeEditorModel {
             vim_visual_tails: vec![],
             hovered_symbol_range: None,
             hide_lines_outside_of_active_diff: None,
-            pending_hidden_lines_recalculation: None,
+            recalculate_hidden_lines_after_diff: None,
             lazy_layout_enabled,
             lazy_layout_initialized,
             pending_syntax_tree_bootstrap: false,
@@ -607,11 +602,7 @@ impl CodeEditorModel {
         }
     }
 
-    /// Set hide_lines_outside_of_active_diff. This will automatically set a delay rendering trigger to wait
-    /// for the next diff to be computed, which also recalculates the hidden
-    /// line ranges — so enabling hiding is self-sufficient whether content is
-    /// seeded before this call (the TUI diff view) or after it (code review's
-    /// file load, whose `ContentReplaced` recalculates anyway).
+    /// Hides lines outside the active diff after the current content's diff computes.
     pub fn hide_lines_outside_of_active_diff(
         &mut self,
         context_lines: usize,
@@ -620,24 +611,36 @@ impl CodeEditorModel {
         let buffer_version = self.buffer_version(ctx);
 
         self.hide_lines_outside_of_active_diff = Some(context_lines);
-        self.pending_hidden_lines_recalculation = Some(buffer_version);
+        self.request_hidden_lines_recalculation_after_diff(buffer_version);
         self.delay_rendering = Some(DelayRendering::new(DelayRenderingTrigger::DiffUpdate(
             buffer_version,
         )));
     }
+    /// Requests hidden-line recalculation after a diff reaches `buffer_version`.
+    fn request_hidden_lines_recalculation_after_diff(&mut self, buffer_version: BufferVersion) {
+        self.recalculate_hidden_lines_after_diff = Some(
+            self.recalculate_hidden_lines_after_diff
+                .map_or(buffer_version, |pending_version| {
+                    pending_version.max(buffer_version)
+                }),
+        );
+    }
 
     /// We need to set the diff model base to the normalized version of the text. This is because the internal text
     /// representation of the content used for syntax tree highlighting and text rendering uses standard LF.
-    pub fn set_base(&self, base: &str, recompute_diff: bool, ctx: &mut ModelContext<Self>) {
+    pub fn set_base(&mut self, base: &str, recompute_diff: bool, ctx: &mut ModelContext<Self>) {
         let normalized_text = MultilineString::<LF>::apply(base);
         self.diff
             .update(ctx, |diff, _ctx| diff.set_base(normalized_text));
 
         if recompute_diff {
             let buffer_version = self.buffer_version(ctx);
+            if self.hide_lines_outside_of_active_diff.is_some() {
+                self.request_hidden_lines_recalculation_after_diff(buffer_version);
+            }
             let content = self.content().as_ref(ctx).text();
             self.diff.update(ctx, move |diff, ctx| {
-                diff.compute_diff(content, true, buffer_version, ctx)
+                diff.compute_diff(content, buffer_version, ctx)
             });
         }
     }
@@ -1492,29 +1495,17 @@ impl CodeEditorModel {
 
     fn handle_diff_model_event(&mut self, event: &DiffModelEvent, ctx: &mut ModelContext<Self>) {
         match event {
-            DiffModelEvent::DiffUpdated {
-                version,
-                should_recalculate_hidden_lines,
-            } => {
+            DiffModelEvent::DiffUpdated { version } => {
                 // If we are hiding lines based on active diffs, there are 3 steps here once the diff is computed:
                 // 1) If we should, recalculate hidden lines based on the updated diff state.
                 // 2) Flush any delayed rendering based on diff update trigger.
                 // 3) If hidden lines are recalculated, rebuild the current layout.
-                //
-                // A recalculation is also owed (one-shot) when hiding was just
-                // enabled: enabling it after content is seeded has no content
-                // replacement or hidden-range edit to trigger one otherwise.
-                // Gated on the version so a compute for stale content doesn't
-                // consume the request before the enabling-time content's diff
-                // lands.
-                let recalculation_owed = self
-                    .pending_hidden_lines_recalculation
+                let should_recalculate_hidden_lines = self
+                    .recalculate_hidden_lines_after_diff
                     .is_some_and(|pending_version| *version >= pending_version);
-                let should_recalculate_hidden_lines =
-                    *should_recalculate_hidden_lines || recalculation_owed;
                 if should_recalculate_hidden_lines {
                     self.calculate_hidden_lines(ctx);
-                    self.pending_hidden_lines_recalculation = None;
+                    self.recalculate_hidden_lines_after_diff = None;
                 }
 
                 // Do not refresh diff state if there is an active delayed rendering. We should wait until the delayed rendering
@@ -1633,6 +1624,7 @@ impl CodeEditorModel {
                 }
 
                 if should_recalculate_hidden_lines {
+                    self.request_hidden_lines_recalculation_after_diff(*buffer_version);
                     if let Some(delay_rendering) = &mut self.delay_rendering {
                         delay_rendering.block_until =
                             DelayRenderingTrigger::DiffUpdate(*buffer_version);
@@ -1644,12 +1636,7 @@ impl CodeEditorModel {
                 }
 
                 self.diff.update(ctx, move |diff, ctx| {
-                    diff.compute_diff(
-                        content,
-                        should_recalculate_hidden_lines,
-                        *buffer_version,
-                        ctx,
-                    )
+                    diff.compute_diff(content, *buffer_version, ctx)
                 });
 
                 // If we are delaying rendering, push these updates to the delay rendering state. Otherwise, flush them to diff and rendering model.
@@ -1679,9 +1666,10 @@ impl CodeEditorModel {
                 // On content replacement with active hidden ranges, we should always recalculate hidden lines and delay rendering
                 // since all anchors will all be invalidated.
                 if self.hide_lines_outside_of_active_diff.is_some() {
+                    self.request_hidden_lines_recalculation_after_diff(*buffer_version);
                     let content = self.content().as_ref(ctx).text();
                     self.diff.update(ctx, move |diff, ctx| {
-                        diff.compute_diff(content, true, *buffer_version, ctx)
+                        diff.compute_diff(content, *buffer_version, ctx)
                     });
 
                     if self.delay_rendering.is_none() {

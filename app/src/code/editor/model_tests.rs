@@ -835,7 +835,7 @@ fn test_update_comment_location_removed_line() {
             editor.update(ctx, |editor, ctx| {
                 let new = editor.content.as_ref(ctx).text();
                 editor.diff().update(ctx, |diff, ctx| {
-                    diff.compute_diff(new, false, BufferVersion::new(), ctx);
+                    diff.compute_diff(new, BufferVersion::new(), ctx);
                 });
             });
         });
@@ -880,7 +880,7 @@ async fn compute_diff_and_expand(app: &mut App, editor: &ModelHandle<CodeEditorM
         editor.update(ctx, |editor, ctx| {
             let new = editor.content.as_ref(ctx).text();
             editor.diff().update(ctx, |diff, ctx| {
-                diff.compute_diff(new, false, BufferVersion::new(), ctx);
+                diff.compute_diff(new, BufferVersion::new(), ctx);
             });
         });
     });
@@ -1039,7 +1039,7 @@ fn test_hidden_lines_window_is_symmetric_around_changes() {
             editor.hide_lines_outside_of_active_diff(3, ctx);
             let new = editor.content.as_ref(ctx).text();
             editor.diff().update(ctx, |diff, ctx| {
-                diff.compute_diff(new, true, BufferVersion::new(), ctx);
+                diff.compute_diff(new, BufferVersion::new(), ctx);
             });
         });
         diff_rx.next().await.expect("DiffUpdated should be emitted");
@@ -1124,9 +1124,7 @@ fn test_char_cell_diff_pipeline_populates_ghosts_and_hidden_ranges() {
                     .render_state()
                     .as_ref(ctx)
                     .char_cell()
-                    .is_some_and(|char_cell| {
-                        char_cell.with_display_lattice(&[], |lattice| !lattice.ghosts().is_empty())
-                    })
+                    .is_some_and(|char_cell| !char_cell.display_lattice(&[]).ghosts().is_empty())
             });
             if has_ghosts {
                 break;
@@ -1136,14 +1134,13 @@ fn test_char_cell_diff_pipeline_populates_ghosts_and_hidden_ranges() {
         app.read(|ctx| {
             let render = editor.as_ref(ctx).render_state().as_ref(ctx);
             let char_cell = render.char_cell().expect("new_tui builds char-cell mode");
-
-            let ghosts = char_cell.with_display_lattice(&[], |lattice| lattice.ghosts().to_vec());
+            let ghosts = char_cell.display_lattice(&[]).ghosts().to_vec();
             assert_eq!(ghosts.len(), 1);
             assert_eq!(ghosts[0].content, "line4\n");
 
             // Change at 0-based line 4 with 3 context lines: only the leading
             // and trailing unchanged runs are hidden.
-            let hidden = render.hidden_line_ranges(ctx);
+            let hidden = char_cell.hidden_line_ranges(ctx);
             assert_eq!(hidden, vec![0..1, 8..10]);
         });
     })
