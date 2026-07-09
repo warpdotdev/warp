@@ -5,6 +5,14 @@ Commit ref: `724c54771e2a06766257bc20f0053c6737a7d1b8`
 > This spec documents the **as-built** Milestone 1 implementation. Where the
 > original plan diverged during implementation, this reflects what actually
 > landed.
+>
+> **Partially superseded** by `specs/tui-editor-element/TECH.md`: the rendering
+> internals described below (`TuiInputElement`, the view-held `scroll_offset`,
+> the pure row/cursor helpers, and the "two char-cell layout call sites" risk)
+> were replaced by the shared `TuiEditorElement` + `DisplayLattice` core, with
+> scroll/drag state moved model-side. The keybinding table and the
+> `CodeEditorModel::new_tui` / char-cell `RenderState` foundations remain
+> accurate.
 
 ## Context
 
