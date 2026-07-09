@@ -42,6 +42,7 @@ use warpui_core::{
 };
 
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
+use crate::clipboard::copy_to_clipboard;
 use crate::conversation_selection::TuiConversationSelection;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::inline_menu::TuiInlineMenu;
@@ -50,7 +51,7 @@ use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::transcript_view::TuiTranscriptView;
-use crate::transient_hint::TransientHint;
+use crate::transient_hint::{TransientHint, TransientHintTone};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::compact_footer_path;
 use crate::usage::UsageToggle;
@@ -94,6 +95,7 @@ const NEW_CONVERSATION_COMMAND_RUNNING_HINT: &str =
 
 /// Footer hint shown while the input is in `!` shell mode.
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
+const COPY_SELECTION_HINT: &str = "copied to clipboard";
 
 /// Typed actions handled by [`TuiTerminalSessionView`].
 #[derive(Debug, Clone)]
@@ -105,6 +107,10 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Click on the footer's usage entry: flips the persisted credits⇄cost
     /// display-mode setting.
     ToggleUsageDisplay,
+    /// A transcript drag began; clear the input editor's selection.
+    TranscriptSelectionStarted,
+    /// A transcript drag ended with selected text.
+    CopyTranscriptSelection(String),
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -272,6 +278,26 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
+
+        let editor_for_selection = input_editor_model.clone();
+        let transcript_for_selection = transcript.clone();
+        ctx.subscribe_to_model(&input_editor_model, move |_, _, event, ctx| {
+            if !matches!(event, CodeEditorModelEvent::SelectionChanged) {
+                return;
+            }
+
+            let has_selection = !editor_for_selection
+                .as_ref(ctx)
+                .buffer_selection_model()
+                .as_ref(ctx)
+                .first_selection_is_single_cursor();
+            if has_selection {
+                transcript_for_selection.update(ctx, |transcript, ctx| {
+                    transcript.clear_selection(ctx);
+                });
+            }
+        });
+
         let input_mode_for_input_view = ai_input_model.clone();
         let inline_menu = TuiInlineMenu::SlashCommands(slash_commands.clone());
         let inline_menu_for_input = inline_menu.clone();
@@ -497,6 +523,14 @@ impl TuiTerminalSessionView {
             .show(text, ctx, |view| &mut view.transient_hint);
     }
 
+    /// Displays success-colored feedback in the transient footer slot.
+    fn show_copy_hint(&mut self, ctx: &mut ViewContext<Self>) {
+        self.transient_hint
+            .show_success(COPY_SELECTION_HINT.to_owned(), ctx, |view| {
+                &mut view.transient_hint
+            });
+    }
+
     /// Handles a ctrl-c press: a second press within [`CTRL_C_EXIT_WINDOW`]
     /// exits the TUI; otherwise one contextual action runs — cancel the running
     /// conversation if there is one, else clear the input — and the exit
@@ -564,12 +598,16 @@ impl TuiTerminalSessionView {
         // replaces the other hints in place.
         let hint = if self.exit_confirmation.is_armed() {
             Some((CTRL_C_EXIT_HINT.to_owned(), muted))
-        } else if let Some(transient) = self.transient_hint.current() {
-            Some((transient.to_owned(), muted))
+        } else if let Some((transient, tone)) = self.transient_hint.current() {
+            let style = match tone {
+                TransientHintTone::Muted => muted,
+                TransientHintTone::Success => builder.success_glyph_style(),
+            };
+            Some((transient.to_owned(), style))
         } else if self.is_shell_mode(ctx) {
             Some((
                 SHELL_MODE_HINT.to_owned(),
-                TuiUiBuilder::from_app(ctx).shell_mode_accent_style(),
+                builder.shell_mode_accent_style(),
             ))
         } else {
             None
@@ -1136,6 +1174,14 @@ impl TypedActionView for TuiTerminalSessionView {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
+            TuiTerminalSessionAction::TranscriptSelectionStarted => {
+                self.input_view
+                    .update(ctx, |input, ctx| input.clear_selection(ctx));
+            }
+            TuiTerminalSessionAction::CopyTranscriptSelection(text) => {
+                copy_to_clipboard(text);
+                self.show_copy_hint(ctx);
+            }
         }
     }
 }

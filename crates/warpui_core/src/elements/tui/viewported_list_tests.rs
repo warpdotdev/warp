@@ -6,8 +6,9 @@ use super::{
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
 };
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiScrollable, TuiSize, TuiText,
+    Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiScrollable, TuiScrollableElement,
+    TuiSelectable, TuiSelectionConfig, TuiSelectionSpan, TuiSize, TuiText,
 };
 use crate::event::ModifiersState;
 use crate::{App, AppContext, EntityId, EntityIdMap};
@@ -33,16 +34,9 @@ impl FakeContent {
             widths: Rc::new(RefCell::new(Vec::new())),
         }
     }
-}
 
-impl TuiViewportedElement for FakeContent {
-    fn visible_items(
-        &self,
-        window: TuiViewportWindow,
-        available_width: u16,
-        _ctx: &mut TuiLayoutContext,
-        _app: &AppContext,
-    ) -> TuiViewportContent {
+    /// Builds deterministic viewport content without requiring layout state.
+    fn content(&self, window: TuiViewportWindow, available_width: u16) -> TuiViewportContent {
         self.requests.borrow_mut().push(window);
         self.widths.borrow_mut().push(available_width);
         let viewport_bottom = window
@@ -65,6 +59,27 @@ impl TuiViewportedElement for FakeContent {
             content_height: origin_y,
             items: visible_items,
         }
+    }
+}
+
+impl TuiViewportedElement for FakeContent {
+    fn visible_items(
+        &self,
+        window: TuiViewportWindow,
+        available_width: u16,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiViewportContent {
+        self.content(window, available_width)
+    }
+
+    fn selection_content(
+        &self,
+        window: TuiViewportWindow,
+        available_width: u16,
+        _app: &AppContext,
+    ) -> Option<TuiViewportContent> {
+        Some(self.content(window, available_width))
     }
 }
 
@@ -95,6 +110,79 @@ fn render_viewport(app: &App, viewport: &mut impl TuiElement, size: TuiSize) -> 
         viewport.render(area, &mut buffer, &mut paint_ctx);
         buffer.to_lines()
     })
+}
+
+/// Dispatches one mouse event against the element's latest layout.
+fn mouse(app: &App, element: &mut impl TuiElement, size: TuiSize, event: TuiEvent) -> bool {
+    app.read(|app_ctx| {
+        let mut rendered_views = EntityIdMap::default();
+        let mut ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
+        let mut event_ctx = TuiEventContext::default();
+        event_ctx.set_origin_view(Some(EntityId::new()));
+        element.dispatch_event(
+            &event,
+            TuiRect::new(0, 0, size.width, size.height),
+            &mut event_ctx,
+            &mut ctx,
+            app_ctx,
+        )
+    })
+}
+
+/// Creates deterministic word selection for viewport tests.
+fn selection_config() -> TuiSelectionConfig {
+    TuiSelectionConfig::new(Rc::new(|point, _width, glyphs, _app| {
+        let clicked = glyphs
+            .iter()
+            .position(|glyph| point.col >= glyph.start_col && point.col < glyph.end_col)?;
+        let boundary = |index: usize| glyphs[index].text.trim().is_empty();
+        let mut start = clicked;
+        while start > 0 && !boundary(start - 1) {
+            start -= 1;
+        }
+        let mut end = clicked + 1;
+        while end < glyphs.len() && !boundary(end) {
+            end += 1;
+        }
+        Some(TuiSelectionSpan {
+            start: super::TuiContentPoint {
+                row: point.row,
+                col: glyphs[start].start_col,
+            },
+            end: super::TuiContentPoint {
+                row: point.row,
+                col: glyphs[end.saturating_sub(1)].end_col,
+            },
+        })
+    }))
+}
+
+/// Returns a left-button press for selection tests.
+fn left_down(x: u16, y: u16, click_count: u32, is_first_mouse: bool) -> TuiEvent {
+    TuiEvent::LeftMouseDown {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+        click_count,
+        is_first_mouse,
+    }
+}
+
+/// Returns a left-button drag for selection tests.
+fn left_drag(x: u16, y: u16) -> TuiEvent {
+    TuiEvent::LeftMouseDragged {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+    }
+}
+
+/// Returns a left-button release for selection tests.
+fn left_up(x: u16, y: u16) -> TuiEvent {
+    TuiEvent::LeftMouseUp {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+    }
 }
 
 /// Dispatches a wheel event against the viewport's last layout. Positive
@@ -255,6 +343,121 @@ fn scrolling_down_pins_to_bottom_without_overscrolling() {
     });
 }
 
+/// Verifies selection rendering and copy are delegated to the viewport.
+#[test]
+fn selectable_viewport_highlights_and_copies_linear_rows() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 3)]);
+        let state = TuiViewportedListState::new_at_end();
+        let viewport =
+            viewport_with_state(state.clone(), content).with_selection(selection_config());
+        let copies = Rc::new(RefCell::new(Vec::new()));
+        let copies_for_callback = copies.clone();
+        let selectable = TuiSelectable::new(viewport)
+            .on_copy(move |text, _, _| copies_for_callback.borrow_mut().push(text));
+        let mut element = TuiScrollable::new(selectable.finish_scrollable());
+        let size = TuiSize::new(8, 3);
+
+        render_viewport(&app, &mut element, size);
+        assert!(mouse(&app, &mut element, size, left_down(0, 0, 1, false)));
+        assert!(mouse(&app, &mut element, size, left_drag(2, 1)));
+        let buffer = app.read(|app_ctx| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(TuiConstraint::tight(size), &mut ctx, app_ctx);
+            let area = TuiRect::new(0, 0, size.width, size.height);
+            let mut buffer = TuiBuffer::empty(area);
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            element.render(area, &mut buffer, &mut paint_ctx);
+            buffer
+        });
+        assert!(buffer[(0, 0)].modifier.contains(Modifier::REVERSED));
+        assert!(buffer[(2, 1)].modifier.contains(Modifier::REVERSED));
+        assert!(mouse(&app, &mut element, size, left_up(2, 1)));
+        assert_eq!(copies.borrow().as_slice(), ["1:0\n1:1"]);
+        assert!(state.selection_handle().range().is_some());
+        assert!(state.clear_selection());
+        assert!(state.selection_handle().range().is_none());
+    });
+}
+
+#[test]
+fn selectable_viewport_extends_into_post_scroll_rows() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 4)]);
+        let state = TuiViewportedListState::new_at_end();
+        state.scroll_to_rows_from_top(0);
+        let viewport = viewport_with_state(state, content).with_selection(selection_config());
+        let copies = Rc::new(RefCell::new(Vec::new()));
+        let copies_for_callback = copies.clone();
+        let mut element = TuiSelectable::new(viewport)
+            .on_copy(move |text, _, _| copies_for_callback.borrow_mut().push(text));
+        let size = TuiSize::new(8, 2);
+
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_down(0, 0, 1, false));
+        mouse(&app, &mut element, size, left_drag(2, 2));
+        mouse(&app, &mut element, size, left_up(2, 2));
+
+        assert_eq!(copies.borrow().as_slice(), ["1:0\n1:1\n1:2"]);
+    });
+}
+
+#[test]
+fn selection_reverse_toggles_existing_modifier() {
+    let area = TuiRect::new(0, 0, 2, 1);
+    let mut buffer = TuiBuffer::empty(area);
+    buffer[(0, 0)].modifier.insert(Modifier::REVERSED);
+
+    super::toggle_selection_reverse(&mut buffer, area);
+
+    assert!(!buffer[(0, 0)].modifier.contains(Modifier::REVERSED));
+    assert!(buffer[(1, 0)].modifier.contains(Modifier::REVERSED));
+}
+
+/// Verifies wheel scrolling preserves persistent selection anchors.
+#[test]
+fn selectable_viewport_preserves_selection_while_scrolling() {
+    App::test((), |app| async move {
+        let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
+        let state = TuiViewportedListState::new_at_end();
+        let viewport =
+            viewport_with_state(state.clone(), content).with_selection(selection_config());
+        let selectable = TuiSelectable::new(viewport);
+        let mut element = TuiScrollable::new(selectable.finish_scrollable());
+        let size = TuiSize::new(8, 4);
+
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_down(0, 0, 1, false));
+        mouse(&app, &mut element, size, left_drag(2, 1));
+        mouse(&app, &mut element, size, left_up(2, 1));
+        assert!(state.selection_handle().range().is_some());
+
+        assert!(wheel(&app, &mut element, size, 1.0));
+        assert!(state.selection_handle().range().is_some());
+        assert!(!state.is_at_end());
+    });
+}
+
+/// Verifies a focus-acquiring first mouse press does not start selection.
+#[test]
+fn selectable_viewport_ignores_first_mouse_press() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 1)]);
+        let state = TuiViewportedListState::new_at_end();
+        let viewport =
+            viewport_with_state(state.clone(), content).with_selection(selection_config());
+        let mut element = TuiSelectable::new(viewport);
+        let size = TuiSize::new(8, 1);
+
+        render_viewport(&app, &mut element, size);
+        assert!(!mouse(&app, &mut element, size, left_down(0, 0, 1, true)));
+        assert!(!state.selection_handle().is_selecting());
+    });
+}
+
 #[test]
 fn scrolling_is_a_noop_when_all_content_fits() {
     App::test((), |app| async move {
@@ -301,6 +504,31 @@ fn grow_from_bottom_docks_short_content_at_the_bottom() {
         assert_eq!(lines[1].trim(), "");
         assert_eq!(&lines[2][..3], "1:0");
         assert_eq!(&lines[3][..3], "2:0");
+    });
+}
+
+/// Verifies layout publishes the exact content-to-screen mapping it rendered.
+#[test]
+fn layout_publishes_resolved_viewport_geometry() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
+        let state = TuiViewportedListState::new_at_end();
+        let mut viewport = viewport_with_state(state.clone(), content)
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
+
+        render_viewport(&app, &mut viewport, TuiSize::new(8, 4));
+
+        assert_eq!(
+            state.resolved_viewport(),
+            Some(super::TuiResolvedViewport {
+                window: TuiViewportWindow {
+                    scroll_top: 0,
+                    viewport_height: 4,
+                },
+                content_height: 2,
+                screen_offset: 2,
+            })
+        );
     });
 }
 

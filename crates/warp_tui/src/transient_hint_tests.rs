@@ -8,7 +8,7 @@ use warpui_core::{
     AddWindowOptions, App, AppContext, Entity, TuiView, TypedActionView, ViewHandle,
 };
 
-use super::TransientHint;
+use super::{TransientHint, TransientHintTone};
 
 /// Minimal view owning a [`TransientHint`], standing in for the session view.
 struct HintView {
@@ -60,7 +60,27 @@ fn show_displays_the_notice() {
             let view = build_view(ctx);
             assert_eq!(view.as_ref(ctx).hint.current(), None);
             show(&view, ctx, "notice");
-            assert_eq!(view.as_ref(ctx).hint.current(), Some("notice"));
+            assert_eq!(
+                view.as_ref(ctx).hint.current(),
+                Some(("notice", TransientHintTone::Muted))
+            );
+        });
+    });
+}
+
+#[test]
+fn success_hint_uses_success_tone() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| {
+                view.hint
+                    .show_success("copied".to_owned(), ctx, |view| &mut view.hint);
+            });
+            assert_eq!(
+                view.as_ref(ctx).hint.current(),
+                Some(("copied", TransientHintTone::Success))
+            );
         });
     });
 }
@@ -72,7 +92,10 @@ fn show_supersedes_the_earlier_notice() {
             let view = build_view(ctx);
             show(&view, ctx, "first");
             show(&view, ctx, "second");
-            assert_eq!(view.as_ref(ctx).hint.current(), Some("second"));
+            assert_eq!(
+                view.as_ref(ctx).hint.current(),
+                Some(("second", TransientHintTone::Muted))
+            );
         });
     });
 }

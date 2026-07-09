@@ -83,6 +83,50 @@ fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
     });
 }
 
+/// Verifies read-only extraction preserves cached heights and dirty state.
+#[test]
+fn read_only_content_does_not_remeasure_agent_blocks() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+
+        app.read(|app| {
+            source.read_only_content(
+                TuiViewportWindow {
+                    scroll_top: 0,
+                    viewport_height: 10,
+                },
+                80,
+                app,
+            );
+        });
+
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(99.0));
+    });
+}
+
+/// Verifies layout reports resize records before updating canonical heights.
+#[test]
+fn viewport_layout_reports_original_agent_block_resize() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, _, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+        let expected = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            agent_block.as_ref(app).desired_height(80, &mut ctx, app)
+        });
+
+        request_top_window(&app, &source, 10);
+        let changes = source.take_selection_row_resizes();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].0, 0..99);
+        assert_eq!(changes[0].1, expected);
+    });
+}
+
 #[test]
 fn tui_agent_rich_content_stays_visible_without_gui_agent_view_state() {
     let mut model = TerminalModel::mock(None, None);

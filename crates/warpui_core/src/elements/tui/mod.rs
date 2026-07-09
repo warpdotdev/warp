@@ -42,6 +42,7 @@ mod geometry;
 mod hoverable;
 mod parent;
 mod scrollable;
+mod selectable;
 mod shimmering_text;
 mod text;
 mod viewported_list;
@@ -62,6 +63,10 @@ pub use geometry::{TuiConstraint, TuiPoint, TuiPointExt, TuiRect, TuiRectExt, Tu
 pub use hoverable::TuiHoverable;
 pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
+pub use selectable::{
+    TuiContentPoint, TuiRowGlyph, TuiSelectable, TuiSelectableElement, TuiSelectionConfig,
+    TuiSelectionEventResult, TuiSelectionSpan,
+};
 pub use shimmering_text::TuiShimmeringText;
 pub use text::TuiText;
 pub use viewported_list::{

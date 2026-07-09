@@ -209,6 +209,25 @@ fn dispatch(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, actions: &[Tu
     });
 }
 
+#[test]
+fn clear_selection_collapses_to_head_without_changing_text() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello world");
+            mouse(&view, ctx, &left_down(0, 0, 1, false));
+            mouse(&view, ctx, &left_drag(5, 0));
+            assert_eq!(selected_text(&view, ctx).as_deref(), Some("hello"));
+
+            view.update(ctx, |view, ctx| view.clear_selection(ctx));
+
+            assert_eq!(selected_text(&view, ctx), None);
+            assert_eq!(text(&view, ctx), "hello world");
+            assert!(!is_drag_selecting(&view, ctx));
+        });
+    });
+}
+
 fn type_str(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, s: &str) {
     let actions: Vec<TuiInputAction> = s.chars().map(TuiInputAction::InsertChar).collect();
     dispatch(view, ctx, &actions);

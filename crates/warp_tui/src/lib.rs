@@ -10,6 +10,7 @@
 mod agent_block;
 mod agent_block_sections;
 mod autoupdate;
+mod clipboard;
 pub mod input;
 pub mod root_view;
 pub mod session;
@@ -31,6 +32,7 @@ mod terminal_session_view;
 mod test_fixtures;
 mod tool_call_labels;
 mod transcript_view;
+mod transcript_word_selection;
 mod transient_hint;
 mod tui_block_list_viewport_source;
 mod tui_diff_storage;

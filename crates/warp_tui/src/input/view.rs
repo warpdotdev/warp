@@ -653,6 +653,20 @@ impl TuiInputView {
                 event_ctx.dispatch_typed_action(TuiInputAction::from(action))
             })
     }
+    /// Collapses the current text selection to its head without changing text.
+    pub(crate) fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        let head = self
+            .model
+            .as_ref(ctx)
+            .buffer_selection_model()
+            .as_ref(ctx)
+            .first_selection_head();
+        self.model.update(ctx, |model, ctx| {
+            model.select_at(head, false, ctx);
+            model.end_selection(ctx);
+        });
+        ctx.notify();
+    }
 
     /// The editor element for this frame, boxed for the render tree.
     fn render_input(&self, ctx: &AppContext) -> Box<dyn TuiElement> {

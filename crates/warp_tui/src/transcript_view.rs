@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -12,8 +13,8 @@ use warp::tui_export::{
     BlocklistAIHistoryModel, ModelEventDispatcher, RichContentItem, RichContentType, TerminalModel,
 };
 use warpui_core::elements::tui::{
-    TuiElement, TuiScrollable, TuiScrollableElement, TuiViewportVerticalAlignment,
-    TuiViewportedList, TuiViewportedListState,
+    TuiElement, TuiScrollable, TuiScrollableElement, TuiSelectable, TuiSelectionConfig,
+    TuiViewportVerticalAlignment, TuiViewportedList, TuiViewportedListState,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TuiView, TypedActionView,
@@ -22,6 +23,8 @@ use warpui_core::{
 
 use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
 use super::terminal_block::should_render_terminal_block;
+use super::terminal_session_view::TuiTerminalSessionAction;
+use super::transcript_word_selection::word_span;
 use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
 
 /// Rows of blank space above every transcript block. Terminal blocks get it
@@ -79,6 +82,19 @@ impl TuiTranscriptView {
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             viewport: TuiViewportedListState::new_at_end(),
         }
+    }
+
+    fn block_rows(&self, view_id: EntityId) -> Option<Range<usize>> {
+        TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone())
+            .rich_content_row_range(view_id)
+    }
+
+    fn mark_agent_block_dirty(&self, view_id: EntityId, ctx: &mut ViewContext<Self>) {
+        self.model
+            .lock()
+            .block_list_mut()
+            .mark_rich_content_dirty(view_id);
+        ctx.notify();
     }
 
     fn handle_history_event(
@@ -240,11 +256,7 @@ impl TuiTranscriptView {
 
     fn mark_exchange_dirty(&mut self, exchange_id: AIAgentExchangeId, ctx: &mut ViewContext<Self>) {
         if let Some(view_id) = self.view_id_for_exchange(exchange_id, ctx) {
-            self.model
-                .lock()
-                .block_list_mut()
-                .mark_rich_content_dirty(view_id);
-            ctx.notify();
+            self.mark_agent_block_dirty(view_id, ctx);
         }
     }
 
@@ -272,11 +284,7 @@ impl TuiTranscriptView {
             view.replace_model(conversation_id, Rc::new(block_model));
             ctx.notify();
         });
-        self.model
-            .lock()
-            .block_list_mut()
-            .mark_rich_content_dirty(view_id);
-        ctx.notify();
+        self.mark_agent_block_dirty(view_id, ctx);
     }
 
     fn remove_conversation(
@@ -293,6 +301,9 @@ impl TuiTranscriptView {
             })
             .collect::<Vec<_>>();
         for view_id in view_ids {
+            if let Some(rows) = self.block_rows(view_id) {
+                self.viewport.rebase_selection_for_row_resize(rows, 0);
+            }
             self.agent_blocks.borrow_mut().remove(&view_id);
             self.model
                 .lock()
@@ -300,6 +311,13 @@ impl TuiTranscriptView {
                 .remove_rich_content(view_id);
         }
         ctx.notify();
+    }
+
+    /// Clears persistent selection owned by the transcript viewport.
+    pub(super) fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.viewport.clear_selection() {
+            ctx.notify();
+        }
     }
 
     fn clear_agent_blocks(&mut self, ctx: &mut ViewContext<Self>) {
@@ -310,6 +328,7 @@ impl TuiTranscriptView {
             .copied()
             .collect::<Vec<_>>();
         self.agent_blocks.borrow_mut().clear();
+        self.viewport.clear_selection();
         let mut model = self.model.lock();
         for view_id in view_ids {
             model.block_list_mut().remove_rich_content(view_id);
@@ -333,12 +352,19 @@ impl TuiView for TuiTranscriptView {
 
     fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
         let source = TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone());
-        TuiScrollable::new(
-            TuiViewportedList::new(self.viewport.clone(), source)
-                .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom)
-                .finish_scrollable(),
-        )
-        .finish()
+        let viewport = TuiViewportedList::new(self.viewport.clone(), source)
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom)
+            .with_selection(TuiSelectionConfig::new(Rc::new(word_span)));
+        let selectable = TuiSelectable::new(viewport)
+            .on_selection_start(|event_ctx, _| {
+                event_ctx
+                    .dispatch_typed_action(TuiTerminalSessionAction::TranscriptSelectionStarted);
+            })
+            .on_copy(|text, event_ctx, _| {
+                event_ctx
+                    .dispatch_typed_action(TuiTerminalSessionAction::CopyTranscriptSelection(text));
+            });
+        TuiScrollable::new(selectable.finish_scrollable()).finish()
     }
 }
 
