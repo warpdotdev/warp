@@ -7,7 +7,8 @@ use warpui::{App, SingletonEntity};
 
 use super::{
     artifact_from_fork_proto, footer_model_token_usage, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, RestoreConversationError,
+    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, RecordingSpanStatus,
+    RestoreConversationError,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
@@ -357,9 +358,7 @@ fn recording_span_closes_on_matching_stop_result() {
         .expect("use action should be inside a recording span");
 
     assert_eq!(span.recording_id, "rec-1");
-    assert!(!span.is_open());
-    assert_eq!(span.stop_action_id, Some("stop".to_string().into()));
-    assert_eq!(span.artifact_uid.as_deref(), Some("artifact-1"));
+    assert_eq!(span.status, RecordingSpanStatus::Captured);
 }
 
 #[test]
@@ -385,8 +384,7 @@ fn recording_span_stays_open_without_stop_result() {
         .expect("use action should be inside an open recording span");
 
     assert_eq!(span.recording_id, "rec-1");
-    assert!(span.is_open());
-    assert_eq!(span.stop_action_id, None);
+    assert_eq!(span.status, RecordingSpanStatus::Active);
 }
 
 #[test]
@@ -447,8 +445,7 @@ fn recording_span_ignores_mismatched_stop_id() {
         .expect("mismatched stop should not close the span");
 
     assert_eq!(span.recording_id, "rec-1");
-    assert!(span.is_open());
-    assert_eq!(span.artifact_uid, None);
+    assert_eq!(span.status, RecordingSpanStatus::Active);
 }
 
 #[test]

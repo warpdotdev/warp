@@ -94,15 +94,13 @@ impl TodoStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordingSpanInfo {
     pub recording_id: String,
-    pub start_action_id: AIAgentActionId,
-    pub stop_action_id: Option<AIAgentActionId>,
-    pub artifact_uid: Option<String>,
+    pub status: RecordingSpanStatus,
 }
 
-impl RecordingSpanInfo {
-    pub fn is_open(&self) -> bool {
-        self.stop_action_id.is_none()
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingSpanStatus {
+    Active,
+    Captured,
 }
 
 fn footer_model_token_usage(
@@ -1735,12 +1733,12 @@ impl AIConversation {
     ///
     /// Walks all exchanges in order: a successful `StartRecording` result opens
     /// a span; the start action and any `UseComputer` actions inside an open
-    /// span are buffered; a matching successful `StopRecording` result closes
-    /// the span (attaching the artifact UID) and flushes the buffer into the
-    /// map; a failed or cancelled stop drops the buffer, since no recording was
-    /// saved; a span still open at the end of the scan is flushed as open so
-    /// in-progress recordings decorate their rows. Exchanges that finished in
-    /// an error expose no output and are skipped.
+    /// span are buffered; a matching successful `StopRecording` result marks
+    /// the span as captured and flushes the buffer into the map; a failed or
+    /// cancelled stop drops the buffer, since no recording was saved; a span
+    /// still open at the end of the scan is flushed as active so in-progress
+    /// recordings decorate their rows. Exchanges that finished in an error
+    /// expose no output and are skipped.
     pub fn recording_spans_by_action_id(
         &self,
         action_model: Option<&crate::ai::blocklist::BlocklistAIActionModel>,
@@ -1807,9 +1805,7 @@ impl AIConversation {
                             }
                             active_span = Some(RecordingSpanInfo {
                                 recording_id: started.recording_id.clone(),
-                                start_action_id: action.id.clone(),
-                                stop_action_id: None,
-                                artifact_uid: None,
+                                status: RecordingSpanStatus::Active,
                             });
                             buffered_action_ids = vec![action.id.clone()];
                         }
@@ -1829,11 +1825,10 @@ impl AIConversation {
 
                         match result_for_action(&action.id) {
                             Some(AIAgentActionResultType::StopRecording(
-                                StopRecordingResult::Success(stopped),
+                                StopRecordingResult::Success(_),
                             )) => {
                                 let mut stopped_span = span.clone();
-                                stopped_span.stop_action_id = Some(action.id.clone());
-                                stopped_span.artifact_uid = Some(stopped.artifact_uid.clone());
+                                stopped_span.status = RecordingSpanStatus::Captured;
                                 buffered_action_ids.push(action.id.clone());
                                 flush_buffer(
                                     stopped_span,

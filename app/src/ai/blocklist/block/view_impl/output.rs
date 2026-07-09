@@ -53,7 +53,7 @@ use super::{
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
-use crate::ai::agent::conversation::RecordingSpanInfo;
+use crate::ai::agent::conversation::{RecordingSpanInfo, RecordingSpanStatus};
 use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -3074,15 +3074,14 @@ fn render_start_recording(
     recording_card(text, None, app)
 }
 
-fn render_recording_footer(is_open: bool, app: &AppContext) -> Box<dyn Element> {
+fn render_recording_footer(status: RecordingSpanStatus, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let icon_offset =
         icon_size(app) + crate::ai::blocklist::inline_action::inline_action_header::ICON_MARGIN;
-    let text = if is_open {
-        "Recording active"
-    } else {
-        "Captured in recording"
+    let text = match status {
+        RecordingSpanStatus::Active => "Recording active",
+        RecordingSpanStatus::Captured => "Captured in recording",
     };
     Container::new(
         Text::new(
@@ -3147,8 +3146,8 @@ fn render_use_computer(
 
     if should_decorate_recorded_use_computer(request) {
         if let Some(recording_span) = recording_span {
-            renderable_action = renderable_action
-                .with_footer(render_recording_footer(recording_span.is_open(), app));
+            renderable_action =
+                renderable_action.with_footer(render_recording_footer(recording_span.status, app));
         }
     }
 
