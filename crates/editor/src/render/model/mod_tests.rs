@@ -1717,6 +1717,7 @@ mod char_cell {
 
 mod char_cell_scroll {
     use string_offset::CharOffset;
+
     use crate::render::model::CharCellState;
 
     /// A 4-column state with five one-row logical lines ("l0".."l4").

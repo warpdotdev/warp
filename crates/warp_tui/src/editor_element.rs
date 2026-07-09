@@ -284,8 +284,7 @@ impl TuiEditorElement {
         char_cell.set_terminal_width(content_width);
 
         let chars: Vec<char> = self.text.chars().collect();
-        let cursor_offset =
-            CharOffset::from(self.cursor_offset.as_usize().saturating_sub(1));
+        let cursor_offset = CharOffset::from(self.cursor_offset.as_usize().saturating_sub(1));
         // The first visible row is model-side scroll state; unwindowed
         // consumers always render from the top.
         let first_visible_row = if self.viewport_rows.is_some() {
@@ -298,60 +297,60 @@ impl TuiEditorElement {
         // so everything below is geometry over the same lattice.
         let lattice = char_cell.display_lattice(&hidden);
         let (column, selected_spans, cursor, visible_end) = {
-                let rows = lattice.rows();
-                // The cursor sits one row past the last text row when a logical
-                // line exactly fills the width (deferred wrap); that phantom row
-                // is part of the layout, so include it when sizing and windowing.
-                let cursor = lattice.offset_to_display_point(cursor_offset);
-                let total_rows = if self.editable {
-                    cursor.map_or(rows.len(), |cursor| rows.len().max(cursor.row as usize + 1))
-                } else {
-                    rows.len()
-                };
-
-                let (visible_start, visible_rows) = match self.viewport_rows {
-                    Some(max_rows) => (
-                        first_visible_row as usize,
-                        (max_rows as usize).min(total_rows),
-                    ),
-                    None => (0, total_rows),
-                };
-                let visible_end = (visible_start + visible_rows).min(total_rows);
-                let text_rows_end = visible_end.min(rows.len());
-                let visible_slice = if visible_start < text_rows_end {
-                    &rows[visible_start..text_rows_end]
-                } else {
-                    &[]
-                };
-                // Phantom rows in the window (past the last text row) carry no
-                // text or selection; render them as blank rows so the cursor's
-                // row still draws.
-                let phantom_rows = visible_end
-                    .saturating_sub(visible_start)
-                    .saturating_sub(visible_slice.len());
-
-                let mut selected_spans = Vec::new();
-                let mut column = TuiFlex::column();
-                for (vis_idx, row) in visible_slice.iter().enumerate() {
-                    column.add_child(self.render_row(row, &chars, lattice.ghosts()));
-                    if let Some((start_col, end_col)) = self.selection_span_in_row(row, &chars) {
-                        selected_spans.push((
-                            vis_idx as u16,
-                            start_col + self.gutter_cols,
-                            end_col + self.gutter_cols,
-                        ));
-                    }
-                }
-                for _ in 0..phantom_rows {
-                    column.add_child(TuiText::new(" ").truncate().finish());
-                }
-                if visible_slice.is_empty() && phantom_rows == 0 {
-                    // Scrolled past the last row: keep one blank row so the
-                    // element never collapses to zero height.
-                    column.add_child(TuiText::new(" ").truncate().finish());
-                }
-                (column, selected_spans, cursor, visible_end)
+            let rows = lattice.rows();
+            // The cursor sits one row past the last text row when a logical
+            // line exactly fills the width (deferred wrap); that phantom row
+            // is part of the layout, so include it when sizing and windowing.
+            let cursor = lattice.offset_to_display_point(cursor_offset);
+            let total_rows = if self.editable {
+                cursor.map_or(rows.len(), |cursor| rows.len().max(cursor.row as usize + 1))
+            } else {
+                rows.len()
             };
+
+            let (visible_start, visible_rows) = match self.viewport_rows {
+                Some(max_rows) => (
+                    first_visible_row as usize,
+                    (max_rows as usize).min(total_rows),
+                ),
+                None => (0, total_rows),
+            };
+            let visible_end = (visible_start + visible_rows).min(total_rows);
+            let text_rows_end = visible_end.min(rows.len());
+            let visible_slice = if visible_start < text_rows_end {
+                &rows[visible_start..text_rows_end]
+            } else {
+                &[]
+            };
+            // Phantom rows in the window (past the last text row) carry no
+            // text or selection; render them as blank rows so the cursor's
+            // row still draws.
+            let phantom_rows = visible_end
+                .saturating_sub(visible_start)
+                .saturating_sub(visible_slice.len());
+
+            let mut selected_spans = Vec::new();
+            let mut column = TuiFlex::column();
+            for (vis_idx, row) in visible_slice.iter().enumerate() {
+                column.add_child(self.render_row(row, &chars, lattice.ghosts()));
+                if let Some((start_col, end_col)) = self.selection_span_in_row(row, &chars) {
+                    selected_spans.push((
+                        vis_idx as u16,
+                        start_col + self.gutter_cols,
+                        end_col + self.gutter_cols,
+                    ));
+                }
+            }
+            for _ in 0..phantom_rows {
+                column.add_child(TuiText::new(" ").truncate().finish());
+            }
+            if visible_slice.is_empty() && phantom_rows == 0 {
+                // Scrolled past the last row: keep one blank row so the
+                // element never collapses to zero height.
+                column.add_child(TuiText::new(" ").truncate().finish());
+            }
+            (column, selected_spans, cursor, visible_end)
+        };
 
         self.column = column;
         self.selected_spans = selected_spans;

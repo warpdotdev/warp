@@ -1,4 +1,5 @@
 use std::ops::Range;
+
 use string_offset::CharOffset;
 
 use super::super::{CharCellState, CharCellTemporaryBlock, LineCount};
@@ -178,21 +179,12 @@ mod geometry {
         // Display rows: 0=line0, 1=ghost, 2=gap, 3=line3.
         assert_eq!(point(&state, 9, &hidden), Some((3, 0)));
         assert_eq!(point(&state, 10, &hidden), Some((3, 1)));
-        assert_eq!(
-            offset(&state, 3, 0, &hidden),
-            Some(CharOffset::from(9))
-        );
-        assert_eq!(
-            offset(&state, 3, 1, &hidden),
-            Some(CharOffset::from(10))
-        );
+        assert_eq!(offset(&state, 3, 0, &hidden), Some(CharOffset::from(9)));
+        assert_eq!(offset(&state, 3, 1, &hidden), Some(CharOffset::from(10)));
 
         // Line 0 is unaffected by overlays below it.
         assert_eq!(point(&state, 0, &hidden), Some((0, 0)));
-        assert_eq!(
-            offset(&state, 0, 1, &hidden),
-            Some(CharOffset::from(1))
-        );
+        assert_eq!(offset(&state, 0, 1, &hidden), Some(CharOffset::from(1)));
 
         // Hidden offsets and synthetic display rows have no exact inverse.
         assert_eq!(point(&state, 4, &hidden), None);

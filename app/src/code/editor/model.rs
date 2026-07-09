@@ -1946,10 +1946,7 @@ impl CodeEditorModel {
             return None;
         }
         // `text[i]` lives at gap `i + 1`, so the exclusive end gap is `row.end + 1`.
-        Some(self.delete_range_returning_text(
-            cursor_gap..row.end + 1,
-            ctx,
-        ))
+        Some(self.delete_range_returning_text(cursor_gap..row.end + 1, ctx))
     }
 
     /// Deletes from the start of the primary cursor's soft-wrapped visual row
@@ -1965,10 +1962,7 @@ impl CodeEditorModel {
         if row.start >= cursor_offset {
             return None;
         }
-        Some(self.delete_range_returning_text(
-            row.start + 1..cursor_gap,
-            ctx,
-        ))
+        Some(self.delete_range_returning_text(row.start + 1..cursor_gap, ctx))
     }
 
     /// The primary cursor as a 1-indexed gap offset.
@@ -1984,11 +1978,7 @@ impl CodeEditorModel {
         ctx: &impl ModelAsRef,
     ) -> Option<Range<CharOffset>> {
         let render = self.render_state.as_ref(ctx);
-        Some(
-            render
-                .char_cell()?
-                .visual_row_char_range(cursor_offset),
-        )
+        Some(render.char_cell()?.visual_row_char_range(cursor_offset))
     }
 
     /// Deletes `range` (1-indexed gap offsets) as a user edit, returning the

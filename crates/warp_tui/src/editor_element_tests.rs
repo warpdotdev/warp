@@ -1,8 +1,8 @@
+use string_offset::CharOffset;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
-use string_offset::CharOffset;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect,

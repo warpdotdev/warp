@@ -486,10 +486,7 @@ pub struct CharCellState {
 }
 
 impl CharCellState {
-    fn new(
-        terminal_width: u16,
-        hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
-    ) -> Self {
+    fn new(terminal_width: u16, hidden_lines: Option<ModelHandle<HiddenLinesModel>>) -> Self {
         Self {
             terminal_width: Cell::new(terminal_width),
             // Seed with logical line 0 so `line_starts` is never empty, matching
@@ -2288,7 +2285,6 @@ impl RenderState {
             LayoutMode::Pixels => None,
         }
     }
-
 
     fn final_trailing_newline_cursor(styles: &RichTextStyles) -> BlockItem {
         BlockItem::TrailingNewLine(Cursor::new(

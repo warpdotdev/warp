@@ -31,6 +31,7 @@
 
 use std::cell::Ref;
 use std::ops::Range;
+
 use string_offset::CharOffset;
 
 use super::{

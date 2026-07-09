@@ -972,8 +972,7 @@ impl TuiInputView {
         let Some(char_cell) = render.char_cell() else {
             return;
         };
-        let cursor_offset =
-            CharOffset::from(self.cursor_offset(ctx).as_usize().saturating_sub(1));
+        let cursor_offset = CharOffset::from(self.cursor_offset(ctx).as_usize().saturating_sub(1));
         let hidden = char_cell.hidden_line_ranges(ctx);
         char_cell.follow_cursor(cursor_offset, self.max_visible_rows, &hidden);
     }
@@ -986,8 +985,7 @@ impl TuiInputView {
         let Some(char_cell) = render.char_cell() else {
             return;
         };
-        let cursor_offset =
-            CharOffset::from(self.cursor_offset(ctx).as_usize().saturating_sub(1));
+        let cursor_offset = CharOffset::from(self.cursor_offset(ctx).as_usize().saturating_sub(1));
         let hidden = render.hidden_line_ranges(ctx);
         char_cell.scroll_by(rows, self.max_visible_rows, cursor_offset, &hidden);
     }
