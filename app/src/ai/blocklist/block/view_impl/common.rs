@@ -3044,6 +3044,7 @@ pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
     pub subscribe_button_handle: &'a MouseStateHandle,
+    pub byo_inference_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
@@ -3075,6 +3076,7 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                     return render_out_of_credits_error(
                         message,
                         props.subscribe_button_handle,
+                        props.byo_inference_button_handle,
                         props.is_ai_input_enabled,
                         props.icon_right_margin,
                         app,
@@ -3198,12 +3200,47 @@ fn should_show_subscribe_cta(app: &AppContext) -> bool {
         .is_none_or(|team| !team.billing_metadata.is_user_on_paid_plan())
 }
 
-/// Renders the out-of-credits failure with an inline Subscribe button that opens the upgrade
-/// flow. Mirrors the plain failed-output layout (alert icon + message) and appends a primary
-/// CTA below the message, indented to align with the text.
+/// Builds one of the out-of-credits CTA buttons, matching the styling of the
+/// invalid-API-key error's "Edit API Keys" button (grey outlined, subtle hover/click).
+fn out_of_credits_cta_button(
+    label: &str,
+    state_handle: &MouseStateHandle,
+    app: &AppContext,
+) -> Button {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    appearance
+        .ui_builder()
+        .button(
+            warpui::ui_components::button::ButtonVariant::Outlined,
+            state_handle.clone(),
+        )
+        .with_style(UiComponentStyles {
+            font_size: Some(14.),
+            border_color: Some(internal_colors::neutral_4(theme).into()),
+            ..Default::default()
+        })
+        .with_hovered_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_2(theme).into()),
+            ..Default::default()
+        })
+        .with_clicked_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_3(theme).into()),
+            ..Default::default()
+        })
+        .with_text_label(label.to_string())
+        .with_cursor(Some(Cursor::PointingHand))
+}
+
+/// Renders the out-of-credits failure with inline CTAs: a Subscribe button that opens the
+/// upgrade flow, and a "Bring your own AI" button that opens the API key settings. Mirrors
+/// the plain failed-output layout (alert icon + message) and appends the buttons below the
+/// message, indented to align with the text.
 fn render_out_of_credits_error(
     message: &str,
-    state_handle: &MouseStateHandle,
+    subscribe_button_handle: &MouseStateHandle,
+    byo_inference_button_handle: &MouseStateHandle,
     is_ai_input_enabled: bool,
     icon_right_margin: f32,
     app: &AppContext,
@@ -3244,19 +3281,23 @@ fn render_out_of_credits_error(
     })
     .finish();
 
-    let subscribe_button = appearance
-        .ui_builder()
-        .button(
-            warpui::ui_components::button::ButtonVariant::Accent,
-            state_handle.clone(),
-        )
-        .with_text_label("Subscribe".to_string())
-        .with_cursor(Some(Cursor::PointingHand))
+    let subscribe_button = out_of_credits_cta_button("Subscribe", subscribe_button_handle, app)
         .build()
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
         })
         .finish();
+
+    let byo_button =
+        out_of_credits_cta_button("Bring your own AI", byo_inference_button_handle, app)
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
+                    search_query: "api".to_string(),
+                    section: Some(SettingsSection::WarpAgent),
+                });
+            })
+            .finish();
 
     Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -3272,7 +3313,9 @@ fn render_out_of_credits_error(
                 Flex::row()
                     .with_main_axis_size(MainAxisSize::Min)
                     .with_main_axis_alignment(MainAxisAlignment::Start)
+                    .with_spacing(8.)
                     .with_child(subscribe_button)
+                    .with_child(byo_button)
                     .finish(),
             )
             .with_margin_left(icon_size(app) + icon_right_margin)

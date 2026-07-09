@@ -177,6 +177,7 @@ pub fn init(app: &mut AppContext) {
 struct StateHandles {
     invalid_api_key_button_handle: MouseStateHandle,
     subscribe_button_handle: MouseStateHandle,
+    byo_inference_button_handle: MouseStateHandle,
     debug_copy_button_handle: MouseStateHandle,
     submit_issue_button_handle: MouseStateHandle,
     query_selection_handle: SelectionHandle,
@@ -1203,6 +1204,9 @@ impl View for CLISubagentView {
                             .state_handles
                             .invalid_api_key_button_handle,
                         subscribe_button_handle: &self.state_handles.subscribe_button_handle,
+                        byo_inference_button_handle: &self
+                            .state_handles
+                            .byo_inference_button_handle,
                         aws_bedrock_credentials_error_view: None,
                         icon_right_margin: AVATAR_RIGHT_MARGIN,
                     },

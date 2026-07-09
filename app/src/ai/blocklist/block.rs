@@ -487,6 +487,9 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handle for the Subscribe button shown on the out-of-credits error
     subscribe_button_handle: MouseStateHandle,
 
+    /// Mouse state handle for the "Bring your own AI" button shown on the out-of-credits error
+    byo_inference_button_handle: MouseStateHandle,
+
     /// Mouse state handle for AI document created block
     ai_document_handle: MouseStateHandle,
 
