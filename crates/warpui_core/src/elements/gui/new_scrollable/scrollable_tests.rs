@@ -10,9 +10,10 @@ use super::{
     NewScrollableElement, ScrollableAppearance, ScrollableAxis, SingleAxisConfig,
 };
 use crate::elements::{
-    Axis, ClippedScrollStateHandle, ConstrainedBox, DispatchEventResult, EventHandler, Fill,
-    ParentElement, Point, Rect, SavePosition, ScrollData, ScrollStateHandle, ScrollTarget,
-    ScrollToPositionMode, ScrollbarWidth, SelectableElement, SelectionFragment, Stack, ZIndex,
+    Axis, ClippedScrollStateHandle, ConstrainedBox, CrossAxisAlignment, DispatchEventResult,
+    EventHandler, Fill, Flex, MainAxisSize, ParentElement, Point, Rect, SavePosition, ScrollData,
+    ScrollStateHandle, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, SelectableElement,
+    SelectionFragment, Stack, ZIndex,
 };
 use crate::event::DispatchedEvent;
 use crate::platform::{TerminationMode, WindowStyle};
@@ -1334,6 +1335,96 @@ fn position_for_child(i: usize, boundary: Boundary) -> f32 {
         pos -= SCROLLABLE_VIEWPORT_SIZE - CHILD_EVENT_HANDLER_DIMENSION;
     }
     pos.clamp(0., SCROLLABLE_VIEWPORT_SIZE)
+}
+
+/// Renders a clipped horizontal scrollable inside a `CrossAxisAlignment::Stretch`
+/// column that is itself nested in a row. The row lays the column out with an
+/// unbounded max width, so the stretch column hands the scrollable a tight
+/// cross-axis (width) constraint whose `min == max == ∞` — exactly the
+/// orchestration-pill-bar situation that used to force the scrollable's viewport
+/// to an infinite width and panic in `Scene::validate_rect`.
+struct InfiniteMinWidthScrollableView;
+
+impl Entity for InfiniteMinWidthScrollableView {
+    type Event = ();
+}
+
+impl crate::core::View for InfiniteMinWidthScrollableView {
+    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+        let scrollable = NewScrollable::horizontal(
+            SingleAxisConfig::Clipped {
+                handle: ClippedScrollStateHandle::default(),
+                child: ConstrainedBox::new(Rect::new().finish())
+                    .with_width(100.)
+                    .with_height(20.)
+                    .finish(),
+            },
+            Fill::None,
+            Fill::None,
+            Fill::None,
+        );
+
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_child(
+                Flex::column()
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_child(
+                        SavePosition::new(scrollable.finish(), "infinite_min_scrollable").finish(),
+                    )
+                    .finish(),
+            )
+            .finish()
+    }
+
+    fn ui_name() -> &'static str {
+        "InfiniteMinWidthScrollableView"
+    }
+}
+
+impl TypedActionView for InfiniteMinWidthScrollableView {
+    type Action = ();
+}
+
+/// Regression test: a clipped horizontal scrollable measured under an infinite
+/// min-width constraint must report a finite width. Before the fix this panicked
+/// in `Scene::validate_rect` (`!rect.size().x().is_infinite()`); the
+/// `apply_with_finite_min` change makes the scrollable clamp to its finite
+/// content instead.
+#[test]
+fn clipped_horizontal_scrollable_reports_finite_width_under_infinite_min_constraint() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            InfiniteMinWidthScrollableView
+        });
+
+        let mut presenter = Presenter::new(window_id);
+        let view_id = app.root_view_id(window_id).unwrap();
+
+        app.update(move |ctx| {
+            // Before the fix, building the scene panics in `Scene::validate_rect`
+            // while painting the scrollable's viewport at an infinite width.
+            render(&mut presenter, view_id, ctx);
+
+            let scene = presenter
+                .scene()
+                .expect("a scene should have been built without panicking");
+
+            // Every painted rect must have a finite size. Before the fix the
+            // clipped scrollable painted an infinite-width rect here.
+            for layer in scene.layers() {
+                for rect in &layer.rects {
+                    assert!(
+                        rect.bounds.size().x().is_finite() && rect.bounds.size().y().is_finite(),
+                        "painted rect should be finite under an infinite min-width constraint, got {:?}",
+                        rect.bounds.size(),
+                    );
+                }
+            }
+        });
+    })
 }
 
 /// Validates that `scroll_position_top_into_view` stabilizes after one scroll:

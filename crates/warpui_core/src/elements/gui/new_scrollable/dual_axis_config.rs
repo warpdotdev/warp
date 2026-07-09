@@ -409,7 +409,7 @@ impl DualAxisConfig {
             "Scrollable's child should not have infinite width"
         );
 
-        constraint.apply(child_size + scrollbar_size_with_padding)
+        constraint.apply_with_finite_min(child_size + scrollbar_size_with_padding)
     }
 
     /// Invoke child's after_layout and return the updated ScrollData.

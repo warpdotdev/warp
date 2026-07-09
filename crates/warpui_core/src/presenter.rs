@@ -790,6 +790,32 @@ impl SizeConstraint {
         size.clamp(self.min, self.max)
     }
 
+    /// Like [`apply`](Self::apply), but treats an infinite `min` bound as `0` so
+    /// a finite size is never forced up to infinity.
+    ///
+    /// A clipped scrollable measured under an unbounded (`min == ∞`) constraint
+    /// on an axis must still report a finite viewport size — its content is
+    /// finite even when the surrounding layout requests an infinite minimum
+    /// (e.g. a `CrossAxisAlignment::Stretch` column laid out with unbounded
+    /// width). This differs from [`apply`](Self::apply) *only* when a `min`
+    /// component is infinite; for every finite/tight constraint the result is
+    /// identical.
+    pub fn apply_with_finite_min(&self, size: Vector2F) -> Vector2F {
+        let finite_min = vec2f(
+            if self.min.x().is_finite() {
+                self.min.x()
+            } else {
+                0.0
+            },
+            if self.min.y().is_finite() {
+                self.min.y()
+            } else {
+                0.0
+            },
+        );
+        size.clamp(finite_min, self.max)
+    }
+
     pub fn max_along(&self, axis: Axis) -> f32 {
         match axis {
             Axis::Horizontal => self.max.x(),
