@@ -131,7 +131,3 @@ required-features = ["tui"]
 [[example]]
 name = "tui_file_viewer"
 required-features = ["tui"]
-
-[[example]]
-name = "tui_viewport_demo"
-required-features = ["tui"]
