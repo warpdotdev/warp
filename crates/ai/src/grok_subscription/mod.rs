@@ -129,6 +129,12 @@ impl ApiKeyManager {
         byo_allowed: bool,
         ctx: &mut ModelContext<Self>,
     ) -> Option<oneshot::Receiver<GrokRefreshOutcome>> {
+        // Keep the proactive-refresh policy mirror in sync with the freshly
+        // evaluated BYO policy (it can drift between `TeamsChanged` events). A
+        // disabled -> enabled transition re-arms the proactive refresh loop, so
+        // a successful blocking refresh below also reschedules the next one
+        // instead of leaving the token to expire again unrefreshed.
+        self.set_grok_refresh_allowed(byo_allowed, ctx);
         let refresh_token = self.grok_expired_refresh_token(byo_allowed)?;
         let (tx, rx) = oneshot::channel();
         log::info!("Grok OAuth token is expired at request time; waiting for refresh before send");
