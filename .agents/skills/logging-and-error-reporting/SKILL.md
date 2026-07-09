@@ -55,7 +55,6 @@ safe_error!(
 );
 ```
 - The `safe:` arm must stand on its own and contain no sensitive/verbose detail; put those bits only in `full:`.
-- Import from `warp_core` (`use warp_core::{safe_error, safe_warn};`). These live in `warp_core` and depend on channel state, so they're unavailable in the `warp_errors`-only leaf crates (`warpui_core`, `warpui`, `settings`, …) — there, log non-sensitive messages only.
 
 ---
 
@@ -116,13 +115,6 @@ impl ErrorExt for UserAuthenticationError {
 }
 register_error!(UserAuthenticationError);
 ```
-
-## Import the macro
-
-Use an imported, unqualified `report_error!` (not `crate::report_error!` / `warp_core::report_error!` / `warp_errors::report_error!`). Import once per file, per tier:
-- All crates: `use warp_errors::report_error;`.
-
-Add `report_if_error` to the same import when the file uses it. If every call site in a file is behind a `#[cfg(...)]`, gate the import the same way to avoid an unused-import warning. A fully-qualified path is acceptable only to appease macro hygiene inside another `macro_rules!` body (`$crate::report_error!`).
 
 ## Choosing the form (variable data out of the grouped message)
 
