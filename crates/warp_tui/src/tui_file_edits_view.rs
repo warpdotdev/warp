@@ -37,6 +37,7 @@ use warpui_core::elements::tui::{
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
+use crate::agent_block_sections::{tool_call_glyph_style, tool_call_label_style};
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
 use crate::tool_call_labels::{tool_call_display_state, tool_call_glyph, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
@@ -348,27 +349,8 @@ impl TuiFileEditsView {
             .is_hovered();
 
         // State lives in the glyph, mirroring `render_tool_call_section`.
-        let glyph_style = match state {
-            ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-                builder.dim_text_style()
-            }
-            ToolCallDisplayState::AwaitingApproval | ToolCallDisplayState::Running => {
-                builder.attention_glyph_style()
-            }
-            ToolCallDisplayState::Succeeded => builder.success_glyph_style(),
-            ToolCallDisplayState::Failed => builder.error_text_style(),
-            ToolCallDisplayState::Cancelled => builder.muted_text_style(),
-        };
-        let name_style = match state {
-            ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-                builder.dim_text_style()
-            }
-            ToolCallDisplayState::AwaitingApproval
-            | ToolCallDisplayState::Running
-            | ToolCallDisplayState::Succeeded
-            | ToolCallDisplayState::Failed
-            | ToolCallDisplayState::Cancelled => builder.primary_text_style(),
-        };
+        let glyph_style = tool_call_glyph_style(state, builder);
+        let name_style = tool_call_label_style(state, builder);
         let bold = |style: TuiStyle| style.add_modifier(Modifier::BOLD);
         let embolden = |style: TuiStyle| if hovered { bold(style) } else { style };
 

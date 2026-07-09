@@ -48,14 +48,26 @@ pub fn tui_collapsible(
     } else {
         header_style
     };
-    let header = TuiHoverable::new(
-        mouse_state,
-        TuiText::new(format!("{} {chevron}", label.into()))
-            .with_style(style)
-            .truncate()
-            .finish(),
-    )
-    .on_click(on_toggle);
+    let header = TuiText::new(format!("{} {chevron}", label.into()))
+        .with_style(style)
+        .truncate()
+        .finish();
+    tui_collapsible_with_header(collapsed, mouse_state, header, body, on_toggle)
+}
+
+/// Composes a collapsible section from a caller-rendered header element. This
+/// is the rich-header counterpart to [`tui_collapsible`]: callers can provide
+/// styled spans (for example, a colored status glyph plus label and chevron)
+/// while reusing the same persistent hover target, click handling, and
+/// conditional body composition.
+pub fn tui_collapsible_with_header(
+    collapsed: bool,
+    mouse_state: MouseStateHandle,
+    header: Box<dyn TuiElement>,
+    body: Box<dyn TuiElement>,
+    on_toggle: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
+) -> Box<dyn TuiElement> {
+    let header = TuiHoverable::new(mouse_state, header).on_click(on_toggle);
 
     let mut column = TuiFlex::column().child(header.finish());
     if !collapsed {

@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use warp::tui_export::{format_elapsed_seconds, AIActionStatus, AIAgentAction, MessageId};
-use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiText};
+use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiStyle, TuiText};
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::AppContext;
 
@@ -45,6 +45,41 @@ pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiE
         .finish()
 }
 
+/// Shared leading-glyph style for all rich and fallback TUI tool-call rows.
+pub(crate) fn tool_call_glyph_style(
+    state: ToolCallDisplayState,
+    builder: &TuiUiBuilder,
+) -> TuiStyle {
+    match state {
+        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
+            builder.dim_text_style()
+        }
+        ToolCallDisplayState::AwaitingApproval | ToolCallDisplayState::Running => {
+            builder.attention_glyph_style()
+        }
+        ToolCallDisplayState::Succeeded => builder.success_glyph_style(),
+        ToolCallDisplayState::Failed => builder.error_text_style(),
+        ToolCallDisplayState::Cancelled => builder.muted_text_style(),
+    }
+}
+
+/// Shared label style for all rich and fallback TUI tool-call rows.
+pub(crate) fn tool_call_label_style(
+    state: ToolCallDisplayState,
+    builder: &TuiUiBuilder,
+) -> TuiStyle {
+    match state {
+        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
+            builder.dim_text_style()
+        }
+        ToolCallDisplayState::AwaitingApproval
+        | ToolCallDisplayState::Running
+        | ToolCallDisplayState::Succeeded
+        | ToolCallDisplayState::Failed
+        | ToolCallDisplayState::Cancelled => builder.primary_text_style(),
+    }
+}
+
 /// Renders a plain-text response section.
 pub(crate) fn render_plain_text_section(text: &str, app: &AppContext) -> Box<dyn TuiElement> {
     TuiText::new(text.to_owned())
@@ -72,27 +107,8 @@ pub(crate) fn render_fallback_tool_call_section(
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let state = tool_call_display_state(status, output_streaming, block.map(|block| block.state));
-    let glyph_style = match state {
-        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-            builder.dim_text_style()
-        }
-        ToolCallDisplayState::AwaitingApproval | ToolCallDisplayState::Running => {
-            builder.attention_glyph_style()
-        }
-        ToolCallDisplayState::Succeeded => builder.success_glyph_style(),
-        ToolCallDisplayState::Failed => builder.error_text_style(),
-        ToolCallDisplayState::Cancelled => builder.muted_text_style(),
-    };
-    let label_style = match state {
-        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-            builder.dim_text_style()
-        }
-        ToolCallDisplayState::AwaitingApproval
-        | ToolCallDisplayState::Running
-        | ToolCallDisplayState::Succeeded
-        | ToolCallDisplayState::Failed
-        | ToolCallDisplayState::Cancelled => builder.primary_text_style(),
-    };
+    let glyph_style = tool_call_glyph_style(state, &builder);
+    let label_style = tool_call_label_style(state, &builder);
     let label = tool_call_label(action, status, output_streaming, block);
     TuiFlex::row()
         .child(

@@ -301,7 +301,6 @@ fn insert_test_agent_block(
 ) -> EntityId {
     transcript.update(app, |view, ctx| {
         let action_model = view.action_model.clone();
-        let model_events = view.model_events.clone();
         let terminal_model = view.model.clone();
         let agent_block = ctx.add_tui_view(|ctx| {
             TuiAIBlock::new(
@@ -309,7 +308,6 @@ fn insert_test_agent_block(
                 exchange_id,
                 Rc::new(FakeAgentBlockModel { inputs }),
                 action_model,
-                &model_events,
                 terminal_model,
                 ctx,
             )

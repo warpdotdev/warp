@@ -32,6 +32,11 @@ impl TypedActionView for TestHostView {
     type Action = ();
 }
 
+/// Builds the action model injected into stateful TUI tool-call views.
+pub(crate) fn add_test_action_model(app: &mut App) -> ModelHandle<BlocklistAIActionModel> {
+    add_test_action_model_and_events(app).0
+}
+
 /// Builds the action model and terminal-event dispatcher injected into TUI agent blocks.
 pub(crate) fn add_test_action_model_and_events(
     app: &mut App,

@@ -67,38 +67,147 @@ impl TuiElement for TerminalBlockVisibleRowsElement {
         let Some(block) = model.block_list().block_with_id(&self.block_id) else {
             return;
         };
+        render_block_rows(
+            block,
+            self.visible_rows.clone(),
+            self.width.min(area.width),
+            area,
+            buffer,
+            &colors,
+        );
+    }
+}
 
-        // A block stacks its prompt/command grid above its output grid; each call
-        // paints only that grid's rows overlapping this element's visible window,
-        // positioned within `area`, so the two grids don't overlap.
-        let max_width = self.width.min(area.width);
-        if !block.should_hide_command_grid() {
-            render_grid_rows(
-                block.prompt_and_command_grid(),
-                block
-                    .prompt_and_command_grid_offset()
-                    .as_f64()
-                    .ceil()
-                    .max(0.0) as usize,
-                self.visible_rows.clone(),
-                max_width,
-                area,
-                buffer,
-                &colors,
-            );
-        }
+/// Paints all currently displayed command/output rows for one terminal block.
+///
+/// Unlike [`TerminalBlockVisibleRowsElement`], this element derives its row
+/// range from the live block during every layout and paint pass. That makes it
+/// suitable for an expanded shell-command tool call: output can grow without
+/// rebuilding the surrounding agent-block element, while the same terminal
+/// cell renderer remains the single source of truth for both transcript
+/// surfaces.
+pub(super) struct TerminalBlockContentElement {
+    model: Arc<FairMutex<TerminalModel>>,
+    block_id: BlockId,
+}
 
-        if !block.should_hide_output_grid() {
-            render_grid_rows(
-                block.output_grid(),
-                block.output_grid_offset().as_f64().ceil().max(0.0) as usize,
-                self.visible_rows.clone(),
-                max_width,
-                area,
-                buffer,
-                &colors,
-            );
+impl TerminalBlockContentElement {
+    pub(super) fn new(model: Arc<FairMutex<TerminalModel>>, block_id: BlockId) -> Self {
+        Self { model, block_id }
+    }
+}
+
+impl TuiElement for TerminalBlockContentElement {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let rows = {
+            let model = self.model.lock();
+            model
+                .block_list()
+                .block_with_id(&self.block_id)
+                .map(block_content_rows)
+                .unwrap_or_default()
+        };
+        constraint.clamp(TuiSize::new(
+            constraint.max.width,
+            rows.end
+                .saturating_sub(rows.start)
+                .min(usize::from(u16::MAX)) as u16,
+        ))
+    }
+
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
+        let model = self.model.lock();
+        let colors = model.colors();
+        let Some(block) = model.block_list().block_with_id(&self.block_id) else {
+            return;
+        };
+        render_block_rows(
+            block,
+            block_content_rows(block),
+            area.width,
+            area,
+            buffer,
+            &colors,
+        );
+    }
+}
+
+/// Returns the smallest block-relative row range containing every displayed
+/// command/output cell. Block-list padding outside the grids is intentionally
+/// excluded because an inline command body already gets its spacing from the
+/// surrounding tool-call section.
+fn block_content_rows(block: &Block) -> Range<usize> {
+    let mut start = usize::MAX;
+    let mut end = 0;
+    let mut include_grid = |hidden: bool, offset: f64, displayed_rows: usize| {
+        if hidden || displayed_rows == 0 {
+            return;
         }
+        let grid_start = offset.ceil().max(0.0) as usize;
+        let grid_end = grid_start.saturating_add(displayed_rows);
+        start = start.min(grid_start);
+        end = end.max(grid_end);
+    };
+    include_grid(
+        block.should_hide_command_grid() || block.prompt_and_command_height().as_f64() <= 0.0,
+        block.prompt_and_command_grid_offset().as_f64(),
+        block.prompt_and_command_grid().len_displayed(),
+    );
+    include_grid(
+        block.should_hide_output_grid() || block.output_grid_displayed_height().as_f64() <= 0.0,
+        block.output_grid_offset().as_f64(),
+        block.output_grid().len_displayed(),
+    );
+    if start == usize::MAX {
+        0..0
+    } else {
+        start..end
+    }
+}
+
+/// Paints the requested block-relative rows from a terminal block. A block
+/// stacks its prompt/command grid above its output grid; each call paints only
+/// the rows overlapping `visible_rows`, positioned within `area` so the two
+/// grids don't overlap.
+fn render_block_rows(
+    block: &Block,
+    visible_rows: Range<usize>,
+    max_width: u16,
+    area: TuiRect,
+    buffer: &mut TuiBuffer,
+    colors: &TerminalColorList,
+) {
+    if !block.should_hide_command_grid() {
+        render_grid_rows(
+            block.prompt_and_command_grid(),
+            block
+                .prompt_and_command_grid_offset()
+                .as_f64()
+                .ceil()
+                .max(0.0) as usize,
+            visible_rows.clone(),
+            max_width,
+            area,
+            buffer,
+            colors,
+        );
+    }
+
+    if !block.should_hide_output_grid() {
+        render_grid_rows(
+            block.output_grid(),
+            block.output_grid_offset().as_f64().ceil().max(0.0) as usize,
+            visible_rows,
+            max_width,
+            area,
+            buffer,
+            colors,
+        );
     }
 }
 

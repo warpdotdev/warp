@@ -14,10 +14,9 @@ use std::time::Duration;
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
-    AIAgentExchangeId, AIAgentOutputMessageType, AIAgentTextSection, AIBlockModel,
-    AIConversationId, BlockId, BlocklistAIActionEvent, BlocklistAIActionModel, MessageId,
-    ModelEvent, ModelEventDispatcher, RequestCommandOutputResult, TerminalModel,
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentOutputMessageType,
+    AIAgentTextSection, AIBlockModel, AIConversationId, BlocklistAIActionModel, MessageId,
+    TerminalModel,
 };
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
@@ -27,11 +26,11 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, EntityId, ModelHandle, TuiView, ViewContext, ViewHandle};
 
 use super::tui_file_edits_view::TuiFileEditsView;
+use super::tui_shell_command_view::TuiShellCommandView;
 use crate::agent_block_sections::{
     render_fallback_tool_call_section, render_input_section, render_plain_text_section,
     render_thinking_section,
 };
-use crate::tool_call_labels::{CommandBlockState, ResolvedCommandBlock};
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
@@ -39,7 +38,8 @@ use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 enum TuiAIBlockSection {
     Input(String),
     PlainText(String),
-    /// A lightweight status row standing in for an agent tool call.
+    /// An agent tool call, rendered by a registered rich child view when one
+    /// exists and by the fallback status row otherwise.
     ToolCall(Box<AIAgentAction>),
     /// A reasoning ("thinking") segment, rendered as a collapsible block.
     Thinking {
@@ -107,6 +107,7 @@ impl ThinkingBlockStates {
 /// when it needs owned state or interactivity.
 enum TuiToolCallView {
     FileEdits(ViewHandle<TuiFileEditsView>),
+    ShellCommand(ViewHandle<TuiShellCommandView>),
 }
 
 impl TuiToolCallView {
@@ -114,6 +115,7 @@ impl TuiToolCallView {
     fn view_id(&self) -> EntityId {
         match self {
             Self::FileEdits(view) => view.id(),
+            Self::ShellCommand(view) => view.id(),
         }
     }
 
@@ -121,13 +123,9 @@ impl TuiToolCallView {
     fn render_child(&self) -> TuiChildView {
         match self {
             Self::FileEdits(view) => TuiChildView::new(view),
+            Self::ShellCommand(view) => TuiChildView::new(view),
         }
     }
-}
-
-/// Events emitted by an agent block to its transcript owner.
-pub(super) enum TuiAIBlockEvent {
-    LayoutInvalidated,
 }
 
 /// A thin TUI rich-content view adapter backed by one agent exchange.
@@ -169,7 +167,6 @@ impl TuiAIBlock {
         exchange_id: AIAgentExchangeId,
         block_model: Rc<dyn AIBlockModel<View = Self>>,
         action_model: ModelHandle<BlocklistAIActionModel>,
-        model_events: &ModelHandle<ModelEventDispatcher>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -185,32 +182,12 @@ impl TuiAIBlock {
         };
         block.sync_action_views(&action_model, ctx);
 
-        ctx.subscribe_to_model(
-            &action_model,
-            |me, _, event: &BlocklistAIActionEvent, ctx| {
-                if me.renders_action(event.action_id()) {
-                    me.invalidate_layout(ctx);
-                }
-            },
-        );
-
-        ctx.subscribe_to_model(model_events, |me, _, event, ctx| {
-            let block_id = match event {
-                ModelEvent::AfterBlockStarted { block_id, .. } => block_id,
-                ModelEvent::BlockCompleted(completed) => &completed.block_id,
-                _ => return,
-            };
-            if me
-                .requested_command_action_id(block_id)
-                .is_some_and(|action_id| me.renders_action(&action_id))
-            {
-                me.invalidate_layout(ctx);
-            }
-        });
-
         block.block_model.on_updated_output(
             Box::new(move |me, ctx| {
                 me.sync_action_views(&action_model, ctx);
+                // The presenter caches this block's rendered element; new
+                // output must invalidate the view or the transcript keeps
+                // painting the stale element.
                 ctx.notify();
             }),
             ctx,
@@ -227,15 +204,22 @@ impl TuiAIBlock {
         ctx: &mut ViewContext<Self>,
     ) {
         let status = self.block_model.status(ctx);
+        let output_streaming = status.is_streaming();
         let mut file_edit_action_ids = Vec::new();
+        let mut shell_command_actions = Vec::new();
         if let Some(output) = status.output_to_render() {
             for message in &output.get().messages {
                 let AIAgentOutputMessageType::Action(action) = &message.message else {
                     continue;
                 };
                 self.action_ids.insert(action.id.clone());
-                if matches!(action.action, AIAgentActionType::RequestFileEdits { .. }) {
+                if matches!(&action.action, AIAgentActionType::RequestFileEdits { .. }) {
                     file_edit_action_ids.push(action.id.clone());
+                } else if matches!(
+                    &action.action,
+                    AIAgentActionType::RequestCommandOutput { .. }
+                ) {
+                    shell_command_actions.push(action.clone());
                 }
             }
         }
@@ -248,6 +232,25 @@ impl TuiAIBlock {
                 ctx.add_tui_view(|ctx| TuiFileEditsView::new(action_id.clone(), action_model, ctx));
             self.action_views
                 .insert(action_id, TuiToolCallView::FileEdits(view));
+            ctx.notify();
+        }
+
+        for action in shell_command_actions {
+            if let Some(TuiToolCallView::ShellCommand(view)) = self.action_views.get(&action.id) {
+                view.update(ctx, |view, ctx| {
+                    view.update_action(action, output_streaming);
+                    ctx.notify();
+                });
+                continue;
+            }
+            let action_id = action.id.clone();
+            let action_model = action_model.clone();
+            let terminal_model = self.terminal_model.clone();
+            let view = ctx.add_tui_view(|_| {
+                TuiShellCommandView::new(action, output_streaming, action_model, terminal_model)
+            });
+            self.action_views
+                .insert(action_id, TuiToolCallView::ShellCommand(view));
             ctx.notify();
         }
     }
@@ -275,76 +278,21 @@ impl TuiAIBlock {
     /// Returns whether this block's output contains the tool call with the
     /// given action id. A set lookup over ids recorded by
     /// [`Self::sync_action_views`], so per-action-event checks stay cheap.
-    fn renders_action(&self, action_id: &AIAgentActionId) -> bool {
+    pub(super) fn renders_action(&self, action_id: &AIAgentActionId) -> bool {
         self.action_ids.contains(action_id)
     }
 
-    /// Requests height remeasurement and redraws this block.
-    fn invalidate_layout(&self, ctx: &mut ViewContext<Self>) {
-        ctx.emit(TuiAIBlockEvent::LayoutInvalidated);
-        ctx.notify();
-    }
-
-    /// Returns the requested-command action associated with a terminal block.
-    fn requested_command_action_id(&self, block_id: &BlockId) -> Option<AIAgentActionId> {
-        self.terminal_model
-            .lock()
-            .block_list()
-            .block_with_id(block_id)
-            .and_then(|block| block.requested_command_action_id().cloned())
-    }
-
-    /// Resolves the terminal block backing a shell-command tool call into
-    /// its ground-truth state and executed command. When a block exists it
-    /// supersedes the stored action status/result for execution states
-    /// (mirroring the GUI's `RequestedCommandView`, which derives the row's
-    /// icon and expandability from the block whenever one exists); the
-    /// stored result only covers rows without a local block (e.g. viewers,
-    /// restored sessions).
-    fn resolve_command_block(
-        &self,
-        action: &AIAgentAction,
-        status: Option<&AIActionStatus>,
-    ) -> Option<ResolvedCommandBlock> {
-        if !action.action.is_request_command_output() {
-            return None;
+    /// Invalidates this block and its stateful command child after an action
+    /// status or backing terminal block changes.
+    pub(super) fn notify_action_changed(
+        &mut self,
+        action_id: &AIAgentActionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(TuiToolCallView::ShellCommand(view)) = self.action_views.get(action_id) {
+            view.update(ctx, |_, ctx| ctx.notify());
         }
-        // Long-running snapshot results carry the block id directly; used as
-        // a fallback when the block can't be found by agent-interaction
-        // metadata.
-        let snapshot_block_id = match status
-            .and_then(AIActionStatus::finished_result)
-            .map(|result| &result.result)
-        {
-            Some(AIAgentActionResultType::RequestCommandOutput(
-                RequestCommandOutputResult::LongRunningCommandSnapshot { block_id, .. },
-            )) => Some(block_id),
-            _ => None,
-        };
-        // Short-lived lock: the TUI layout/render pipeline drops its own model
-        // guards before rich content measures or renders, so this never nests.
-        let model = self.terminal_model.lock();
-        let block_list = model.block_list();
-        let block = block_list
-            .block_for_ai_action_id(&action.id)
-            .or_else(|| snapshot_block_id.and_then(|id| block_list.block_with_id(id)))?;
-        // The block's command is the one actually executed (the streamed
-        // command can be edited before acceptance), so surface it for display.
-        let command = block
-            .command_with_secrets_obfuscated(false)
-            .trim()
-            .to_owned();
-        let state = if block.finished() {
-            CommandBlockState::Finished {
-                exit_code: block.exit_code(),
-            }
-        } else {
-            CommandBlockState::Running
-        };
-        Some(ResolvedCommandBlock {
-            command: (!command.is_empty()).then_some(command),
-            state,
-        })
+        ctx.notify();
     }
 
     /// Returns this block's wrapped height using the live layout context.
@@ -460,12 +408,11 @@ impl TuiAIBlock {
                     Some(view) => TuiContainer::new(Box::new(view.render_child())).finish(),
                     None => {
                         let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        let block = self.resolve_command_block(action, status.as_ref());
                         render_fallback_tool_call_section(
                             action,
                             status.as_ref(),
                             output_streaming,
-                            block.as_ref(),
+                            None,
                             app,
                         )
                     }
@@ -503,7 +450,7 @@ impl TuiAIBlock {
 
 /// Registers the view with the TUI runtime.
 impl Entity for TuiAIBlock {
-    type Event = TuiAIBlockEvent;
+    type Event = ();
 }
 
 /// Renders the model-backed block as a TUI element.
