@@ -15,10 +15,11 @@ use itertools::Itertools;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentOutputMessageType,
-    AIAgentTextSection, AIBlockModel, AIConversationId, BlockId, BlocklistAIActionEvent,
-    BlocklistAIActionModel, MessageId, ModelEvent, ModelEventDispatcher, SummarizationType,
-    TerminalModel,
+    AIAgentTextSection, AIAgentTodo, AIBlockModel, AIConversationId, BlockId,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryModel, MessageId, ModelEvent,
+    ModelEventDispatcher, SummarizationType, TerminalModel, TodoOperation, TodoStatus,
 };
+use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
     TuiParentElement, TuiSize,
@@ -31,8 +32,9 @@ use warpui_core::{
 use super::tui_file_edits_view::{TuiFileEditsView, TuiFileEditsViewEvent};
 use super::tui_shell_command_view::{TuiShellCommandView, TuiShellCommandViewEvent};
 use crate::agent_block_sections::{
-    render_fallback_tool_call_section, render_input_section, render_plain_text_section,
-    render_summarization_section, render_thinking_section,
+    render_completed_todos_section, render_fallback_tool_call_section, render_input_section,
+    render_plain_text_section, render_summarization_section, render_thinking_section,
+    render_todo_list_section,
 };
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 
@@ -55,37 +57,48 @@ enum TuiAIBlockSection {
         finished: bool,
         body: String,
     },
+    /// The agent's task list (todo list), rendered as a collapsible block.
+    TodoList {
+        message_id: MessageId,
+        todos: Vec<AIAgentTodo>,
+    },
+    /// A compact completion row for todos the agent just marked done.
+    CompletedTodos {
+        completed: Vec<AIAgentTodo>,
+    },
 }
 
-/// Per-message UI state for thinking blocks, keyed by reasoning message.
+/// Per-message UI state for collapsible sections (thinking blocks,
+/// conversation summaries, and task lists), keyed by the owning output
+/// message.
 #[derive(Default)]
-pub(crate) struct ThinkingBlockStates {
-    states: RefCell<HashMap<MessageId, ThinkingBlockState>>,
+pub(crate) struct CollapsibleSectionStates {
+    states: RefCell<HashMap<MessageId, CollapsibleSectionState>>,
 }
 
-/// UI state for a single thinking block.
+/// UI state for a single collapsible section.
 #[derive(Default)]
-struct ThinkingBlockState {
-    /// Manual collapse override. `None` means the default: collapsed iff
-    /// reasoning has finished, so a block streams expanded and auto-collapses
-    /// on finish unless the user has toggled it — a recorded override wins
+struct CollapsibleSectionState {
+    /// Manual collapse override. `None` means the section's default (supplied
+    /// per render by the caller: thinking blocks default to collapsed once
+    /// finished, task lists default to expanded) — a recorded override wins
     /// permanently.
     collapse_override: Option<bool>,
-    /// Hover state for the thinking header. Owned here (not created inline
+    /// Hover state for the section header. Owned here (not created inline
     /// during render) so it survives element-tree rebuilds, following the
     /// GUI's `MouseStateHandle` pattern.
     hover_state: MouseStateHandle,
 }
 
-impl ThinkingBlockStates {
-    /// Whether the thinking block for `message_id` is collapsed: the manual
-    /// override if one was recorded, else collapsed iff `finished`.
-    pub(crate) fn is_collapsed(&self, message_id: &MessageId, finished: bool) -> bool {
+impl CollapsibleSectionStates {
+    /// Whether the section for `message_id` is collapsed: the manual override
+    /// if one was recorded, else `default_collapsed`.
+    pub(crate) fn is_collapsed(&self, message_id: &MessageId, default_collapsed: bool) -> bool {
         self.states
             .borrow()
             .get(message_id)
             .and_then(|state| state.collapse_override)
-            .unwrap_or(finished)
+            .unwrap_or(default_collapsed)
     }
 
     /// Records a manual collapse override for `message_id`.
@@ -145,7 +158,7 @@ pub(super) enum TuiAIBlockEvent {
 /// User interactions handled by the owning agent block.
 #[derive(Clone, Debug)]
 pub(crate) enum TuiAIBlockAction {
-    SetThinkingCollapsed {
+    SetSectionCollapsed {
         message_id: MessageId,
         collapsed: bool,
     },
@@ -166,8 +179,9 @@ pub(super) struct TuiAIBlock {
     /// ground-truth state for agent-monitored commands (see
     /// [`Self::lrc_command_state`]). Locked only in short, render-time scopes.
     terminal_model: Arc<FairMutex<TerminalModel>>,
-    /// Per-message UI state for this exchange's thinking blocks.
-    thinking_states: ThinkingBlockStates,
+    /// Per-message UI state for this exchange's collapsible sections
+    /// (thinking blocks and task lists).
+    collapsible_states: CollapsibleSectionStates,
     /// Every tool-call action id seen in this exchange's output, maintained by
     /// [`Self::sync_action_views`]. Mirrors the GUI `AIBlock`'s
     /// `requested_action_ids` so per-action-event lookups are a cheap set
@@ -201,7 +215,7 @@ impl TuiAIBlock {
             block_model,
             action_model: action_model.clone(),
             terminal_model,
-            thinking_states: Default::default(),
+            collapsible_states: Default::default(),
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
             last_measured_width: Cell::new(None),
@@ -482,10 +496,28 @@ impl TuiAIBlock {
                             });
                         }
                     }
+                    AIAgentOutputMessageType::TodoOperation(operation) => match operation {
+                        TodoOperation::UpdateTodos { todos } if !todos.is_empty() => {
+                            sections.push(TuiAIBlockSection::TodoList {
+                                message_id: message.id.clone(),
+                                todos: todos.clone(),
+                            });
+                        }
+                        TodoOperation::MarkAsCompleted { completed_todos }
+                            if !completed_todos.is_empty() =>
+                        {
+                            sections.push(TuiAIBlockSection::CompletedTodos {
+                                completed: completed_todos.clone(),
+                            });
+                        }
+                        // Empty operations carry nothing to render (matching
+                        // the GUI's guards).
+                        TodoOperation::UpdateTodos { .. }
+                        | TodoOperation::MarkAsCompleted { .. } => {}
+                    },
                     // Other message kinds are not rendered by the TUI transcript yet.
                     AIAgentOutputMessageType::Summarization { .. }
                     | AIAgentOutputMessageType::Subagent(_)
-                    | AIAgentOutputMessageType::TodoOperation(_)
                     | AIAgentOutputMessageType::WebSearch(_)
                     | AIAgentOutputMessageType::WebFetch(_)
                     | AIAgentOutputMessageType::CommentsAddressed { .. }
@@ -531,7 +563,7 @@ impl TuiAIBlock {
                     finished_duration,
                     body,
                 } => render_thinking_section(
-                    &self.thinking_states,
+                    &self.collapsible_states,
                     message_id,
                     *finished_duration,
                     body,
@@ -542,12 +574,40 @@ impl TuiAIBlock {
                     finished,
                     body,
                 } => render_summarization_section(
-                    &self.thinking_states,
+                    &self.collapsible_states,
                     message_id,
                     *finished,
                     body,
                     app,
                 ),
+                TuiAIBlockSection::TodoList { message_id, todos } => {
+                    // Statuses resolve against the conversation's todo
+                    // history at render time, so superseded lists restyle
+                    // without needing a dedicated invalidation. Items the
+                    // conversation no longer knows belong to a superseded
+                    // list (matching the GUI's fallback).
+                    let history = BlocklistAIHistoryModel::as_ref(app);
+                    let rows: Vec<(String, TodoStatus)> = todos
+                        .iter()
+                        .map(|todo| {
+                            (
+                                todo.title.clone(),
+                                history
+                                    .todo_status(&self.conversation_id, &todo.id)
+                                    .unwrap_or(TodoStatus::Cancelled),
+                            )
+                        })
+                        .collect();
+                    render_todo_list_section(&self.collapsible_states, message_id, &rows, app)
+                }
+                TuiAIBlockSection::CompletedTodos { completed } => {
+                    let history = BlocklistAIHistoryModel::as_ref(app);
+                    render_completed_todos_section(
+                        completed,
+                        history.active_todo_list(&self.conversation_id),
+                        app,
+                    )
+                }
             };
 
             // One row of bottom padding separates sections; the last section
@@ -596,11 +656,11 @@ impl TypedActionView for TuiAIBlock {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            TuiAIBlockAction::SetThinkingCollapsed {
+            TuiAIBlockAction::SetSectionCollapsed {
                 message_id,
                 collapsed,
             } => {
-                self.thinking_states
+                self.collapsible_states
                     .set_collapsed(message_id.clone(), *collapsed);
                 self.invalidate_layout(ctx);
             }
