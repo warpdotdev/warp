@@ -1255,7 +1255,7 @@ impl Network {
                 }
                 log::info!("Closing websocket to session sharing server as sharer");
                 if let Err(e) = sink.close().await {
-                    warp_errors::report_error!(anyhow::Error::new(e)
+                    report_error!(anyhow::Error::new(e)
                         .context("Failed to close session sharing websocket as sharer"));
                 }
                 startup_send_failed
