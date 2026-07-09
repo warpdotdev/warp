@@ -554,17 +554,49 @@ pub struct RunCloudArgs {
 
     /// Execution harness for the agent run.
     ///
-    /// "oz" (default) uses Warp's built-in agent infrastructure.
-    /// "claude" delegates to the `claude` CLI.
-    #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
+    /// "oz" (the default) runs on Warp's built-in agent infrastructure. Other
+    /// values delegate the run to an external agent CLI; see the possible
+    /// values below.
+    #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz)]
     pub harness: Harness,
 
-    /// Name of a managed secret for Claude Code harness authentication.
+    /// Name of a managed secret used to authenticate the Claude Code harness.
     ///
-    /// Resolved server-side and injected into the agent container.
-    /// Only valid when --harness is set to "claude".
-    #[arg(long = "claude-auth-secret", value_name = "NAME", hide = true)]
+    /// Only valid with `--harness claude`. The secret is resolved server-side
+    /// and injected into the agent container.
+    ///
+    /// If you don't have one yet, create it with
+    /// `oz secret create claude api-key <NAME>` (run
+    /// `oz secret create claude --help` for other credential types), then pass
+    /// that <NAME> here.
+    #[arg(long = "claude-auth-secret", value_name = "NAME")]
     pub claude_auth_secret: Option<String>,
+
+    /// Name of a managed secret used to authenticate the Codex harness.
+    ///
+    /// Only valid with `--harness codex`. The secret is resolved server-side
+    /// and injected into the agent container.
+    ///
+    /// If you don't have one yet, create it with
+    /// `oz secret create codex api-key <NAME>`, then pass that <NAME> here.
+    #[arg(long = "codex-auth-secret", value_name = "NAME")]
+    pub codex_auth_secret: Option<String>,
+}
+
+impl RunCloudArgs {
+    /// Validates that the harness auth-secret flags are only supplied alongside
+    /// their matching `--harness`. Returns a user-facing error message when a
+    /// secret is provided for the wrong harness. Checked on run so a mismatched
+    /// invocation fails fast with a clear message.
+    pub fn validate_auth_secrets(&self) -> Result<(), String> {
+        if self.claude_auth_secret.is_some() && self.harness != Harness::Claude {
+            return Err("--claude-auth-secret is only valid with --harness claude.".to_string());
+        }
+        if self.codex_auth_secret.is_some() && self.harness != Harness::Codex {
+            return Err("--codex-auth-secret is only valid with --harness codex.".to_string());
+        }
+        Ok(())
+    }
 }
 
 /// Sort field for named agents.

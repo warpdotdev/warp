@@ -313,10 +313,8 @@ fn run_agent(
             if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--harness' found"));
             }
-            if args.claude_auth_secret.is_some() && args.harness != Harness::Claude {
-                return Err(anyhow::anyhow!(
-                    "--claude-auth-secret is only valid with --harness claude."
-                ));
+            if let Err(msg) = args.validate_auth_secrets() {
+                return Err(anyhow::anyhow!(msg));
             }
             if args.runner.is_some() && !FeatureFlag::CloudRunners.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--runner' found"));
