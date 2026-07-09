@@ -9590,7 +9590,7 @@ impl Workspace {
         );
 
         items.extend([
-            MenuItemFields::new("Slack")
+            MenuItemFields::new("Join our Slack community")
                 .with_on_select_action(WorkspaceAction::JoinSlack)
                 .into_item(),
             MenuItem::Separator,
