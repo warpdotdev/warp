@@ -4,10 +4,6 @@ use super::*;
 // `app/src/ai/blocklist/orchestration_topology_tests.rs`. These tests stay
 // focused on the pill bar's own dispatch behavior.
 
-/// Regression test for the orchestration-pill-bar infinite-width panic on pane
-/// drag (see `DRAG_PREVIEW_HEADER_MAX_WIDTH` in `pane_group::pane::view`).
-/// Reproduces the drag-preview layout under an unbounded max width and asserts
-/// every painted rect is finite; without the cap, building the scene panics.
 #[test]
 fn pill_bar_scrollable_finite_under_capped_drag_preview() {
     use pathfinder_geometry::vector::vec2f;
