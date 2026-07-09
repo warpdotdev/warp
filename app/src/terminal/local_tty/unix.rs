@@ -127,7 +127,7 @@ pub(super) fn resolve_current_user() -> Option<CurrentUser> {
         .or_else(|| current_user_from_passwd_file(uid.as_raw()))
 }
 
-/// Step 1: resolve the current user with an in-process passwd lookup via nix's
+/// Resolve the current user with an in-process passwd lookup via nix's
 /// safe [`nix::unistd::User::from_uid`] wrapper (backed by `getpwuid_r`).
 fn current_user_via_getpwuid(uid: nix::unistd::Uid) -> Option<CurrentUser> {
     match nix::unistd::User::from_uid(uid) {
@@ -150,8 +150,6 @@ fn current_user_via_getpwuid(uid: nix::unistd::Uid) -> Option<CurrentUser> {
     }
 }
 
-/// Step 2: resolve via the host's `getent passwd <uid>`.
-///
 /// `getent` is the host's own (typically glibc-dynamic) binary, so it consults
 /// the host's full NSS configuration — including SSSD/LDAP/AD — which a
 /// static/musl Warp binary cannot do in-process.
@@ -168,7 +166,6 @@ fn current_user_via_getent(uid: u32) -> Option<CurrentUser> {
     stdout.lines().find_map(|line| parse_passwd_line(line, uid))
 }
 
-/// Step 3: resolve by reading `/etc/passwd` directly.
 fn current_user_from_passwd_file(uid: u32) -> Option<CurrentUser> {
     let contents = std::fs::read_to_string("/etc/passwd").ok()?;
     contents
@@ -179,20 +176,6 @@ fn current_user_from_passwd_file(uid: u32) -> Option<CurrentUser> {
 /// Parse a single `passwd(5)`-format line
 /// (`name:passwd:uid:gid:gecos:dir:shell`) and return it as a [`CurrentUser`]
 /// iff its uid field equals `uid`.
-///
-/// This deliberately mirrors how glibc's own `/etc/passwd` reader
-/// (`fgetpwent_r` + the `nss_files` line parser) treats a line, so this
-/// last-resort fallback stays consistent with the in-process / `getent`
-/// lookups above:
-/// - Leading blanks are stripped and blank or `#`-comment lines are skipped —
-///   glibc's `__nss_readline` strips leading blanks and `__fgetpwent_r` ignores
-///   empty and comment lines.
-/// - The line is split into the seven colon-separated fields, and the seventh
-///   (shell) is taken as the *remainder* of the line. glibc assigns
-///   `pw_shell = line` (the rest after the sixth colon), so a shell field is
-///   never truncated at a stray `:`; `splitn(7, ':')` reproduces that.
-/// - A line whose uid field isn't a base-10 number, or that has fewer than
-///   seven fields, is treated as malformed and skipped rather than matched.
 fn parse_passwd_line(line: &str, uid: u32) -> Option<CurrentUser> {
     // Strip leading blanks and ignore blank / comment lines, as glibc's passwd
     // reader does before parsing fields.

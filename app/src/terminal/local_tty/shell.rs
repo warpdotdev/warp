@@ -187,9 +187,6 @@ impl ShellStarter {
     fn compute_fallback_shell() -> Option<ShellStarterSource> {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
-                // Resolve the user's login shell via the host-delegated lookup
-                // so directory-service users (SSSD/LDAP/AD) still resolve even
-                // from a static/musl binary that can't load glibc NSS plugins.
                 let pw_shell_path = super::unix::resolve_current_user().map(|user| user.shell);
                 if pw_shell_path.is_none() {
                     log::error!(
