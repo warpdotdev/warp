@@ -103,6 +103,7 @@ warpui_core = { path = "crates/warpui_core" }
 warpui_extras = { path = "crates/warpui_extras", default-features = false }
 watcher = { path = "crates/watcher" }
 websocket = { path = "crates/websocket" }
+i18n = { path = "crates/i18n" }
 
 # Workspace-level dependencies used by multiple crates. Prefer adding dependencies
 # here to copying-and-pasting versions.
@@ -281,6 +282,7 @@ smol_str = "0.2.2"
 strsim = "0.11"
 strum = "0.27"
 strum_macros = "0.27"
+sys-locale = "0.3"
 tempfile = "3.8.0"
 thiserror = "2.0.17"
 tokio = "1.47.1"

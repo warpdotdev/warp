@@ -96,7 +96,10 @@ impl View for NewEnvironmentButtonView {
                     .with_spacing(4.)
                     .with_child(
                         Text::new(
-                            "New environment",
+                            crate::menu_label(
+                                "settings.environments.new_environment_button",
+                                "New environment",
+                            ),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )

@@ -2986,7 +2986,7 @@ impl AgentDriver {
         let mut written_conversation_id = false;
 
         ctx.subscribe_to_model(&history_model_handle, move |me, _, event, ctx| {
-            if event.terminal_surface_id().is_some_and(|id| id != terminal_id) {
+if event.terminal_surface_id().is_some_and(|id| id != terminal_id) {
                 return;
             }
 

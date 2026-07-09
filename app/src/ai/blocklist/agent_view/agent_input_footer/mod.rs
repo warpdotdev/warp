@@ -2066,6 +2066,11 @@ impl AgentInputFooter {
             self.prompt_cache_expired = is_cache_expired;
             self.context_window_button.update(ctx, |button, ctx| {
                 button.set_icon(Some(icon), ctx);
+                if is_cache_expired {
+                    button.set_theme(WarningAgentInputButtonTheme, ctx);
+                } else {
+                    button.set_theme(AgentInputButtonTheme, ctx);
+                }
                 button.set_tooltip(Some(tooltip), ctx);
             });
 
@@ -2836,6 +2841,43 @@ impl ActionButtonTheme for InstallPluginButtonTheme {
 
     fn should_opt_out_of_contrast_adjustment(&self) -> bool {
         true
+    }
+}
+
+/// Yellow-tinted variant of [`AgentInputButtonTheme`] used to flag a warning
+/// state on an input chip (e.g. expired prompt cache); slightly darker on hover.
+struct WarningAgentInputButtonTheme;
+
+impl ActionButtonTheme for WarningAgentInputButtonTheme {
+    fn background(&self, hovered: bool, appearance: &Appearance) -> Option<Fill> {
+        let yellow = appearance.theme().ansi_fg_yellow();
+        let base = appearance.theme().surface_1();
+        Some(if hovered {
+            base.blend(&Fill::Solid(yellow).with_opacity(45))
+        } else {
+            base.blend(&Fill::Solid(yellow).with_opacity(30))
+        })
+    }
+
+    fn text_color(
+        &self,
+        hovered: bool,
+        background: Option<Fill>,
+        appearance: &Appearance,
+    ) -> ColorU {
+        AgentInputButtonTheme.text_color(hovered, background, appearance)
+    }
+
+    fn border(&self, appearance: &Appearance) -> Option<ColorU> {
+        AgentInputButtonTheme.border(appearance)
+    }
+
+    fn should_opt_out_of_contrast_adjustment(&self) -> bool {
+        AgentInputButtonTheme.should_opt_out_of_contrast_adjustment()
+    }
+
+    fn font_properties(&self) -> Option<warpui::fonts::Properties> {
+        AgentInputButtonTheme.font_properties()
     }
 }
 

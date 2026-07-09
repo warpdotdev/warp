@@ -99,7 +99,7 @@ impl SettingsUmbrella {
         let section = self.subpages.get(index)?;
         let mouse_state = self.subpage_button_states.get(index)?.clone();
 
-        let label = section.to_string() + &match_data.to_string();
+        let label = section.sidebar_label().to_string() + &match_data.to_string();
 
         let hoverable = appearance
             .ui_builder()

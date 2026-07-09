@@ -223,7 +223,10 @@ impl AgentSlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Customize your Warp Agent")
+            .paragraph(crate::menu_label(
+                "onboarding.agent_slide.title",
+                "Customize your Warp Agent",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -233,7 +236,10 @@ impl AgentSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Select your Warp Agent's defaults.",
+            crate::menu_label(
+                "onboarding.agent_slide.subtitle",
+                "Select your Warp Agent's defaults.",
+            ),
             appearance.ui_font_family(),
             16.,
         )
@@ -319,7 +325,10 @@ impl AgentSlide {
         settings: &AgentDevelopmentSettings,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let header = self.render_section_header("Default model", appearance);
+        let header = self.render_section_header(
+            crate::menu_label("onboarding.agent_slide.default_model", "Default model"),
+            appearance,
+        );
 
         let expanded = self.is_model_list_expanded;
         let chip = self.render_collapsed_model_chip(appearance, settings, app, expanded);
@@ -618,7 +627,7 @@ impl AgentSlide {
             };
 
             let trailing: Box<dyn Element> = if is_default {
-                make_pill("Recommended")
+                make_pill(crate::menu_label("common.recommended", "Recommended"))
             } else {
                 Empty::new().finish()
             };
@@ -665,7 +674,10 @@ impl AgentSlide {
     }
 
     fn render_autonomy_workspace_enforced(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let header = self.render_section_header("Autonomy", appearance);
+        let header = self.render_section_header(
+            crate::menu_label("onboarding.agent_slide.autonomy", "Autonomy"),
+            appearance,
+        );
 
         let theme = appearance.theme();
         let background_for_text = theme.background().into_solid();
@@ -674,17 +686,27 @@ impl AgentSlide {
         let title_color = internal_colors::text_main(theme, background_for_text);
         let subtitle_color = internal_colors::text_sub(theme, background_for_text);
 
-        let title_el = Text::new("Set by Team Workspace", ui_font_family, 14.0)
-            .with_color(title_color)
-            .with_style(Properties {
-                weight: Weight::Normal,
-                ..Default::default()
-            })
-            .with_line_height_ratio(1.0)
-            .finish();
+        let title_el = Text::new(
+            crate::menu_label(
+                "onboarding.agent_slide.set_by_workspace",
+                "Set by Team Workspace",
+            ),
+            ui_font_family,
+            14.0,
+        )
+        .with_color(title_color)
+        .with_style(Properties {
+            weight: Weight::Normal,
+            ..Default::default()
+        })
+        .with_line_height_ratio(1.0)
+        .finish();
 
         let subtitle_el = Text::new(
-            "Autonomy settings are configured as part of your team workspace.",
+            crate::menu_label(
+                "onboarding.agent_slide.autonomy_workspace_subtitle",
+                "Autonomy settings are configured as part of your team workspace.",
+            ),
             ui_font_family,
             12.0,
         )
@@ -720,7 +742,10 @@ impl AgentSlide {
         appearance: &Appearance,
         settings: &AgentDevelopmentSettings,
     ) -> Box<dyn Element> {
-        let header = self.render_section_header("Autonomy", appearance);
+        let header = self.render_section_header(
+            crate::menu_label("onboarding.agent_slide.autonomy", "Autonomy"),
+            appearance,
+        );
 
         // The rows now take the full column width (vs. the previous three-across layout),
         // so they no longer need the extra height that came from cramped subtitle wrapping.
@@ -732,23 +757,32 @@ impl AgentSlide {
         let text_main = internal_colors::text_main(theme, background_for_text);
         let text_sub = internal_colors::text_sub(theme, background_for_text);
 
-        let autonomy_options: [(AgentAutonomy, &str, &str, MouseStateHandle); 3] = [
+        let autonomy_options: [(AgentAutonomy, &'static str, &'static str, MouseStateHandle); 3] = [
             (
                 AgentAutonomy::Full,
-                "Full",
-                "Warp Agent runs commands, writes code, and reads files without asking.",
+                crate::menu_label("onboarding.agent_slide.autonomy_full_title", "Full"),
+                crate::menu_label(
+                    "onboarding.agent_slide.autonomy_full_subtitle",
+                    "Warp Agent runs commands, writes code, and reads files without asking.",
+                ),
                 self.autonomy_full_mouse_state.clone(),
             ),
             (
                 AgentAutonomy::Partial,
-                "Partial",
-                "Warp Agent can plan, read files, and execute low-risk commands. Asks before making any changes or executing sensitive commands.",
+                crate::menu_label("onboarding.agent_slide.autonomy_partial_title", "Partial"),
+                crate::menu_label(
+                    "onboarding.agent_slide.autonomy_partial_subtitle",
+                    "Warp Agent can plan, read files, and execute low-risk commands. Asks before making any changes or executing sensitive commands.",
+                ),
                 self.autonomy_partial_mouse_state.clone(),
             ),
             (
                 AgentAutonomy::None,
-                "None",
-                "Warp Agent takes no actions without your approval.",
+                crate::menu_label("onboarding.agent_slide.autonomy_none_title", "None"),
+                crate::menu_label(
+                    "onboarding.agent_slide.autonomy_none_subtitle",
+                    "Warp Agent takes no actions without your approval.",
+                ),
                 self.autonomy_none_mouse_state.clone(),
             ),
         ];
@@ -798,7 +832,7 @@ impl AgentSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(crate::menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -813,7 +847,7 @@ impl AgentSlide {
         let next_button = self.next_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Next".into()),
+                content: button::Content::Label(crate::menu_label("common.next", "Next").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),

@@ -93,24 +93,50 @@ pub fn cost_type_color(cost_type: &AiCreditsUsageAndCostType) -> ColorU {
 
 fn cost_type_label(cost_type: &AiCreditsUsageAndCostType) -> &'static str {
     match cost_type {
-        AiCreditsUsageAndCostType::BaseLimit => "Base",
-        AiCreditsUsageAndCostType::BonusGrant => "Add-ons",
-        AiCreditsUsageAndCostType::Payg => "Pay-as-you-go",
-        AiCreditsUsageAndCostType::AmbientBonusGrant => "Cloud-only",
-        AiCreditsUsageAndCostType::Aggregate => "Combined",
-        AiCreditsUsageAndCostType::Other(_) => "Other",
+        AiCreditsUsageAndCostType::BaseLimit => {
+            crate::menu_label("settings.billing_and_usage.cost_type_base", "Base")
+        }
+        AiCreditsUsageAndCostType::BonusGrant => {
+            crate::menu_label("settings.billing_and_usage.cost_type_addons", "Add-ons")
+        }
+        AiCreditsUsageAndCostType::Payg => {
+            crate::menu_label("settings.billing_and_usage.cost_type_payg", "Pay-as-you-go")
+        }
+        AiCreditsUsageAndCostType::AmbientBonusGrant => crate::menu_label(
+            "settings.billing_and_usage.cost_type_cloud_only",
+            "Cloud-only",
+        ),
+        AiCreditsUsageAndCostType::Aggregate => {
+            crate::menu_label("settings.billing_and_usage.cost_type_combined", "Combined")
+        }
+        AiCreditsUsageAndCostType::Other(_) => {
+            crate::menu_label("settings.billing_and_usage.category_other", "Other")
+        }
     }
 }
 
 fn bucket_label(bucket: &AiCreditsUsageBucket) -> &'static str {
     match bucket {
-        AiCreditsUsageBucket::Ai => "AI",
-        AiCreditsUsageBucket::Compute => "Compute",
-        AiCreditsUsageBucket::Platform => "Platform",
-        AiCreditsUsageBucket::SuggestedCodeDiffs => "Suggested code diffs",
-        AiCreditsUsageBucket::Voice => "Voice",
-        AiCreditsUsageBucket::Aggregate => "Total",
-        AiCreditsUsageBucket::Other(_) => "Other",
+        AiCreditsUsageBucket::Ai => crate::menu_label("settings.billing_and_usage.bucket_ai", "AI"),
+        AiCreditsUsageBucket::Compute => {
+            crate::menu_label("settings.billing_and_usage.bucket_compute", "Compute")
+        }
+        AiCreditsUsageBucket::Platform => {
+            crate::menu_label("settings.billing_and_usage.bucket_platform", "Platform")
+        }
+        AiCreditsUsageBucket::SuggestedCodeDiffs => crate::menu_label(
+            "settings.billing_and_usage.bucket_suggested_code_diffs",
+            "Suggested code diffs",
+        ),
+        AiCreditsUsageBucket::Voice => {
+            crate::menu_label("settings.billing_and_usage.bucket_voice", "Voice")
+        }
+        AiCreditsUsageBucket::Aggregate => {
+            crate::menu_label("settings.billing_and_usage.bucket_total", "Total")
+        }
+        AiCreditsUsageBucket::Other(_) => {
+            crate::menu_label("settings.billing_and_usage.category_other", "Other")
+        }
     }
 }
 
@@ -312,7 +338,11 @@ pub fn render_breakdown_tooltip(
 
     column.add_child(render_tooltip_row(
         /* no swatch on the total row */ None,
-        "Total usage".to_string(),
+        crate::menu_label(
+            "settings.billing_and_usage.total_usage_label",
+            "Total usage",
+        )
+        .to_string(),
         total_credits,
         total_cost_cents,
         main,

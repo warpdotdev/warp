@@ -66,6 +66,8 @@ pub enum AgentOnboardingEvent {
     UpgradeRequested,
     UpgradeCopyUrlRequested,
     UpgradePasteTokenFromClipboardRequested,
+    AddApiKeyRequested,
+    AddCustomEndpointRequested,
     /// Emitted when the app regains focus (e.g. user returns from the browser).
     /// The parent should refresh any stale data: available models, workspace/billing metadata, etc.
     AppBecameActive,
@@ -226,6 +228,12 @@ impl AgentOnboardingView {
         };
 
         ctx.subscribe_to_view(&ai_access_slide, |_me, _view, event, ctx| match event {
+            AiAccessSlideEvent::AddApiKeyRequested => {
+                ctx.emit(AgentOnboardingEvent::AddApiKeyRequested);
+            }
+            AiAccessSlideEvent::AddCustomEndpointRequested => {
+                ctx.emit(AgentOnboardingEvent::AddCustomEndpointRequested);
+            }
             AiAccessSlideEvent::CopyUpgradeUrlRequested => {
                 ctx.emit(AgentOnboardingEvent::UpgradeCopyUrlRequested);
             }
@@ -313,6 +321,20 @@ impl AgentOnboardingView {
         ctx.notify();
     }
 
+    /// Updates how many BYOK provider keys and custom endpoints the user has
+    /// configured. This drives the AI-access slide's "connected" status line and
+    /// gates "Next" on the bring-your-own path.
+    pub fn set_byok_status(
+        &mut self,
+        key_count: usize,
+        endpoint_count: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.ai_access_slide.update(ctx, |slide, ctx| {
+            slide.set_byok_status(key_count, endpoint_count, ctx);
+        });
+    }
+
     /// The current `use_vertical_tabs` value on the onboarding UI customization.
     /// This reflects the intention's default (agent = vertical, terminal = horizontal)
     /// and any change the user made on the customize slide, and is what the
@@ -393,7 +415,13 @@ impl AgentOnboardingView {
         let cancel_button = self.no_ai_cancel_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Give me AI features".into()),
+                content: button::Content::Label(
+                    crate::menu_label(
+                        "onboarding.agent.give_me_ai_features",
+                        "Give me AI features",
+                    )
+                    .into(),
+                ),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -408,7 +436,9 @@ impl AgentOnboardingView {
         let confirm_button = self.no_ai_confirm_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("I don't want AI".into()),
+                content: button::Content::Label(
+                    crate::menu_label("onboarding.ai_access.no_ai", "I don't want AI").into(),
+                ),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),
@@ -423,9 +453,14 @@ impl AgentOnboardingView {
         render_feature_optout_dialog(
             appearance,
             FeatureOptOutDialog {
-                title: "Are you sure you don't want AI?",
-                body: "Without AI, you'll still get Warp's terminal experience, but you'll miss \
-                       our agentic features like automatic fixes for terminal errors.",
+                title: crate::menu_label(
+                    "onboarding.agent.no_ai_dialog_title",
+                    "Are you sure you don't want AI?",
+                ),
+                body: crate::menu_label(
+                    "onboarding.agent.no_ai_dialog_body",
+                    "Without AI, you'll still get Warp's terminal experience, but you'll miss our agentic features like automatic fixes for terminal errors.",
+                ),
                 features: &[],
                 close_button,
                 cancel_button,
@@ -490,7 +525,10 @@ impl AgentOnboardingView {
         .finish();
 
         let text = ui_builder
-            .span("Plan successfully activated!")
+            .span(crate::menu_label(
+                "onboarding.agent.plan_activated_toast",
+                "Plan successfully activated!",
+            ))
             .with_style(UiComponentStyles {
                 font_color: Some(text_color),
                 font_size: Some(FONT_SIZE),
@@ -620,7 +658,9 @@ impl View for AgentOnboardingView {
             let close_button = self.close_button.render(
                 appearance,
                 button::Params {
-                    content: button::Content::Label("Skip".into()),
+                    content: button::Content::Label(
+                        crate::menu_label("onboarding.agent.skip", "Skip").into(),
+                    ),
                     theme: &button::themes::Naked,
                     options: button::Options {
                         size: button::Size::Small,

@@ -71,7 +71,10 @@ impl ScriptingSettingsPageView {
             vec![Box::new(LocalControlModeWidget)];
 
         Self {
-            page: PageType::new_uncategorized(widgets, Some("Scripting")),
+            page: PageType::new_uncategorized(
+                widgets,
+                Some(crate::menu_label("settings.scripting.title", "Scripting")),
+            ),
             local_only_icon_tooltip_states: RefCell::new(HashMap::new()),
             local_control_mode_dropdown,
             #[cfg(target_os = "macos")]
@@ -120,9 +123,10 @@ impl ScriptingSettingsPageView {
                 match result {
                     Ok(()) => {
                         let command_name = ChannelState::channel().warpctrl_command_name();
-                        let message = format!(
-                            "Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line."
-                        );
+                        let message = i18n::interpolate(
+                            crate::menu_label("settings.scripting.install_success", "Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line."),
+                            &[("command_name", command_name.to_string())],
+                        ).into_owned();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
                                 DismissibleToast::success(message),
@@ -132,7 +136,10 @@ impl ScriptingSettingsPageView {
                         });
                     }
                     Err(error) => {
-                        let message = format!("Failed to install Warp Control command: {error}");
+                        let message = i18n::interpolate(
+                            crate::menu_label("settings.scripting.install_failed", "Failed to install Warp Control command: {error}"),
+                            &[("error", error.to_string())],
+                        ).into_owned();
                         log::warn!("{message}");
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_persistent_toast(
@@ -231,11 +238,11 @@ impl SettingsWidget for WarpControlCliInstallWidget {
         let installed = cli_install::is_warpctrl_installed();
         let disabled = view.warpctrl_installing || installed;
         let label = if view.warpctrl_installing {
-            "Installing…"
+            crate::menu_label("settings.scripting.installing", "Installing…")
         } else if installed {
-            "Installed"
+            crate::menu_label("settings.scripting.installed", "Installed")
         } else {
-            "Install"
+            crate::menu_label("settings.scripting.install", "Install")
         };
         let mut button = appearance
             .ui_builder()
@@ -259,13 +266,23 @@ impl SettingsWidget for WarpControlCliInstallWidget {
         };
 
         render_body_item::<ScriptingSettingsPageAction>(
-            "Warp Control CLI command".into(),
+            crate::menu_label(
+                "settings.scripting.warp_control_cli_command",
+                "Warp Control CLI command",
+            )
+            .into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
             appearance,
             button,
-            Some("Install the warpctrl command for scripting Warp from your terminal.".to_owned()),
+            Some(
+                crate::menu_label(
+                    "settings.scripting.warp_control_cli_description",
+                    "Install the warpctrl command for scripting Warp from your terminal.",
+                )
+                .to_owned(),
+            ),
         )
     }
 }
@@ -285,7 +302,7 @@ impl SettingsWidget for LocalControlModeWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_body_item::<ScriptingSettingsPageAction>(
-            "warpctrl CLI".into(),
+            crate::menu_label("settings.scripting.warpctrl_cli", "warpctrl CLI").into(),
             None,
             LocalOnlyIconState::for_setting(
                 LocalControlModeSetting::storage_key(),
@@ -296,7 +313,13 @@ impl SettingsWidget for LocalControlModeWidget {
             ToggleState::Enabled,
             appearance,
             ChildView::new(&view.local_control_mode_dropdown).finish(),
-            Some("warpctrl allows for scripting Warp's UI. Use with care.".to_owned()),
+            Some(
+                crate::menu_label(
+                    "settings.scripting.warpctrl_cli_description",
+                    "warpctrl allows for scripting Warp's UI. Use with care.",
+                )
+                .to_owned(),
+            ),
         )
     }
 }

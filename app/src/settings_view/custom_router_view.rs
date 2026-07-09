@@ -48,20 +48,23 @@ impl CustomRouterView {
     pub fn new(router: CustomModelRouter, ctx: &mut ViewContext<Self>) -> Self {
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
         let open_file_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Open file", SecondaryTheme)
-                .with_icon(Icon::File)
-                .with_size(ButtonSize::Small)
-                .with_height(HEADER_BUTTON_HEIGHT)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CustomRouterViewAction::OpenFile);
-                })
+            ActionButton::new(
+                crate::menu_label("settings.custom_router.view.open_file", "Open file"),
+                SecondaryTheme,
+            )
+            .with_icon(Icon::File)
+            .with_size(ButtonSize::Small)
+            .with_height(HEADER_BUTTON_HEIGHT)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(CustomRouterViewAction::OpenFile);
+            })
         });
         open_file_button.update(ctx, |button, ctx| {
             button.set_disabled(router.source_path.is_none(), ctx);
         });
 
         let edit_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Edit", SecondaryTheme)
+            ActionButton::new(crate::menu_label("common.edit", "Edit"), SecondaryTheme)
                 .with_icon(Icon::Pencil)
                 .with_size(ButtonSize::Small)
                 .with_height(HEADER_BUTTON_HEIGHT)
@@ -74,13 +77,16 @@ impl CustomRouterView {
         });
 
         let delete_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Delete", DangerSecondaryTheme)
-                .with_icon(Icon::Trash)
-                .with_size(ButtonSize::Small)
-                .with_height(HEADER_BUTTON_HEIGHT)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CustomRouterViewAction::Delete);
-                })
+            ActionButton::new(
+                crate::menu_label("common.delete", "Delete"),
+                DangerSecondaryTheme,
+            )
+            .with_icon(Icon::Trash)
+            .with_size(ButtonSize::Small)
+            .with_height(HEADER_BUTTON_HEIGHT)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(CustomRouterViewAction::Delete);
+            })
         });
         delete_button.update(ctx, |button, ctx| {
             button.set_disabled(!is_any_ai_enabled, ctx);
@@ -178,8 +184,14 @@ impl View for CustomRouterView {
 
         // Type label row
         let type_label = match &self.router.routing {
-            CustomModelRouting::Complexity(_) => "Complexity-based routing",
-            CustomModelRouting::Prompt(_) => "Prompt-based routing",
+            CustomModelRouting::Complexity(_) => crate::menu_label(
+                "settings.custom_router.view.complexity_based_routing",
+                "Complexity-based routing",
+            ),
+            CustomModelRouting::Prompt(_) => crate::menu_label(
+                "settings.custom_router.view.prompt_based_routing",
+                "Prompt-based routing",
+            ),
         };
         let type_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -257,7 +269,7 @@ fn render_targets_row(
     match routing {
         CustomModelRouting::Complexity(c) => {
             flex.add_child(render_model_line(
-                "Default:",
+                crate::menu_label("settings.custom_router.view.label_default", "Default:"),
                 model_display_name(&c.default, app),
                 appearance,
                 sub_color,
@@ -265,7 +277,7 @@ fn render_targets_row(
             if let Some(easy) = &c.easy {
                 flex.add_child(
                     Container::new(render_model_line(
-                        "Easy:",
+                        crate::menu_label("settings.custom_router.view.label_easy", "Easy:"),
                         model_display_name(easy, app),
                         appearance,
                         sub_color,
@@ -277,7 +289,7 @@ fn render_targets_row(
             if let Some(medium) = &c.medium {
                 flex.add_child(
                     Container::new(render_model_line(
-                        "Medium:",
+                        crate::menu_label("settings.custom_router.view.label_medium", "Medium:"),
                         model_display_name(medium, app),
                         appearance,
                         sub_color,
@@ -289,7 +301,7 @@ fn render_targets_row(
             if let Some(hard) = &c.hard {
                 flex.add_child(
                     Container::new(render_model_line(
-                        "Hard:",
+                        crate::menu_label("settings.custom_router.view.label_hard", "Hard:"),
                         model_display_name(hard, app),
                         appearance,
                         sub_color,
@@ -301,7 +313,7 @@ fn render_targets_row(
         }
         CustomModelRouting::Prompt(p) => {
             flex.add_child(render_model_line(
-                "Default:",
+                crate::menu_label("settings.custom_router.view.label_default", "Default:"),
                 model_display_name(&p.default_model, app),
                 appearance,
                 sub_color,
@@ -309,9 +321,17 @@ fn render_targets_row(
             let rule_count = p.rules.len();
             if rule_count > 0 {
                 let label = if rule_count == 1 {
-                    "1 rule".to_string()
+                    crate::menu_label("settings.custom_router.view.rules_count_one", "1 rule")
+                        .to_string()
                 } else {
-                    format!("{rule_count} rules")
+                    i18n::interpolate(
+                        crate::menu_label(
+                            "settings.custom_router.view.rules_count_other",
+                            "{n} rules",
+                        ),
+                        &[("n", rule_count.to_string())],
+                    )
+                    .into_owned()
                 };
                 flex.add_child(
                     Container::new(

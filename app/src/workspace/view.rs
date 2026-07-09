@@ -560,7 +560,9 @@ const TAB_BAR_PILL_WIDTH: f32 = 100.;
 const PILL_FONT_SIZE: f32 = 12.;
 // We use the word "Warp" in the Update Ready button to make it obvious that the terminal is Warp.
 // This can lead to free advertising when users screen-share Warp when an update is available.
-const UPDATE_READY_TEXT: &str = "Update Warp";
+fn update_ready_text() -> &'static str {
+    crate::menu_label("workspace.update_warp", "Update Warp")
+}
 
 const TAB_BAR_OVERFLOW_MENU_WIDTH: f32 = 300.;
 
@@ -587,9 +589,13 @@ const ELLIPSE_SVG_PATH: &str = "bundled/svg/ellipse.svg";
 
 const AI_ASSISTANT_BUTTON_ID: &str = "workspace_view:ai_assistant_button";
 
-const VERSION_DEPRECATION_BANNER_TEXT: &str = "Your app is out of date and some features may not work as expected. Please update immediately.";
+fn version_deprecation_banner_text() -> &'static str {
+    crate::menu_label("workspace.version_deprecation", "Your app is out of date and some features may not work as expected. Please update immediately.")
+}
 
-const VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT: &str = "Some Warp features may not work as expected without updating immediately, but Warp is unable to perform the update.";
+fn version_deprecation_without_permissions_banner_text() -> &'static str {
+    crate::menu_label("workspace.version_deprecation_without_permissions", "Some Warp features may not work as expected without updating immediately, but Warp is unable to perform the update.")
+}
 
 const ASK_AI_ASSISTANT_KEYBINDING_NAME: &str = "workspace:toggle_ai_assistant";
 const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_center";
@@ -609,7 +615,12 @@ const NEW_SESSION_SIDECAR_SEARCH_BOX_HORIZONTAL_PADDING: f32 = 12.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_VERTICAL_PADDING: f32 = 6.;
 const NEW_SESSION_SIDECAR_FOOTER_HORIZONTAL_PADDING: f32 = 16.;
 const NEW_SESSION_SIDECAR_FOOTER_VERTICAL_PADDING: f32 = 8.;
-const SESSION_CONFIG_TAB_CONFIG_CHIP_TEXT: &str = "Access your tab configs here.";
+fn session_config_tab_config_chip_text() -> &'static str {
+    crate::menu_label(
+        "workspace.tab_configs_chip",
+        "Access your tab configs here.",
+    )
+}
 const SESSION_CONFIG_TAB_CONFIG_CHIP_WIDTH: f32 = 206.;
 const SHOW_SETTINGS_KEYBINDING_NAME: &str = "workspace:show_settings";
 pub const TOGGLE_COMMAND_PALETTE_KEYBINDING_NAME: &str = "workspace:toggle_command_palette";
@@ -866,9 +877,9 @@ pub enum BannerSeverity {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum BannerButtonVariant {
     /// No fill, no border, just text (and optional icon). Used for the primary
-    /// action in the Figma design (e.g. "Fix with Oz").
+    /// action in the Figma design (e.g. crate::menu_label("workspace.fix_with_oz", "Fix with Oz")).
     Naked,
-    /// Border-only, no fill (e.g. "Open file").
+    /// Border-only, no fill (e.g. crate::menu_label("workspace.open_file", "Open file")).
     Outlined,
 }
 
@@ -878,7 +889,7 @@ struct WorkspaceBannerButtonDetails {
     variant: BannerButtonVariant,
     /// Optional leading icon shown before the label.
     icon: Option<Icon>,
-    /// If set, renders an adjacent "More info" pill that dispatches this action.
+    /// If set, renders an adjacent crate::menu_label("workspace.more_info", "More info") pill that dispatches this action.
     more_info_button_action: Option<WorkspaceAction>,
 }
 
@@ -1316,7 +1327,10 @@ impl Workspace {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search repos", ctx);
+            editor.set_placeholder_text(
+                crate::menu_label("workspace.search_repos", "Search repos"),
+                ctx,
+            );
             editor
         });
         ctx.subscribe_to_view(&editor, |me, editor_view, event, ctx| match event {
@@ -1352,7 +1366,10 @@ impl Workspace {
             EditorView::single_line(options, ctx)
         });
         editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text("Search tabs...", ctx);
+            editor.set_placeholder_text(
+                crate::menu_label("workspace.search_tabs", "Search tabs..."),
+                ctx,
+            );
         });
         ctx.subscribe_to_view(&editor, |me, editor_view, event, ctx| match event {
             EditorEvent::Edited(_) => {
@@ -2534,7 +2551,7 @@ impl Workspace {
         .finish();
 
         let text = Text::new_inline(
-            SESSION_CONFIG_TAB_CONFIG_CHIP_TEXT.to_string(),
+            session_config_tab_config_chip_text().to_string(),
             appearance.ui_font_family(),
             12.,
         )
@@ -2592,7 +2609,11 @@ impl Workspace {
                     me.shown_staging_banner_count += 1;
                     me.toast_stack.update(ctx, |toast_stack, ctx| {
                         let toast = DismissibleToast::error(
-                            "Staging API call failed. Did your IP address change?".to_string(),
+                            crate::menu_label(
+                                "workspace.staging_api_call_failed",
+                                "Staging API call failed. Did your IP address change?",
+                            )
+                            .to_string(),
                         )
                         .with_object_id("staging_access_blocked_toast".to_string());
                         toast_stack.add_ephemeral_toast(toast, ctx);
@@ -2679,7 +2700,11 @@ impl Workspace {
                         let toast = DismissibleToast::error(message)
                             .with_object_id(object_id.clone())
                             .with_link(
-                                ToastLink::new("Open file".to_string()).with_onclick_action(
+                                ToastLink::new(
+                                    crate::menu_label("workspace.open_file", "Open file")
+                                        .to_string(),
+                                )
+                                .with_onclick_action(
                                     WorkspaceAction::OpenTabConfigErrorFile {
                                         path,
                                         toast_object_id: object_id,
@@ -4395,7 +4420,11 @@ impl Workspace {
                     log::error!("Failed to load conversation from server");
                     me.toast_stack.update(ctx, |view, ctx| {
                         let new_toast = DismissibleToast::error(
-                            "Failed to load conversation data.".to_string(),
+                            crate::menu_label(
+                                "workspace.failed_load_conversation_data",
+                                "Failed to load conversation data.",
+                            )
+                            .to_string(),
                         );
                         view.add_ephemeral_toast(new_toast, ctx);
                     });
@@ -5709,7 +5738,8 @@ impl Workspace {
                     .unwrap_or_else(|| {
                         let title = configuration.title().trim();
                         if title.is_empty() {
-                            "Untitled pane".to_string()
+                            crate::menu_label("workspace.untitled_pane", "Untitled pane")
+                                .to_string()
                         } else {
                             title.to_string()
                         }
@@ -6055,9 +6085,12 @@ impl Workspace {
         if !FeatureFlag::ConfigurableToolbar.is_enabled() {
             return;
         }
-        let items = vec![MenuItemFields::new("Re-arrange toolbar items")
-            .with_on_select_action(WorkspaceAction::OpenHeaderToolbarEditor)
-            .into_item()];
+        let items = vec![MenuItemFields::new(crate::menu_label(
+            "workspace.rearrange_toolbar_items",
+            "Re-arrange toolbar items",
+        ))
+        .with_on_select_action(WorkspaceAction::OpenHeaderToolbarEditor)
+        .into_item()];
         self.header_toolbar_context_menu
             .update(ctx, |menu, ctx| menu.set_items(items, ctx));
         self.show_header_toolbar_context_menu = Some(position);
@@ -6543,7 +6576,7 @@ impl Workspace {
 
         // 1. Agent (if AI enabled)
         if is_any_ai_enabled {
-            let mut agent_item = MenuItemFields::new("Agent")
+            let mut agent_item = MenuItemFields::new(crate::menu_label("workspace.agent", "Agent"))
                 .with_on_select_action(WorkspaceAction::AddAgentTab)
                 .with_icon(icons::Icon::LayoutAlt01);
             if effective_default == DefaultSessionMode::Agent {
@@ -6559,11 +6592,12 @@ impl Workspace {
             #[cfg(target_os = "windows")]
             {
                 let is_terminal_default = effective_default == DefaultSessionMode::Terminal;
-                let mut terminal_item = MenuItemFields::new("Terminal")
-                    .with_on_select_action(WorkspaceAction::AddTerminalTab {
-                        hide_homepage: false,
-                    })
-                    .with_icon(icons::Icon::LayoutAlt01);
+                let mut terminal_item =
+                    MenuItemFields::new(crate::menu_label("workspace.terminal", "Terminal"))
+                        .with_on_select_action(WorkspaceAction::AddTerminalTab {
+                            hide_homepage: false,
+                        })
+                        .with_icon(icons::Icon::LayoutAlt01);
                 if is_terminal_default {
                     terminal_item = terminal_item.with_key_shortcut_label(shortcut_label.clone());
                 }
@@ -6596,11 +6630,12 @@ impl Workspace {
             // On other platforms, Terminal is a regular item.
             #[cfg(not(target_os = "windows"))]
             {
-                let mut terminal_item = MenuItemFields::new("Terminal")
-                    .with_on_select_action(WorkspaceAction::AddTerminalTab {
-                        hide_homepage: false,
-                    })
-                    .with_icon(icons::Icon::LayoutAlt01);
+                let mut terminal_item =
+                    MenuItemFields::new(crate::menu_label("workspace.terminal", "Terminal"))
+                        .with_on_select_action(WorkspaceAction::AddTerminalTab {
+                            hide_homepage: false,
+                        })
+                        .with_icon(icons::Icon::LayoutAlt01);
                 if effective_default == DefaultSessionMode::Terminal {
                     terminal_item = terminal_item.with_key_shortcut_label(shortcut_label.clone());
                 }
@@ -6613,9 +6648,10 @@ impl Workspace {
             && FeatureFlag::AgentView.is_enabled()
             && FeatureFlag::CloudMode.is_enabled()
         {
-            let mut cloud_item = MenuItemFields::new("Cloud Agent")
-                .with_on_select_action(WorkspaceAction::AddAmbientAgentTab)
-                .with_icon(icons::Icon::LayoutAlt01);
+            let mut cloud_item =
+                MenuItemFields::new(crate::menu_label("workspace.cloud_agent", "Cloud Agent"))
+                    .with_on_select_action(WorkspaceAction::AddAmbientAgentTab)
+                    .with_icon(icons::Icon::LayoutAlt01);
             if effective_default == DefaultSessionMode::CloudAgent {
                 cloud_item = cloud_item.with_key_shortcut_label(shortcut_label.clone());
             }
@@ -6624,9 +6660,12 @@ impl Workspace {
 
         // 3b. Local Docker Sandbox
         if FeatureFlag::LocalDockerSandbox.is_enabled() {
-            let mut docker_item = MenuItemFields::new("Local Docker Sandbox")
-                .with_on_select_action(WorkspaceAction::AddDockerSandboxTab)
-                .with_icon(icons::Icon::Docker);
+            let mut docker_item = MenuItemFields::new(crate::menu_label(
+                "workspace.local_docker_sandbox",
+                "Local Docker Sandbox",
+            ))
+            .with_on_select_action(WorkspaceAction::AddDockerSandboxTab)
+            .with_icon(icons::Icon::Docker);
             if effective_default == DefaultSessionMode::DockerSandbox {
                 docker_item = docker_item.with_key_shortcut_label(shortcut_label.clone());
             }
@@ -6684,19 +6723,25 @@ impl Workspace {
         if FeatureFlag::TabConfigs.is_enabled() {
             menu_items.push(MenuItem::Separator);
             menu_items.push(
-                MenuItemFields::new_submenu("New worktree config")
-                    .with_icon(icons::Icon::Dataflow02)
-                    .into_item(),
+                MenuItemFields::new_submenu(crate::menu_label(
+                    "workspace.new_worktree_config",
+                    "New worktree config",
+                ))
+                .with_icon(icons::Icon::Dataflow02)
+                .into_item(),
             );
 
             // 6. New tab config — V0: opens the TOML template.
             menu_items.push(
-                MenuItemFields::new("New tab config")
-                    .with_on_select_action(WorkspaceAction::SelectNewSessionMenuItem(
-                        NewSessionMenuItem::CreateNewTabConfig,
-                    ))
-                    .with_icon(icons::Icon::Plus)
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "workspace.new_tab_config",
+                    "New tab config",
+                ))
+                .with_on_select_action(WorkspaceAction::SelectNewSessionMenuItem(
+                    NewSessionMenuItem::CreateNewTabConfig,
+                ))
+                .with_icon(icons::Icon::Plus)
+                .into_item(),
             );
         }
 
@@ -6716,11 +6761,14 @@ impl Workspace {
 
         menu_items.push(MenuItem::Separator);
         menu_items.push(
-            MenuItemFields::new("Reopen closed session")
-                .with_on_select_action(WorkspaceAction::ReopenClosedSession)
-                .with_key_shortcut_label(reopen_closed_session_shortcut_label)
-                .with_disabled(UndoCloseStack::handle(ctx).as_ref(ctx).is_empty())
-                .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "workspace.reopen_closed_session",
+                "Reopen closed session",
+            ))
+            .with_on_select_action(WorkspaceAction::ReopenClosedSession)
+            .with_key_shortcut_label(reopen_closed_session_shortcut_label)
+            .with_disabled(UndoCloseStack::handle(ctx).as_ref(ctx).is_empty())
+            .into_item(),
         );
 
         menu_items
@@ -7710,13 +7758,19 @@ impl Workspace {
         let pane_name_target = match target {
             VerticalTabsPaneContextMenuTarget::ClickedPane(locator) => PaneNameMenuTarget {
                 locator,
-                rename_label: "Rename pane",
-                reset_label: "Reset pane name",
+                rename_label: crate::menu_label("workspace.rename_pane", "Rename pane"),
+                reset_label: crate::menu_label("workspace.reset_pane_name", "Reset pane name"),
             },
             VerticalTabsPaneContextMenuTarget::ActivePane(locator) => PaneNameMenuTarget {
                 locator,
-                rename_label: "Rename active pane",
-                reset_label: "Reset active pane name",
+                rename_label: crate::menu_label(
+                    "workspace.rename_active_pane",
+                    "Rename active pane",
+                ),
+                reset_label: crate::menu_label(
+                    "workspace.reset_active_pane_name",
+                    "Reset active pane name",
+                ),
             },
         };
         let can_move_left = self.can_move_tab(tab_index, TabMovement::Left);
@@ -7771,9 +7825,12 @@ impl Workspace {
                             .into_item(),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => menu_items.push(
-                        MenuItemFields::new("Update Warp manually")
-                            .with_on_select_action(WorkspaceAction::DownloadNewVersion)
-                            .into_item(),
+                        MenuItemFields::new(crate::menu_label(
+                            "workspace.update_warp_manually",
+                            "Update Warp manually",
+                        ))
+                        .with_on_select_action(WorkspaceAction::DownloadNewVersion)
+                        .into_item(),
                     ),
                     AutoupdateStage::NoUpdateAvailable
                     | AutoupdateStage::CheckingForUpdate
@@ -8381,7 +8438,7 @@ impl Workspace {
         self.add_tab_with_pane_layout(
             panes_layout,
             Arc::new(HashMap::new()),
-            Some("Settings".to_owned()),
+            Some(crate::menu_label("workspace.settings", "Settings").to_owned()),
             ctx,
         );
     }
@@ -8885,7 +8942,7 @@ impl Workspace {
             let command_name = ChannelState::channel().cli_command_name();
             let message = format!("Installed the Oz CLI globally. You can now run '{command_name}' from any terminal outside of Warp.");
             let toast = DismissibleToast::success(message).with_link(
-                ToastLink::new("Learn more".to_string())
+                ToastLink::new(crate::menu_label("workspace.learn_more", "Learn more").to_string())
                     .with_href("https://docs.warp.dev/reference/cli".to_string()),
             );
             view.handle_cli_command_result(result, toast, "Failed to install Oz command", ctx);
@@ -9530,10 +9587,13 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update and relaunch Warp")
-                            .with_on_select_action(WorkspaceAction::ApplyUpdate)
-                            .with_override_text_color(appearance.theme().ansi_fg_red())
-                            .into_item(),
+                        MenuItemFields::new(crate::menu_label(
+                            "workspace.update_and_relaunch_warp",
+                            "Update and relaunch Warp",
+                        ))
+                        .with_on_select_action(WorkspaceAction::ApplyUpdate)
+                        .with_override_text_color(appearance.theme().ansi_fg_red())
+                        .into_item(),
                     )
                 }
                 AutoupdateStage::Updating { new_version, .. }
@@ -9553,10 +9613,13 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update Warp manually")
-                            .with_on_select_action(WorkspaceAction::DownloadNewVersion)
-                            .with_override_text_color(appearance.theme().ansi_fg_red())
-                            .into_item(),
+                        MenuItemFields::new(crate::menu_label(
+                            "workspace.update_warp_manually",
+                            "Update Warp manually",
+                        ))
+                        .with_on_select_action(WorkspaceAction::DownloadNewVersion)
+                        .with_override_text_color(appearance.theme().ansi_fg_red())
+                        .into_item(),
                     )
                 }
                 _ => {}
@@ -9564,33 +9627,42 @@ impl Workspace {
         }
 
         items.extend([
-            MenuItemFields::new("What's new")
+            MenuItemFields::new(crate::menu_label("workspace.whats_new", "What's new"))
                 .with_on_select_action(WorkspaceAction::ViewLatestChangelog)
                 .into_item(),
-            MenuItemFields::new("Settings")
+            MenuItemFields::new(crate::menu_label("workspace.settings", "Settings"))
                 .with_on_select_action(WorkspaceAction::ShowSettings)
                 .into_item(),
-            MenuItemFields::new("Keyboard shortcuts")
-                .with_on_select_action(WorkspaceAction::ToggleKeybindingsPage)
-                .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "workspace.keyboard_shortcuts",
+                "Keyboard shortcuts",
+            ))
+            .with_on_select_action(WorkspaceAction::ToggleKeybindingsPage)
+            .into_item(),
             MenuItem::Separator,
-            MenuItemFields::new("Documentation")
-                .with_on_select_action(WorkspaceAction::ViewUserDocs)
-                .into_item(),
-            MenuItemFields::new("Feedback")
+            MenuItemFields::new(crate::menu_label(
+                "workspace.documentation",
+                "Documentation",
+            ))
+            .with_on_select_action(WorkspaceAction::ViewUserDocs)
+            .into_item(),
+            MenuItemFields::new(crate::menu_label("workspace.feedback", "Feedback"))
                 .with_on_select_action(WorkspaceAction::SendFeedback)
                 .into_item(),
         ]);
 
         #[cfg(not(target_family = "wasm"))]
         items.push(
-            MenuItemFields::new("View Warp logs")
-                .with_on_select_action(WorkspaceAction::ViewLogs)
-                .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "workspace.view_warp_logs",
+                "View Warp logs",
+            ))
+            .with_on_select_action(WorkspaceAction::ViewLogs)
+            .into_item(),
         );
 
         items.extend([
-            MenuItemFields::new("Slack")
+            MenuItemFields::new(crate::menu_label("workspace.slack", "Slack"))
                 .with_on_select_action(WorkspaceAction::JoinSlack)
                 .into_item(),
             MenuItem::Separator,
@@ -9598,13 +9670,13 @@ impl Workspace {
 
         if self.auth_state.is_anonymous_or_logged_out() {
             items.push(
-                MenuItemFields::new("Sign up")
+                MenuItemFields::new(crate::menu_label("workspace.sign_up", "Sign up"))
                     .with_on_select_action(WorkspaceAction::SignupAnonymousUser)
                     .into_item(),
             );
         }
 
-        // Check if the user is on any paid plan to determine whether to show "Billing and Usage" or "Upgrade"
+        // Check if the user is on any paid plan to determine whether to show "Billing and Usage" or crate::menu_label("workspace.upgrade", "Upgrade")
         let is_on_paid_plan = UserWorkspaces::as_ref(app)
             .current_workspace()
             .map(|workspace| workspace.billing_metadata.is_user_on_paid_plan())
@@ -9612,29 +9684,35 @@ impl Workspace {
 
         if is_on_paid_plan {
             items.push(
-                MenuItemFields::new("Billing and usage")
-                    .with_on_select_action(WorkspaceAction::ShowSettingsPage(
-                        SettingsSection::BillingAndUsage,
-                    ))
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "workspace.billing_and_usage",
+                    "Billing and usage",
+                ))
+                .with_on_select_action(WorkspaceAction::ShowSettingsPage(
+                    SettingsSection::BillingAndUsage,
+                ))
+                .into_item(),
             );
         } else {
             items.push(
-                MenuItemFields::new("Upgrade")
+                MenuItemFields::new(crate::menu_label("workspace.upgrade", "Upgrade"))
                     .with_on_select_action(WorkspaceAction::ShowUpgrade)
                     .into_item(),
             );
         }
 
         items.push(
-            MenuItemFields::new("Invite a friend")
-                .with_on_select_action(WorkspaceAction::ShowReferralSettingsPage)
-                .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "workspace.invite_a_friend",
+                "Invite a friend",
+            ))
+            .with_on_select_action(WorkspaceAction::ShowReferralSettingsPage)
+            .into_item(),
         );
 
         if !self.auth_state.is_anonymous_or_logged_out() {
             items.push(
-                MenuItemFields::new("Log out")
+                MenuItemFields::new(crate::menu_label("workspace.log_out", "Log out"))
                     .with_on_select_action(WorkspaceAction::LogOut)
                     .into_item(),
             );
@@ -9768,9 +9846,9 @@ impl Workspace {
             let mut items = vec![];
             if can_move_up {
                 let label = if is_vertical {
-                    "Move group up"
+                    crate::menu_label("workspace.tab_group.move_up", "Move group up")
                 } else {
-                    "Move group left"
+                    crate::menu_label("workspace.tab_group.move_left", "Move group left")
                 };
                 items.push(
                     MenuItemFields::new(label)
@@ -9780,9 +9858,9 @@ impl Workspace {
             }
             if can_move_down {
                 let label = if is_vertical {
-                    "Move group down"
+                    crate::menu_label("workspace.tab_group.move_down", "Move group down")
                 } else {
-                    "Move group right"
+                    crate::menu_label("workspace.tab_group.move_right", "Move group right")
                 };
                 items.push(
                     MenuItemFields::new(label)
@@ -9794,21 +9872,27 @@ impl Workspace {
         };
 
         let close_section = {
-            let mut items = vec![MenuItemFields::new("Close all tabs in group")
-                .with_on_select_action(WorkspaceAction::CloseTabGroup(group_id))
-                .into_item()];
+            let mut items = vec![MenuItemFields::new(crate::menu_label(
+                "workspace.tab_group.close_all",
+                "Close all tabs in group",
+            ))
+            .with_on_select_action(WorkspaceAction::CloseTabGroup(group_id))
+            .into_item()];
             if has_tabs_outside {
                 items.push(
-                    MenuItemFields::new("Close other tabs")
-                        .with_on_select_action(WorkspaceAction::CloseTabsOutsideGroup(group_id))
-                        .into_item(),
+                    MenuItemFields::new(crate::menu_label(
+                        "workspace.tab_group.close_others",
+                        "Close other tabs",
+                    ))
+                    .with_on_select_action(WorkspaceAction::CloseTabsOutsideGroup(group_id))
+                    .into_item(),
                 );
             }
             if has_tabs_above {
                 let label = if is_vertical {
-                    "Close tabs above"
+                    crate::menu_label("workspace.tab_group.close_above", "Close tabs above")
                 } else {
-                    "Close tabs to the left"
+                    crate::menu_label("workspace.tab_group.close_left", "Close tabs to the left")
                 };
                 items.push(
                     MenuItemFields::new(label)
@@ -9818,9 +9902,9 @@ impl Workspace {
             }
             if has_tabs_below {
                 let label = if is_vertical {
-                    "Close tabs below"
+                    crate::menu_label("workspace.tab_group.close_below", "Close tabs below")
                 } else {
-                    "Close tabs to the right"
+                    crate::menu_label("workspace.tab_group.close_right", "Close tabs to the right")
                 };
                 items.push(
                     MenuItemFields::new(label)
@@ -9862,17 +9946,25 @@ impl Workspace {
         for section_items in [
             pin_section,
             vec![
-                MenuItemFields::new("Ungroup tabs")
-                    .with_on_select_action(WorkspaceAction::UngroupTabs(group_id))
-                    .into_item(),
-                MenuItemFields::new("New tab in group")
-                    .with_on_select_action(WorkspaceAction::NewTabInGroup(group_id))
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "workspace.tab_group.ungroup",
+                    "Ungroup tabs",
+                ))
+                .with_on_select_action(WorkspaceAction::UngroupTabs(group_id))
+                .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "workspace.tab_group.new_tab_in_group",
+                    "New tab in group",
+                ))
+                .with_on_select_action(WorkspaceAction::NewTabInGroup(group_id))
+                .into_item(),
             ],
             move_section,
-            vec![MenuItemFields::new("Rename")
-                .with_on_select_action(WorkspaceAction::RenameTabGroup(group_id))
-                .into_item()],
+            vec![
+                MenuItemFields::new(crate::menu_label("workspace.tab_group.rename", "Rename"))
+                    .with_on_select_action(WorkspaceAction::RenameTabGroup(group_id))
+                    .into_item(),
+            ],
             close_section,
             color_section,
         ] {
@@ -10138,7 +10230,7 @@ impl Workspace {
                 .with_height(NEW_SESSION_SIDECAR_SEARCH_BOX_HEIGHT)
                 .finish()
             }),
-            Some("Search repos".to_string()),
+            Some(crate::menu_label("workspace.search_repos", "Search repos").to_string()),
         )
         .with_no_interaction_on_hover()
         .no_highlight_on_hover()
@@ -12697,7 +12789,7 @@ impl Workspace {
         self.add_tab_with_pane_layout(
             Default::default(),
             Arc::new(HashMap::new()),
-            Some("Install Update".to_owned()),
+            Some(crate::menu_label("workspace.install_update_tab", "Install Update").to_owned()),
             ctx,
         );
 
@@ -13783,7 +13875,9 @@ impl Workspace {
             .conversation(&conversation_id)
             .and_then(|c| c.title())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| "Conversation".to_string());
+            .unwrap_or_else(|| {
+                crate::menu_label("workspace.conversation", "Conversation").to_string()
+            });
 
         let title = if source_title.chars().count() > MAX_FORK_TOAST_TITLE_LENGTH {
             let truncated: String = source_title
@@ -14059,7 +14153,7 @@ impl Workspace {
                             let toast = DismissibleToast::error(
                                 "Warp doesn't have permission to send desktop notifications.".to_string(),
                             )
-                            .with_link(ToastLink::new("Troubleshoot notifications".to_string()).with_href(url));
+                            .with_link(ToastLink::new(crate::menu_label("workspace.troubleshoot_notifications", "Troubleshoot notifications").to_string()).with_href(url));
                             toast_stack.add_persistent_toast(toast, ctx);
                         });
                     }
@@ -15573,7 +15667,7 @@ impl Workspace {
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
                         DismissibleToast::error(
-                            "Your conversation hasn't synced to the cloud yet. Try sending another message, then hand off again."
+                            crate::menu_label("workspace.conversation_not_synced", "Your conversation hasn't synced to the cloud yet. Try sending another message, then hand off again.")
                                 .to_owned(),
                         ),
                         window_id,
@@ -15685,7 +15779,7 @@ impl Workspace {
                     WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
                             DismissibleToast::error(
-                                "Couldn't save your conversation locally. Try sending another message, then hand off again."
+                                crate::menu_label("workspace.couldnt_save_conversation", "Couldn't save your conversation locally. Try sending another message, then hand off again.")
                                     .to_owned(),
                             ),
                             window_id,
@@ -16035,9 +16129,10 @@ impl Workspace {
 
                 if !object_found {
                     self.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::error(String::from(
+                        let toast = DismissibleToast::error(String::from(crate::menu_label(
+                            "workspace.resource_not_found",
                             "Resource not found or access denied",
-                        ));
+                        )));
                         toast_stack.add_ephemeral_toast(toast, ctx);
                     });
                     ctx.notify();
@@ -17590,8 +17685,13 @@ impl Workspace {
 
         if !ContextFlag::CreateNewSession.is_enabled() {
             self.toast_stack.update(ctx, |toast_stack, ctx| {
-                let toast =
-                    DismissibleToast::error("Cannot open a new terminal session".to_string());
+                let toast = DismissibleToast::error(
+                    crate::menu_label(
+                        "workspace.cannot_open_new_terminal_session",
+                        "Cannot open a new terminal session",
+                    )
+                    .to_string(),
+                );
                 toast_stack.add_ephemeral_toast(toast, ctx);
             });
             return None;
@@ -17855,7 +17955,11 @@ impl Workspace {
                                     self.toast_stack.update(ctx, |view, ctx| {
                                         view.add_ephemeral_toast(
                                             DismissibleToast::error(
-                                                "This workflow is no longer available.".to_string(),
+                                                crate::menu_label(
+                                                    "workspace.workflow_no_longer_available",
+                                                    "This workflow is no longer available.",
+                                                )
+                                                .to_string(),
                                             ),
                                             ctx,
                                         );
@@ -18040,20 +18144,27 @@ impl Workspace {
                                             },
                                         ) {
                                             new_toast = DismissibleToast::success(
-                                                "Plan synced to your Warp Drive".to_string(),
+                                                crate::menu_label(
+                                                    "workspace.plan_synced_to_warp_drive",
+                                                    "Plan synced to your Warp Drive",
+                                                )
+                                                .to_string(),
                                             )
                                             .with_object_id(object_id_clone)
                                             .with_link(
-                                                ToastLink::new("View".to_string())
-                                                    .with_onclick_action(
-                                                        WorkspaceAction::ViewObjectInWarpDrive(
-                                                            WarpDriveItemId::Object(
-                                                                CloudObjectTypeAndId::Notebook(
-                                                                    notebook.id,
-                                                                ),
+                                                ToastLink::new(
+                                                    crate::menu_label("workspace.view", "View")
+                                                        .to_string(),
+                                                )
+                                                .with_onclick_action(
+                                                    WorkspaceAction::ViewObjectInWarpDrive(
+                                                        WarpDriveItemId::Object(
+                                                            CloudObjectTypeAndId::Notebook(
+                                                                notebook.id,
                                                             ),
                                                         ),
                                                     ),
+                                                ),
                                             );
                                         } else {
                                             return;
@@ -18066,7 +18177,11 @@ impl Workspace {
                                         || result.operation == ObjectOperation::Update
                                     {
                                         new_toast = new_toast.with_link(
-                                            ToastLink::new("View".to_string()).with_onclick_action(
+                                            ToastLink::new(
+                                                crate::menu_label("workspace.view", "View")
+                                                    .to_string(),
+                                            )
+                                            .with_onclick_action(
                                                 WorkspaceAction::ViewObjectInWarpDrive(
                                                     WarpDriveItemId::Object(
                                                         CloudObjectTypeAndId::Workflow(workflow.id),
@@ -18079,9 +18194,12 @@ impl Workspace {
 
                                 if result.operation == ObjectOperation::Trash {
                                     new_toast = new_toast.with_link(
-                                        ToastLink::new("Undo".to_string()).with_onclick_action(
-                                            WorkspaceAction::UndoTrash(cloud_object_type_and_id),
-                                        ),
+                                        ToastLink::new(
+                                            crate::menu_label("workspace.undo", "Undo").to_string(),
+                                        )
+                                        .with_onclick_action(WorkspaceAction::UndoTrash(
+                                            cloud_object_type_and_id,
+                                        )),
                                     )
                                 }
 
@@ -19166,7 +19284,9 @@ impl Workspace {
         {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
                 if let Some(conversation) = history.conversation_mut(&conversation_id) {
-                    conversation.set_fallback_display_title("Linear Issue".to_string());
+                    conversation.set_fallback_display_title(
+                        crate::menu_label("workspace.linear_issue", "Linear Issue").to_string(),
+                    );
                 }
             });
         }
@@ -20156,7 +20276,11 @@ impl Workspace {
                         icons::Icon::Grid,
                         &self.mouse_states.agent_management_view_button,
                         WorkspaceAction::ToggleAgentManagementView,
-                        "Agent management panel".to_string(),
+                        crate::menu_label(
+                            "workspace.agent_management_panel",
+                            "Agent management panel",
+                        )
+                        .to_string(),
                         keybinding_name_to_display_string(
                             "workspace:toggle_agent_management_view",
                             ctx,
@@ -20186,7 +20310,7 @@ impl Workspace {
             if vertical_tabs_active {
                 (
                     self.vertical_tabs_panel_open,
-                    "Tabs panel",
+                    crate::menu_label("workspace.tabs_panel", "Tabs panel"),
                     WorkspaceAction::ToggleVerticalTabsPanel,
                     "workspace:toggle_vertical_tabs_panel",
                     "workspace:toggle_vertical_tabs_panel",
@@ -20199,13 +20323,22 @@ impl Workspace {
                         .copied()
                         .unwrap_or(ToolPanelView::WarpDrive)
                     {
-                        ToolPanelView::ProjectExplorer => "Project explorer",
-                        ToolPanelView::GlobalSearch { .. } => "Global search",
-                        ToolPanelView::WarpDrive => "Warp Drive",
-                        ToolPanelView::ConversationListView => "Agent conversations",
+                        ToolPanelView::ProjectExplorer => {
+                            crate::menu_label("workspace.project_explorer", "Project explorer")
+                        }
+                        ToolPanelView::GlobalSearch { .. } => {
+                            crate::menu_label("workspace.global_search", "Global search")
+                        }
+                        ToolPanelView::WarpDrive => {
+                            crate::menu_label("workspace.warp_drive", "Warp Drive")
+                        }
+                        ToolPanelView::ConversationListView => crate::menu_label(
+                            "workspace.agent_conversations",
+                            "Agent conversations",
+                        ),
                     }
                 } else {
-                    "Tools panel"
+                    crate::menu_label("workspace.tools_panel", "Tools panel")
                 };
                 (
                     self.active_tab_pane_group().as_ref(ctx).left_panel_open,
@@ -20253,13 +20386,19 @@ impl Workspace {
                 .copied()
                 .unwrap_or(ToolPanelView::WarpDrive)
             {
-                ToolPanelView::ProjectExplorer => "Project explorer",
-                ToolPanelView::GlobalSearch { .. } => "Global search",
-                ToolPanelView::WarpDrive => "Warp Drive",
-                ToolPanelView::ConversationListView => "Agent conversations",
+                ToolPanelView::ProjectExplorer => {
+                    crate::menu_label("workspace.project_explorer", "Project explorer")
+                }
+                ToolPanelView::GlobalSearch { .. } => {
+                    crate::menu_label("workspace.global_search", "Global search")
+                }
+                ToolPanelView::WarpDrive => crate::menu_label("workspace.warp_drive", "Warp Drive"),
+                ToolPanelView::ConversationListView => {
+                    crate::menu_label("workspace.agent_conversations", "Agent conversations")
+                }
             }
         } else {
-            "Tools panel"
+            crate::menu_label("workspace.tools_panel", "Tools panel")
         };
 
         SavePosition::new(
@@ -20414,11 +20553,14 @@ impl Workspace {
             button.build().disable()
         } else {
             button
-                .with_tooltip(self.render_tab_bar_icon_button_tooltip(
-                    appearance,
-                    "Code review panel".to_string(),
-                    keybinding_name_to_display_string("workspace:toggle_right_panel", ctx),
-                ))
+                .with_tooltip(
+                    self.render_tab_bar_icon_button_tooltip(
+                        appearance,
+                        crate::menu_label("workspace.code_review_panel", "Code review panel")
+                            .to_string(),
+                        keybinding_name_to_display_string("workspace:toggle_right_panel", ctx),
+                    ),
+                )
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(WorkspaceAction::ToggleRightPanel);
@@ -20950,7 +21092,7 @@ impl Workspace {
                 WorkspaceAction::ToggleNotificationMailbox {
                     select_first: false,
                 },
-                "Notifications".to_string(),
+                crate::menu_label("workspace.notifications", "Notifications").to_string(),
                 keybinding_name_to_display_string(TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME, ctx),
                 is_inbox_active,
                 false,
@@ -21459,7 +21601,7 @@ impl Workspace {
                 icons::Icon::Lightbulb,
                 &self.mouse_states.resource_center_icon,
                 WorkspaceAction::ToggleResourceCenter,
-                "Warp Essentials".to_string(),
+                crate::menu_label("workspace.warp_essentials", "Warp Essentials").to_string(),
                 self.cached_keybindings[TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME].clone(),
                 false,
                 false,
@@ -21501,7 +21643,7 @@ impl Workspace {
                 icons::Icon::Gear,
                 &self.mouse_states.settings_icon,
                 WorkspaceAction::ShowSettings,
-                "Settings".to_string(),
+                crate::menu_label("workspace.settings", "Settings").to_string(),
                 self.cached_keybindings[SHOW_SETTINGS_KEYBINDING_NAME].clone(),
                 false,
                 false,
@@ -21542,7 +21684,10 @@ impl Workspace {
                 Some(hovered_styles),
                 None,
             )
-            .with_centered_text_label(String::from("Sign up"));
+            .with_centered_text_label(String::from(crate::menu_label(
+                "workspace.sign_up",
+                "Sign up",
+            )));
 
         Align::new(
             button
@@ -21584,7 +21729,10 @@ impl Workspace {
                 Some(hovered_styles),
                 None,
             )
-            .with_centered_text_label(String::from("Sign up"));
+            .with_centered_text_label(String::from(crate::menu_label(
+                "workspace.sign_up",
+                "Sign up",
+            )));
 
         Align::new(
             button
@@ -21764,7 +21912,7 @@ impl Workspace {
                     Flex::row()
                         .with_child(
                             Text::new_inline(
-                                UPDATE_READY_TEXT,
+                                update_ready_text(),
                                 appearance.ui_font_family(),
                                 PILL_FONT_SIZE,
                             )
@@ -21957,7 +22105,7 @@ impl Workspace {
             AISettings::as_ref(app)
                 .is_any_ai_enabled(app)
                 .then(|| WorkspaceBannerButtonDetails {
-                    text: "Fix with Oz".to_owned(),
+                    text: crate::menu_label("workspace.fix_with_oz", "Fix with Oz").to_owned(),
                     action: WorkspaceAction::FixSettingsWithOz {
                         error_description: error.to_string(),
                     },
@@ -21972,7 +22120,7 @@ impl Workspace {
             description,
             secondary_button,
             button: Some(WorkspaceBannerButtonDetails {
-                text: "Open file".to_owned(),
+                text: crate::menu_label("workspace.open_file", "Open file").to_owned(),
                 action: WorkspaceAction::OpenSettingsFile,
                 variant: BannerButtonVariant::Outlined,
                 icon: None,
@@ -21998,11 +22146,17 @@ impl Workspace {
         Some(WorkspaceBannerFields {
             banner_type: WorkspaceBanner::Reauth,
             severity: BannerSeverity::Warning,
-            heading: Some("Your login has expired.".into()),
-            description: "Please sign in again to restore access to cloud-based features.".into(),
+            heading: Some(
+                crate::menu_label("workspace.login_expired", "Your login has expired.").into(),
+            ),
+            description: crate::menu_label(
+                "workspace.please_sign_in_again",
+                "Please sign in again to restore access to cloud-based features.",
+            )
+            .into(),
             secondary_button: None,
             button: Some(WorkspaceBannerButtonDetails {
-                text: "Sign in".into(),
+                text: crate::menu_label("workspace.sign_in", "Sign in").into(),
                 action: WorkspaceAction::Reauth,
                 variant: BannerButtonVariant::Outlined,
                 icon: None,
@@ -22019,10 +22173,13 @@ impl Workspace {
                 {
                     let description =
                         if is_incoming_version_past_current(new_version.soft_cutoff.as_deref()) {
-                            VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT.to_owned()
+                            version_deprecation_without_permissions_banner_text().to_owned()
                         } else {
-                            "A new version is available but Warp is unable to perform the update."
-                                .to_owned()
+                            crate::menu_label(
+                            "workspace.unable_update_new_version",
+                            "A new version is available but Warp is unable to perform the update.",
+                        )
+                        .to_owned()
                         };
 
                     Some(WorkspaceBannerFields {
@@ -22032,7 +22189,11 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: crate::menu_label(
+                                "workspace.update_warp_manually",
+                                "Update Warp manually",
+                            )
+                            .to_string(),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -22045,9 +22206,13 @@ impl Workspace {
                 {
                     let description =
                         if is_incoming_version_past_current(new_version.soft_cutoff.as_deref()) {
-                            VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT.to_owned()
+                            version_deprecation_without_permissions_banner_text().to_owned()
                         } else {
-                            "Warp was unable to launch the new installed version.".to_owned()
+                            crate::menu_label(
+                                "workspace.unable_launch_new_version",
+                                "Warp was unable to launch the new installed version.",
+                            )
+                            .to_owned()
                         };
 
                     Some(WorkspaceBannerFields {
@@ -22057,7 +22222,11 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: crate::menu_label(
+                                "workspace.update_warp_manually",
+                                "Update Warp manually",
+                            )
+                            .to_string(),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -22072,10 +22241,11 @@ impl Workspace {
                             banner_type: WorkspaceBanner::VersionDeprecated,
                             severity: BannerSeverity::Error,
                             heading: None,
-                            description: VERSION_DEPRECATION_BANNER_TEXT.to_string(),
+                            description: version_deprecation_banner_text().to_string(),
                             secondary_button: None,
                             button: Some(WorkspaceBannerButtonDetails {
-                                text: "Update now".to_string(),
+                                text: crate::menu_label("workspace.update_now", "Update now")
+                                    .to_string(),
                                 action: WorkspaceAction::ApplyUpdate,
                                 variant: BannerButtonVariant::Outlined,
                                 icon: None,
@@ -22089,11 +22259,18 @@ impl Workspace {
                                     banner_type: WorkspaceBanner::VersionDeprecated,
                                     severity: BannerSeverity::Warning,
                                     heading: None,
-                                    description: "Your app is out of date and needs to update."
-                                        .to_string(),
+                                    description: crate::menu_label(
+                                        "workspace.app_needs_update",
+                                        "Your app is out of date and needs to update.",
+                                    )
+                                    .to_string(),
                                     secondary_button: None,
                                     button: Some(WorkspaceBannerButtonDetails {
-                                        text: "Restart app and update now".to_string(),
+                                        text: crate::menu_label(
+                                            "workspace.restart_and_update_now",
+                                            "Restart app and update now",
+                                        )
+                                        .to_string(),
                                         action: WorkspaceAction::ApplyUpdate,
                                         variant: BannerButtonVariant::Outlined,
                                         icon: None,
@@ -22201,7 +22378,7 @@ impl Workspace {
 
             if let Some(more_info_button_action) = more_info_button_action {
                 let more_info_details = WorkspaceBannerButtonDetails {
-                    text: "More info".to_owned(),
+                    text: crate::menu_label("workspace.more_info", "More info").to_owned(),
                     action: more_info_button_action,
                     variant: BannerButtonVariant::Outlined,
                     icon: None,
@@ -25686,15 +25863,15 @@ impl TypedActionView for Workspace {
                             Ok(Ok(output)) => {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
                                 log::error!("sample command failed ({}): {stderr}", output.status);
-                                "Failed to sample process (check logs)".to_string()
+                                crate::menu_label("workspace.failed_sample_process", "Failed to sample process (check logs)").to_string()
                             }
                             Ok(Err(io_err)) => {
                                 log::error!("Failed to run sample command: {io_err}");
-                                "Failed to sample process (check logs)".to_string()
+                                crate::menu_label("workspace.failed_sample_process", "Failed to sample process (check logs)").to_string()
                             }
                             Err(join_err) => {
                                 log::error!("Sample task panicked: {join_err}");
-                                "Failed to sample process (check logs)".to_string()
+                                crate::menu_label("workspace.failed_sample_process", "Failed to sample process (check logs)").to_string()
                             }
                         };
                         me.toast_stack.update(ctx, |view, ctx| {
@@ -25853,7 +26030,7 @@ impl TypedActionView for Workspace {
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
                                 DismissibleToast::error(
-                                    "Failed to delete conversation. Please exit the agent view and try again.".to_string(),
+                                    crate::menu_label("workspace.failed_delete_conversation", "Failed to delete conversation. Please exit the agent view and try again.").to_string(),
                                 ),
                                 window_id,
                                 ctx,

@@ -74,7 +74,11 @@ impl ExpireApiKeyButton {
                 | Err(_) => {
                     me.request_state = RequestState::Idle;
                     ctx.emit(ExpireApiKeyButtonEvent::ExpireApiKeyFailed {
-                        message: "Failed to delete API key. Please try again.".to_string(),
+                        message: crate::menu_label(
+                            "settings.platform.failed_to_delete_api_key",
+                            "Failed to delete API key. Please try again.",
+                        )
+                        .to_string(),
                     });
                     ctx.notify();
                 }

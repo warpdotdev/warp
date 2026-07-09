@@ -181,7 +181,7 @@ impl SettingsPage {
                 },
                 self.button_state_handle.clone(),
             )
-            .with_text_label(self.section.to_string() + &match_data.to_string())
+            .with_text_label(self.section.sidebar_label().to_owned() + &match_data.to_string())
             .with_style(
                 UiComponentStyles::default()
                     .set_border_width(0.)
@@ -548,9 +548,13 @@ pub fn render_info_icon<T: Clone + Action>(
     appearance: &Appearance,
     additional_info: AdditionalInfo<T>,
 ) -> Box<dyn Element> {
-    let tooltip_text = additional_info
-        .tooltip_override_text
-        .unwrap_or("Click to learn more in docs".to_owned());
+    let tooltip_text = additional_info.tooltip_override_text.unwrap_or_else(|| {
+        crate::menu_label(
+            "settings.main.click_to_learn_more_in_docs",
+            "Click to learn more in docs",
+        )
+        .to_owned()
+    });
     let icon = Container::new(
         ConstrainedBox::new(
             Icon::Info
@@ -608,7 +612,13 @@ pub fn render_local_only_icon(
         .ui_builder()
         .local_only_icon_with_tooltip(
             13.,
-            custom_tooltip.unwrap_or("This setting is not synced to your other devices".to_owned()),
+            custom_tooltip.unwrap_or_else(|| {
+                crate::menu_label(
+                    "settings.main.not_synced_to_other_devices",
+                    "This setting is not synced to your other devices",
+                )
+                .to_owned()
+            }),
             mouse_state.clone(),
         )
         .finish();
@@ -1023,8 +1033,12 @@ pub(crate) fn render_settings_info_banner(
     .finish()
 }
 
-const WORKSPACE_OVERRIDE_TOOLTIP_TEXT: &str =
-    "This option is enforced by your organization's settings and cannot be customized.";
+fn workspace_override_tooltip_text() -> &'static str {
+    crate::menu_label(
+        "settings.ai.org_enforced_tooltip",
+        "This option is enforced by your organization's settings and cannot be customized.",
+    )
+}
 
 pub struct InputListItem<SettingsPageAction: Action + Clone> {
     pub item: String,
@@ -1133,7 +1147,7 @@ fn render_workspace_override_row_tooltip(
         if state.is_hovered() {
             let tooltip = appearance
                 .ui_builder()
-                .tool_tip(WORKSPACE_OVERRIDE_TOOLTIP_TEXT.to_string())
+                .tool_tip(workspace_override_tooltip_text().to_string())
                 .build()
                 .finish();
             stack.add_positioned_child(
@@ -1921,5 +1935,7 @@ pub(super) fn build_reset_button(
             font_size: Some(appearance.ui_font_size() * 0.8),
             ..Default::default()
         })
-        .with_text_label("Reset to default".to_owned())
+        .with_text_label(
+            crate::menu_label("settings.reset_to_default", "Reset to default").to_owned(),
+        )
 }

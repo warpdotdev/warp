@@ -1846,7 +1846,7 @@ impl LocalCodeEditorView {
                         Shrinkable::new(
                             1.,
                             Text::new_inline(
-                                "Add as context",
+                                crate::menu_label("code.add_as_context", "Add as context"),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -1963,12 +1963,18 @@ impl LocalCodeEditorView {
     /// Creates menu items for the context menu
     fn context_menu_items(&self) -> Vec<MenuItem<LocalCodeEditorAction>> {
         vec![
-            MenuItemFields::new("Go to definition")
-                .with_on_select_action(LocalCodeEditorAction::GotoDefinition)
-                .into_item(),
-            MenuItemFields::new("Find references")
-                .with_on_select_action(LocalCodeEditorAction::FindReferences)
-                .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "code.go_to_definition",
+                "Go to definition",
+            ))
+            .with_on_select_action(LocalCodeEditorAction::GotoDefinition)
+            .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "code.find_references_action",
+                "Find references",
+            ))
+            .with_on_select_action(LocalCodeEditorAction::FindReferences)
+            .into_item(),
         ]
     }
 
@@ -2380,7 +2386,10 @@ pub fn render_unsaved_changes_banner(
             Shrinkable::new(
                 1.,
                 Text::new(
-                    "This file has saved changes that are not reflected here.",
+                    crate::menu_label(
+                        "code.file_has_saved_changes",
+                        "This file has saved changes that are not reflected here.",
+                    ),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -2398,7 +2407,9 @@ pub fn render_unsaved_changes_banner(
             appearance
                 .ui_builder()
                 .button(ButtonVariant::Text, discard_mouse_state)
-                .with_text_label("Discard this version".into())
+                .with_text_label(
+                    crate::menu_label("code.discard_this_version", "Discard this version").into(),
+                )
                 .with_style(UiComponentStyles {
                     height: Some(24.),
                     padding: Some(Coords {
@@ -2420,7 +2431,7 @@ pub fn render_unsaved_changes_banner(
                 appearance
                     .ui_builder()
                     .button(ButtonVariant::Outlined, overwrite_mouse_state)
-                    .with_text_label("Overwrite".into())
+                    .with_text_label(crate::menu_label("code.overwrite", "Overwrite").into())
                     .with_style(UiComponentStyles {
                         font_color: Some(appearance.theme().active_ui_text_color().into()),
                         ..Default::default()
@@ -2477,7 +2488,7 @@ pub fn render_remote_disconnected_banner(appearance: &Appearance) -> Box<dyn Ele
             Shrinkable::new(
                 1.,
                 Text::new(
-                    "Remote host disconnected. You will not be able to see updates and save changes.",
+                    crate::menu_label("code.remote_disconnected_banner", "Remote host disconnected. You will not be able to see updates and save changes."),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )

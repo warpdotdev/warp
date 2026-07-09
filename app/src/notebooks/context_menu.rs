@@ -152,7 +152,7 @@ where
                 items.push(MenuItem::Separator);
             }
             items.push(
-                MenuItemFields::new("Copy file path")
+                MenuItemFields::new(crate::menu_label("code.copy_file_path", "Copy file path"))
                     .with_on_select_action(V::Action::from(ContextMenuAction::CopyFilePath))
                     .into_item(),
             );

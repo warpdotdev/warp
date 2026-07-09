@@ -25,8 +25,18 @@ use crate::workspace::tab_settings::{
     TabSettingsChangedEvent,
 };
 
-const ADD_DIRECTORY_LABEL: &str = "+ Add directory…";
-const BUTTON_LABEL: &str = "Add directory color";
+fn add_directory_label() -> &'static str {
+    crate::menu_label(
+        "settings.appearance.add_directory_label",
+        "+ Add directory…",
+    )
+}
+fn button_label() -> &'static str {
+    crate::menu_label(
+        "settings.appearance.add_directory_color",
+        "Add directory color",
+    )
+}
 const MENU_WIDTH: f32 = 340.;
 
 /// A dropdown used by the Directory tab colors settings widget, with a button fallback
@@ -109,7 +119,7 @@ impl DirectoryColorAddPicker {
         });
 
         let button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new(BUTTON_LABEL, SecondaryTheme)
+            ActionButton::new(button_label(), SecondaryTheme)
                 .with_icon(icons::Icon::Plus)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(DirectoryColorAddPickerAction::AddNewDirectory);
@@ -120,7 +130,7 @@ impl DirectoryColorAddPicker {
             let mut dropdown = FilterableDropdown::new(ctx);
             dropdown.set_top_bar_max_width(MENU_WIDTH);
             dropdown.set_menu_width(MENU_WIDTH, ctx);
-            dropdown.set_menu_header_to_static(BUTTON_LABEL);
+            dropdown.set_menu_header_to_static(button_label());
             dropdown
         });
 
@@ -157,7 +167,7 @@ impl DirectoryColorAddPicker {
                                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                                     .with_child(
                                         Text::new_inline(
-                                            ADD_DIRECTORY_LABEL,
+                                            add_directory_label(),
                                             font_family,
                                             font_size,
                                         )

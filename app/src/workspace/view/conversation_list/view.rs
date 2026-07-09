@@ -53,7 +53,9 @@ use crate::workspace::view::conversation_list::item::{
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
 
-const VIEW_ALL_LABEL: &str = "View all";
+fn view_all_label() -> &'static str {
+    crate::menu_label("workspace.view_all", "View all")
+}
 /// Maximum number of past items to show before the user toggles "view all".
 const INITIAL_MAX_PAST_ITEMS: usize = 10;
 
@@ -238,7 +240,7 @@ impl ConversationListView {
                 ctx,
             );
 
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(crate::menu_label("common.search", "Search"), ctx);
             editor
         });
         ctx.subscribe_to_view(&query_editor, |me, _handle, event, ctx| {
@@ -272,7 +274,7 @@ impl ConversationListView {
         // We use this as both the "view all" and "show less" button
         // (switching out the text on-toggle).
         let toggle_view_all_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(VIEW_ALL_LABEL, SecondaryTheme)
+            ActionButton::new(view_all_label(), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ConversationListViewAction::ToggleViewAll);
@@ -792,7 +794,11 @@ fn render_zero_state(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(4.)
         .with_child(
-            Text::new("No conversations yet", appearance.ui_font_family(), 14.)
+            Text::new(
+                crate::menu_label("workspace.no_conversations_yet", "No conversations yet"),
+                appearance.ui_font_family(),
+                14.,
+            )
                 .with_color(theme.sub_text_color(theme.background()).into_solid())
                 .with_style(Properties::default().weight(Weight::Semibold))
                 .finish(),
@@ -800,7 +806,10 @@ fn render_zero_state(
         .with_child(
             ConstrainedBox::new(
                 FormattedTextElement::from_str(
-                    "Your active and past conversations with local and ambient agents will appear here.",
+                    crate::menu_label(
+                        "workspace.conversations_empty_description",
+                        "Your active and past conversations with local and ambient agents will appear here.",
+                    ),
                     appearance.ui_font_family(),
                     14.,
                 )
@@ -815,9 +824,13 @@ fn render_zero_state(
 
     let new_conversation_button =
         Hoverable::new(zero_state_button_mouse_state, move |mouse_state| {
-            let label = Text::new_inline("New conversation", appearance.ui_font_family(), 12.)
-                .with_color(theme.main_text_color(theme.background()).into_solid())
-                .finish();
+            let label = Text::new_inline(
+                crate::menu_label("workspace.new_conversation", "New conversation"),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_color(theme.main_text_color(theme.background()).into_solid())
+            .finish();
 
             let button_content = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -916,8 +929,12 @@ fn render_section_header(
 
     let title_text = Text::new_inline(
         match section {
-            ConversationSection::Active => "ACTIVE",
-            ConversationSection::Past => "PAST",
+            ConversationSection::Active => {
+                crate::menu_label("conversation_list.section_active", "ACTIVE")
+            }
+            ConversationSection::Past => {
+                crate::menu_label("conversation_list.section_past", "PAST")
+            }
         },
         appearance.ui_font_family(),
         11.,
@@ -991,7 +1008,11 @@ impl TypedActionView for ConversationListView {
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
                             DismissibleToast::error(
-                                "Conversations cannot be deleted while in progress.".to_string(),
+                                crate::menu_label(
+                                    "workspace.conversations_delete_in_progress",
+                                    "Conversations cannot be deleted while in progress.",
+                                )
+                                .to_string(),
                             ),
                             window_id,
                             ctx,
@@ -1006,7 +1027,9 @@ impl TypedActionView for ConversationListView {
                     .as_ref(ctx)
                     .get_item_by_id(&id, ctx)
                     .map(|entry| entry.display.title)
-                    .unwrap_or_else(|| "Conversation".to_string());
+                    .unwrap_or_else(|| {
+                        crate::menu_label("workspace.conversation", "Conversation").to_string()
+                    });
                 ctx.emit(Event::ShowDeleteConfirmationDialog {
                     conversation_id: *conversation_id,
                     conversation_title,
@@ -1037,25 +1060,33 @@ impl TypedActionView for ConversationListView {
                         return;
                     };
 
-                    let mut delete_item = MenuItemFields::new("Delete")
-                        .with_override_text_color(Appearance::as_ref(ctx).theme().ansi_fg_red())
-                        .with_on_select_action(ConversationListViewAction::DeleteFromOverflowMenu {
-                            conversation_id,
-                        })
-                        .with_disabled(!entry.capabilities.can_delete);
+                    let mut delete_item =
+                        MenuItemFields::new(crate::menu_label("common.delete", "Delete"))
+                            .with_override_text_color(Appearance::as_ref(ctx).theme().ansi_fg_red())
+                            .with_on_select_action(
+                                ConversationListViewAction::DeleteFromOverflowMenu {
+                                    conversation_id,
+                                },
+                            )
+                            .with_disabled(!entry.capabilities.can_delete);
                     if !entry.capabilities.can_delete {
-                        delete_item =
-                            delete_item.with_tooltip("This conversation cannot be deleted");
+                        delete_item = delete_item.with_tooltip(crate::menu_label(
+                            "workspace.conversation_cannot_be_deleted",
+                            "This conversation cannot be deleted",
+                        ));
                     }
 
                     // Only show share item if the conversation is shareable
                     let share_item = if entry.capabilities.can_share {
                         Some(
-                            MenuItemFields::new("Share conversation")
-                                .with_on_select_action(
-                                    ConversationListViewAction::OpenShareDialog { conversation_id },
-                                )
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "workspace.share_conversation",
+                                "Share conversation",
+                            ))
+                            .with_on_select_action(ConversationListViewAction::OpenShareDialog {
+                                conversation_id,
+                            })
+                            .into_item(),
                         )
                     } else {
                         None
@@ -1065,7 +1096,10 @@ impl TypedActionView for ConversationListView {
                         // Forking from a closed ambient agent conversation is not supported at this point.
                         if entry.capabilities.can_fork_locally {
                             Some([
-                                MenuItemFields::new("Fork in new pane")
+                                MenuItemFields::new(crate::menu_label(
+                                    "workspace.fork_in_new_pane",
+                                    "Fork in new pane",
+                                ))
                                     .with_on_select_action(
                                         ConversationListViewAction::ForkConversation {
                                             conversation_id,
@@ -1073,7 +1107,10 @@ impl TypedActionView for ConversationListView {
                                         },
                                     )
                                     .into_item(),
-                                MenuItemFields::new("Fork in new tab")
+                                MenuItemFields::new(crate::menu_label(
+                                    "workspace.fork_in_new_tab",
+                                    "Fork in new tab",
+                                ))
                                     .with_on_select_action(
                                         ConversationListViewAction::ForkConversation {
                                             conversation_id,
@@ -1154,8 +1191,11 @@ impl TypedActionView for ConversationListView {
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
                                 DismissibleToast::error(
-                                    "Conversations cannot be deleted while in progress."
-                                        .to_string(),
+                                    crate::menu_label(
+                                        "workspace.conversations_delete_in_progress",
+                                        "Conversations cannot be deleted while in progress.",
+                                    )
+                                    .to_string(),
                                 ),
                                 window_id,
                                 ctx,
@@ -1222,9 +1262,9 @@ impl TypedActionView for ConversationListView {
                 self.view_all = !self.view_all;
 
                 let label = if self.view_all {
-                    "Show less"
+                    crate::menu_label("workspace.show_less", "Show less")
                 } else {
-                    VIEW_ALL_LABEL
+                    view_all_label()
                 };
                 self.toggle_view_all_button
                     .update(ctx, |button, ctx| button.set_label(label, ctx));
@@ -1301,7 +1341,10 @@ impl View for ConversationListView {
         } else if self.item_count() == 0 {
             Container::new(
                 Text::new_inline(
-                    "No matching conversations",
+                    crate::menu_label(
+                        "workspace.no_matching_conversations",
+                        "No matching conversations",
+                    ),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )

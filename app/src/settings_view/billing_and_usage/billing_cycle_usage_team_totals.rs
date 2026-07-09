@@ -59,7 +59,10 @@ pub fn build_team_total_card_summaries(
 ) -> Vec<TeamTotalCardSummary> {
     let (overall_segments, overall_credits, overall_cost) = aggregate_segments(entries.iter());
     let mut summaries = vec![TeamTotalCardSummary {
-        title: "Overall usage",
+        title: crate::menu_label(
+            "settings.billing_and_usage.overall_usage_title",
+            "Overall usage",
+        ),
         card_key: "__card_overall__",
         segments: overall_segments,
         total_credits: overall_credits,
@@ -83,7 +86,10 @@ pub fn build_team_total_card_summaries(
                 .filter(|e| e.usage_source == AiCreditsUsageSource::Cloud),
         );
         summaries.push(TeamTotalCardSummary {
-            title: "Local agent usage",
+            title: crate::menu_label(
+                "settings.billing_and_usage.local_agent_usage_title",
+                "Local agent usage",
+            ),
             card_key: "__card_local__",
             segments: local_segments,
             total_credits: local_credits,
@@ -91,7 +97,10 @@ pub fn build_team_total_card_summaries(
             limit_cents: None,
         });
         summaries.push(TeamTotalCardSummary {
-            title: "Cloud agent usage",
+            title: crate::menu_label(
+                "settings.billing_and_usage.cloud_agent_usage_title",
+                "Cloud agent usage",
+            ),
             card_key: "__card_cloud__",
             segments: cloud_segments,
             total_credits: cloud_credits,
@@ -221,7 +230,11 @@ fn build_team_total_card(
     .finish();
 
     let credits_text = Text::new_inline(
-        format!("({} credits)", format_credits(summary.total_credits)),
+        crate::menu_label(
+            "settings.billing_and_usage.credits_parenthetical",
+            "({count} credits)",
+        )
+        .replace("{count}", &format_credits(summary.total_credits)),
         appearance.ui_font_family(),
         13.,
     )
@@ -237,7 +250,8 @@ fn build_team_total_card(
     let totals_row: Box<dyn Element> = match summary.limit_cents {
         Some(limit) => {
             let limit_text = Text::new_inline(
-                format!("Limit: {}", format_cost_cents(limit)),
+                crate::menu_label("settings.billing_and_usage.limit_label", "Limit: {amount}")
+                    .replace("{amount}", &format_cost_cents(limit)),
                 appearance.ui_font_family(),
                 12.,
             )
@@ -353,9 +367,12 @@ pub fn render_team_totals_block(
 ) -> Box<dyn Element> {
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     column.add_child(
-        Container::new(render_section_subheader("Team", appearance))
-            .with_margin_bottom(8.)
-            .finish(),
+        Container::new(render_section_subheader(
+            crate::menu_label("settings.billing_and_usage.team_subheader", "Team"),
+            appearance,
+        ))
+        .with_margin_bottom(8.)
+        .finish(),
     );
     column.add_child(render_team_totals_section(
         entries,
