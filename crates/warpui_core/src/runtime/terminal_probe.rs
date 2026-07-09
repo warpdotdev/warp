@@ -13,6 +13,7 @@
 //! crossterm parser to consume (which discards unrecognized sequences).
 
 use std::io::{self, IsTerminal};
+#[cfg(unix)]
 use std::time::Duration;
 
 use ratatui::crossterm::terminal;
@@ -20,6 +21,7 @@ use ratatui::crossterm::terminal;
 /// How long the probe waits for the terminal's replies before giving up.
 /// Local terminals answer in single-digit milliseconds; keeping this short
 /// bounds startup latency on terminals (or transports) that never answer.
+#[cfg(unix)]
 const PROBE_DEADLINE: Duration = Duration::from_millis(100);
 
 /// An 8-bit RGB color reported by the terminal.
@@ -209,7 +211,12 @@ fn poll_stdin(timeout: Duration) -> io::Result<bool> {
     Ok(ready > 0)
 }
 
+// The reply parsers below are pure and platform-independent, but only the
+// unix probe produces reply bytes; keep them compiled for tests on every
+// platform so the parsing logic stays covered on non-unix CI.
+
 /// Extracts the OSC 10/11 color replies from the probe's raw reply bytes.
+#[cfg(any(unix, test))]
 fn parse_replies(replies: &[u8]) -> ProbedTerminalColors {
     let text = String::from_utf8_lossy(replies);
     ProbedTerminalColors {
@@ -220,6 +227,7 @@ fn parse_replies(replies: &[u8]) -> ProbedTerminalColors {
 
 /// Finds the reply to an `OSC <code> ; ?` query and parses its color payload.
 /// Replies look like `ESC ] 11 ; rgb:RRRR/GGGG/BBBB` terminated by BEL or ST.
+#[cfg(any(unix, test))]
 fn parse_osc_color_reply(text: &str, code: u8) -> Option<ProbedRgb> {
     let prefix = format!("\x1b]{code};");
     let payload = &text[text.find(&prefix)? + prefix.len()..];
@@ -229,6 +237,7 @@ fn parse_osc_color_reply(text: &str, code: u8) -> Option<ProbedRgb> {
 
 /// Parses an XParseColor-style payload: `rgb:R/G/B` with 1–4 hex digits per
 /// component, or `rgba:` with a trailing alpha component that is ignored.
+#[cfg(any(unix, test))]
 fn parse_x11_color(payload: &str) -> Option<ProbedRgb> {
     let components = payload
         .strip_prefix("rgba:")
@@ -241,6 +250,7 @@ fn parse_x11_color(payload: &str) -> Option<ProbedRgb> {
 }
 
 /// Scales a 1–4 digit hex component to 8 bits.
+#[cfg(any(unix, test))]
 fn parse_scaled_component(component: &str) -> Option<u8> {
     if component.is_empty() || component.len() > 4 {
         return None;
@@ -252,6 +262,7 @@ fn parse_scaled_component(component: &str) -> Option<u8> {
 
 /// Whether the bytes contain a DA1 reply (`CSI ? ... c`), the probe's
 /// end-of-replies sentinel.
+#[cfg(any(unix, test))]
 fn contains_da1_reply(replies: &[u8]) -> bool {
     let mut search = replies;
     while let Some(start) = find_subsequence(search, b"\x1b[?") {
@@ -265,6 +276,7 @@ fn contains_da1_reply(replies: &[u8]) -> bool {
     false
 }
 
+#[cfg(any(unix, test))]
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
