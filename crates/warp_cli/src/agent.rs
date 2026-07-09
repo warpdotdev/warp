@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use clap::builder::PossibleValue;
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
@@ -125,33 +126,56 @@ impl HiddenComputerUseArgs {
         }
     }
 }
+const HARNESS_VALUE_VARIANTS: [Harness; 5] = [
+    Harness::Oz,
+    Harness::Claude,
+    Harness::OpenCode,
+    Harness::Gemini,
+    Harness::Codex,
+];
+
 /// The execution harness for an agent run.
-#[derive(Debug, Copy, Clone, ValueEnum, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Harness {
     /// Use Warp's built-in MAA infrastructure (default).
     #[default]
-    #[value(name = "oz")]
     Oz,
     /// Delegate to the `claude` CLI.
-    #[value(name = "claude", alias = "claude-code")]
     Claude,
     /// Delegate to the `opencode` CLI.
-    #[value(name = "opencode", alias = "open-code", hide = true)]
     OpenCode,
     /// Delegate to the `gemini` CLI.
-    #[value(name = "gemini", hide = true)]
     Gemini,
     /// Delegate to the `codex` CLI.
-    #[value(name = "codex")]
     Codex,
     /// A harness produced by a newer client/server that this client doesn't
     /// recognize. Surfaced via deserialization fallbacks (e.g. unknown GraphQL
     /// enum values, unknown `harness_type` strings); never selectable from the
     /// CLI or harness dropdown.
     #[serde(other)]
-    #[value(skip)]
     Unknown,
+}
+
+impl ValueEnum for Harness {
+    fn value_variants<'a>() -> &'a [Self] {
+        &HARNESS_VALUE_VARIANTS
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        let mut pv = match self {
+            Harness::Oz => PossibleValue::new("oz"),
+            Harness::Claude => PossibleValue::new("claude").alias("claude-code"),
+            Harness::OpenCode => PossibleValue::new("opencode").alias("open-code"),
+            Harness::Gemini => PossibleValue::new("gemini"),
+            Harness::Codex => PossibleValue::new("codex"),
+            Harness::Unknown => return None,
+        };
+        if !self.should_display_in_help_text() {
+            pv = pv.hide(true);
+        }
+        Some(pv)
+    }
 }
 
 impl Harness {
@@ -170,11 +194,13 @@ impl Harness {
     /// Whether this harness is surfaced to users in CLI `--help` for cloud runs
     /// (`oz agent run-cloud --harness`). Only the harnesses that are generally
     /// available for cloud runs are shown; gemini and opencode aren't available
-    /// yet, so they're hidden from help and rejected on run (see the run-cloud
-    /// dispatch). Update this when a harness becomes GA for cloud.
+    /// yet, so they're hidden from help. Update this when a harness becomes GA
+    /// for cloud.
     ///
-    /// This is the source of truth for the per-variant `#[value(hide = ...)]`
-    /// attributes above; a unit test asserts the two stay in sync.
+    /// This is the single source of truth for the `ValueEnum` help text; the
+    /// per-variant `#[value(hide = ...)]` attributes are no longer used. It does
+    /// not affect runtime acceptance — the server decides which harnesses are
+    /// actually runnable.
     pub fn should_display_in_help_text(self) -> bool {
         match self {
             Self::Oz | Self::Claude | Self::Codex => true,

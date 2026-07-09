@@ -81,26 +81,6 @@ fn run_cloud_help_lists_harness_and_auth_secret_flags() {
 }
 
 #[test]
-fn harness_help_visibility_matches_should_display_predicate() {
-    use clap::ValueEnum;
-    for harness in Harness::value_variants() {
-        // Skipped variants (e.g. Unknown) have no possible value and are never shown.
-        let Some(pv) = harness.to_possible_value() else {
-            assert!(
-                !harness.should_display_in_help_text(),
-                "{harness:?} is skipped from the value enum but marked displayable"
-            );
-            continue;
-        };
-        assert_eq!(
-            !pv.is_hide_set(),
-            harness.should_display_in_help_text(),
-            "help visibility for {harness:?} must match should_display_in_help_text()"
-        );
-    }
-}
-
-#[test]
 fn run_cloud_accepts_claude_auth_secret() {
     let args = parse_run_cloud(&[
         "agent",
