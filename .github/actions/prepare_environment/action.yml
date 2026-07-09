@@ -158,7 +158,7 @@ runs:
       shell: bash
       run: corepack enable
 
-    - name: Install protoc via Homebrew (macOS)
+    - name: Install protoc for generating rust bindings of protobuf APIs (macOS)
       # macOS installs protoc from Homebrew. Refreshing the formula index
       # (brew update) intermittently times out fetching formula.jws.json from
       # the formulae.brew.sh CDN (curl exit 28), which previously failed the
