@@ -557,7 +557,7 @@ pub struct TuiInputView {
     input_mode: ModelHandle<BlocklistAIInputModel>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
     kill_buffer: KillBuffer,
-    /// First visible visual row (0-indexed).
+    /// First visible display row (0-indexed).
     scroll_offset: u32,
     /// Maximum number of visible rows before the input scrolls.
     max_visible_rows: u32,
@@ -896,9 +896,9 @@ impl TypedActionView for TuiInputView {
             }
         }
 
-        let total_rows = self.total_visual_rows(ctx);
+        let (cursor_row, total_rows) = self.display_geometry(ctx);
         let visible_rows = cmp::min(total_rows, self.max_visible_rows);
-        self.scroll_to_cursor(total_rows, visible_rows.max(1), ctx);
+        self.scroll_to_cursor(cursor_row, total_rows, visible_rows.max(1));
         ctx.notify();
     }
 }
@@ -953,43 +953,35 @@ impl TuiInputView {
         self.cursor_offset(ctx).as_usize() <= 1 && self.selection_range(ctx).is_none()
     }
 
-    pub fn visual_line_count(&self, ctx: &AppContext) -> u32 {
-        self.model
-            .as_ref(ctx)
-            .render_state()
-            .as_ref(ctx)
-            .max_line()
-            .as_u32()
-            .max(1)
-    }
-
-    /// The cursor's visual row in the char-cell soft-wrap map (0-based).
-    fn cursor_visual_row(&self, ctx: &AppContext) -> u32 {
-        let cursor_offset = self.cursor_offset(ctx);
+    /// The cursor's row and the total row count in *display-row* space — the
+    /// same rows [`TuiEditorElement`] windows by — so scroll policy and
+    /// rendering can never disagree about which rows exist. The total includes
+    /// the "phantom" row the cursor wraps onto when a logical line exactly
+    /// fills the terminal width (deferred wrap): the lattice's rows never
+    /// count it, but the cursor legitimately sits there, so sizing and
+    /// scrolling must include it or the viewport scrolls to a row that is
+    /// never rendered.
+    fn display_geometry(&self, ctx: &AppContext) -> (u32, u32) {
+        let cursor_idx = self.cursor_offset(ctx).as_usize().saturating_sub(1);
         let inner = self.model.as_ref(ctx);
         let render = inner.render_state().as_ref(ctx);
-        // `offset_to_softwrap_point` is 0-based (see `char_cell_offset_to_softwrap_point`),
-        // while the cursor is a 1-based `CharOffset`, so convert by subtracting 1.
-        let cursor_char_index = CharOffset::from(cursor_offset.as_usize().saturating_sub(1));
-        render.offset_to_softwrap_point(cursor_char_index).row()
-    }
-
-    /// Total visual rows the input occupies, including the "phantom" row the
-    /// cursor wraps onto when a logical line exactly fills the terminal width
-    /// (deferred wrap). [`Self::visual_line_count`] never counts that row — the
-    /// soft-wrap map only adds a row once a character actually overflows — but
-    /// the cursor legitimately sits there, so sizing and scrolling must include
-    /// it or the viewport scrolls to a row that is never rendered.
-    fn total_visual_rows(&self, ctx: &AppContext) -> u32 {
-        self.visual_line_count(ctx)
-            .max(self.cursor_visual_row(ctx) + 1)
+        let Some(char_cell) = render.char_cell() else {
+            return (0, 1);
+        };
+        let hidden = render.hidden_line_ranges(ctx);
+        char_cell.with_display_lattice(&hidden, |lattice| {
+            let cursor_row = lattice.offset_to_display_point(cursor_idx).row;
+            let total_rows = (lattice.rows().len() as u32).max(cursor_row + 1);
+            (cursor_row, total_rows)
+        })
     }
 
     // ── Scroll ────────────────────────────────────────────────────────────────────
 
-    fn scroll_to_cursor(&mut self, total_rows: u32, visible_rows: u32, ctx: &AppContext) {
-        let cursor_row = self.cursor_visual_row(ctx);
-
+    /// Clamps a stale scroll offset, then moves the viewport the minimal
+    /// amount needed to keep `cursor_row` visible. Rows are display rows from
+    /// [`Self::display_geometry`].
+    fn scroll_to_cursor(&mut self, cursor_row: u32, total_rows: u32, visible_rows: u32) {
         // A stale offset can point past the last remaining row (e.g. after a
         // deletion shrank the content); clamp it so the visible window always
         // overlaps real rows before following the cursor.
@@ -1004,13 +996,13 @@ impl TuiInputView {
         }
     }
 
-    /// Scrolls the viewport by `rows` visual rows (negative scrolls toward the
+    /// Scrolls the viewport by `rows` display rows (negative scrolls toward the
     /// top), clamped to `[0, max_scroll]`. Independent of the cursor, so callers
     /// must not follow it with `scroll_to_cursor`.
     fn scroll_by(&mut self, rows: isize, ctx: &AppContext) {
-        let lines = self.total_visual_rows(ctx);
-        let visible_rows = cmp::min(lines, self.max_visible_rows).max(1);
-        let max_scroll = lines.saturating_sub(visible_rows) as isize;
+        let (_, total_rows) = self.display_geometry(ctx);
+        let visible_rows = cmp::min(total_rows, self.max_visible_rows).max(1);
+        let max_scroll = total_rows.saturating_sub(visible_rows) as isize;
         let new_offset = (self.scroll_offset as isize + rows).clamp(0, max_scroll);
         self.scroll_offset = new_offset as u32;
     }
@@ -1111,7 +1103,7 @@ impl TuiInputView {
         }
     }
 
-    // ── Kill range helpers ──────────────────────────────────────────────────────────
+    // ── Kill range helpers ────────────────────────────────────────────────────
     //
     // The soft-wrapped row containing the cursor comes from the render state
     // (`CharCellState::visual_row_char_range`, 0-based char indices); these

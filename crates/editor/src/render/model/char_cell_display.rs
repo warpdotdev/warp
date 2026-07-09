@@ -1,4 +1,4 @@
-//! Char-cell display-row functions: the single implementation of "which
+//! Char-cell display-row projection: the single implementation of "which
 //! terminal rows does a char-cell editor occupy, and where is everything on
 //! them" once structural overlays are applied.
 //!
@@ -24,9 +24,10 @@
 //! navigation uses. With no ghosts and no hidden ranges the two spaces are
 //! identical.
 //!
-//! Like the softwrap functions, these are free functions over the wrap-table
-//! slices; the public entry points are the thin borrowing delegates on
-//! [`CharCellState`](super::CharCellState).
+//! The public entry point is
+//! [`CharCellState::with_display_lattice`](super::CharCellState::with_display_lattice):
+//! it projects the wrap tables and overlays once into a [`DisplayLattice`],
+//! which owns the row list and answers every query against those same rows.
 
 use std::ops::Range;
 
@@ -68,11 +69,207 @@ pub struct DisplayRow {
     pub is_continuation: bool,
 }
 
+/// A position in display-row space: a 0-based display row and a 0-based
+/// display column in terminal cells. The display-space analogue of
+/// [`SoftWrapPoint`](super::SoftWrapPoint) with
+/// [`ColumnUnit::Chars`](super::ColumnUnit) columns; display space is
+/// char-cell only, so the column is a bare `u16`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayPoint {
+    pub row: u32,
+    pub col: u16,
+}
+
+/// The display-row projection at one snapshot of wrap tables, ghosts, and
+/// hidden line ranges: the row list plus the inputs it was computed from.
+///
+/// Constructed once per
+/// [`with_display_lattice`](super::CharCellState::with_display_lattice) call,
+/// so callers can mix row iteration and point queries freely without
+/// re-projecting — and both are guaranteed to describe the same rows, because
+/// the hidden set and ghost set are bound at construction.
+pub struct DisplayLattice<'a> {
+    rows: Vec<DisplayRow>,
+    line_starts: &'a [usize],
+    char_widths: &'a [u8],
+    terminal_width: u16,
+    ghosts: &'a [CharCellTemporaryBlock],
+    hidden_line_ranges: &'a [Range<usize>],
+}
+
+impl<'a> DisplayLattice<'a> {
+    pub(super) fn new(
+        line_starts: &'a [usize],
+        char_widths: &'a [u8],
+        terminal_width: u16,
+        ghosts: &'a [CharCellTemporaryBlock],
+        hidden_line_ranges: &'a [Range<usize>],
+    ) -> Self {
+        let rows = display_rows(
+            line_starts,
+            char_widths,
+            terminal_width,
+            ghosts,
+            hidden_line_ranges,
+        );
+        Self {
+            rows,
+            line_starts,
+            char_widths,
+            terminal_width,
+            ghosts,
+            hidden_line_ranges,
+        }
+    }
+
+    /// The projected display rows, one per terminal row.
+    pub fn rows(&self) -> &[DisplayRow] {
+        &self.rows
+    }
+
+    /// The ghost blocks that `Ghost` rows' `ghost_index` values index into.
+    pub fn ghosts(&self) -> &[CharCellTemporaryBlock] {
+        self.ghosts
+    }
+
+    /// The [`DisplayPoint`] of the gap before 0-based char index `char_idx`.
+    ///
+    /// Offsets inside hidden lines resolve to their gap row; when the hidden
+    /// run produced no gap (edge runs emit no rows), leading runs resolve to
+    /// the first display row and trailing runs to the last. A deferred-wrap
+    /// cursor at the end of a line that exactly fills the width lands on the
+    /// next *buffer* row, or one past the entire display when no buffer row
+    /// follows — never on an interleaved ghost or gap row, which holds no
+    /// buffer gap for a cursor. Callers sizing a viewport must accommodate
+    /// that phantom row.
+    pub fn offset_to_display_point(&self, char_idx: usize) -> DisplayPoint {
+        let line_index = self
+            .line_starts
+            .partition_point(|&start| start <= char_idx)
+            .saturating_sub(1);
+
+        if self
+            .hidden_line_ranges
+            .iter()
+            .any(|range| range.contains(&line_index))
+        {
+            return DisplayPoint {
+                row: self.hidden_line_row(line_index),
+                col: 0,
+            };
+        }
+
+        let line_start = self.line_starts.get(line_index).copied().unwrap_or(0);
+        let line = char_cell_logical_line(self.line_starts, self.char_widths, line_index);
+        let (row_within_line, col) =
+            char_cell_line_gap_position(line, self.terminal_width, char_idx - line_start);
+
+        // The line's display rows are contiguous by construction.
+        let mut line_rows = self.rows.iter().enumerate().filter(|(_, row)| {
+            matches!(row.kind, DisplayRowKind::Buffer { line_index: l } if l == line_index)
+        });
+        let Some((first_row, _)) = line_rows.next() else {
+            // Unreachable — a visible line always emits rows — but degrade to
+            // one past the display rather than panicking.
+            return DisplayPoint {
+                row: self.rows.len() as u32,
+                col,
+            };
+        };
+        let last_row = line_rows.next_back().map_or(first_row, |(index, _)| index);
+        if (row_within_line as usize) <= last_row - first_row {
+            return DisplayPoint {
+                row: first_row as u32 + row_within_line,
+                col,
+            };
+        }
+
+        // Deferred wrap: the cursor sits one row past the line's last row.
+        // Skip past any interleaved ghost/gap rows to the next buffer row, or
+        // one past the entire display when none follows.
+        let row = self.rows[last_row + 1..]
+            .iter()
+            .position(|row| matches!(row.kind, DisplayRowKind::Buffer { .. }))
+            .map_or(self.rows.len(), |offset| last_row + 1 + offset);
+        DisplayPoint {
+            row: row as u32,
+            col,
+        }
+    }
+
+    /// The 0-based char index of the gap at `point` — the inverse of
+    /// [`Self::offset_to_display_point`] for buffer rows.
+    ///
+    /// Non-buffer rows resolve to the *nearest buffer offset* so mouse drags
+    /// have sensible semantics: ghost rows map to their insert position's
+    /// line start, gap rows to the start of their first hidden line, and rows
+    /// past the end of the display to the end of the buffer.
+    pub fn display_point_to_offset(&self, point: DisplayPoint) -> usize {
+        let Some(row) = self.rows.get(point.row as usize) else {
+            return self.char_widths.len();
+        };
+        match &row.kind {
+            DisplayRowKind::Buffer { .. } => {
+                // Walk the row's per-char widths to the gap at or just before
+                // `point.col`, clamped to the row's end.
+                let target_col = point.col as usize;
+                let mut col = 0usize;
+                let mut idx = row.char_range.start;
+                while idx < row.char_range.end {
+                    let width = self.char_widths[idx] as usize;
+                    if col + width > target_col {
+                        break;
+                    }
+                    col += width;
+                    idx += 1;
+                }
+                idx
+            }
+            DisplayRowKind::Ghost { ghost_index } => {
+                let insert_before = self.ghosts[*ghost_index].insert_before.as_u32() as usize;
+                self.line_starts
+                    .get(insert_before)
+                    .copied()
+                    .unwrap_or(self.char_widths.len())
+            }
+            DisplayRowKind::Gap { line_range } => self
+                .line_starts
+                .get(line_range.start)
+                .copied()
+                .unwrap_or(self.char_widths.len()),
+        }
+    }
+
+    /// The display row for an offset inside hidden line `line_index`: its gap
+    /// row when the run produced one, else the display edge the run was
+    /// elided at (leading runs → the first row, trailing runs → the last).
+    fn hidden_line_row(&self, line_index: usize) -> u32 {
+        let gap_row = self.rows.iter().position(|row| {
+            matches!(&row.kind, DisplayRowKind::Gap { line_range } if line_range.contains(&line_index))
+        });
+        if let Some(row) = gap_row {
+            return row as u32;
+        }
+        let has_content_before = self.rows.iter().any(|row| match &row.kind {
+            DisplayRowKind::Buffer { line_index: l } => *l < line_index,
+            DisplayRowKind::Gap { line_range } => line_range.start < line_index,
+            DisplayRowKind::Ghost { ghost_index } => {
+                (self.ghosts[*ghost_index].insert_before.as_u32() as usize) <= line_index
+            }
+        });
+        if has_content_before {
+            self.rows.len().saturating_sub(1) as u32
+        } else {
+            0
+        }
+    }
+}
+
 /// Projects the wrap tables + overlays into the flat display-row list
 /// described in the module docs. Ghosts always render, even when their insert
 /// position falls inside a hidden range (they represent changed content),
 /// splitting the gap.
-pub(super) fn display_rows(
+fn display_rows(
     line_starts: &[usize],
     char_widths: &[u8],
     terminal_width: u16,
@@ -149,114 +346,6 @@ pub(super) fn display_rows(
     }
 
     rows
-}
-
-/// The `(display_row, display_col)` of the gap before 0-based char index
-/// `char_idx`, in display-row space.
-///
-/// Offsets inside hidden lines resolve to their gap row (or clamp to the
-/// nearest display row when the hidden run produced no gap). A deferred-wrap
-/// cursor at the end of a row that exactly fills the width lands one row past
-/// the line's last display row, mirroring [`char_cell_line_gap_position`];
-/// callers sizing a viewport must accommodate that phantom row.
-pub(super) fn offset_to_display_point(
-    char_idx: usize,
-    line_starts: &[usize],
-    char_widths: &[u8],
-    terminal_width: u16,
-    ghosts: &[CharCellTemporaryBlock],
-    hidden_line_ranges: &[Range<usize>],
-) -> (u32, u16) {
-    let line_index = line_starts
-        .partition_point(|&start| start <= char_idx)
-        .saturating_sub(1);
-    let rows = display_rows(
-        line_starts,
-        char_widths,
-        terminal_width,
-        ghosts,
-        hidden_line_ranges,
-    );
-
-    if hidden_line_ranges
-        .iter()
-        .any(|range| range.contains(&line_index))
-    {
-        let gap_row = rows.iter().position(|row| {
-            matches!(&row.kind, DisplayRowKind::Gap { line_range } if line_range.contains(&line_index))
-        });
-        let row = gap_row.unwrap_or_else(|| rows.len().saturating_sub(1));
-        return (row as u32, 0);
-    }
-
-    let line_start = line_starts.get(line_index).copied().unwrap_or(0);
-    let line = char_cell_logical_line(line_starts, char_widths, line_index);
-    let (row_within_line, col) =
-        char_cell_line_gap_position(line, terminal_width, char_idx - line_start);
-
-    let first_row_of_line = rows
-        .iter()
-        .position(
-            |row| matches!(row.kind, DisplayRowKind::Buffer { line_index: l } if l == line_index),
-        )
-        .unwrap_or(rows.len());
-    (first_row_of_line as u32 + row_within_line, col)
-}
-
-/// The 0-based char index of the gap at `(display_row, display_col)` — the
-/// inverse of [`offset_to_display_point`] for buffer rows.
-///
-/// Non-buffer rows resolve to the *nearest buffer offset* so mouse drags have
-/// sensible semantics: ghost rows map to their insert position's line start,
-/// gap rows to the start of their first hidden line, and rows past the end of
-/// the display to the end of the buffer.
-pub(super) fn display_point_to_offset(
-    display_row: u32,
-    display_col: usize,
-    line_starts: &[usize],
-    char_widths: &[u8],
-    terminal_width: u16,
-    ghosts: &[CharCellTemporaryBlock],
-    hidden_line_ranges: &[Range<usize>],
-) -> usize {
-    let rows = display_rows(
-        line_starts,
-        char_widths,
-        terminal_width,
-        ghosts,
-        hidden_line_ranges,
-    );
-    let Some(row) = rows.get(display_row as usize) else {
-        return char_widths.len();
-    };
-    match &row.kind {
-        DisplayRowKind::Buffer { .. } => {
-            // Walk the row's per-char widths to the gap at or just before
-            // `display_col`, clamped to the row's end.
-            let mut col = 0usize;
-            let mut idx = row.char_range.start;
-            while idx < row.char_range.end {
-                let width = char_widths[idx] as usize;
-                if col + width > display_col {
-                    break;
-                }
-                col += width;
-                idx += 1;
-            }
-            idx
-        }
-        DisplayRowKind::Ghost { ghost_index } => {
-            let insert_before = ghosts[*ghost_index].insert_before.as_u32() as usize;
-            line_starts
-                .get(insert_before)
-                .copied()
-                .unwrap_or(char_widths.len())
-        }
-        DisplayRowKind::Gap { line_range } => line_starts
-            .get(line_range.start)
-            .copied()
-            .unwrap_or(char_widths.len()),
-    }
 }
 
 /// Appends the wrapped rows of buffer line `line_index`.

@@ -40,7 +40,7 @@ use warpui_core::text_selection_utils::{
 use warpui_core::units::{IntoPixels, Pixels};
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
-pub use self::char_cell_display::{DisplayRow, DisplayRowKind};
+pub use self::char_cell_display::{DisplayLattice, DisplayPoint, DisplayRow, DisplayRowKind};
 use self::location::WrapDirection;
 pub use self::location::{HitTestOptions, Location};
 pub use self::offset_map::{OffsetMap, SelectableTextRun};
@@ -491,10 +491,13 @@ impl CharCellState {
         }
     }
 
-    /// The current set of diff ghost lines, in ascending `insert_before` order
-    /// as produced by the diff model. Empty when no diff is displayed.
-    pub fn temporary_blocks(&self) -> Ref<'_, Vec<CharCellTemporaryBlock>> {
-        self.temporary_blocks.borrow()
+    /// A clone of the current diff ghost lines, in ascending `insert_before`
+    /// order as produced by the diff model; empty when no diff is displayed.
+    /// Returns owned data rather than a `RefCell` guard so callers can't hold
+    /// a borrow across a layout push that replaces the set; borrow-free access
+    /// for rendering goes through [`Self::with_display_lattice`].
+    pub fn temporary_blocks(&self) -> Vec<CharCellTemporaryBlock> {
+        self.temporary_blocks.borrow().clone()
     }
 
     /// Replace the stored ghost lines. Replace-all semantics, mirroring the
@@ -516,62 +519,33 @@ impl CharCellState {
         self.terminal_width.set(terminal_width);
     }
 
-    /// The display-row list at the current wrap tables, ghost blocks, and the
-    /// given hidden line ranges: buffer rows soft-wrapped, ghosts interleaved,
-    /// hidden lines elided into gap rows. See [`char_cell_display`] for the
-    /// full semantics.
+    /// Projects the current wrap tables, ghost blocks, and the given hidden
+    /// line ranges into a [`DisplayLattice`] and passes it to `f`: buffer rows
+    /// soft-wrapped, ghosts interleaved, hidden lines elided into gap rows.
+    /// See [`char_cell_display`] for the full semantics.
     ///
-    /// `hidden_line_ranges` is a parameter (not internal state) so painting
-    /// and geometry provably see the same overlays: pass the model-derived
-    /// set from [`RenderState::hidden_line_ranges`], plus any structural
-    /// extras (e.g. a diff view eliding the buffer's final empty line).
-    pub fn display_rows(&self, hidden_line_ranges: &[Range<usize>]) -> Vec<DisplayRow> {
-        char_cell_display::display_rows(
-            &self.line_starts.borrow(),
-            &self.char_widths.borrow(),
-            self.terminal_width.get(),
-            &self.temporary_blocks.borrow(),
-            hidden_line_ranges,
-        )
-    }
-
-    /// The `(display_row, display_col)` of the gap before 0-based char index
-    /// `char_idx`, over the same rows as [`Self::display_rows`]. Used for
-    /// cursor placement; see [`char_cell_display::offset_to_display_point`].
-    pub fn offset_to_display_point(
+    /// The projection is computed once per call and every query `f` makes is
+    /// answered against those same rows, so painting and interaction geometry
+    /// derived in one closure can never disagree. `hidden_line_ranges` is a
+    /// parameter (not internal state) so consumers can append structural
+    /// extras (e.g. a diff view eliding the buffer's final empty line) to the
+    /// model-derived set from [`RenderState::hidden_line_ranges`].
+    pub fn with_display_lattice<R>(
         &self,
-        char_idx: usize,
         hidden_line_ranges: &[Range<usize>],
-    ) -> (u32, u16) {
-        char_cell_display::offset_to_display_point(
-            char_idx,
-            &self.line_starts.borrow(),
-            &self.char_widths.borrow(),
+        f: impl FnOnce(&DisplayLattice) -> R,
+    ) -> R {
+        let line_starts = self.line_starts.borrow();
+        let char_widths = self.char_widths.borrow();
+        let ghosts = self.temporary_blocks.borrow();
+        let lattice = DisplayLattice::new(
+            &line_starts,
+            &char_widths,
             self.terminal_width.get(),
-            &self.temporary_blocks.borrow(),
+            &ghosts,
             hidden_line_ranges,
-        )
-    }
-
-    /// The 0-based char index at `(display_row, display_col)`, over the same
-    /// rows as [`Self::display_rows`]. Used for mouse hit-testing; non-buffer
-    /// rows resolve to the nearest buffer offset (see
-    /// [`char_cell_display::display_point_to_offset`]).
-    pub fn display_point_to_offset(
-        &self,
-        display_row: u32,
-        display_col: usize,
-        hidden_line_ranges: &[Range<usize>],
-    ) -> usize {
-        char_cell_display::display_point_to_offset(
-            display_row,
-            display_col,
-            &self.line_starts.borrow(),
-            &self.char_widths.borrow(),
-            self.terminal_width.get(),
-            &self.temporary_blocks.borrow(),
-            hidden_line_ranges,
-        )
+        );
+        f(&lattice)
     }
 
     /// The 0-based char range of the soft-wrapped visual row containing the
@@ -2081,13 +2055,15 @@ impl RenderState {
     ///
     /// `hidden_lines` backs [`Self::hidden_line_ranges`]; pass the owning editor's
     /// [`HiddenLinesModel`] so char-cell consumers see model-driven line hiding.
+    /// Required (unlike [`Self::new`]'s optional handle): every char-cell editor is
+    /// built through `CodeEditorModel::new_tui`, which always has one.
     ///
     /// `styles` is stored on the struct for API compatibility but is **not used** for rendering
     /// in CharCell mode. Callers (e.g. `warp_tui`) should supply a minimal stub.
     pub fn new_tui(
         terminal_width: u16,
         styles: RichTextStyles,
-        hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
+        hidden_lines: ModelHandle<HiddenLinesModel>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (element_tx, element_rx) = async_channel::unbounded();
@@ -2120,7 +2096,7 @@ impl RenderState {
             pending_selection_change: Mutex::new(None),
             layout_options: Default::default(),
             document_path: None,
-            hidden_lines,
+            hidden_lines: Some(hidden_lines),
             layout_mode: LayoutMode::CharCell(CharCellState::new(terminal_width)),
         }
     }

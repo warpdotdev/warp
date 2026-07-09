@@ -378,7 +378,7 @@ impl CodeEditorModel {
                     RenderState::new_tui(
                         terminal_width,
                         Self::tui_stub_text_styles(),
-                        Some(hidden_lines),
+                        hidden_lines,
                         ctx,
                     )
                 })

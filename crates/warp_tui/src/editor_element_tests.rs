@@ -8,7 +8,7 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::{App, AppContext, ModelHandle};
 
-use super::{GutterConfig, TuiEditorElement};
+use super::TuiEditorElement;
 
 /// A char-cell editor model seeded with `text`.
 fn model(ctx: &mut AppContext, text: &str) -> ModelHandle<CodeEditorModel> {
@@ -66,8 +66,7 @@ fn gutter_numbers_first_rows_and_blanks_continuations() {
             ctx.add_singleton_model(|_| Appearance::mock());
             // Width 8 with a 1-digit gutter (+2 gap) leaves 5 content columns.
             let model = model(ctx, "abcdef\ngh");
-            let element =
-                TuiEditorElement::new(&model, ctx).with_gutter(GutterConfig::line_numbers());
+            let element = TuiEditorElement::new(&model, ctx).with_line_number_gutter();
             assert_eq!(
                 render_lines(ctx, element, 8, 10),
                 vec!["1  abcde", "   f", "2  gh"]
@@ -83,7 +82,7 @@ fn hide_trailing_empty_line_elides_the_final_blank_row() {
             ctx.add_singleton_model(|_| Appearance::mock());
             let model = model(ctx, "a\nb\n");
             let with_flag = TuiEditorElement::new(&model, ctx)
-                .with_gutter(GutterConfig::line_numbers())
+                .with_line_number_gutter()
                 .hide_trailing_empty_line();
             assert_eq!(render_lines(ctx, with_flag, 8, 10), vec!["1  a", "2  b"]);
 

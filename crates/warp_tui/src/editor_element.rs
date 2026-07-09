@@ -3,12 +3,12 @@
 //!
 //! The element *paints and interacts*; it does not compute row structure.
 //! Rows come from the render state's single display-row implementation
-//! (`CharCellState::display_rows`), which interleaves ghost rows and elides
-//! hidden line ranges; the element slices its text snapshot by each row's
-//! char range, applies consumer-supplied styles, prefixes gutter cells, and
-//! windows by scroll. Interaction geometry (cursor placement, mouse
-//! hit-testing) queries the same render-state methods, so what is painted and
-//! what a click resolves to can never disagree.
+//! (`CharCellState::with_display_lattice`), which interleaves ghost rows and
+//! elides hidden line ranges; the element slices its text snapshot by each
+//! row's char range, applies consumer-supplied styles, prefixes gutter cells,
+//! and windows by scroll. Interaction geometry (cursor placement, mouse
+//! hit-testing) queries the same lattice, so what is painted and what a click
+//! resolves to can never disagree.
 //!
 //! Consumers configure the element; they never assemble rows:
 //! - the prompt input renders it `.editable()` with scroll and an action
@@ -26,7 +26,7 @@ use string_offset::CharOffset;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
 use warp_editor::render::model::{
-    char_cell_display_width, CharCellTemporaryBlock, DisplayRow, DisplayRowKind,
+    char_cell_display_width, CharCellTemporaryBlock, DisplayPoint, DisplayRow, DisplayRowKind,
 };
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
@@ -69,25 +69,6 @@ pub(crate) enum TuiEditorAction {
 /// Handler receiving the element's [`TuiEditorAction`]s during event dispatch.
 type TuiEditorActionHandler = Rc<dyn Fn(TuiEditorAction, &mut TuiEventContext)>;
 
-/// Line-number gutter configuration.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct GutterConfig {
-    /// Width of the number column in cells; `None` sizes it to the buffer's
-    /// largest line number. Numbers are right-aligned; total gutter width is
-    /// the column plus a [`GUTTER_GAP`]-cell gap.
-    pub width: Option<u16>,
-}
-
-impl GutterConfig {
-    /// A gutter sized to the buffer's largest line number.
-    // Consumed by the TUI diff view (stacked on this branch); exercised by
-    // this crate's element tests until then.
-    #[allow(dead_code)]
-    pub(crate) fn line_numbers() -> Self {
-        Self { width: None }
-    }
-}
-
 /// Whole-row styles by row kind, plus per-line overrides — all consumer
 /// policy. Gutter cells take their row's style.
 #[derive(Debug, Clone, Default)]
@@ -115,15 +96,20 @@ pub(crate) struct TuiEditorElement {
     cursor_offset: CharOffset,
     /// Selection as 0-based `(start, end)` char indices, if any.
     sel_char_range: Option<(usize, usize)>,
-    /// Hidden line ranges: the model-derived set plus any structural extras
-    /// (e.g. [`Self::hide_trailing_empty_line`]).
+    /// Model-derived hidden line ranges captured at construction. Structural
+    /// extras are folded in via [`Self::effective_hidden_ranges`], which is
+    /// also what the event path uses over fresh model state.
     hidden_line_ranges: Vec<Range<usize>>,
 
     // ── Config ──────────────────────────────────────────────────────────────
     editable: bool,
     /// `(first_visible_row, max_visible_rows)`; `None` renders full height.
     scroll: Option<(u32, u32)>,
-    gutter: Option<GutterConfig>,
+    /// Whether to render a line-number gutter sized to the largest number.
+    line_number_gutter: bool,
+    /// Whether to elide the buffer's final empty line (see
+    /// [`Self::hide_trailing_empty_line`]).
+    hide_trailing_empty_line: bool,
     styles: TuiEditorStyles,
     /// Whether a mouse drag-selection is in progress (snapshot from the view);
     /// gates drag/up handling in `dispatch_event`.
@@ -178,7 +164,8 @@ impl TuiEditorElement {
             hidden_line_ranges,
             editable: false,
             scroll: None,
-            gutter: None,
+            line_number_gutter: false,
+            hide_trailing_empty_line: false,
             styles: TuiEditorStyles::default(),
             drag_in_progress: false,
             on_action: None,
@@ -207,13 +194,15 @@ impl TuiEditorElement {
         self
     }
 
-    /// Render a line-number gutter: numbers on a buffer line's first row,
-    /// blanks on continuation/ghost/gap rows.
+    /// Render a line-number gutter sized to the buffer's largest line number:
+    /// right-aligned numbers on a buffer line's first row, blanks on
+    /// continuation/ghost/gap rows, plus a [`GUTTER_GAP`]-cell gap before the
+    /// content.
     // Consumed by the TUI diff view (stacked on this branch); exercised by
     // this crate's element tests until then.
     #[allow(dead_code)]
-    pub(crate) fn with_gutter(mut self, gutter: GutterConfig) -> Self {
-        self.gutter = Some(gutter);
+    pub(crate) fn with_line_number_gutter(mut self) -> Self {
+        self.line_number_gutter = true;
         self
     }
 
@@ -229,16 +218,14 @@ impl TuiEditorElement {
     /// trailing newline doesn't render as a blank numbered row; the input must
     /// not, since its cursor legitimately sits there.
     ///
-    /// Structural extras like this one are appended to the hidden set that
-    /// both painting and hit-testing use, so the two stay consistent.
+    /// Structural extras like this one are folded into the hidden set that
+    /// both painting and hit-testing use ([`Self::effective_hidden_ranges`]),
+    /// so the two stay consistent.
     // Consumed by the TUI diff view (stacked on this branch); exercised by
     // this crate's element tests until then.
     #[allow(dead_code)]
     pub(crate) fn hide_trailing_empty_line(mut self) -> Self {
-        if self.text.ends_with('\n') {
-            let last_line = self.text.split('\n').count() - 1;
-            self.hidden_line_ranges.push(last_line..last_line + 1);
-        }
+        self.hide_trailing_empty_line = true;
         self
     }
 
@@ -259,7 +246,22 @@ impl TuiEditorElement {
         self
     }
 
-    // ── Layout internals ─────────────────────────────────────────────────────
+    // ── Layout internals ─────────────────────────────────────────────────────────
+
+    /// The hidden set painting and hit-testing share: `model_ranges` plus the
+    /// structural extras this element is configured with (currently the
+    /// trailing-empty-line elision, derived from `text`).
+    fn effective_hidden_ranges(
+        &self,
+        text: &str,
+        mut model_ranges: Vec<Range<usize>>,
+    ) -> Vec<Range<usize>> {
+        if self.hide_trailing_empty_line && text.ends_with('\n') {
+            let last_line = text.split('\n').count() - 1;
+            model_ranges.push(last_line..last_line + 1);
+        }
+        model_ranges
+    }
 
     /// Builds the visible rows, cursor position, and selection spans at
     /// `full_width`, storing them for `render`/`cursor_position`.
@@ -271,89 +273,95 @@ impl TuiEditorElement {
             return;
         };
 
+        let hidden = self.effective_hidden_ranges(&self.text, self.hidden_line_ranges.clone());
+
         // The gutter narrows the content width; push the content width into
         // the model so buffer softwrap math (navigation, event-time queries)
         // agrees with the display rows built below.
-        self.gutter_cols = self.gutter.map_or(0, |gutter| {
-            gutter
-                .width
-                .unwrap_or_else(|| digits(self.max_line_number()))
-                + GUTTER_GAP
-        });
+        self.gutter_cols = if self.line_number_gutter {
+            digits(self.max_line_number(&hidden)) + GUTTER_GAP
+        } else {
+            0
+        };
         let content_width = full_width.saturating_sub(self.gutter_cols);
         char_cell.set_terminal_width(content_width);
 
-        let rows = char_cell.display_rows(&self.hidden_line_ranges);
         let chars: Vec<char> = self.text.chars().collect();
-        let ghosts = char_cell.temporary_blocks().clone();
+        let cursor_idx = self.cursor_offset.as_usize().saturating_sub(1);
 
-        // The cursor sits one row past the last text row when a logical line
-        // exactly fills the width (deferred wrap); that phantom row is part of
-        // the layout, so include it when sizing and windowing.
-        let (cursor_row, cursor_col) = char_cell.offset_to_display_point(
-            self.cursor_offset.as_usize().saturating_sub(1),
-            &self.hidden_line_ranges,
-        );
-        let total_rows = if self.editable {
-            rows.len().max(cursor_row as usize + 1)
-        } else {
-            rows.len()
-        };
+        // One projection serves rows, cursor placement, and selection spans,
+        // so everything below is geometry over the same lattice.
+        let (column, selected_spans, cursor, visible_end) =
+            char_cell.with_display_lattice(&hidden, |lattice| {
+                let rows = lattice.rows();
+                // The cursor sits one row past the last text row when a logical
+                // line exactly fills the width (deferred wrap); that phantom row
+                // is part of the layout, so include it when sizing and windowing.
+                let cursor = lattice.offset_to_display_point(cursor_idx);
+                let total_rows = if self.editable {
+                    rows.len().max(cursor.row as usize + 1)
+                } else {
+                    rows.len()
+                };
 
-        let (visible_start, visible_rows) = match self.scroll {
-            Some((offset, max_rows)) => (offset as usize, (max_rows as usize).min(total_rows)),
-            None => (0, total_rows),
-        };
-        let visible_end = (visible_start + visible_rows).min(total_rows);
-        let text_rows_end = visible_end.min(rows.len());
-        let visible_slice = if visible_start < text_rows_end {
-            &rows[visible_start..text_rows_end]
-        } else {
-            &[]
-        };
-        // Phantom rows in the window (past the last text row) carry no text or
-        // selection; render them as blank rows so the cursor's row still draws.
-        let phantom_rows = visible_end
-            .saturating_sub(visible_start)
-            .saturating_sub(visible_slice.len());
+                let (visible_start, visible_rows) = match self.scroll {
+                    Some((offset, max_rows)) => {
+                        (offset as usize, (max_rows as usize).min(total_rows))
+                    }
+                    None => (0, total_rows),
+                };
+                let visible_end = (visible_start + visible_rows).min(total_rows);
+                let text_rows_end = visible_end.min(rows.len());
+                let visible_slice = if visible_start < text_rows_end {
+                    &rows[visible_start..text_rows_end]
+                } else {
+                    &[]
+                };
+                // Phantom rows in the window (past the last text row) carry no
+                // text or selection; render them as blank rows so the cursor's
+                // row still draws.
+                let phantom_rows = visible_end
+                    .saturating_sub(visible_start)
+                    .saturating_sub(visible_slice.len());
 
-        let mut selected_spans = Vec::new();
-        let mut column = TuiFlex::column();
-        for (vis_idx, row) in visible_slice.iter().enumerate() {
-            column.add_child(self.render_row(row, &chars, &ghosts));
-            if let Some((start_col, end_col)) = self.selection_span_in_row(row, &chars) {
-                selected_spans.push((
-                    vis_idx as u16,
-                    start_col + self.gutter_cols,
-                    end_col + self.gutter_cols,
-                ));
-            }
-        }
-        for _ in 0..phantom_rows {
-            column.add_child(TuiText::new(" ").truncate().finish());
-        }
-        if visible_slice.is_empty() && phantom_rows == 0 {
-            // Scrolled past the last row: keep one blank row so the element
-            // never collapses to zero height.
-            column.add_child(TuiText::new(" ").truncate().finish());
-        }
+                let mut selected_spans = Vec::new();
+                let mut column = TuiFlex::column();
+                for (vis_idx, row) in visible_slice.iter().enumerate() {
+                    column.add_child(self.render_row(row, &chars, lattice.ghosts()));
+                    if let Some((start_col, end_col)) = self.selection_span_in_row(row, &chars) {
+                        selected_spans.push((
+                            vis_idx as u16,
+                            start_col + self.gutter_cols,
+                            end_col + self.gutter_cols,
+                        ));
+                    }
+                }
+                for _ in 0..phantom_rows {
+                    column.add_child(TuiText::new(" ").truncate().finish());
+                }
+                if visible_slice.is_empty() && phantom_rows == 0 {
+                    // Scrolled past the last row: keep one blank row so the
+                    // element never collapses to zero height.
+                    column.add_child(TuiText::new(" ").truncate().finish());
+                }
+                (column, selected_spans, cursor, visible_end)
+            });
 
         self.column = column;
         self.selected_spans = selected_spans;
-        self.cursor_col = cursor_col + self.gutter_cols;
-        self.cursor_row_in_view = cursor_row.saturating_sub(self.scroll_offset()) as u16;
+        self.cursor_col = cursor.col + self.gutter_cols;
+        self.cursor_row_in_view = cursor.row.saturating_sub(self.scroll_offset()) as u16;
         self.cursor_visible = self.editable
-            && cursor_row >= self.scroll_offset()
-            && (cursor_row as usize) < visible_end.max(1);
+            && cursor.row >= self.scroll_offset()
+            && (cursor.row as usize) < visible_end.max(1);
     }
 
     /// The largest line number the gutter can display: the buffer's line
     /// count, ignoring a trailing empty line that is hidden (so a file's
     /// conventional trailing newline doesn't widen the number column).
-    fn max_line_number(&self) -> usize {
+    fn max_line_number(&self, hidden_line_ranges: &[Range<usize>]) -> usize {
         let line_count = self.text.split('\n').count();
-        let last_line_hidden = self
-            .hidden_line_ranges
+        let last_line_hidden = hidden_line_ranges
             .iter()
             .any(|range| range.contains(&(line_count.saturating_sub(1))));
         if self.text.ends_with('\n') && last_line_hidden {
@@ -455,8 +463,10 @@ impl TuiEditorElement {
     // ── Event internals ──────────────────────────────────────────────────────
 
     /// Maps a terminal cell `position` to the 1-based buffer [`CharOffset`]
-    /// under it, querying the render state fresh (the element may be cached
-    /// across frames while the model changes).
+    /// under it. The element may be cached across frames while the model
+    /// changes, so everything the hit-test reads — text, hidden ranges, wrap
+    /// tables — is re-derived from the model here rather than taken from the
+    /// construction-time snapshots.
     ///
     /// Points outside the element's vertical bounds are intentionally *not*
     /// clamped to the viewport: a point above maps toward row 0 and a point
@@ -469,6 +479,13 @@ impl TuiEditorElement {
         let Some(char_cell) = render_state.char_cell() else {
             return CharOffset::default();
         };
+        let buffer = inner.content().as_ref(app);
+        let text = if buffer.is_empty() {
+            String::new()
+        } else {
+            buffer.text().into_string()
+        };
+        let hidden = self.effective_hidden_ranges(&text, render_state.hidden_line_ranges(app));
 
         let row_in_view = i64::from(position.y) - i64::from(area.y);
         let display_row = (i64::from(self.scroll_offset()) + row_in_view).max(0) as u32;
@@ -477,26 +494,25 @@ impl TuiEditorElement {
             .saturating_sub(area.x)
             .saturating_sub(self.gutter_cols);
 
-        // The rendered layout can include a "phantom" row one past the last
-        // display row when the final logical line exactly fills the width
-        // (deferred wrap). Resolve it directly to the end-of-buffer gap;
-        // otherwise cap at the last real display row so a drag below the text
-        // resolves within it rather than past it.
-        let row_count = char_cell.display_rows(&self.hidden_line_ranges).len() as u32;
-        let last_row = row_count.saturating_sub(1);
-        if display_row > last_row {
-            let end_char_count = self.text.chars().count();
-            let (end_gap_row, _) =
-                char_cell.offset_to_display_point(end_char_count, &self.hidden_line_ranges);
-            if end_gap_row > last_row {
-                return CharOffset::from(end_char_count + 1);
+        char_cell.with_display_lattice(&hidden, |lattice| {
+            // The rendered layout can include a "phantom" row one past the last
+            // display row when the final logical line exactly fills the width
+            // (deferred wrap). Resolve it directly to the end-of-buffer gap;
+            // otherwise cap at the last real display row so a drag below the
+            // text resolves within it rather than past it.
+            let last_row = (lattice.rows().len() as u32).saturating_sub(1);
+            if display_row > last_row {
+                let end_char_count = text.chars().count();
+                if lattice.offset_to_display_point(end_char_count).row > last_row {
+                    return CharOffset::from(end_char_count + 1);
+                }
             }
-        }
-        let display_row = display_row.min(last_row);
-
-        let zero_based =
-            char_cell.display_point_to_offset(display_row, col as usize, &self.hidden_line_ranges);
-        CharOffset::from(zero_based + 1)
+            let point = DisplayPoint {
+                row: display_row.min(last_row),
+                col,
+            };
+            CharOffset::from(lattice.display_point_to_offset(point) + 1)
+        })
     }
 
     /// Maps a mouse `event` to the [`TuiEditorAction`] it should emit, or
