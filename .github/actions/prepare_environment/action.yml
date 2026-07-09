@@ -158,14 +158,58 @@ runs:
       shell: bash
       run: corepack enable
 
-    - name: Install protoc for generating rust bindings of protobuf APIs
+    - name: Install protoc via Homebrew (macOS)
+      # macOS installs protoc from Homebrew. Refreshing the formula index
+      # (brew update) intermittently times out fetching formula.jws.json from
+      # the formulae.brew.sh CDN (curl exit 28), which previously failed the
+      # whole job. Retry the index refresh, and fall back to the runner image's
+      # cached index if it keeps failing, so a transient network blip can't red
+      # the build while still installing an up-to-date protoc on the happy path.
+      if: ${{ inputs.target_os == 'macos' }}
+      shell: bash
+      env:
+        # Make Homebrew's own curl retry the index/bottle downloads.
+        HOMEBREW_CURL_RETRIES: '3'
+      run: |
+        set -euo pipefail
+
+        run_with_retries() {
+          # Runs "$@" up to 3 times with linear backoff, succeeding on the first
+          # attempt that passes and returning non-zero only if all attempts fail.
+          local attempt
+          for attempt in 1 2 3; do
+            if "$@"; then
+              return 0
+            fi
+            echo "'$*' failed (attempt ${attempt}/3); retrying in $((attempt * 10))s..."
+            sleep $((attempt * 10))
+          done
+          return 1
+        }
+
+        # Refresh the formula index for an up-to-date protobuf, but don't fail the
+        # job if the (transient) index fetch keeps timing out — fall back to the
+        # cached index that ships with the runner image.
+        if ! run_with_retries brew update; then
+          echo "::warning::brew update failed repeatedly; installing protobuf from the cached formula index."
+        fi
+
+        # Install protobuf (provides protoc), retrying to absorb transient
+        # bottle-download blips.
+        if ! run_with_retries brew install protobuf; then
+          echo "::error::protoc (protobuf) install failed after 3 attempts on macos"
+          exit 1
+        fi
+
+    - name: Install protoc for generating rust bindings of protobuf APIs (Windows/Linux)
       id: install_protoc
-      # Install protoc for generating rust bindings of protobuf APIs.
+      # macOS is handled by the Homebrew step above; this covers Windows (choco).
+      # On Linux protoc comes from the build-deps scripts, so this is a no-op.
+      if: ${{ inputs.target_os != 'macos' }}
       uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
       # Don't fail the job here so the winget fallback below has a chance to run on Windows.
       continue-on-error: true
       with:
-        brew: protobuf
         choco: protoc
 
     - name: Install protoc via winget (fallback for Windows)
