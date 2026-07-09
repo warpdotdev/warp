@@ -41,6 +41,7 @@ The `delay_rendering` interplay is validated end-to-end by `test_char_cell_diff_
 
 - Renders the core element per file: no `.editable()`/`.on_action` (read-only, PRODUCT 18), `.with_gutter(...)` (new-file numbers, PRODUCT 9/11), `.hide_trailing_empty_line()` (PRODUCT 7), and diff styles — context dim, added green via line classification from `DiffModel::added_or_changed_lines`, ghost red, gap dim (PRODUCT 10; styles from `tui_builder.rs`'s new `diff_added_style`/`diff_removed_style`).
 - Owns chrome: header row (state glyph per `tool_call_labels.rs` conventions, verb from `DiffType`, `+a −r` from `diff_status().get_diff_lines()` so header and body derive from the same computed diff — PRODUCT 2-6), per-file collapse (`MouseStateHandle` + click, caret `▾`/`▸`, PRODUCT 15-16), blank-row spacing between files.
+- Multi-file aggregation (PRODUCT 21-23): a single generic `render_section` renders every collapsible level — keyed header (`SectionKey::Summary | File(index)` into one shared collapse/hover state map) over a lazily built body. Two-plus files render as one summary section (`Edited N files`, counts summed once every file's diff is ready) whose body is the indented per-file column; one file renders the per-file column directly.
 - Fallback: when the storage was never seeded (failed/cancelled actions, restored conversations), a single aggregate label from the action's recorded result (PRODUCT 19); zero-change diffs render `+0 −0`, no body or caret (PRODUCT 14).
 
 ### Transcript integration

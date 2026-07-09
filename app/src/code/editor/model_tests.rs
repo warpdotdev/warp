@@ -1124,7 +1124,9 @@ fn test_char_cell_diff_pipeline_populates_ghosts_and_hidden_ranges() {
                     .render_state()
                     .as_ref(ctx)
                     .char_cell()
-                    .is_some_and(|char_cell| !char_cell.temporary_blocks().is_empty())
+                    .is_some_and(|char_cell| {
+                        char_cell.with_display_lattice(&[], |lattice| !lattice.ghosts().is_empty())
+                    })
             });
             if has_ghosts {
                 break;
@@ -1135,7 +1137,7 @@ fn test_char_cell_diff_pipeline_populates_ghosts_and_hidden_ranges() {
             let render = editor.as_ref(ctx).render_state().as_ref(ctx);
             let char_cell = render.char_cell().expect("new_tui builds char-cell mode");
 
-            let ghosts = char_cell.temporary_blocks();
+            let ghosts = char_cell.with_display_lattice(&[], |lattice| lattice.ghosts().to_vec());
             assert_eq!(ghosts.len(), 1);
             assert_eq!(ghosts[0].content, "line4\n");
 

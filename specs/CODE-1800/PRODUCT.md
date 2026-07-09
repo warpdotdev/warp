@@ -2,7 +2,7 @@
 
 ## Summary
 
-When the agent edits files in the TUI, each edited file renders as its own transcript section: a header row (`✓ Updated components.js +31 −12 ▾`) followed by a read-only, hunk-only inline diff — line-number gutter, dim context lines, removed lines in red, added lines in green. The diff appears as soon as the edits are resolved (before execution completes) so the user can see what the agent is changing. It is not editable and has no approval affordances.
+When the agent edits files in the TUI, each edited file renders as its own transcript section: a header row (`✓ Updated components.js +31 −12 ▾`) followed by a read-only, hunk-only inline diff — line-number gutter, dim context lines, removed lines in red, added lines in green. When a tool call edits multiple files, the per-file sections nest, indented, under one collapsible summary header (`✓ Edited 3 files +34 −15 ▾`). The diff appears as soon as the edits are resolved (before execution completes) so the user can see what the agent is changing. It is not editable and has no approval affordances.
 
 ## Figma
 
@@ -19,7 +19,7 @@ Figma: https://www.figma.com/design/yg5nbPZuGoAszHS3Rhvehu/TUI?node-id=323-17499
 
 ### Per-file sections
 
-1. Each file touched by a single file-edit tool call gets its own section in the transcript: one header row plus (once available) one diff body. There is no aggregate "Edited N file(s)" line.
+1. Each file touched by a single file-edit tool call gets its own section in the transcript: one header row plus (once available) one diff body. When the tool call edits two or more files, these sections nest under an aggregate summary header (see Multi-file aggregation below); a single-file edit renders its file section alone, with no summary header.
 
 2. The header row reads `{status glyph} {verb} {filename} +{added} −{removed} {caret}`, in bold. The verb reflects the operation: `Updated` for content edits, `Created` for new files, `Deleted` for deletions. A rename renders the filename as `old_name → new_name`.
 
@@ -69,3 +69,11 @@ Figma: https://www.figma.com/design/yg5nbPZuGoAszHS3Rhvehu/TUI?node-id=323-17499
 19. If diff data is unavailable for a completed action (e.g. a restored conversation without stored diffs), the view falls back to a single aggregate result line (e.g. "Edited 2 files (+40 −12)"), with no per-file headers, body, or caret.
 
 20. All colors come from the active theme's standard tokens (red, green, bright-black, default foreground). No hard-coded colors; the view renders correctly across themes.
+
+### Multi-file aggregation
+
+21. When a tool call edits two or more files, a summary header reading `{status glyph} Edited {N} files +{added} −{removed} {caret}` precedes the per-file sections, which render indented two cells beneath it. The glyph, bold label, colored counts, and hover affordance follow the same rules as file headers (2–3, 6); per-file headers keep their full format from (2)–(3) unchanged.
+
+22. The summary counts are the sums across all files and appear only once every file's diff has computed, so the totals never tick up incrementally. The caret is always shown.
+
+23. Clicking the summary header collapses or expands the whole group, with the same interaction as file headers (caret `▾` expanded, `▸` collapsed; expanded by default). Collapsing hides all per-file sections; each file's own collapse state is independent and is preserved and restored when the group is re-expanded.

@@ -12,9 +12,11 @@
 //! view renders per-file chrome: a clickable header row
 //! (`✓ Updated name +a −r ▾`) over a read-only, gutter-ed, diff-styled core
 //! element. It never walks diff hunks, computes hidden ranges, or builds
-//! rows. When the storage was never seeded (failed or cancelled actions, or
-//! actions that resolved before this view existed), the view falls back to a
-//! one-line label from the action's recorded result.
+//! rows. Multi-file edits nest the per-file sections, indented, under one
+//! collapsible summary header (`✓ Edited 3 files +a −r ▾`); single-file edits
+//! render the file section alone. When the storage was never seeded (failed
+//! or cancelled actions, or actions that resolved before this view existed),
+//! the view falls back to a one-line label from the action's recorded result.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -59,9 +61,10 @@ pub(super) struct TuiFileEditsView {
     /// One section per resolved file diff, in storage order; empty until the
     /// executor seeds the storage.
     sections: Vec<FileSection>,
-    /// Shared per-file UI state (collapse + header hover), cloned into header
-    /// click closures — the thinking-block pattern.
-    section_states: FileSectionStates,
+    /// Shared per-section UI state (collapse + header hover) for the summary
+    /// header and each file, cloned into header click closures — the
+    /// thinking-block pattern.
+    section_states: SectionStates,
 }
 
 /// One edited file's diff: header facts plus the char-cell editor whose
@@ -96,45 +99,54 @@ impl FileSection {
     }
 }
 
-/// Per-file UI state shared with header click closures, keyed by section
-/// index. Lives outside the view (like `ThinkingBlockStates`) because click
-/// handlers only get a `TuiEventContext`, not the view.
-#[derive(Clone, Default)]
-struct FileSectionStates {
-    states: Rc<RefCell<HashMap<usize, FileSectionUiState>>>,
+/// Keys the shared collapse/hover state map: the multi-file summary header or
+/// one file section by index. File states are independent of the summary's,
+/// so inner collapse choices survive outer toggles.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SectionKey {
+    Summary,
+    File(usize),
 }
 
-/// UI state for a single file section.
+/// Per-section UI state shared with header click closures. Lives outside the
+/// view (like `ThinkingBlockStates`) because click handlers only get a
+/// `TuiEventContext`, not the view.
+#[derive(Clone, Default)]
+struct SectionStates {
+    states: Rc<RefCell<HashMap<SectionKey, SectionUiState>>>,
+}
+
+/// UI state for a single collapsible section.
 #[derive(Default)]
-struct FileSectionUiState {
+struct SectionUiState {
     collapsed: bool,
     /// Hover state for the header row. Owned here so it survives element-tree
     /// rebuilds (the GUI `MouseStateHandle` pattern).
     hover_state: MouseStateHandle,
 }
 
-impl FileSectionStates {
-    /// Whether the section at `index` is collapsed (default: expanded).
-    fn is_collapsed(&self, index: usize) -> bool {
+impl SectionStates {
+    /// Whether the keyed section is collapsed (default: expanded).
+    fn is_collapsed(&self, key: SectionKey) -> bool {
         self.states
             .borrow()
-            .get(&index)
+            .get(&key)
             .map(|state| state.collapsed)
             .unwrap_or(false)
     }
 
-    /// Flips the collapse state of the section at `index`.
-    fn toggle_collapsed(&self, index: usize) {
+    /// Flips the collapse state of the keyed section.
+    fn toggle_collapsed(&self, key: SectionKey) {
         let mut states = self.states.borrow_mut();
-        let state = states.entry(index).or_default();
+        let state = states.entry(key).or_default();
         state.collapsed = !state.collapsed;
     }
 
-    /// The persistent hover state handle for the section at `index`.
-    fn hover_state(&self, index: usize) -> MouseStateHandle {
+    /// The persistent hover state handle for the keyed section.
+    fn hover_state(&self, key: SectionKey) -> MouseStateHandle {
         self.states
             .borrow_mut()
-            .entry(index)
+            .entry(key)
             .or_default()
             .hover_state
             .clone()
@@ -184,7 +196,7 @@ impl TuiFileEditsView {
             action_id,
             action_model: action_model.clone(),
             sections: Vec::new(),
-            section_states: FileSectionStates::default(),
+            section_states: SectionStates::default(),
         }
     }
 
@@ -280,23 +292,60 @@ impl TuiFileEditsView {
         }
     }
 
-    /// Renders one file's header row as one styled-span paragraph: a state
-    /// glyph (colored like `render_tool_call_section`'s rows), `{verb} {name}`
-    /// in bold, colored `+a −r` counts, and the collapse chevron, clickable to
-    /// toggle the body. The counts and chevron are omitted while `line_stats`
-    /// is `None` (diff not yet computed).
-    fn render_file_header(
+    /// The summed `(added, removed)` counts across all sections, available
+    /// only once every file's diff has computed so the summary totals never
+    /// tick up as async diffs land.
+    fn aggregate_stats(&self, app: &AppContext) -> Option<(usize, usize)> {
+        self.sections
+            .iter()
+            .try_fold((0, 0), |(added, removed), section| {
+                section
+                    .line_stats(app)
+                    .map(|(a, r)| (added + a, removed + r))
+            })
+    }
+
+    /// Renders one collapsible section: the keyed header over `body`. The
+    /// body is built lazily, only when the section is expanded; sections
+    /// without a body (`None`) render no chevron.
+    fn render_section(
         &self,
-        index: usize,
-        section: &FileSection,
+        key: SectionKey,
+        label: &str,
         line_stats: Option<(usize, usize)>,
+        builder: &TuiUiBuilder,
+        app: &AppContext,
+        body: Option<impl FnOnce() -> Box<dyn TuiElement>>,
+    ) -> Box<dyn TuiElement> {
+        let has_body = body.is_some();
+        let mut column = TuiFlex::column()
+            .child(self.render_header(key, label, line_stats, has_body, builder, app));
+        if let Some(body) = body {
+            if !self.section_states.is_collapsed(key) {
+                column.add_child(body());
+            }
+        }
+        column.finish()
+    }
+
+    /// Renders a collapsible header row as one styled-span paragraph: a state
+    /// glyph (colored like `render_tool_call_section`'s rows), `label` in
+    /// bold, colored `+a −r` counts, and the collapse chevron, clickable to
+    /// toggle the keyed section. The counts are omitted while `line_stats` is
+    /// `None` (diff(s) not yet computed).
+    fn render_header(
+        &self,
+        key: SectionKey,
+        label: &str,
+        line_stats: Option<(usize, usize)>,
+        show_chevron: bool,
         builder: &TuiUiBuilder,
         app: &AppContext,
     ) -> Box<dyn TuiElement> {
         let state = self.display_state(app);
         let hovered = self
             .section_states
-            .hover_state(index)
+            .hover_state(key)
             .lock()
             .unwrap()
             .is_hovered();
@@ -328,10 +377,7 @@ impl TuiFileEditsView {
 
         let mut spans = vec![
             (format!("{} ", tool_call_glyph(state)), glyph_style),
-            (
-                format!("{} {} ", section.verb, section.name),
-                embolden(bold(name_style)),
-            ),
+            (format!("{label} "), embolden(bold(name_style))),
         ];
         if let Some((added, removed)) = line_stats {
             spans.push((
@@ -343,8 +389,8 @@ impl TuiFileEditsView {
                 embolden(bold(builder.diff_removed_style())),
             ));
         }
-        if line_stats.is_some_and(|stats| stats != (0, 0)) {
-            let chevron = if self.section_states.is_collapsed(index) {
+        if show_chevron {
+            let chevron = if self.section_states.is_collapsed(key) {
                 CHEVRON_COLLAPSED
             } else {
                 CHEVRON_EXPANDED
@@ -354,12 +400,44 @@ impl TuiFileEditsView {
         let row = TuiText::from_spans(spans).truncate();
 
         let states = self.section_states.clone();
-        TuiHoverable::new(self.section_states.hover_state(index), row.finish())
+        TuiHoverable::new(self.section_states.hover_state(key), row.finish())
             .on_click(move |event_ctx, _app| {
-                states.toggle_collapsed(index);
+                states.toggle_collapsed(key);
                 event_ctx.notify();
             })
             .finish()
+    }
+
+    /// Renders the per-file sections as a column of collapsible sections with
+    /// a blank row between files.
+    fn render_file_sections(
+        &self,
+        builder: &TuiUiBuilder,
+        app: &AppContext,
+    ) -> Box<dyn TuiElement> {
+        let last_index = self.sections.len() - 1;
+        let mut column = TuiFlex::column();
+        for (index, section) in self.sections.iter().enumerate() {
+            let line_stats = section.line_stats(app);
+            // Zero-change (and not-yet-computed) diffs have no body to toggle.
+            let has_body = line_stats.is_some_and(|stats| stats != (0, 0));
+            let file_section = self.render_section(
+                SectionKey::File(index),
+                &format!("{} {}", section.verb, section.name),
+                line_stats,
+                builder,
+                app,
+                has_body.then_some(|| self.render_body(section, builder, app)),
+            );
+            // Blank row between files; the block composer pads after the last.
+            let padding_bottom = if index == last_index { 0 } else { 1 };
+            column.add_child(
+                TuiContainer::new(file_section)
+                    .with_padding_bottom(padding_bottom)
+                    .finish(),
+            );
+        }
+        column.finish()
     }
 
     /// Builds the body for one file section: the core editor element,
@@ -453,26 +531,24 @@ impl TuiView for TuiFileEditsView {
             .finish();
         }
 
-        let last_index = self.sections.len() - 1;
-        let mut column = TuiFlex::column();
-        for (index, section) in self.sections.iter().enumerate() {
-            let line_stats = section.line_stats(app);
-            let mut file_column = TuiFlex::column()
-                .child(self.render_file_header(index, section, line_stats, &builder, app));
-            if line_stats.is_some_and(|stats| stats != (0, 0))
-                && !self.section_states.is_collapsed(index)
-            {
-                file_column.add_child(self.render_body(section, &builder, app));
-            }
-            // Blank row between files; the block composer pads after the last.
-            let padding_bottom = if index == last_index { 0 } else { 1 };
-            column.add_child(
-                TuiContainer::new(file_column.finish())
-                    .with_padding_bottom(padding_bottom)
-                    .finish(),
-            );
+        // Single-file edits render the file section alone; multi-file edits
+        // nest the sections, indented, under one collapsible summary header.
+        if self.sections.len() == 1 {
+            return self.render_file_sections(&builder, app);
         }
-        column.finish()
+
+        self.render_section(
+            SectionKey::Summary,
+            &format!("Edited {} files", self.sections.len()),
+            self.aggregate_stats(app),
+            &builder,
+            app,
+            Some(|| {
+                TuiContainer::new(self.render_file_sections(&builder, app))
+                    .with_padding_left(2)
+                    .finish()
+            }),
+        )
     }
 }
 
