@@ -114,7 +114,9 @@ fn diff_pipeline_computes_added_lines_and_ghost_blocks() {
                     .as_ref(app)
                     .char_cell()
                     .expect("TUI editor renders in char-cell mode")
-                    .with_display_lattice(&[], |lattice| lattice.ghosts().to_vec())
+                    .display_lattice(&[])
+                    .ghosts()
+                    .to_vec()
             });
             if !ghosts.is_empty() {
                 break;
