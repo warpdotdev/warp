@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use crate::report_error;
 /// Adjusts resource limits applied to the Warp process (e.g.: the limit on open
 /// file descriptors) to ensure proper behavior.
 pub fn adjust_resource_limits() {
@@ -15,7 +17,8 @@ pub fn adjust_resource_limits() {
         let (cur_limit, hard_limit) = match getrlimit(RLIMIT_NOFILE) {
             Ok(val) => val,
             Err(err) => {
-                log::error!("Failed to retrieve resource limit for number of files: {err:#}");
+                report_error!(anyhow::Error::new(err)
+                    .context("Failed to retrieve resource limit for number of files"));
                 return;
             }
         };
@@ -27,7 +30,10 @@ pub fn adjust_resource_limits() {
         if cur_limit < new_limit {
             match setrlimit(RLIMIT_NOFILE, new_limit, hard_limit) {
                 Ok(_) => log::info!("Increased open file descriptor limit to {new_limit}"),
-                Err(err) => log::error!("Failed to increase open file descriptor limit: {err:#}"),
+                Err(err) => {
+                    report_error!(anyhow::Error::new(err)
+                        .context("Failed to increase open file descriptor limit"))
+                }
             }
         }
     }

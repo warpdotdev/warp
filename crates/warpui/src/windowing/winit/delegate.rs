@@ -15,6 +15,7 @@ use geometry::rect::RectF;
 use itertools::Itertools;
 use parking_lot::Mutex;
 use serde::de::IntoDeserializer;
+use warp_errors::report_error;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
 #[cfg(not(target_family = "wasm"))]
@@ -201,7 +202,8 @@ impl AppDelegate {
                 let global_hotkey_handler = match GlobalHotKeyHandler::new(event_loop_proxy.clone()) {
                     Ok(handler) => Some(handler),
                     Err(err) => {
-                        log::error!("Error creating global hotkey handler: {err:?}");
+                        report_error!(anyhow::Error::new(err)
+                            .context("Error creating global hotkey handler"));
                         None
                     }
                 };
@@ -227,14 +229,14 @@ impl AppDelegate {
                 match super::linux::LinuxClipboard::new() {
                     Ok(clipboard) => self.clipboard = Box::new(clipboard),
                     Err(err) => {
-                        log::error!("Error creating Linux clipboard: {err:?}");
+                        report_error!(anyhow::Error::new(err).context("Error creating Linux clipboard"));
                     }
                 }
             } else if #[cfg(target_os = "windows")] {
                 match super::windows::WindowsClipboard::new() {
                     Ok(clipboard) => self.clipboard = Box::new(clipboard),
                     Err(err) => {
-                        log::error!("Error creating Windows clipboard: {err:?}");
+                        report_error!(anyhow::Error::new(err).context("Error creating Windows clipboard"));
                     }
                 }
             }
@@ -447,7 +449,9 @@ impl platform::Delegate for AppDelegate {
                     }
 
                     let file_result = file_dialog.show_save_single_file().unwrap_or_else(|err| {
-                        log::error!("unable to show save file dialog: {err:?}");
+                        report_error!(
+                            anyhow::Error::new(err).context("unable to show save file dialog")
+                        );
                         None
                     });
 

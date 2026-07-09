@@ -2,6 +2,7 @@ mod v1;
 
 use serde::Deserialize;
 
+use crate::report_error;
 use crate::terminal::CLIAgent;
 
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
@@ -90,9 +91,9 @@ pub fn parse_event(title: Option<&str>, body: &str) -> Option<CLIAgentEvent> {
     match VERSIONED_PARSERS.get(index) {
         Some(parser) => parser(body),
         None => {
-            log::error!(
-                "Received CLI agent event with unsupported schema version \
-                 {version}. The CLI agent plugin or Warp may need to be updated."
+            report_error!(
+                "Received CLI agent event with unsupported schema version. The CLI agent plugin or Warp may need to be updated.",
+                extra: { "version" => %version }
             );
             None
         }

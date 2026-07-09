@@ -9,6 +9,7 @@ use rand::{thread_rng, Rng as _};
 use super::channel_versions::fetch_channel_versions;
 use super::release_assets_directory_url;
 use crate::channel::{Channel, ChannelState};
+use crate::report_error;
 use crate::server::server_api::ServerApi;
 
 pub async fn get_current_changelog(server_api: Arc<ServerApi>) -> Result<Option<Changelog>> {
@@ -29,7 +30,9 @@ pub async fn get_current_changelog(server_api: Arc<ServerApi>) -> Result<Option<
             changelog_result @ Ok(_) => {
                 return changelog_result.map(Option::Some);
             }
-            Err(error) => log::error!("Failed to fetch changelog.json: {error}"),
+            Err(error) => {
+                report_error!(error.context("Failed to fetch changelog.json"))
+            }
         };
     }
 

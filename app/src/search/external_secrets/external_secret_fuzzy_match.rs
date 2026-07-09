@@ -1,6 +1,8 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
 
+use crate::report_error;
+
 #[derive(Clone, Debug)]
 pub struct FuzzyMatchExternalSecretResult {
     pub name_match_result: Option<FuzzyMatchResult>,
@@ -23,7 +25,7 @@ impl FuzzyMatchExternalSecretResult {
         });
 
         if count == 0 {
-            log::error!("Secret object doesn't have a name match result.");
+            report_error!("Secret object doesn't have a name match result.");
             OrderedFloat(f64::MIN)
         } else {
             OrderedFloat((sum / (count as i64)) as f64)

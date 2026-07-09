@@ -9,6 +9,7 @@ use uuid::Uuid;
 use warp_managed_secrets::ManagedSecretValue;
 
 use crate::ai::mcp::{TemplatableMCPServer, TemplateVariable};
+use crate::report_error;
 
 lazy_static! {
     static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);
@@ -62,7 +63,8 @@ impl TemplatableMCPServerInstallation {
         let variable_values_json = match serde_json::to_string(&variable_values) {
             Ok(json) => json,
             Err(err) => {
-                log::error!("Failed to serialize variable values for hashing: {err}");
+                report_error!(anyhow::Error::new(err)
+                    .context("Failed to serialize variable values for hashing"));
                 return None;
             }
         };

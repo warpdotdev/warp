@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use clap::builder::PossibleValue;
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
@@ -125,33 +126,62 @@ impl HiddenComputerUseArgs {
         }
     }
 }
+const HARNESS_VALUE_VARIANTS: [Harness; 5] = [
+    Harness::Oz,
+    Harness::Claude,
+    Harness::OpenCode,
+    Harness::Gemini,
+    Harness::Codex,
+];
+
 /// The execution harness for an agent run.
-#[derive(Debug, Copy, Clone, ValueEnum, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Harness {
     /// Use Warp's built-in MAA infrastructure (default).
     #[default]
-    #[value(name = "oz")]
     Oz,
     /// Delegate to the `claude` CLI.
-    #[value(name = "claude", alias = "claude-code")]
     Claude,
     /// Delegate to the `opencode` CLI.
-    #[value(name = "opencode", alias = "open-code")]
     OpenCode,
     /// Delegate to the `gemini` CLI.
-    #[value(name = "gemini")]
     Gemini,
     /// Delegate to the `codex` CLI.
-    #[value(name = "codex")]
     Codex,
     /// A harness produced by a newer client/server that this client doesn't
     /// recognize. Surfaced via deserialization fallbacks (e.g. unknown GraphQL
     /// enum values, unknown `harness_type` strings); never selectable from the
     /// CLI or harness dropdown.
     #[serde(other)]
-    #[value(skip)]
     Unknown,
+}
+
+impl ValueEnum for Harness {
+    fn value_variants<'a>() -> &'a [Self] {
+        &HARNESS_VALUE_VARIANTS
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        let mut pv = match self {
+            Harness::Oz => {
+                PossibleValue::new("oz").help("Use Warp's built-in MAA infrastructure (default)")
+            }
+            Harness::Claude => PossibleValue::new("claude")
+                .alias("claude-code")
+                .help("Delegate to the `claude` CLI"),
+            Harness::OpenCode => PossibleValue::new("opencode")
+                .alias("open-code")
+                .help("Delegate to the `opencode` CLI"),
+            Harness::Gemini => PossibleValue::new("gemini").help("Delegate to the `gemini` CLI"),
+            Harness::Codex => PossibleValue::new("codex").help("Delegate to the `codex` CLI"),
+            Harness::Unknown => return None,
+        };
+        if !self.should_display_in_help_text() {
+            pv = pv.hide(true);
+        }
+        Some(pv)
+    }
 }
 
 impl Harness {
@@ -164,6 +194,23 @@ impl Harness {
         match Self::parse_orchestration_harness(value) {
             Some(harness @ (Self::Claude | Self::OpenCode | Self::Codex)) => Some(harness),
             Some(Self::Oz) | Some(Self::Gemini) | Some(Self::Unknown) | None => None,
+        }
+    }
+
+    /// Whether this harness is surfaced to users in CLI `--help` for cloud runs
+    /// (`oz agent run-cloud --harness`). Only the harnesses that are generally
+    /// available for cloud runs are shown; gemini and opencode aren't available
+    /// yet, so they're hidden from help. Update this when a harness becomes GA
+    /// for cloud.
+    ///
+    /// This is the single source of truth for the `ValueEnum` help text; the
+    /// per-variant `#[value(hide = ...)]` attributes are no longer used. It does
+    /// not affect runtime acceptance — the server decides which harnesses are
+    /// actually runnable.
+    pub fn should_display_in_help_text(self) -> bool {
+        match self {
+            Self::Oz | Self::Claude | Self::Codex => true,
+            Self::OpenCode | Self::Gemini | Self::Unknown => false,
         }
     }
 
@@ -554,17 +601,49 @@ pub struct RunCloudArgs {
 
     /// Execution harness for the agent run.
     ///
-    /// "oz" (default) uses Warp's built-in agent infrastructure.
-    /// "claude" delegates to the `claude` CLI.
-    #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
+    /// "oz" (the default) runs on Warp's built-in agent infrastructure. Other
+    /// values delegate the run to an external agent CLI; see the possible
+    /// values below.
+    #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz)]
     pub harness: Harness,
 
-    /// Name of a managed secret for Claude Code harness authentication.
+    /// Name of a managed secret used to authenticate the Claude Code harness.
     ///
-    /// Resolved server-side and injected into the agent container.
-    /// Only valid when --harness is set to "claude".
-    #[arg(long = "claude-auth-secret", value_name = "NAME", hide = true)]
+    /// Only valid with `--harness claude`. The secret is resolved server-side
+    /// and injected into the agent container.
+    ///
+    /// If you don't have one yet, create it with
+    /// `oz secret create claude api-key <NAME>` (run
+    /// `oz secret create claude --help` for other credential types), then pass
+    /// that <NAME> here.
+    #[arg(long = "claude-auth-secret", value_name = "NAME")]
     pub claude_auth_secret: Option<String>,
+
+    /// Name of a managed secret used to authenticate the Codex harness.
+    ///
+    /// Only valid with `--harness codex`. The secret is resolved server-side
+    /// and injected into the agent container.
+    ///
+    /// If you don't have one yet, create it with
+    /// `oz secret create codex api-key <NAME>`, then pass that <NAME> here.
+    #[arg(long = "codex-auth-secret", value_name = "NAME")]
+    pub codex_auth_secret: Option<String>,
+}
+
+impl RunCloudArgs {
+    /// Validates that the harness auth-secret flags are only supplied alongside
+    /// their matching `--harness`. Returns a user-facing error message when a
+    /// secret is provided for the wrong harness. Checked on run so a mismatched
+    /// invocation fails fast with a clear message.
+    pub fn validate_auth_secrets(&self) -> Result<(), String> {
+        if self.claude_auth_secret.is_some() && self.harness != Harness::Claude {
+            return Err("--claude-auth-secret is only valid with --harness claude.".to_string());
+        }
+        if self.codex_auth_secret.is_some() && self.harness != Harness::Codex {
+            return Err("--codex-auth-secret is only valid with --harness codex.".to_string());
+        }
+        Ok(())
+    }
 }
 
 /// Sort field for named agents.

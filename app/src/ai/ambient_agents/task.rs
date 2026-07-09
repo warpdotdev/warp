@@ -534,7 +534,7 @@ pub fn cancel_task_with_toast<V: View>(task_id: AmbientAgentTaskId, ctx: &mut Vi
             let message = match result {
                 Ok(()) => "Task cancelled".to_string(),
                 Err(e) => {
-                    log::error!("Failed to cancel task: {e}");
+                    report_error!(&e);
                     format!("Failed to cancel task: {e}")
                 }
             };
@@ -553,7 +553,7 @@ pub fn cancel_task_silently<V: View>(task_id: AmbientAgentTaskId, ctx: &mut View
         async move { ai_client.cancel_ambient_agent_task(&task_id).await },
         move |_view, result, _| {
             if let Err(e) = result {
-                log::error!("Failed to cancel task: {e}");
+                report_error!(e.context("Failed to cancel task"));
             }
         },
     );

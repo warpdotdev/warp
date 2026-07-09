@@ -21,14 +21,13 @@ impl TuiConversationSelection {
             &BlocklistAIHistoryModel::handle(ctx),
             |selection, _, event, ctx| selection.handle_history_event(event, ctx),
         );
-        let pending_query_state =
-            if warp_core::execution_mode::AppExecutionMode::as_ref(ctx).is_sandboxed() {
-                PendingQueryState::New {
-                    autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
-                }
-            } else {
-                PendingQueryState::default()
-            };
+
+        // TODO: Implement actual permissions once settings are in place and there is a UI for permissions requests.
+        // For now, we just always set fast-forward to on.
+        let pending_query_state = PendingQueryState::New {
+            autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
+        };
+
         Self {
             terminal_surface_id,
             pending_query_state,
@@ -120,7 +119,15 @@ impl ConversationSelection for TuiConversationSelection {
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) {
         let previous_conversation_id = self.selected_id();
-        self.set_pending_query_state(PendingQueryState::default(), ctx);
+        // TODO: Implement actual permissions once settings are in place and there is a UI for permissions requests.
+        // For now, we just always set fast-forward to on.
+        self.set_pending_query_state(
+            PendingQueryState::New {
+                autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
+            },
+            ctx,
+        );
+
         if let Some(previous_conversation_id) = previous_conversation_id {
             Self::emit_deactivated(previous_conversation_id, false, ctx);
         }

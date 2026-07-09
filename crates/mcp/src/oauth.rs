@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
+use warp_core::report_error;
 use warpui_extras::secure_storage::AppContextExt as _;
 
 pub const TEMPLATABLE_MCP_CREDENTIALS_KEY: &str = "TemplatableMcpCredentials";
@@ -384,15 +385,14 @@ pub fn write_to_secure_storage<T: Serialize>(
 ) {
     match serde_json::to_string(credentials) {
         Ok(json) => {
-            app.secure_storage()
-                .write_value(key, &json)
-                .inspect_err(|err| {
-                    log::error!("Failed to write MCP credentials to secure storage: {err:#}")
-                })
-                .ok();
+            if let Err(err) = app.secure_storage().write_value(key, &json) {
+                report_error!(anyhow::Error::new(err)
+                    .context("Failed to write MCP credentials to secure storage"));
+            }
         }
         Err(err) => {
-            log::error!("Failed to serialize MCP credentials for secure storage: {err:#}");
+            report_error!(anyhow::Error::new(err)
+                .context("Failed to serialize MCP credentials for secure storage"));
         }
     }
 }

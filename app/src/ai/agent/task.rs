@@ -6,6 +6,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 
 use ai::skills::SkillPathOrigin;
+use anyhow::Context as _;
 use field_mask::{FieldMaskError, FieldMaskOperation};
 use helper::{MessageExt, SubagentExt, ToolCallExt};
 use itertools::Itertools;
@@ -29,7 +30,7 @@ use super::{
 };
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::terminal::model::block::BlockId;
-use crate::AIAgentTodoList;
+use crate::{report_error, AIAgentTodoList};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(String);
@@ -250,10 +251,11 @@ impl Task {
                     skill_path_origin,
                 },
                 false,
+            )
+            .context(
+                "Failed to update last exchange from messages upon converting to a server created task",
             ) {
-                log::error!(
-                    "Failed to update last exchange from messages upon converting to a server created task: {e:?}"
-                );
+                report_error!(e);
             }
         }
         Ok(self)
@@ -774,7 +776,7 @@ impl Task {
             .enumerate()
             .find(|(_, m)| message.id == m.id)
         else {
-            log::error!("Message not found for append client action.");
+            report_error!("Message not found for append client action.");
             return Err(UpdateTaskError::MessageNotFound);
         };
         let updated_message =

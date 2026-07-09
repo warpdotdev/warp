@@ -1,10 +1,13 @@
 mod keysym;
+mod recording;
 mod wayland;
 mod x11;
 
 use async_trait::async_trait;
+pub use recording::Recorder;
+use warp_errors::report_error;
 
-use crate::{Action, ActionResult, Options};
+use crate::{ActionResult, Options, TargetedAction};
 
 /// Returns true if a Wayland environment is available.
 fn is_wayland_available() -> bool {
@@ -22,6 +25,12 @@ fn is_x11_available() -> bool {
 
 pub fn is_supported_on_current_platform() -> bool {
     is_wayland_available() || is_x11_available()
+}
+
+/// Reports whether background, per-window control is available. The Linux input stack drives the
+/// whole screen / frontmost application, so per-window background control is unsupported.
+pub fn background_supported() -> bool {
+    false
 }
 
 pub struct Actor {
@@ -44,7 +53,7 @@ impl Actor {
             match wayland::Actor::new() {
                 Ok(actor) => ActorInner::Wayland(Box::new(actor)),
                 Err(e) => {
-                    log::error!("Failed to create Wayland actor: {e}");
+                    report_error!(anyhow::anyhow!(e).context("Failed to create Wayland actor"));
                     ActorInner::Unsupported
                 }
             }
@@ -53,7 +62,7 @@ impl Actor {
             match x11::Actor::new() {
                 Ok(actor) => ActorInner::X11(Box::new(actor)),
                 Err(e) => {
-                    log::error!("Failed to create X11 actor: {e}");
+                    report_error!(anyhow::anyhow!(e).context("Failed to create X11 actor"));
                     ActorInner::Unsupported
                 }
             }
@@ -77,7 +86,7 @@ impl super::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
+        actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String> {
         match &mut self.inner {

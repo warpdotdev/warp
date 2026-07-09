@@ -42,7 +42,7 @@ fn new_block_list(event_proxy: ChannelEventListener, mode: TypeaheadMode) -> Blo
     assert_eq!(block_list.early_output_mut().mode, mode);
 
     block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    block_list.prompt_only_precmd(Default::default());
     assert!(block_list.is_bootstrapping_precmd_done());
     block_list
 }
@@ -128,7 +128,7 @@ fn test_queued_typeahead_input_matching() {
     });
     assert_eq!(block_list.active_block().command_to_string(), "first");
     block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    block_list.prompt_only_precmd(Default::default());
 
     // Once the second line of typeahead is echoed, it should be recognized as typeahead.
     block_list.input('s');
@@ -174,7 +174,7 @@ fn test_queued_typeahead_shell_reported() {
     assert!(block_list.background_block_mut().is_none());
 
     block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    block_list.prompt_only_precmd(Default::default());
 
     // Now, when the second line is echoed, it should be recognized as typeahead.
     block_list.input('s');

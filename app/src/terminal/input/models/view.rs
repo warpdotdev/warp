@@ -111,6 +111,10 @@ pub struct InlineModelSelectorView {
     /// prompt is stashed in the suggestions-mode buffer snapshot and restored
     /// when the selector closes.
     prompt_parked_for_search: bool,
+    /// Retained so a lazily-created ambient view model can be attached after construction on the
+    /// shared-session viewer path (see `set_ambient_agent_view_model`). It also lives inside the
+    /// search mixer; this handle points at the same model.
+    model_selector_data_source: ModelHandle<ModelSelectorDataSource>,
 }
 
 impl InlineModelSelectorView {
@@ -126,7 +130,9 @@ impl InlineModelSelectorView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let data_source = ctx.add_model(|_| {
-            ModelSelectorDataSource::new(terminal_view_id, ambient_agent_view_model)
+            // Built without the ambient model; the setter (called below for construction and by
+            // the lazy shared-session viewer path) is the single point that attaches it.
+            ModelSelectorDataSource::new(terminal_view_id, None)
         });
 
         let tab_configs = TAB_CONFIGS.clone();
@@ -400,7 +406,7 @@ impl InlineModelSelectorView {
             });
         });
 
-        Self {
+        let mut me = Self {
             menu_view,
             mixer,
             suggestions_mode_model,
@@ -409,7 +415,28 @@ impl InlineModelSelectorView {
             selection_before_tab_switch: None,
             filter_results_by_input: true,
             prompt_parked_for_search: false,
+            model_selector_data_source: data_source,
+        };
+        // Route ambient wiring through the setter so construction and the lazy shared-session
+        // viewer path share one implementation.
+        if let Some(ambient_agent_view_model) = ambient_agent_view_model {
+            me.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
         }
+        me
+    }
+
+    /// Attaches a lazily-created ambient agent view model to the picker's data source so a
+    /// shared-session viewer's follow-up lists the correct (cloud-pane) model set. Used when a
+    /// raw-link viewer only learns the run is ambient at `SessionJoined`. Idempotent.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model_selector_data_source
+            .update(ctx, |data_source, ctx| {
+                data_source.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
+            });
     }
 
     fn menu_model<'a>(

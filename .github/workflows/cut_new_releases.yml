@@ -30,6 +30,7 @@ jobs:
   get_config:
     name: Get release configuration
     runs-on: ubuntu-latest
+    if: github.repository_owner == 'warpdotdev'
     env:
       SCHEDULE: ${{ github.event.schedule }}
       TARGETS: ${{ inputs.targets }}

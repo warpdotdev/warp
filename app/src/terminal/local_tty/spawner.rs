@@ -302,7 +302,7 @@ fn is_e2big(err: &anyhow::Error) -> bool {
 /// env var / secret configurations (E2BIG on Linux, socket overflow on macOS).
 #[cfg(unix)]
 fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
-    log::error!("Shell spawn env var diagnostics (names and sizes only, no values):");
+    report_error!("Shell spawn env var diagnostics (names and sizes only, no values):");
 
     // Log the additional env vars supplied via PtyOptions.
     let mut extra: Vec<(&OsString, usize)> = extra_env_vars
@@ -310,9 +310,15 @@ fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
         .map(|(k, v)| (k, k.len() + v.len() + 2))
         .collect();
     extra.sort_by_key(|(_, size)| Reverse(*size));
-    log::error!("  PtyOptions env_vars ({} entries):", extra_env_vars.len());
+    report_error!(
+        "PtyOptions env_vars",
+        extra: { "entries" => %extra_env_vars.len() }
+    );
     for (key, size) in extra.iter().take(20) {
-        log::error!("    {:?} — {} bytes", key, size);
+        report_error!(
+            "PtyOptions env var entry",
+            extra: { "key" => ?key, "bytes" => %size }
+        );
     }
 
     // Log the largest vars from the inherited process environment.
@@ -324,12 +330,14 @@ fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
         .collect();
     inherited.sort_by_key(|(_, size)| Reverse(*size));
     let total: usize = inherited.iter().map(|(_, s)| s).sum();
-    log::error!(
-        "  Inherited process env ({} vars, ~{} bytes total):",
-        inherited.len(),
-        total
+    report_error!(
+        "Inherited process env summary",
+        extra: { "vars" => %inherited.len(), "bytes" => %total }
     );
     for (key, size) in inherited.iter().take(20) {
-        log::error!("    {:?} — {} bytes", key, size);
+        report_error!(
+            "Inherited process env entry",
+            extra: { "key" => ?key, "bytes" => %size }
+        );
     }
 }

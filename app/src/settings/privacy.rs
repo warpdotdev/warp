@@ -94,6 +94,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "TelemetryEnabled",
         toml_path: "privacy.telemetry_enabled",
@@ -104,6 +105,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "CrashReportingEnabled",
         toml_path: "privacy.crash_reporting_enabled",
@@ -114,6 +116,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "CloudConversationStorageEnabled",
         toml_path: "agents.cloud_conversation_storage_enabled",
@@ -126,6 +129,7 @@ maybe_define_setting!(CustomSecretRegexList, group: PrivacySettings, {
     default: Vec::new(),
     supported_platforms: SupportedPlatforms::ALL,
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+    surface: settings::SettingSurfaces::GUI,
     private: false,
     toml_path: "privacy.custom_secret_regex_list",
     description: "Custom regex patterns for detecting and redacting secrets.",
@@ -136,6 +140,7 @@ maybe_define_setting!(HasInitializedDefaultSecretRegexes, group: PrivacySettings
     default: false,
     supported_platforms: SupportedPlatforms::ALL,
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+    surface: settings::SettingSurfaces::GUI,
     private: true,
 });
 
@@ -340,9 +345,9 @@ impl PrivacySettings {
                         name: enterprise_regex.name,
                     });
                 } else {
-                    log::error!(
-                        "Invalid enterprise secret regex pattern: {}",
-                        enterprise_regex.pattern
+                    report_error!(
+                        "Invalid enterprise secret regex pattern",
+                        extra: { "pattern" => %enterprise_regex.pattern }
                     );
                 }
             }
@@ -601,7 +606,7 @@ impl PrivacySettings {
             .set_value(new_user_secret_regex_list, ctx)
             .is_err()
         {
-            log::error!("Custom Secret Regex List failed to serialize")
+            report_error!("Custom Secret Regex List failed to serialize")
         }
     }
 
@@ -623,7 +628,10 @@ impl PrivacySettings {
                     new_user_secret_regex_list.push(custom_regex);
                 }
             } else {
-                log::error!("Failed to compile default regex: {}", default_regex.pattern);
+                report_error!(
+                    "Failed to compile default regex",
+                    extra: { "pattern" => %default_regex.pattern }
+                );
             }
         }
 
@@ -636,7 +644,7 @@ impl PrivacySettings {
             .set_value(new_user_secret_regex_list, ctx)
             .is_err()
         {
-            log::error!("Failed to serialize default regexes to custom secret regex list")
+            report_error!("Failed to serialize default regexes to custom secret regex list")
         }
 
         ctx.notify();
@@ -649,7 +657,7 @@ impl PrivacySettings {
             .set_value(true, ctx)
             .is_err()
         {
-            log::error!("Failed to disable default regex trigger");
+            report_error!("Failed to disable default regex trigger");
         }
     }
 
@@ -666,7 +674,7 @@ impl PrivacySettings {
                 .set_value(true, ctx)
                 .is_err()
             {
-                log::error!("Failed to set has_initialized_default_secret_regexes flag");
+                report_error!("Failed to set has_initialized_default_secret_regexes flag");
             }
         }
     }

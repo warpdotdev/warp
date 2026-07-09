@@ -34,6 +34,23 @@ impl PendingResponseStreams {
             .any(|stream_id| conversation.is_processing_response_stream(stream_id))
     }
 
+    /// Returns the IDs of all in-flight streams owned by the given conversation.
+    pub fn stream_ids_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        app: &AppContext,
+    ) -> Vec<ResponseStreamId> {
+        let history_model = BlocklistAIHistoryModel::as_ref(app);
+        let Some(conversation) = history_model.conversation(&conversation_id) else {
+            return Vec::new();
+        };
+        self.streams
+            .keys()
+            .filter(|stream_id| conversation.is_processing_response_stream(stream_id))
+            .cloned()
+            .collect()
+    }
+
     pub fn register_new_stream(
         &mut self,
         stream_id: ResponseStreamId,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use instant::Instant;
 use parking_lot::FairMutex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use warp_core::send_telemetry_from_ctx;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
@@ -23,18 +23,67 @@ use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::TerminalModel;
-use crate::BlocklistAIHistoryModel;
+use crate::{report_error, BlocklistAIHistoryModel};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum UserTakeOverReason {
     Manual,
-    Stop,
+    /// The user interrupted the command and took control. `should_auto_resume` is `true` for a
+    /// live interrupt (e.g. Ctrl-C) that keeps the conversation alive so it resumes once the
+    /// command completes, and `false` for teardown flows (stop/rewind) that have cancelled it.
+    Stop {
+        should_auto_resume: bool,
+    },
     /// The agent explicitly transferred control to the user via the
     /// TransferShellCommandControlToUser tool call.
     TransferFromAgent {
         /// The reason the agent gave for transferring control.
         reason: String,
     },
+}
+
+impl<'de> Deserialize<'de> for UserTakeOverReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // `Current` mirrors the derived shape so serde can parse it without recursing back into
+        // this impl. `LegacyStop` accepts the bare `"Stop"` persisted before `should_auto_resume`
+        // existed: an externally tagged enum can't accept `Stop` as both a unit (legacy) and a
+        // struct (current) variant, and `#[serde(default)]` can't bridge the two, so the forms are
+        // unioned as `untagged`.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Current(Current),
+            LegacyStop(LegacyStop),
+        }
+
+        #[derive(Deserialize)]
+        enum Current {
+            Manual,
+            Stop { should_auto_resume: bool },
+            TransferFromAgent { reason: String },
+        }
+
+        #[derive(Deserialize)]
+        enum LegacyStop {
+            Stop,
+        }
+
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Current(Current::Manual) => Self::Manual,
+            Wire::Current(Current::Stop { should_auto_resume }) => {
+                Self::Stop { should_auto_resume }
+            }
+            Wire::Current(Current::TransferFromAgent { reason }) => {
+                Self::TransferFromAgent { reason }
+            }
+            Wire::LegacyStop(LegacyStop::Stop) => Self::Stop {
+                should_auto_resume: false,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -45,11 +94,20 @@ struct ActiveCLISubagentState {
 
 impl UserTakeOverReason {
     pub fn is_stop(&self) -> bool {
-        matches!(self, Self::Stop)
+        matches!(self, Self::Stop { .. })
     }
 
     pub fn is_transfer_from_agent(&self) -> bool {
         matches!(self, Self::TransferFromAgent { .. })
+    }
+
+    /// Returns `true` if the conversation should resume once the user-controlled command
+    /// completes. Only a teardown `Stop` opts out.
+    pub fn should_auto_resume(&self) -> bool {
+        match self {
+            Self::Manual | Self::TransferFromAgent { .. } => true,
+            Self::Stop { should_auto_resume } => *should_auto_resume,
+        }
     }
 
     pub fn transfer_reason(&self) -> Option<&str> {
@@ -93,6 +151,14 @@ impl LongRunningCommandControlState {
 
     pub fn is_user_in_control(&self) -> bool {
         matches!(self, Self::User { .. })
+    }
+
+    /// Returns `true` if a completing user-controlled command should auto-resume the conversation.
+    pub fn should_auto_resume(&self) -> bool {
+        match self {
+            Self::Agent { .. } => false,
+            Self::User { reason } => reason.should_auto_resume(),
+        }
     }
 
     pub fn should_hide_responses(&self) -> bool {
@@ -237,7 +303,7 @@ impl CLISubagentController {
                             me.controller.update(ctx, |controller, ctx| {
                                 controller.cancel_conversation_progress(
                                     conversation_id,
-                                    CancellationReason::OptimisticCLISubagentCompletion,
+                                    CancellationReason::CommandFinishedDuringInlineAgentView,
                                     ctx,
                                 );
                             });
@@ -315,10 +381,14 @@ impl CLISubagentController {
         let interaction_mode_debug = format!("{:?}", active_block.interaction_mode());
         let lrc_state_debug = format!("{:?}", active_block.long_running_control_state());
         if let Err(e) = active_block.take_over_control_for_user(reason.clone()) {
-            log::error!(
-                "Failed to take control for user: {e:?}, reason={reason:?}, \
-                 block_id={block_id:?}, interaction_mode={interaction_mode_debug}, \
-                 lrc_state={lrc_state_debug}"
+            report_error!(
+                anyhow::Error::new(e).context("Failed to take control for user"),
+                extra: {
+                    "reason" => ?reason,
+                    "block_id" => ?block_id,
+                    "interaction_mode" => %interaction_mode_debug,
+                    "lrc_state" => %lrc_state_debug
+                }
             );
             return;
         }
@@ -378,9 +448,9 @@ impl CLISubagentController {
             .and_then(|state| state.user_take_over_reason())
             .is_some_and(|reason| reason.is_transfer_from_agent());
         if let Err(e) = active_block.handoff_control_to_agent() {
-            log::error!(
-                "Failed to handoff control to agent: {e:?}, \
-                 block_id={block_id:?}, lrc_state={lrc_state_debug}"
+            report_error!(
+                anyhow::Error::new(e).context("Failed to handoff control to agent"),
+                extra: { "block_id" => ?block_id, "lrc_state" => %lrc_state_debug }
             );
             return;
         }
@@ -399,7 +469,8 @@ impl CLISubagentController {
                         AgentViewEntryOrigin::LongRunningCommand,
                         ctx,
                     ) {
-                        log::error!("Failed to enter inline agent view for LRC handoff: {e}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Failed to enter inline agent view for LRC handoff"));
                     }
                 }
             });
@@ -516,7 +587,8 @@ impl CLISubagentController {
                     task_id,
                     *conversation_id,
                 ) {
-                    log::error!("Could not update interaction mode to agent-monitored: {e:?}",);
+                    report_error!(anyhow::Error::new(e)
+                        .context("Could not update interaction mode to agent-monitored"));
                     return;
                 };
 
@@ -569,9 +641,9 @@ impl CLISubagentController {
                                 }
                             }
                             Err(e) => {
-                                log::error!(
-                                    "Tried to upgrade CLISubagent task ID for non-existent block: {e:?}"
-                                );
+                                report_error!(e.context(
+                                    "Tried to upgrade CLISubagent task ID for non-existent block"
+                                ));
                             }
                         }
                     }
@@ -636,3 +708,7 @@ fn snapshot_block_id_for_action_result(result: &AIAgentActionResultType) -> Opti
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "cli_controller_tests.rs"]
+mod tests;

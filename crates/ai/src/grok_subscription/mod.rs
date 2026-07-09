@@ -19,6 +19,7 @@ pub mod oauth;
 
 use std::time::{Duration, SystemTime};
 
+use warp_core::report_error;
 use warpui_core::r#async::Timer;
 use warpui_core::ModelContext;
 
@@ -220,7 +221,7 @@ fn spawn_grok_refresh(
                     // truly invalid. The request-time safety net
                     // (`ApiKeyManager::refresh_grok_tokens_if_needed`) retries
                     // on the next request.
-                    log::error!("Failed to refresh Grok OAuth token: {err:#}");
+                    report_error!(err.context("Failed to refresh Grok OAuth token"));
                 }
             }
         },

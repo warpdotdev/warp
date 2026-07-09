@@ -40,6 +40,7 @@ use crate::editor::{
     SingleLineEditorOptions,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::report_error;
 use crate::terminal::input::MenuPositioning;
 use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_VOLTRON_WIDTH};
 use crate::util::bindings::{self, CustomAction};
@@ -213,7 +214,7 @@ impl Voltron {
         {
             Some(handle) => handle,
             None => {
-                log::error!("Couldn't retrieve voltron resizable state handle.");
+                report_error!("Couldn't retrieve voltron resizable state handle.");
                 resizable_state_handle(DEFAULT_VOLTRON_WIDTH)
             }
         };

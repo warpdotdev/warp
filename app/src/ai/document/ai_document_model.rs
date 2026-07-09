@@ -37,6 +37,7 @@ use crate::notebooks::editor::rich_text_styles;
 use crate::notebooks::file::MarkdownDisplayMode;
 use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::persistence::ModelEvent;
+use crate::report_error;
 use crate::server::cloud_objects::update_manager::{
     InitiatedBy, ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
@@ -323,8 +324,9 @@ impl AIDocumentModel {
                 }
                 AIDocumentSaveStatus::NotSaved => {
                     if !self.sync_to_warp_drive(document_id, ctx) {
-                        log::error!(
-                            "Failed to publish plan document {document_id} to Warp Drive before child-agent launch."
+                        report_error!(
+                            "Failed to publish plan document to Warp Drive before child-agent launch.",
+                            extra: { "document_id" => %document_id }
                         );
                     } else if !self.get_document_save_status(&document_id).is_saved() {
                         awaiting_server_backing.push(document_id);
@@ -1175,7 +1177,10 @@ impl AIDocumentModel {
         if let Err(e) = self.save_tx.try_send(AIDocumentSaveRequest {
             document_id: *document_id,
         }) {
-            log::error!("Error enqueueing content save for {}: {}", document_id, e);
+            report_error!(
+                anyhow::Error::new(e).context("Error enqueueing content save"),
+                extra: { "document_id" => %document_id }
+            );
         }
     }
 
@@ -1217,7 +1222,10 @@ impl AIDocumentModel {
             title: doc.title.clone(),
         };
         if let Err(err) = sender.try_send(event) {
-            log::error!("Error persisting AI document content for {id}: {err}");
+            report_error!(
+                anyhow::Error::new(err).context("Error persisting AI document content"),
+                extra: { "id" => %id }
+            );
         }
     }
 

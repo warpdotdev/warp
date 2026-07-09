@@ -10,6 +10,7 @@ use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::notebooks::CloudNotebookModel;
+use crate::report_error;
 use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::item::SearchItem;
 use crate::search::notebooks::fuzzy_match::render_notebook_matched_content_with_highlight;
@@ -116,7 +117,7 @@ impl SearchItem for NotebookSearchItem {
                 // This branch should never be executed because a Notebooks search result should
                 // always have some match with the query, otherwise it should not appear as a
                 // result.
-                log::error!(
+                report_error!(
                     "Notebook in search results has neither a name nor command match result."
                 );
                 OrderedFloat(f64::MIN)

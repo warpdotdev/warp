@@ -86,7 +86,7 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::view::{cell_size_and_padding, TerminalAction};
 use crate::themes::onboarding_theme_picker_themes;
 use crate::themes::theme::{AnsiColorIdentifier, Blend, Fill, ThemeKind, WarpThemeConfig};
-use crate::uri::OpenMCPSettingsArgs;
+use crate::uri::{OpenMCPSettingsArgs, OpenSettingsArgs};
 use crate::util::bindings::{self, is_binding_pty_compliant};
 use crate::util::traffic_lights::{traffic_light_data, TrafficLightData, TrafficLightMouseStates};
 use crate::view_components::DismissibleToast;
@@ -99,8 +99,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::{
-    report_if_error, send_telemetry_from_app_ctx, send_telemetry_from_ctx, ChannelState,
-    GlobalResourceHandles, GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
+    report_error, report_if_error, send_telemetry_from_app_ctx, send_telemetry_from_ctx,
+    ChannelState, GlobalResourceHandles, GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
 };
 
 const WINDOW_TITLE: &str = "Warp";
@@ -385,6 +385,15 @@ pub fn init(app: &mut AppContext) {
     app.add_action(
         "root_view:open_settings_page_in_existing_window",
         RootView::open_settings_page_in_existing_window,
+    );
+
+    app.add_global_action(
+        "root_view:open_settings_in_new_window",
+        open_settings_in_new_window,
+    );
+    app.add_action(
+        "root_view:open_settings_in_existing_window",
+        RootView::open_settings_in_existing_window,
     );
 
     app.add_global_action(
@@ -976,6 +985,34 @@ fn open_settings_page_in_new_window(section: &SettingsSection, ctx: &mut AppCont
                 workspace_view_handle.id(),
                 &WorkspaceAction::ShowSettingsPage(*section),
             );
+        }
+    });
+}
+
+/// Maps a `warp://settings` deeplink to the workspace action that opens it.
+fn workspace_action_for_open_settings(args: &OpenSettingsArgs) -> WorkspaceAction {
+    match args {
+        OpenSettingsArgs::Default => WorkspaceAction::ShowSettings,
+        OpenSettingsArgs::Search { query } => WorkspaceAction::ShowSettingsPageWithSearch {
+            search_query: query.clone(),
+            section: None,
+        },
+        OpenSettingsArgs::Widget { page, widget_id } => WorkspaceAction::ScrollToSettingsWidget {
+            page: *page,
+            widget_id,
+        },
+    }
+}
+
+fn open_settings_in_new_window(args: &OpenSettingsArgs, ctx: &mut AppContext) {
+    let action = workspace_action_for_open_settings(args);
+    let root_handle = open_new_window_get_handles(None, ctx).1;
+    root_handle.update(ctx, |root_view, ctx| {
+        if let AuthOnboardingState::Terminal(workspace_view_handle) =
+            &root_view.auth_onboarding_state
+        {
+            let window_id = ctx.window_id();
+            ctx.dispatch_typed_action_for_view(window_id, workspace_view_handle.id(), &action);
         }
     });
 }
@@ -1848,7 +1885,10 @@ impl RootView {
                 })
             }
         } else {
-            log::error!("Error fetching server time {:?}", server_time.err());
+            report_error!(anyhow::anyhow!(
+                "Error fetching server time {:?}",
+                server_time.err()
+            ));
         }
     }
 
@@ -2589,7 +2629,8 @@ impl RootView {
     ) -> bool {
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
             handle.update(ctx, |workspace, ctx| {
-                workspace.add_tab_for_joining_shared_session(*session_id, ctx);
+                // Generic session link: ambient-ness (if any) is discovered at SessionJoined.
+                workspace.add_tab_for_joining_shared_session(*session_id, false, ctx);
             });
             let window_id = ctx.window_id();
             ctx.windows().show_window_and_focus_app(window_id);
@@ -2759,7 +2800,7 @@ impl RootView {
             );
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open warp drive");
+            report_error!("Auth not complete before trying to open warp drive");
         }
 
         // Use the team tester model to notify relevant subscribers to refresh their data.
@@ -2779,7 +2820,7 @@ impl RootView {
             );
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open team settings page");
+            report_error!("Auth not complete before trying to open team settings page");
         }
         true
     }
@@ -2798,7 +2839,26 @@ impl RootView {
             );
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open settings page {section:?}");
+            report_error!(
+                "Auth not complete before trying to open settings page",
+                extra: { "section" => ?section }
+            );
+        }
+        true
+    }
+
+    pub fn open_settings_in_existing_window(
+        &mut self,
+        args: &OpenSettingsArgs,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let window_id = ctx.window_id();
+        if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
+            let action = workspace_action_for_open_settings(args);
+            ctx.dispatch_typed_action_for_view(window_id, handle.id(), &action);
+            ctx.windows().show_window_and_focus_app(window_id);
+        } else {
+            report_error!("Auth not complete before trying to open settings");
         }
         true
     }
@@ -2825,7 +2885,7 @@ impl RootView {
             let window_id = ctx.window_id();
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open MCP settings page");
+            report_error!("Auth not complete before trying to open MCP settings page");
         }
         true
     }
@@ -2839,7 +2899,7 @@ impl RootView {
             });
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open Codex modal");
+            report_error!("Auth not complete before trying to open Codex modal");
         }
         true
     }
@@ -2858,7 +2918,7 @@ impl RootView {
             });
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open Linear issue work");
+            report_error!("Auth not complete before trying to open Linear issue work");
         }
         true
     }
@@ -2959,8 +3019,8 @@ impl RootView {
                         }
                     }
                 }
-                UserAuthenticationError::Unexpected(err) => {
-                    log::error!("Encountered unexpected error when trying to fetch user: {err:#}");
+                UserAuthenticationError::Unexpected(_) => {
+                    report_error!(err);
                 }
                 UserAuthenticationError::InvalidStateParameter => {}
                 UserAuthenticationError::MissingStateParameter => {}
@@ -3078,7 +3138,7 @@ impl RootView {
                     };
                     ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
                 } else {
-                    log::error!("Received web handoff event in unexpected state");
+                    report_error!("Received web handoff event in unexpected state");
                 }
                 self.focus(ctx);
             }
@@ -3155,7 +3215,9 @@ impl RootView {
                         // Stop listening and proceed to transcription (don't abort).
                         voice_input.update(ctx, |voice_input, ctx| {
                             if let Err(e) = voice_input.stop_listening(ctx) {
-                                log::error!("Failed to stop voice input on key release: {e:?}");
+                                report_error!(
+                                    e.context("Failed to stop voice input on key release")
+                                );
                             }
                         });
                     }
@@ -3502,7 +3564,7 @@ impl AuthOnboardingState {
             AuthOnboardingState::WebImport(_) => {
                 // This case _shouldn't_ be possible - if SSO were required, it should be handled
                 // in the host app.
-                log::error!("SSO link required after web user import");
+                report_error!("SSO link required after web user import");
             }
             AuthOnboardingState::NeedsSsoLink { .. } => (),
             AuthOnboardingState::Onboarding { .. } | AuthOnboardingState::LoginSlide { .. } => {

@@ -15,6 +15,7 @@ use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::task::{AttachmentInput, TaskAttachment};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
+use crate::report_error;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::server_api::ServerApi;
@@ -75,7 +76,7 @@ pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
     attachments_dir: PathBuf,
 ) -> anyhow::Result<Option<String>> {
     if !FeatureFlag::OzHandoff.is_enabled() {
-        log::error!(
+        report_error!(
             "fetch_and_download_handoff_snapshot_attachments called with OzHandoff disabled; \
              call sites should gate on the flag before invoking"
         );

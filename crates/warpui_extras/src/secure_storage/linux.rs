@@ -12,6 +12,7 @@ use rand::RngCore;
 use ring::aead;
 use secret_service::blocking::{Item, SecretService};
 use secret_service::EncryptionType;
+use warp_errors::report_error;
 
 use super::Error;
 
@@ -70,11 +71,15 @@ impl SecureStorage {
     /// return the error on an initialization failure.
     fn collection(&self) -> Result<&secret_service::blocking::Collection<'_>, Error> {
         self.collection
-            .get_or_init(|| match Collection::open_default_collection() {
-                Ok(collection) => Some(collection),
-                Err(err) => {
-                    log::error!("Failed to acquire default Secret Service collection: {err:#}");
-                    None
+            .get_or_init(|| {
+                match Collection::open_default_collection()
+                    .context("Failed to acquire default Secret Service collection")
+                {
+                    Ok(collection) => Some(collection),
+                    Err(err) => {
+                        report_error!(err);
+                        None
+                    }
                 }
             })
             .as_ref()
@@ -106,7 +111,7 @@ impl SecureStorage {
                 match aead::UnboundKey::new(&aead::AES_256_GCM, key_bytes.as_slice()) {
                     Ok(key) => Some(aead::LessSafeKey::new(key)),
                     Err(_) => {
-                        log::error!("Failed to initialize fallback encryption key");
+                        report_error!("Failed to initialize fallback encryption key");
                         None
                     }
                 }

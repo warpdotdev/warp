@@ -30,7 +30,7 @@ use crate::features::FeatureFlag;
 use crate::server::telemetry::context::AttachContext;
 use crate::server::telemetry_ext::TelemetryExt;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::ChannelState;
+use crate::{report_error, ChannelState};
 
 /// Filename for file where telemetry events are written on app quit.
 const RUDDER_TELEMETRY_EVENTS_FILE_NAME: &str = "rudder_telemetry_events.json";
@@ -172,7 +172,7 @@ impl TelemetryApi {
 
         let events = warpui::telemetry::flush_events();
         if events.len() > max_event_count {
-            log::error!("More telemetry events in queue than the limit to persist")
+            report_error!("More telemetry events in queue than the limit to persist")
         }
 
         self.persist_events_at_path(&file, max_event_count, events)?;

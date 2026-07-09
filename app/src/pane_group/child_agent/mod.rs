@@ -9,6 +9,7 @@ use warp_cli::agent::Harness;
 use warpui::{EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::RenderableAIError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
@@ -17,7 +18,7 @@ use crate::ai::llms::LLMPreferences;
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::TerminalView;
-use crate::AIExecutionProfilesModel;
+use crate::{report_error, AIExecutionProfilesModel};
 
 pub(crate) struct HiddenChildAgentConversation {
     pub terminal_view: ViewHandle<TerminalView>,
@@ -146,7 +147,7 @@ pub(crate) fn create_hidden_child_agent_conversation(
         ctx,
     );
     let Some(new_terminal_view) = group.terminal_view_from_pane_id(new_pane_id, ctx) else {
-        log::error!("Failed to get terminal view for new StartAgent pane");
+        report_error!("Failed to get terminal view for new StartAgent pane");
         group.discard_pane(new_pane_id.into(), ctx);
         return None;
     };
@@ -240,8 +241,12 @@ pub(crate) fn create_error_child_agent_conversation(
             ctx,
         )
     else {
-        log::error!(
-            "Failed to surface local child harness error for parent conversation {parent_conversation_id:?}: {error_message}"
+        report_error!(
+            "Failed to surface local child harness error for parent conversation",
+            extra: {
+                "parent_conversation_id" => ?parent_conversation_id,
+                "error_message" => %error_message
+            }
         );
         return None;
     };
@@ -267,11 +272,11 @@ pub(crate) fn create_error_child_agent_conversation(
     }
 
     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-        history_model.update_conversation_status_with_error_message(
+        history_model.update_conversation_status_with_error(
             terminal_view_id,
             conversation_id,
             ConversationStatus::Error,
-            Some(error_message),
+            Some(RenderableAIError::other(error_message, false)),
             ctx,
         );
     });

@@ -39,7 +39,6 @@ use crate::appearance::Appearance;
 use crate::editor::{
     EditOrigin, EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions,
 };
-use crate::send_telemetry_from_ctx;
 use crate::server::block::{Block as ServerBlock, DisplaySetting};
 use crate::server::server_api::block::BlockClient;
 use crate::server::telemetry::TelemetryEvent;
@@ -59,6 +58,7 @@ use crate::util::bindings::CustomAction;
 use crate::view_components::ToastFlavor;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{report_error, send_telemetry_from_ctx};
 
 const PADDING: f32 = 30.;
 const INNER_MARGIN: f32 = 20.;
@@ -317,7 +317,7 @@ impl ShareBlockModal {
             let model = match &self.model {
                 Some(model) => model.lock(),
                 None => {
-                    log::error!("Opened share modal without a model");
+                    report_error!("Opened share modal without a model");
                     self.request_state = ShareRequestState::Failed;
                     ctx.notify();
                     return;
@@ -442,7 +442,7 @@ impl ShareBlockModal {
                 .and_then(|block_index| model.block_list().block_at(block_index))
             {
                 None => {
-                    log::error!("Opened block share modal without block");
+                    report_error!("Opened block share modal without block");
                     return;
                 }
                 Some(block) => block,

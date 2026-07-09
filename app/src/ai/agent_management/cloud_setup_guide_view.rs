@@ -385,10 +385,10 @@ impl CloudSetupGuideView {
             )),
             _ => None,
         }) else {
-            report_error!(anyhow::anyhow!(
-                "Received unknown code in render_code_block: {}",
-                code
-            ));
+            report_error!(
+                "Received unknown code in render_code_block",
+                extra: { "code" => %code }
+            );
             return Empty::new().finish();
         };
 

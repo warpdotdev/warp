@@ -19,7 +19,7 @@ use crate::ai::blocklist::context_model::{
 use crate::ai::blocklist::queued_query::{QueuedQueryId, QueuedQueryModel};
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
-use crate::BlocklistAIHistoryModel;
+use crate::{report_error, BlocklistAIHistoryModel};
 
 pub enum SlashCommandRequest {
     CreateNewProject {
@@ -148,7 +148,7 @@ impl SlashCommandRequest {
                 Some(controller.start_new_conversation_for_request(ctx).id())
             }
         }) else {
-            log::error!("Failed to get conversation ID for slash command request");
+            report_error!("Failed to get conversation ID for slash command request");
             return;
         };
 
@@ -169,10 +169,11 @@ impl SlashCommandRequest {
         else {
             return;
         };
+        let task_id = conversation.get_root_task_id().clone();
 
         let request_input = RequestInput::for_task(
             inputs,
-            conversation.get_root_task_id().clone(),
+            task_id,
             &controller.active_session,
             controller.get_current_response_initiator(),
             conversation_id,
@@ -210,7 +211,7 @@ impl SlashCommandRequest {
                     });
                 }
             }
-            Err(e) => log::error!("Failed to send agent slash command request: {e:?}"),
+            Err(e) => report_error!(e.context("Failed to send agent slash command request")),
         }
     }
 

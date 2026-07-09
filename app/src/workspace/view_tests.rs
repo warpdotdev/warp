@@ -153,6 +153,7 @@ pub(crate) fn initialize_app(app: &mut App) {
         CloudPreferencesSyncer::new(
             false,                     // force_local_wins_on_startup
             std::path::PathBuf::new(), // unused in tests that don't exercise the hash path
+            true,                      // sync_enabled: cloud sync active in tests
             ctx,
         )
     });
@@ -210,7 +211,7 @@ pub(crate) fn initialize_app(app: &mut App) {
             ctx,
         )
     });
-    app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|_| RestoredAgentConversations::new_seeded(vec![]));
     app.add_singleton_model(|ctx| {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     });
@@ -431,6 +432,93 @@ fn test_tools_panel_does_not_suppress_vertical_tab_bar_traffic_light_padding() {
         assert_vertical_tabs_tools_panel_preserves_padding(config);
     }
 }
+/// Regression test for the handoff model carry-over: the copy must preserve
+/// the source pane's explicit selection M even when M equals the destination
+/// pane's current profile default — the case where re-normalizing the resolved
+/// id against the destination's default (instead of copying the raw override)
+/// would drop the override and let the source profile's default D win.
+#[test]
+fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default() {
+    use warpui::EntityId;
+
+    use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, ModelsByFeature};
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let m = LLMId::from("auto-genius");
+        let d = LLMId::from("auto");
+
+        let source_id = EntityId::new();
+        let new_id = EntityId::new();
+
+        app.update(|ctx| {
+            // Catalog containing both slugs so profile/override ids resolve.
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                let models = ModelsByFeature {
+                    agent_mode: AvailableLLMs::new(
+                        "auto".into(),
+                        vec![
+                            LLMInfo::new_for_test("auto"),
+                            LLMInfo::new_for_test("auto-genius"),
+                        ],
+                        None,
+                    )
+                    .expect("valid available llms"),
+                    ..Default::default()
+                };
+                prefs.update_feature_model_choices(Ok(models), ctx);
+            });
+
+            // Default profile default = M (the destination pane's current profile).
+            // Source uses a second profile whose default = D.
+            let profiles = AIExecutionProfilesModel::handle(ctx);
+            let default_profile_id = profiles.read(ctx, |p, _| p.default_profile_id());
+            profiles.update(ctx, |p, ctx| {
+                p.set_base_model(default_profile_id, Some(m.clone()), ctx);
+                let source_profile_id = p.create_profile(ctx).expect("create source profile");
+                p.set_base_model(source_profile_id, Some(d.clone()), ctx);
+                p.set_active_profile(source_id, source_profile_id, ctx);
+            });
+
+            // Source's explicit selection = M (differs from its profile default D).
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                prefs.update_preferred_agent_mode_llm(&m, source_id, ctx);
+            });
+        });
+
+        // Preconditions: source resolves to M; destination's current default is M.
+        app.update(|ctx| {
+            let prefs = LLMPreferences::as_ref(ctx);
+            assert_eq!(
+                prefs.get_active_base_model(ctx, Some(source_id)).id,
+                m,
+                "source pane should resolve to its explicit selection"
+            );
+            assert_eq!(
+                prefs.get_active_base_model(ctx, Some(new_id)).id,
+                m,
+                "destination pane's current profile default should be M"
+            );
+        });
+
+        // Carry source -> new via the production helper.
+        app.update(|ctx| {
+            Workspace::copy_model_and_profile_to_terminal_view(source_id, new_id, ctx);
+        });
+
+        app.update(|ctx| {
+            assert_eq!(
+                LLMPreferences::as_ref(ctx)
+                    .get_active_base_model(ctx, Some(new_id))
+                    .id,
+                m,
+                "destination pane must retain the source's explicit selection, not the source profile default"
+            );
+        });
+    });
+}
+
 #[cfg(feature = "local_fs")]
 fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
     workspace.update(app, |workspace, ctx| {
@@ -1449,6 +1537,63 @@ fn test_close_last_horizontal_tab_activates_tab_to_left() {
         });
     });
 }
+
+#[test]
+fn test_close_active_vertical_tab_activates_tab_below() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
+            });
+        });
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            let tab_below_id = workspace.get_pane_group_view(2).unwrap().id();
+
+            workspace.activate_tab(1, ctx);
+            workspace.close_tab(1, true, true, ctx);
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(workspace.active_tab_index(), 1);
+            assert_eq!(workspace.active_tab_pane_group().id(), tab_below_id);
+        });
+    });
+}
+
+#[test]
+fn test_close_last_vertical_tab_activates_tab_above() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
+            });
+        });
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            let tab_above_id = workspace.get_pane_group_view(1).unwrap().id();
+
+            workspace.activate_tab(2, ctx);
+            workspace.close_tab(2, true, true, ctx);
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(workspace.active_tab_index(), 1);
+            assert_eq!(workspace.active_tab_pane_group().id(), tab_above_id);
+        });
+    });
+}
+
 #[test]
 fn test_close_pane_confirmation_dialog() {
     let _guard = FeatureFlag::CreatingSharedSessions.override_enabled(true);
@@ -3756,11 +3901,10 @@ fn test_close_tab_group_removes_group_and_members() {
 }
 
 #[test]
-fn test_new_tab_with_after_all_tabs_setting_lands_at_group_end() {
-    // With `new_tab_placement = AfterAllTabs` and the active tab in a
-    // group, a new tab should land at the end of the group's contiguous
-    // run instead of at the workspace's global end so group contiguity
-    // is preserved while honoring the user's "end" placement preference.
+fn test_new_tab_with_after_all_tabs_setting_lands_top_level_at_end() {
+    // With `new_tab_placement = AfterAllTabs`, a new tab lands at the very end
+    // of the tab bar, outside any group — even when the active tab is in a
+    // group.
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -3775,69 +3919,36 @@ fn test_new_tab_with_after_all_tabs_setting_lands_at_group_end() {
 
         let workspace = mock_workspace(&mut app);
         workspace.update(&mut app, |workspace, ctx| {
-            // Create a group and add a second tab so the group has two
-            // contiguous members.
-            workspace.handle_action(
-                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
-                ctx,
-            );
-            let group_id = workspace.tabs[workspace.active_tab_index()]
-                .group_id
-                .expect("active tab should be in a group");
+            // Build [g0, g1, ungrouped] by assigning membership directly, so the
+            // setup doesn't depend on new-tab placement behavior.
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[0].group_id = Some(group_id);
+            workspace.tabs[1].group_id = Some(group_id);
+
+            // Activate a member of the group, then add a new tab.
+            workspace.activate_tab(0, ctx);
             workspace.add_terminal_tab(false, ctx);
 
-            // Add an ungrouped tab past the end of the group by first
-            // activating the trailing ungrouped tab.
-            let ungrouped_idx = workspace
-                .tabs
-                .iter()
-                .position(|t| t.group_id.is_none())
-                .expect("expected at least one ungrouped tab");
-            workspace.activate_tab(ungrouped_idx, ctx);
-            workspace.add_terminal_tab(false, ctx);
+            // The new tab lands at the very end of the bar and is top-level.
+            let last = workspace.tab_count() - 1;
+            assert_eq!(workspace.active_tab_index(), last);
+            assert_eq!(workspace.tabs[last].group_id, None);
 
-            // Now activate the first grouped tab and add a new tab. With
-            // `AfterAllTabs`, the new tab must land at the end of the
-            // group's contiguous run rather than past the trailing
-            // ungrouped tabs.
-            let first_grouped_idx = workspace
-                .tabs
-                .iter()
-                .position(|t| t.group_id == Some(group_id))
-                .expect("expected at least one grouped tab");
-            workspace.activate_tab(first_grouped_idx, ctx);
-
-            let group_run_end_before = workspace
-                .tabs
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| t.group_id == Some(group_id))
-                .map(|(idx, _)| idx)
-                .max()
-                .expect("group should be non-empty")
-                + 1;
-
-            workspace.add_terminal_tab(false, ctx);
-
-            // The new tab lands at the prior group-run end, inherits the
-            // group_id, and keeps the group's run contiguous.
-            assert_eq!(workspace.active_tab_index(), group_run_end_before);
-            assert_eq!(
-                workspace.tabs[group_run_end_before].group_id,
-                Some(group_id)
-            );
-
-            let group_indices: Vec<usize> = workspace
+            // The group keeps exactly its original two contiguous members.
+            let group_members: Vec<usize> = workspace
                 .tabs
                 .iter()
                 .enumerate()
                 .filter(|(_, t)| t.group_id == Some(group_id))
                 .map(|(idx, _)| idx)
                 .collect();
-            assert!(
-                group_indices.windows(2).all(|w| w[1] == w[0] + 1),
-                "group's tab indices should be contiguous, got {group_indices:?}"
-            );
+            assert_eq!(group_members, vec![0, 1]);
         });
     });
 }

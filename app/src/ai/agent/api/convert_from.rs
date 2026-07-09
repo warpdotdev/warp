@@ -771,6 +771,12 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             api::message::tool_call::Tool::RequestComputerUse(request_computer_use) => {
                 create_standard_action(request_computer_use.into())
             }
+            api::message::tool_call::Tool::StartRecording(start_recording) => {
+                create_standard_action(start_recording.into())
+            }
+            api::message::tool_call::Tool::StopRecording(stop_recording) => {
+                create_standard_action(stop_recording.into())
+            }
             api::message::tool_call::Tool::Subagent(subagent) => {
                 use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 use api::message::tool_call::subagent::Metadata;

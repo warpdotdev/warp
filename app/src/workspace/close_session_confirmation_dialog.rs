@@ -15,6 +15,7 @@ use warpui::{
 
 use crate::appearance::Appearance;
 use crate::pane_group::PaneId;
+use crate::report_error;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::workspace::TabMovement;
 
@@ -195,7 +196,7 @@ impl TypedActionView for CloseSessionConfirmationDialog {
             CloseSessionConfirmationAction::CloseSession { dont_show_again } => {
                 let Some(open_confirmation_source) = self.open_confirmation_source else {
                     // Should not be possible.
-                    log::error!(
+                    report_error!(
                         "Close session button pressed with no open confirmation dialog source"
                     );
                     return;

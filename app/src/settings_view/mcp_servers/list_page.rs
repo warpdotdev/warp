@@ -67,7 +67,7 @@ use crate::view_components::DismissibleToast;
 use crate::workflows::local_workflows::tail_command_for_shell;
 use crate::workspace::Workspace;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::ToastStack;
+use crate::{report_error, ToastStack};
 
 const DESCRIPTION_TEXT: &str = "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ";
 
@@ -609,7 +609,7 @@ impl MCPServersListPageView {
             .views_of_type::<Workspace>(window_id)
             .and_then(|views| views.first().cloned())
         else {
-            log::error!("Could not find workspace when attempting to open MCP logs.");
+            report_error!("Could not find workspace when attempting to open MCP logs.");
             return;
         };
 
@@ -623,7 +623,9 @@ impl MCPServersListPageView {
             });
             let Some(terminal_view_handle) = active_pane_group.as_ref(ctx).active_session_view(ctx)
             else {
-                log::error!("Could not get terminal view handle when attempting to open MCP logs.");
+                report_error!(
+                    "Could not get terminal view handle when attempting to open MCP logs."
+                );
                 return;
             };
 
@@ -648,15 +650,15 @@ impl MCPServersListPageView {
                     self.share_templatable_mcp_server_installation(*installation_uuid, ctx);
                 }
                 ServerCardItemId::GalleryMCP(_) => {
-                    log::error!("Share is not implemented for gallery MCP items.")
+                    report_error!("Share is not implemented for gallery MCP items.")
                 }
                 ServerCardItemId::FileBasedMCP(_) => {
-                    log::error!("Share is not implemented for file-based MCP servers.")
+                    report_error!("Share is not implemented for file-based MCP servers.")
                 }
             },
             ServerCardEvent::ViewLogs(item_id) => match item_id {
                 ServerCardItemId::TemplatableMCP(_) => {
-                    log::error!("Viewing logs is not implemented for templatable MCP.");
+                    report_error!("Viewing logs is not implemented for templatable MCP.");
                 }
                 ServerCardItemId::TemplatableMCPInstallation(installation_uuid) => {
                     if let Some(template_uuid) = TemplatableMCPServerManager::as_ref(ctx)
@@ -665,8 +667,9 @@ impl MCPServersListPageView {
                         let log_path = logs::log_file_path_from_uuid(&template_uuid);
                         self.open_logs_for_server(&log_path, ctx);
                     } else {
-                        log::error!(
-                            "Could not find template_uuid for installation {installation_uuid}"
+                        report_error!(
+                            "Could not find template_uuid for installation",
+                            extra: { "installation_uuid" => %installation_uuid }
                         );
                     }
                 }
@@ -677,16 +680,19 @@ impl MCPServersListPageView {
                         let log_path = logs::log_file_path_from_uuid(&installation.template_uuid());
                         self.open_logs_for_server(&log_path, ctx);
                     } else {
-                        log::error!("Could not find installation for file-based server {uuid}");
+                        report_error!(
+                            "Could not find installation for file-based server",
+                            extra: { "uuid" => %uuid }
+                        );
                     }
                 }
                 ServerCardItemId::GalleryMCP(_) => {
-                    log::error!("Viewing logs is not implemented for gallery MCP items.")
+                    report_error!("Viewing logs is not implemented for gallery MCP items.")
                 }
             },
             ServerCardEvent::ToggleRunningSwitch(item_id, switch_state) => match item_id {
                 ServerCardItemId::TemplatableMCP(_) => {
-                    log::error!("Running a server is not implemented for templatable MCP.");
+                    report_error!("Running a server is not implemented for templatable MCP.");
                 }
                 ServerCardItemId::TemplatableMCPInstallation(uuid) => {
                     self.toggle_server_running_templatable(*uuid, *switch_state, ctx);
@@ -695,7 +701,7 @@ impl MCPServersListPageView {
                     self.toggle_server_running_file_based(*uuid, *switch_state, ctx);
                 }
                 ServerCardItemId::GalleryMCP(_) => {
-                    log::error!("Running a server is not implemented for gallery MCP items.")
+                    report_error!("Running a server is not implemented for gallery MCP items.")
                 }
             },
             ServerCardEvent::Install(item_id) => match item_id {
@@ -735,7 +741,7 @@ impl MCPServersListPageView {
             ServerCardEvent::InstallServerUpdate(item_id) => {
                 let ServerCardItemId::TemplatableMCPInstallation(installation_uuid) = item_id
                 else {
-                    log::error!(
+                    report_error!(
                         "Install server update is only supported for templatable MCP installations"
                     );
                     return;

@@ -17,12 +17,12 @@
 //!   the action origin for the duration of the subtree's dispatch.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize, TuiViewMapContext,
 };
 #[cfg(test)]
 use crate::EntityIdMap;
-use crate::{AppContext, EntityId, Event, TuiView, ViewHandle};
+use crate::{AppContext, EntityId, TuiView, ViewHandle};
 
 /// Embeds a registered [`TuiView`] as a node in the element tree, mirroring
 /// the GUI's `ChildView` design: the child element is never cached in this
@@ -80,11 +80,11 @@ impl TuiElement for TuiChildView {
         })
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         ctx.use_view(self.view_id, |child, ctx| child.render(area, buffer, ctx));
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         ctx.use_view(self.view_id, |child, ctx| child.cursor_position(area, ctx))
             .flatten()
     }
@@ -97,7 +97,7 @@ impl TuiElement for TuiChildView {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,

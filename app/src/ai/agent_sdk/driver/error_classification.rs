@@ -326,13 +326,12 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::HarnessAuthCheckFailed { harness, detail } => {
+        AgentDriverError::HarnessAuthCheckFailed { harness, .. } => {
             let message = format!(
                 "Harness '{harness}' authentication check failed: login credentials \
                  are invalid or expired. Verify that the authentication secret \
                  configured for this harness is correct."
             );
-            log::error!("Preflight detail for {harness}: {detail}");
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(
@@ -352,7 +351,6 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                  This usually means the API key is invalid, out of credits, or the \
                  account is misconfigured."
             );
-            log::error!("Runtime failure for {harness}: pattern={pattern}, excerpt={excerpt}");
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(

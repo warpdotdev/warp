@@ -17,11 +17,14 @@ use warpui_core::App;
 #[cfg(feature = "local_fs")]
 use watcher::BulkFilesystemWatcherEvent;
 
-use crate::entry::{DirectoryEntry, Entry, FileMetadata};
+use crate::entry::{
+    BudgetExceededBehavior, BuildTreeOptions, DirectoryEntry, Entry, FileMetadata,
+    IgnoredPathStrategy,
+};
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
 use crate::local_model::{
-    GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate, RepositoryMetadataEvent,
-    RootWatchMode,
+    FileTreeMutation, GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate,
+    RepositoryMetadataEvent, RootWatchMode,
 };
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
@@ -2274,6 +2277,277 @@ fn recursive_repo_uses_recursive_watch_mode() {
             });
         });
     });
+}
+
+#[test]
+fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
+    fn find_entry<'a>(entry: &'a Entry, target: &StandardizedPath) -> Option<&'a Entry> {
+        if entry.path() == target {
+            return Some(entry);
+        }
+        if let Entry::Directory(dir) = entry {
+            for child in &dir.children {
+                if let Some(found) = find_entry(child, target) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    VirtualFS::test(
+        "incremental_force_included_under_ignored_parent",
+        |dirs, mut vfs| {
+            // `.agents/` is ignored by the repo-root .gitignore; `.agents/skills`
+            // is force-included, so it is ignored only because of its ancestor.
+            vfs.mkdir("repo/.agents/skills").with_files(vec![
+                Stub::FileWithContent("repo/.gitignore", ".agents/\n"),
+                Stub::FileWithContent("repo/.agents/skills/SKILL.md", "skill"),
+            ]);
+
+            let repo_local = dirs.tests().join("repo");
+            let skills_local = repo_local.join(".agents").join("skills");
+
+            let force_included = vec![PathBuf::from(".agents/skills")];
+            let gitignores = crate::gitignores_for_directory(&repo_local);
+            let definitions = StandingQueryDefinitions::default();
+
+            // Ground truth: how the initial full index classifies `.agents/skills`.
+            // Mirrors `index_directory`, which builds from the repo root with
+            // `IncludeLazy` + force-included paths so the ignored `.agents`
+            // ancestor propagates down into `.agents/skills`.
+            let expected_ignored = {
+                let mut files = Vec::new();
+                let mut gitignores = gitignores.clone();
+                let mut budget = 100_000usize;
+                let mut standing_results = crate::StandingQueryResults::default();
+                let root = Entry::build_tree_with_standing_queries(
+                    &repo_local,
+                    &mut files,
+                    &mut gitignores,
+                    Some(&mut budget),
+                    BuildTreeOptions {
+                        max_depth: 64,
+                        current_depth: 0,
+                        ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
+                        force_included_paths: &force_included,
+                        budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
+                    },
+                    false,
+                    &mut standing_results,
+                    &definitions,
+                )
+                .expect("initial index build should succeed");
+
+                let skills_canonical =
+                    dunce::canonicalize(&skills_local).expect("skills dir should exist");
+                let skills_node_path =
+                    StandardizedPath::from_local_absolute_unchecked(&skills_canonical);
+                find_entry(&root, &skills_node_path)
+                    .expect("`.agents/skills` should be materialized by the initial index")
+                    .ignored()
+            };
+
+            assert!(
+                expected_ignored,
+                "fixture sanity: the initial index should mark `.agents/skills` ignored \
+                 via its `.agents` ancestor"
+            );
+
+            // Incremental watcher path: `.agents/skills` is reported as added.
+            let update = RepoUpdate {
+                added: vec![skills_local.clone()],
+                ..Default::default()
+            };
+            let (mutations, _standing_results, _removed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &gitignores,
+                    &force_included,
+                    &definitions,
+                    false, /* lazy_load */
+                ));
+
+            let incremental_ignored = mutations
+                .iter()
+                .find_map(|mutation| match mutation {
+                    FileTreeMutation::AddDirectorySubtree { dir_path, subtree }
+                        if dir_path == &skills_local =>
+                    {
+                        Some(subtree.ignored())
+                    }
+                    FileTreeMutation::AddDirectorySubtree { .. }
+                    | FileTreeMutation::Remove(_)
+                    | FileTreeMutation::AddFile { .. }
+                    | FileTreeMutation::AddUnloadedDirectory { .. } => None,
+                })
+                .expect(
+                    "incremental update should materialize the force-included subtree \
+                     as an AddDirectorySubtree mutation",
+                );
+
+            assert_eq!(
+                incremental_ignored, expected_ignored,
+                "force-included `.agents/skills` under ignored `.agents`: incremental watcher \
+                 update recorded ignored={incremental_ignored}, but the initial index records \
+                 ignored={expected_ignored}"
+            );
+        },
+    );
+}
+
+/// A filesystem event deep under an UNLOADED (collapsed) gitignored directory is
+/// dropped at apply time, so nothing below the unloaded placeholder is
+/// materialized — matching the initial index's single-placeholder representation.
+#[test]
+fn incremental_deep_event_under_unloaded_ignored_dir_is_collapsed() {
+    VirtualFS::test(
+        "incremental_deep_event_under_unloaded_ignored_dir",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/target/debug/.fingerprint").with_files(vec![
+                Stub::FileWithContent("repo/.gitignore", "target/\n"),
+                Stub::FileWithContent("repo/target/debug/.fingerprint/x.json", "{}"),
+            ]);
+
+            let repo_local = dirs.tests().join("repo");
+            let target_local = repo_local.join("target");
+            let deep_dir_local = target_local.join("debug").join(".fingerprint");
+            let deep_file_local = deep_dir_local.join("x.json");
+
+            let repo_std = StandardizedPath::try_from_local(&repo_local).unwrap();
+            let target_std = StandardizedPath::try_from_local(&target_local).unwrap();
+            let debug_std = StandardizedPath::try_from_local(&target_local.join("debug")).unwrap();
+
+            // Post-initial-index state: `target` is a single UNLOADED ignored placeholder.
+            let root_entry = Entry::Directory(DirectoryEntry {
+                path: repo_std,
+                ignored: false,
+                loaded: true,
+                children: vec![Entry::Directory(DirectoryEntry {
+                    path: target_std.clone(),
+                    ignored: true,
+                    loaded: false,
+                    children: vec![],
+                })],
+            });
+            let mut tree = FileTreeEntry::from(root_entry);
+
+            let gitignores = crate::gitignores_for_directory(&repo_local);
+            let definitions = StandingQueryDefinitions::default();
+
+            let update = RepoUpdate {
+                added: vec![deep_dir_local, deep_file_local],
+                ..Default::default()
+            };
+            let (mutations, _standing_results, _removed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &gitignores,
+                    &[], /* force_included_paths */
+                    &definitions,
+                    false, /* lazy_load */
+                ));
+            LocalRepoMetadataModel::apply_file_tree_mutations(&mut tree, mutations, false, false);
+
+            // `target` stays a single unloaded placeholder; nothing below it is materialized.
+            match tree
+                .get(&target_std)
+                .expect("`target` should remain in the tree")
+            {
+                FileTreeEntryState::Directory(directory) => {
+                    assert!(
+                        !directory.loaded,
+                        "`target` should remain an unloaded placeholder"
+                    );
+                    assert!(directory.ignored, "`target` should stay ignored");
+                }
+                FileTreeEntryState::File(_) => panic!("`target` should be a directory"),
+            }
+            assert!(
+                tree.get(&debug_std).is_none(),
+                "nothing below the unloaded `target` placeholder should be materialized"
+            );
+        },
+    );
+}
+
+/// A filesystem event under a gitignored directory the user has already
+/// expanded (so it is `loaded`) must keep that directory loaded.
+#[test]
+fn incremental_event_under_expanded_ignored_dir_keeps_it_loaded() {
+    VirtualFS::test(
+        "incremental_event_under_expanded_ignored_dir",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/target/debug").with_files(vec![
+                Stub::FileWithContent("repo/.gitignore", "target/\n"),
+                Stub::FileWithContent("repo/target/debug/new.rs", "x"),
+            ]);
+
+            let repo_local = dirs.tests().join("repo");
+            let target_local = repo_local.join("target");
+            let new_file_local = target_local.join("debug").join("new.rs");
+
+            let repo_std = StandardizedPath::try_from_local(&repo_local).unwrap();
+            let target_std = StandardizedPath::try_from_local(&target_local).unwrap();
+            let debug_std = StandardizedPath::try_from_local(&target_local.join("debug")).unwrap();
+            let new_file_std = StandardizedPath::try_from_local(&new_file_local).unwrap();
+
+            // The user has expanded the gitignored `target/`, so it is loaded.
+            let root_entry = Entry::Directory(DirectoryEntry {
+                path: repo_std,
+                ignored: false,
+                loaded: true,
+                children: vec![Entry::Directory(DirectoryEntry {
+                    path: target_std.clone(),
+                    ignored: true,
+                    loaded: true,
+                    children: vec![Entry::Directory(DirectoryEntry {
+                        path: debug_std,
+                        ignored: true,
+                        loaded: true,
+                        children: vec![],
+                    })],
+                })],
+            });
+            let mut tree = FileTreeEntry::from(root_entry);
+
+            let gitignores = crate::gitignores_for_directory(&repo_local);
+            let definitions = StandingQueryDefinitions::default();
+
+            let update = RepoUpdate {
+                added: vec![new_file_local],
+                ..Default::default()
+            };
+            let (mutations, _standing_results, _removed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &gitignores,
+                    &[], /* force_included_paths */
+                    &definitions,
+                    false, /* lazy_load */
+                ));
+            LocalRepoMetadataModel::apply_file_tree_mutations(&mut tree, mutations, false, false);
+
+            match tree
+                .get(&target_std)
+                .expect("expanded `target` should remain in the tree")
+            {
+                FileTreeEntryState::Directory(directory) => {
+                    assert!(
+                        directory.loaded,
+                        "an event under an expanded ignored dir must not collapse it to an \
+                         unloaded placeholder"
+                    );
+                    assert!(directory.ignored, "`target` should still be ignored");
+                }
+                FileTreeEntryState::File(_) => panic!("`target` should be a directory"),
+            }
+            assert!(
+                tree.get(&new_file_std).is_some(),
+                "the new file under the expanded ignored dir should be delivered"
+            );
+        },
+    );
 }
 
 /// Expanding a gitignored directory inside a git repo registers an on-demand

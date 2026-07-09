@@ -15,13 +15,13 @@ use warp_util::on_cancel::OnCancelFutureExt;
 use warpui::r#async::block_on;
 
 use super::ExecuteCommandOptions;
-use crate::safe_info;
 use crate::terminal::event::ExecutedExecutorCommandEvent;
 use crate::terminal::model::session::command_executor::{
     shared, CommandExecutor, ExecutorCommandEvent,
 };
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::SizeInfo;
+use crate::{report_error, safe_info};
 
 #[derive(Clone, Debug)]
 pub struct InBandCommand {
@@ -225,9 +225,9 @@ impl InBandCommandExecutor {
                                 }
                             };
                             if let Err(error) = output_tx.try_send(command_output) {
-                                log::error!(
-                                    "Error occurred when sending generator command output: {error}"
-                                );
+                                report_error!(anyhow::Error::new(error).context(
+                                    "Error occurred when sending generator command output"
+                                ));
                             }
                         }
                     }

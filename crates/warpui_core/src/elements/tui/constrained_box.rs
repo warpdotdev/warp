@@ -14,10 +14,10 @@
 //! bottom input to at most six rows) without a bespoke layout element.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize,
 };
-use crate::{AppContext, Event};
+use crate::AppContext;
 
 pub struct TuiConstrainedBox {
     child: Box<dyn TuiElement>,
@@ -26,9 +26,9 @@ pub struct TuiConstrainedBox {
 }
 
 impl TuiConstrainedBox {
-    pub fn new(child: impl TuiElement + 'static) -> Self {
+    pub fn new(child: Box<dyn TuiElement>) -> Self {
         Self {
-            child: Box::new(child),
+            child,
             max_rows: None,
             max_cols: None,
         }
@@ -84,11 +84,11 @@ impl TuiElement for TuiConstrainedBox {
         self.child.layout(self.cap_constraint(constraint), ctx, app)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         self.child.render(self.capped_area(area), buffer, ctx);
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         self.child.cursor_position(self.capped_area(area), ctx)
     }
 
@@ -98,7 +98,7 @@ impl TuiElement for TuiConstrainedBox {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,

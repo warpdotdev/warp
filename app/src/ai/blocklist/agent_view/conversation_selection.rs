@@ -8,6 +8,7 @@ use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::report_error;
 
 /// GUI conversation selection backed unconditionally by Agent View.
 pub(crate) struct AgentViewConversationSelection {
@@ -85,7 +86,8 @@ impl ConversationSelection for AgentViewConversationSelection {
         if let Err(error) = self.agent_view_controller.update(ctx, |controller, ctx| {
             controller.try_enter_agent_view(Some(conversation_id), origin, ctx)
         }) {
-            log::error!("Failed to enter agent view for existing conversation: {error}");
+            report_error!(anyhow::Error::new(error)
+                .context("Failed to enter agent view for existing conversation"));
         }
     }
 
@@ -97,7 +99,8 @@ impl ConversationSelection for AgentViewConversationSelection {
         if let Err(error) = self.agent_view_controller.update(ctx, |controller, ctx| {
             controller.try_enter_agent_view(None, origin, ctx)
         }) {
-            log::error!("Failed to enter agent view for new conversation: {error}");
+            report_error!(anyhow::Error::new(error)
+                .context("Failed to enter agent view for new conversation"));
         }
     }
 

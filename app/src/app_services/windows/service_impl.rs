@@ -7,6 +7,7 @@ use url::Url;
 use warpui::r#async::executor::Background;
 
 use super::single_instance_manager::uri_named_pipe_name;
+use crate::report_error;
 
 /// IPC Service to respond to URIs sent to the active Warp instance.
 pub(super) struct UriService {}
@@ -33,7 +34,9 @@ impl ipc::ServiceImpl for UriServiceImpl {
 
     async fn handle_request(&self, request: Vec<Url>) -> () {
         if let Err(send_error) = self.tx.send(request).await {
-            log::error!("Error sending urls to local stream: {send_error:#}");
+            report_error!(
+                anyhow::Error::new(send_error).context("Error sending urls to local stream")
+            );
         }
     }
 }

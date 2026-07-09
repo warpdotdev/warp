@@ -1,16 +1,17 @@
 use std::any::Any;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
 use core_foundation::array::{CFArray, CFArrayRef};
-use core_foundation::base::{CFType, ItemRef, TCFType};
+use core_foundation::base::{CFEqual, CFHash, CFType, CFTypeRef, ItemRef, TCFType};
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef, UniChar};
 use core_graphics::display::CGSize;
-use core_graphics::font::CGGlyph;
+use core_graphics::font::{CGFont, CGGlyph};
 use core_text::font::{cascade_list_for_languages as ct_cascade_list_for_languages, CTFont};
 use core_text::font_descriptor::{
     kCTFontFamilyNameAttribute, kCTFontLanguagesAttribute, kCTFontNameAttribute,
@@ -22,6 +23,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use font_kit::font::Font;
 use font_kit::loaders::core_text::NativeFont;
+use foreign_types::ForeignType;
 use futures::future::BoxFuture;
 use futures::FutureExt as _;
 use itertools::Itertools as _;
@@ -185,7 +187,7 @@ pub struct FontDB {
     rasterizer: Rasterizer,
     font_names: DashMap<FontId, Arc<String>>,
     native_fonts: DashMap<(FontId, OrderedFloat<f32>), NativeFont>,
-    fonts_by_name: DashMap<Arc<String>, FontId>,
+    cgfont_to_id: DashMap<CGFontKey, FontId>,
     fallback_fonts: DashMap<FontId, Arc<Vec<FontId>>>,
     metrics: DashMap<FontId, Metrics>,
     font_selections: DashMap<(FamilyId, Properties), FontId>,
@@ -233,6 +235,33 @@ fn space_advance_width(font: &CTFont) -> Option<f64> {
     (width.is_finite() && width > 0.0).then_some(width)
 }
 
+/// A hashable, comparable key wrapping a [`CGFont`].
+///
+/// [`CGFont`] is a Core Foundation object without Rust [`Hash`]/[`Eq`], so we key on its Core Foundation
+/// identity via [`CFHash`]/[`CFEqual`]. Fonts that merely share a PostScript name (e.g. a user-installed
+/// and a bundled font) are distinct CGFonts, so this tells them apart where a name cannot.
+struct CGFontKey(CGFont);
+
+impl CGFontKey {
+    fn as_type_ref(&self) -> CFTypeRef {
+        self.0.as_ptr() as CFTypeRef
+    }
+}
+
+impl PartialEq for CGFontKey {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe { CFEqual(self.as_type_ref(), other.as_type_ref()) != 0 }
+    }
+}
+
+impl Eq for CGFontKey {}
+
+impl Hash for CGFontKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_usize(unsafe { CFHash(self.as_type_ref()) } as usize);
+    }
+}
+
 impl FontDB {
     pub fn new() -> Self {
         Self {
@@ -242,7 +271,7 @@ impl FontDB {
             rasterizer: Rasterizer::new(),
             font_names: Default::default(),
             native_fonts: Default::default(),
-            fonts_by_name: Default::default(),
+            cgfont_to_id: Default::default(),
             fallback_fonts: Default::default(),
             metrics: Default::default(),
             font_selections: Default::default(),
@@ -370,28 +399,17 @@ impl FontDB {
             }
         };
 
-        let font_name = match unsafe { FontDB::get_font_name(&fontdesc) } {
-            Some(name) => name,
-            None => {
-                log::warn!("Failed to load the font as it does not have a valid name.");
-                return None;
-            }
-        };
+        // Skip descriptors that don't have a valid font name.
+        if unsafe { FontDB::get_font_name(&fontdesc) }.is_none() {
+            log::warn!("Failed to load the font as it does not have a valid name.");
+            return None;
+        }
 
         // We should not load fonts with name that starts with dot
         // https://developer.apple.com/videos/play/wwdc2019/227/?time=200
         (!name.starts_with('.')).then(|| {
-            // Check if the fallback font is in cache.
-            match self.fonts_by_name.entry(Arc::new(font_name)) {
-                Entry::Occupied(entry) => return *entry.get(),
-                Entry::Vacant(_) => (),
-            }
-
-            // We need to push font after releasing the entry of the dashmap to prevent deadlocks.
-            self.push_font(Font::from_ct_font(font::new_from_descriptor(
-                &fontdesc,
-                DEFAULT_FONT_SIZE,
-            )))
+            // Resolve to an existing font by CGFont identity, registering it if it's new.
+            self.font_id_for_native_font(font::new_from_descriptor(&fontdesc, DEFAULT_FONT_SIZE))
         })
     }
 
@@ -465,11 +483,16 @@ impl FontDB {
     }
 
     pub fn font_id_for_native_font(&self, native_font: NativeFont) -> FontId {
-        let postscript_name = native_font.postscript_name();
-        if let Some(font_id) = self.fonts_by_name.get(&postscript_name).as_ref() {
-            return *font_id.value();
+        // Look the font up by its CGFont identity. The read guard is released before push_font
+        // runs, avoiding a re-entrant DashMap lock on the same shard.
+        if let Some(font_id) = self
+            .cgfont_to_id
+            .get(&CGFontKey(native_font.copy_to_CGFont()))
+        {
+            return *font_id;
         }
 
+        // Not one of ours — a genuine Core Text substitution/fallback font — so register it.
         self.push_font(Font::from_ct_font(native_font))
     }
 
@@ -479,10 +502,11 @@ impl FontDB {
 
         let ct_font = font.native_font().clone_with_font_size(DEFAULT_FONT_SIZE);
         let advance = space_advance_width(&ct_font);
+        let cg_font = ct_font.copy_to_CGFont();
 
         self.rasterizer.insert(font_id, Arc::new(font));
-        self.font_names.insert(font_id, name.clone());
-        self.fonts_by_name.insert(name, font_id);
+        self.font_names.insert(font_id, name);
+        self.cgfont_to_id.insert(CGFontKey(cg_font), font_id);
         self.space_advances.insert(font_id, advance);
         font_id
     }
@@ -655,3 +679,7 @@ impl crate::platform::TextLayoutSystem for FontDB {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "fonts_tests.rs"]
+mod tests;

@@ -45,6 +45,7 @@ use crate::editor::{
 };
 use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
 use crate::network::NetworkStatus;
+use crate::report_error;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::server_api::ai::AIClient;
@@ -749,7 +750,7 @@ impl WorkflowModal {
                     );
                 });
             }
-            _ => log::error!("Only one of a workflow ID or space can be specified for saving workflows, but both or neither were specified instead")
+            _ => report_error!("Only one of a workflow ID or space can be specified for saving workflows, but both or neither were specified instead")
         }
 
         self.close(true, ctx);
@@ -796,7 +797,7 @@ impl WorkflowModal {
                 .map(|workflow| workflow.permissions.owner),
             (None, Some(owner)) => Some(owner),
             _ => {
-                log::error!("Only one of a workflow ID or space can be specified");
+                report_error!("Only one of a workflow ID or space can be specified");
                 None
             }
         };

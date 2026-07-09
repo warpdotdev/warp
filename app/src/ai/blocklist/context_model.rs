@@ -224,7 +224,7 @@ impl BlocklistAIContextModel {
     }
 
     /// Test-only constructor that skips production subscriptions and singleton lookups.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn new_for_test(
         terminal_model: Arc<FairMutex<TerminalModel>>,
         terminal_surface_id: EntityId,

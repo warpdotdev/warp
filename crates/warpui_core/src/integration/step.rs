@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use instant::Instant;
+use warp_errors::report_error;
 
 use super::{action_log, overlay, TestSetupUtils};
 use crate::event::{Event, KeyEventDetails};
@@ -700,10 +701,9 @@ pub(super) async fn run_step(
                 // are experimental and we await in the failure case.
                 if bounds.is_none() {
                     if let Some(pause) = step.pause_on_failure {
-                        log::error!(
-                            "Test step '{}' failed to find saved position {}, pausing...",
-                            step.name,
-                            position_id
+                        report_error!(
+                            "Test step failed to find saved position, pausing",
+                            extra: { "step" => %step.name, "position" => %position_id }
                         );
                         Timer::at(Instant::now() + pause).await;
                     }
@@ -897,10 +897,12 @@ pub(super) async fn run_step(
         if let Some(mut final_assertion) = step.on_failure_handler.take() {
             // Log the timed-out assertion's failure message before running the final assertion
             if let Some(AssertionOutcome::Failure { message, .. }) = &last_failure {
-                log::error!(
-                    "Assertion '{}' timed out with message: {}",
-                    last_assertion_name.unwrap_or("unknown"),
-                    message
+                report_error!(
+                    "Assertion timed out",
+                    extra: {
+                        "assertion" => %last_assertion_name.unwrap_or("unknown"),
+                        "message" => %message
+                    }
                 );
             }
             let res = match &mut final_assertion.callback {
@@ -961,19 +963,17 @@ pub(super) async fn run_step(
             let AssertionOutcome::Failure { message, .. } = &last_failure else {
                 panic!("last_failure should be a failure assertion");
             };
-            log::error!(
-                "Test step '{}' failed with error '{}', pausing...",
-                step.name,
-                message
+            report_error!(
+                "Test step failed, pausing",
+                extra: { "step" => %step.name, "message" => %message }
             );
             Timer::at(Instant::now() + pause).await;
         }
         // Mostly logging to get a timestamp - the test driver will panic right
         // after this.
-        log::error!(
-            "Test step '{}' failed on '{}'",
-            step.name,
-            last_assertion_name.unwrap_or("unknown")
+        report_error!(
+            "Test step failed",
+            extra: { "step" => %step.name, "assertion" => %last_assertion_name.unwrap_or("unknown") }
         );
         return last_failure;
     }

@@ -13,6 +13,7 @@ use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectT
 use crate::ai::cloud_environments;
 use crate::appearance::Appearance;
 use crate::modal::MODAL_BACKDROP_OPACITY;
+use crate::report_error;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, SyncId};
 use crate::settings_view::update_environment_form::{
@@ -113,7 +114,7 @@ impl HandoffEnvironmentCreationModal {
                 };
 
                 let Some(owner) = owner else {
-                    log::error!("Unable to create environment: not logged in");
+                    report_error!("Unable to create environment: not logged in");
                     ctx.emit(HandoffEnvironmentCreationModalEvent::CreationFailed {
                         error_message: "Not logged in".to_string(),
                     });
@@ -137,7 +138,7 @@ impl HandoffEnvironmentCreationModal {
                         ctx.emit(HandoffEnvironmentCreationModalEvent::Created { env_id });
                     }
                     Err(err) => {
-                        log::error!("Failed to create environment for handoff: {err:#}");
+                        report_error!(&err);
                         ctx.emit(HandoffEnvironmentCreationModalEvent::CreationFailed {
                             error_message: err.to_string(),
                         });

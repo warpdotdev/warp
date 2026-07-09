@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub use warp_terminal::model::grid::Dimensions;
 
 use crate::features::FeatureFlag;
+use crate::report_error;
 use crate::terminal::model::ansi::{CharsetIndex, StandardCharset};
 use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::grid::row::Row;
@@ -550,8 +551,9 @@ impl GridStorage {
         let mut point = self.cursor_point();
 
         if point.row >= self.total_rows() || point.col >= self.columns() {
-            log::error!(
-                "Error retrieving cursor cell, cursor point was outside the bounds of the grid: {point:?}"
+            report_error!(
+                "Error retrieving cursor cell, cursor point was outside the bounds of the grid",
+                extra: { "point" => ?point }
             );
             point = Point {
                 row: self.total_rows().saturating_sub(1),

@@ -2,29 +2,36 @@
 //!
 //! This crate contains:
 //! - [`input`] — the editor-backed TUI input view (`TuiEditorModel` + `TuiInputView`).
-//! - [`root_view`] — [`RootTuiView`], the root view mounted by the `warp-tui`
-//!   binary (a single bordered input box docked at the bottom).
+//! - [`root_view`] — [`RootTuiView`], the login-gated transcript root view.
 //! - [`session`] — [`run`], the binary entry point that boots the headless app
-//!   and starts the TUI draw + input driver.
-//! - Conversation-streaming modules (`conversation_model`, `conversation_selection`,
-//!   `prompt_stream`) — retained but not yet wired into [`run`]; they back the
-//!   upcoming transcript view.
+//!   and starts the transcript-capable TUI draw + input driver.
 //! - Binary entry points under `src/bin/`.
 
+mod agent_block;
+mod agent_block_sections;
+mod autoupdate;
 pub mod input;
 pub mod root_view;
 pub mod session;
+mod telemetry;
+mod tui_builder;
 mod ui;
 
-// Retained for the upcoming transcript-view integration. They are not wired into
-// `run()` yet (the entry point renders the input box), so they are intentionally
-// dead code for now.
-#[allow(dead_code)]
-mod conversation_model;
-#[allow(dead_code)]
 mod conversation_selection;
-#[allow(dead_code)]
-mod prompt_stream;
+mod exit_confirmation;
+mod input_mode_policy;
+mod keybindings;
+mod terminal_block;
+mod terminal_session_view;
+#[cfg(test)]
+mod test_fixtures;
+mod tool_call_labels;
+mod transcript_view;
+mod transient_hint;
+mod tui_block_list_viewport_source;
+mod tui_diff_storage;
+mod tui_file_edits_view;
+mod warping_indicator;
 
 pub use root_view::RootTuiView;
 pub use session::run;

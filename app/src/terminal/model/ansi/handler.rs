@@ -255,8 +255,11 @@ pub trait Handler {
     /// Process a prompt marker control sequence.
     fn prompt_marker(&mut self, _marker: PromptMarker) {}
 
-    /// Callback for the Warp precmd hook.
-    fn precmd(&mut self, _data: PrecmdValue) {}
+    /// Callback for a Warp precmd hook with completion metadata.
+    fn precmd_with_completion_metadata(&mut self, _data: PrecmdValue) {}
+
+    /// Callback for a prompt-only Warp precmd hook.
+    fn prompt_only_precmd(&mut self, _data: PromptMetadata) {}
 
     /// Update the active block's current working directory, independent of the
     /// prompt cycle. Invoked from OSC 7 (`\e]7;file://host/path`) so external

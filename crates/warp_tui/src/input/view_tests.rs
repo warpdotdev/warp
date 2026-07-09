@@ -4,15 +4,26 @@
 //! [`TuiInputView`] so they exercise the exact render/layout/cursor path the
 //! presenter uses, not a reimplementation of it.
 
+use std::rc::Rc;
+
+use string_offset::CharOffset;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
+use warp::tui_export::BlocklistAIInputModel;
+use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
-use warpui_core::elements::tui::{TuiConstraint, TuiLayoutContext, TuiRect, TuiSize};
+use warpui_core::elements::tui::{
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPoint, TuiRect, TuiSize,
+};
+use warpui_core::event::{KeyEventDetails, ModifiersState};
+use warpui_core::keymap::Keystroke;
 use warpui_core::platform::WindowStyle;
 use warpui_core::{AddWindowOptions, App, AppContext, TuiView, TypedActionView, ViewHandle};
 
-use super::{TuiInputAction, TuiInputView};
+use super::{TuiInputAction, TuiInputElement, TuiInputView, SHELL_MODE_INPUT_FLAG};
+use crate::input_mode_policy::TuiInputModePolicy;
 
 const W: u16 = 80;
 
@@ -20,6 +31,10 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
     // `CodeEditorModel::new_tui` reads syntax colors from the `Appearance`
     // singleton, so register a mock one before constructing the editor.
     ctx.add_singleton_model(|_| Appearance::mock());
+    // Double-click word selection reads the `SemanticSelection` singleton for
+    // its word-boundary policy, so register a mock one too.
+    ctx.add_singleton_model(|_| SemanticSelection::mock(true, ""));
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,
@@ -27,7 +42,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         },
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            TuiInputView::new(model, ctx)
+            TuiInputView::new(model, input_mode, ctx)
         },
     );
     view
@@ -57,7 +72,9 @@ fn cursor_and_height(
         rendered_views: &mut rendered_views,
     };
     let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
-    let cursor = element.cursor_position(TuiRect::new(0, 0, size.width, size.height), &mut lctx);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    let cursor =
+        element.cursor_position(TuiRect::new(0, 0, size.width, size.height), &mut paint_ctx);
     (cursor, size.height)
 }
 
@@ -272,6 +289,26 @@ fn kill_then_yank_round_trips() {
     });
 }
 
+/// Ctrl-c clear: emptying the buffer resets the text and the viewport scroll.
+#[test]
+fn clear_empties_buffer_and_resets_scroll() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_lines(&view, ctx, 10); // 10 rows > 6-row viewport
+            assert_eq!(view.as_ref(ctx).scroll_offset, 4);
+            assert!(!view.as_ref(ctx).is_empty(ctx));
+
+            view.update(ctx, |v, ctx| v.clear(ctx));
+
+            assert!(view.as_ref(ctx).is_empty(ctx));
+            assert_eq!(text(&view, ctx), "");
+            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+        });
+    });
+}
+
 /// Bug 3: word-wise selection (Ctrl+Shift+←) extends the selection one word back.
 #[test]
 fn select_word_left_selects_previous_word() {
@@ -347,6 +384,588 @@ fn cursor_accounts_for_zero_width_chars() {
             type_str(&view, ctx, "a\u{0301}b");
             let (cursor, _height) = cursor_and_height(&view, ctx);
             assert_eq!(cursor, Some((2, 0)), "a + combining + b → 2 display cols");
+        });
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Soft-wrap growth
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Typing until the first line exactly fills the terminal width wraps the
+/// cursor to the next visual row (deferred-wrap terminal behavior), so the
+/// input must grow to show that row — and must not scroll the first row away.
+#[test]
+fn input_grows_when_line_exactly_fills_width() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, &"a".repeat(W as usize));
+            assert_eq!(
+                view.as_ref(ctx).scroll_offset,
+                0,
+                "first row must stay visible"
+            );
+            let (cursor, height) = cursor_and_height(&view, ctx);
+            assert_eq!(height, 2, "wrapped cursor row must be shown");
+            assert_eq!(cursor, Some((0, 1)), "cursor wraps to start of next row");
+        });
+    });
+}
+
+/// Once the first line soft-wraps past the terminal width, the input must be
+/// two rows tall with both rows visible.
+#[test]
+fn input_grows_when_first_line_softwraps() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, &"a".repeat(W as usize + 5));
+            assert_eq!(
+                view.as_ref(ctx).scroll_offset,
+                0,
+                "first row must stay visible"
+            );
+            let (cursor, height) = cursor_and_height(&view, ctx);
+            assert_eq!(height, 2, "two visual rows expected");
+            assert_eq!(cursor, Some((5, 1)), "cursor on second row after wrap");
+        });
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mouse selection
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn left_down(x: u16, y: u16, click_count: u32, shift: bool) -> TuiEvent {
+    TuiEvent::LeftMouseDown {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState {
+            shift,
+            ..Default::default()
+        },
+        click_count,
+        is_first_mouse: false,
+    }
+}
+
+fn left_drag(x: u16, y: u16) -> TuiEvent {
+    TuiEvent::LeftMouseDragged {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+    }
+}
+
+fn left_up(x: u16, y: u16) -> TuiEvent {
+    TuiEvent::LeftMouseUp {
+        position: TuiPoint::new(x, y),
+        modifiers: ModifiersState::default(),
+    }
+}
+
+/// A mouse-wheel event at `(x, y)`. `delta_rows` follows crossterm's convention
+/// (+1 = wheel up / toward the top, -1 = wheel down).
+fn scroll_wheel(x: u16, y: u16, delta_rows: isize) -> TuiEvent {
+    TuiEvent::ScrollWheel {
+        position: TuiPoint::new(x, y),
+        delta: (0, delta_rows),
+        precise: false,
+        modifiers: ModifiersState::default(),
+    }
+}
+
+/// Types `n` short logical lines ("0".."n-1") into the input.
+fn type_lines(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, n: usize) {
+    for i in 0..n {
+        if i > 0 {
+            dispatch(view, ctx, &[TuiInputAction::InsertNewline]);
+        }
+        type_str(view, ctx, &i.to_string());
+    }
+}
+
+/// Builds + lays out the view's concrete element at width `W` (height capped
+/// by the view), returning the element and the area it occupies. Built via
+/// [`TuiInputElement::new`] (the same constructor `render_input` boxes) so
+/// tests can drive the element's inherent `mouse_action` mapping.
+fn laid_out_element(
+    view: &ViewHandle<TuiInputView>,
+    ctx: &AppContext,
+) -> (TuiInputElement, TuiRect) {
+    let mut element = TuiInputElement::new(view.as_ref(ctx), ctx);
+    let mut rendered_views = EntityIdMap::default();
+    let mut lctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
+    (element, TuiRect::new(0, 0, size.width, size.height))
+}
+
+/// Drives the full mouse path for `event`: lay out the element, map the event to
+/// its [`TuiInputAction`], and apply that action to the view. Returns whether an
+/// action fired (i.e. the event was not ignored).
+fn mouse(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, event: &TuiEvent) -> bool {
+    let action = {
+        let (element, area) = laid_out_element(view, ctx);
+        element.mouse_action(event, area, ctx)
+    };
+    match action {
+        Some(action) => {
+            dispatch(view, ctx, &[action]);
+            true
+        }
+        None => false,
+    }
+}
+
+#[test]
+fn single_click_places_cursor() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello world");
+            assert!(mouse(&view, ctx, &left_down(3, 0, 1, false)));
+            assert!(mouse(&view, ctx, &left_up(3, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((3, 0)));
+            assert_eq!(selected_text(&view, ctx), None);
+        });
+    });
+}
+
+/// Clicking the phantom deferred-wrap row (rendered when a logical line
+/// exactly fills the width) must resolve to the end-of-buffer gap — where the
+/// cursor visibly sits — not clamp into the preceding full row and teleport
+/// the cursor to its start.
+#[test]
+fn click_on_phantom_wrap_row_keeps_cursor_at_end() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, &"a".repeat(W as usize));
+            // The exactly-full line renders two rows: the text row and the
+            // phantom cursor row below it.
+            assert_eq!(cursor_and_height(&view, ctx), (Some((0, 1)), 2));
+
+            // Click the phantom row at its left edge.
+            assert!(mouse(&view, ctx, &left_down(0, 1, 1, false)));
+            assert!(mouse(&view, ctx, &left_up(0, 1)));
+
+            // The cursor stays at the buffer end (and the row stays rendered).
+            assert_eq!(cursor_and_height(&view, ctx), (Some((0, 1)), 2));
+            assert_eq!(selected_text(&view, ctx), None);
+        });
+    });
+}
+
+#[test]
+fn click_outside_area_is_ignored() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hi");
+            // The single-line input is one row tall; row 5 is outside it.
+            assert!(!mouse(&view, ctx, &left_down(0, 5, 1, false)));
+            assert_eq!(selected_text(&view, ctx), None);
+        });
+    });
+}
+
+#[test]
+fn drag_selects_range() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello world");
+            mouse(&view, ctx, &left_down(0, 0, 1, false));
+            mouse(&view, ctx, &left_drag(5, 0));
+            assert_eq!(selected_text(&view, ctx).as_deref(), Some("hello"));
+            mouse(&view, ctx, &left_up(5, 0));
+            assert_eq!(selected_text(&view, ctx).as_deref(), Some("hello"));
+        });
+    });
+}
+
+#[test]
+fn shift_click_extends_selection() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello world");
+            // Place the cursor at the start, then shift-click after "hello".
+            mouse(&view, ctx, &left_down(0, 0, 1, false));
+            mouse(&view, ctx, &left_up(0, 0));
+            mouse(&view, ctx, &left_down(5, 0, 1, true));
+            assert_eq!(selected_text(&view, ctx).as_deref(), Some("hello"));
+        });
+    });
+}
+
+#[test]
+fn double_click_selects_word() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello world");
+            assert!(mouse(&view, ctx, &left_down(2, 0, 2, false)));
+            assert_eq!(selected_text(&view, ctx).as_deref(), Some("hello"));
+        });
+    });
+}
+
+#[test]
+fn triple_click_selects_line() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello world");
+            assert!(mouse(&view, ctx, &left_down(2, 0, 3, false)));
+            assert_eq!(selected_text(&view, ctx).as_deref(), Some("hello world"));
+        });
+    });
+}
+
+#[test]
+fn drag_past_last_visible_row_autoscrolls() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            // 10 logical lines, exceeding the 6-row viewport.
+            for i in 0..10 {
+                if i > 0 {
+                    dispatch(&view, ctx, &[TuiInputAction::InsertNewline]);
+                }
+                type_str(&view, ctx, &i.to_string());
+            }
+            // Scroll back to the top.
+            for _ in 0..9 {
+                dispatch(&view, ctx, &[TuiInputAction::MoveUp]);
+            }
+            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+
+            // Begin a selection at the top, then drag well below the viewport.
+            mouse(&view, ctx, &left_down(0, 0, 1, false));
+            mouse(&view, ctx, &left_drag(0, 50));
+
+            // The head followed the drag to the last row, scrolling the viewport.
+            assert!(
+                view.as_ref(ctx).scroll_offset > 0,
+                "drag past the last visible row should auto-scroll"
+            );
+            assert!(selected_text(&view, ctx).is_some());
+        });
+    });
+}
+
+#[test]
+fn wheel_scrolls_viewport_without_moving_cursor() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_lines(&view, ctx, 10); // 10 rows > 6-row viewport
+                                        // Typing leaves the cursor at the end, scrolled to the bottom.
+            assert_eq!(view.as_ref(ctx).scroll_offset, 4);
+            let cursor_before = view.as_ref(ctx).cursor_offset(ctx);
+
+            // Wheel up (delta +1) scrolls toward the top by WHEEL_STEP (2) rows.
+            assert!(mouse(&view, ctx, &scroll_wheel(0, 0, 1)));
+            assert_eq!(view.as_ref(ctx).scroll_offset, 2);
+            // Further wheel-ups clamp at the top.
+            mouse(&view, ctx, &scroll_wheel(0, 0, 1));
+            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+            mouse(&view, ctx, &scroll_wheel(0, 0, 1));
+            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+
+            // Scrolling never moved the cursor.
+            assert_eq!(view.as_ref(ctx).cursor_offset(ctx), cursor_before);
+        });
+    });
+}
+
+#[test]
+fn wheel_scroll_down_clamps_at_bottom() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_lines(&view, ctx, 10);
+            // Scroll to the top first.
+            mouse(&view, ctx, &scroll_wheel(0, 0, 1));
+            mouse(&view, ctx, &scroll_wheel(0, 0, 1));
+            assert_eq!(view.as_ref(ctx).scroll_offset, 0);
+
+            // Wheel down (delta -1) scrolls toward the bottom, clamped at
+            // max_scroll = 10 rows - 6 visible = 4.
+            mouse(&view, ctx, &scroll_wheel(0, 0, -1));
+            assert_eq!(view.as_ref(ctx).scroll_offset, 2);
+            mouse(&view, ctx, &scroll_wheel(0, 0, -1));
+            assert_eq!(view.as_ref(ctx).scroll_offset, 4);
+            mouse(&view, ctx, &scroll_wheel(0, 0, -1));
+            assert_eq!(view.as_ref(ctx).scroll_offset, 4);
+        });
+    });
+}
+
+#[test]
+fn wheel_outside_area_is_ignored() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_lines(&view, ctx, 10);
+            let before = view.as_ref(ctx).scroll_offset;
+            // Row 50 is well outside the 6-row viewport.
+            assert!(!mouse(&view, ctx, &scroll_wheel(0, 50, 1)));
+            assert_eq!(view.as_ref(ctx).scroll_offset, before);
+        });
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shell mode
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Mode *transitions* live on the shared `BlocklistAIInputModel` (exercised by
+// the app crate's `input_model` tests; the view tests drive it through
+// [`BlocklistAIInputModel::mock`]); these tests cover the view's `!` trigger,
+// the submit/clear split, and the shell-mode gutter geometry of the composed
+// `!`-affordance row (built directly via `TuiInputView::shell_element`).
+
+/// A `!` typed at the start of the buffer enters shell mode without inserting;
+/// subsequent text lands in the buffer.
+#[test]
+fn bang_at_start_enters_shell_mode() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "!ls");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(text(&view, ctx), "ls", "the `!` must not be inserted");
+        });
+    });
+}
+
+/// A `!` typed anywhere but the buffer start inserts literally.
+#[test]
+fn bang_mid_text_inserts_literally() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "a!b");
+            assert!(!view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(text(&view, ctx), "a!b");
+        });
+    });
+}
+
+/// Submit emits without clearing; the owner clears via [`TuiInputView::clear`]
+/// once a submission is accepted.
+#[test]
+fn submit_keeps_buffer_until_cleared() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "ab");
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+            assert_eq!(text(&view, ctx), "ab", "submit must not clear the buffer");
+            view.update(ctx, |v, vctx| v.clear(vctx));
+            assert_eq!(text(&view, ctx), "");
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+        });
+    });
+}
+
+/// Esc is never consumed by the element — the shell-mode exit is the
+/// `tui:input:exit_shell_mode` keymap binding, gated on the shell-mode
+/// keymap-context flag — and `ExitShellMode` is a no-op outside shell mode.
+#[test]
+fn escape_is_not_consumed_by_the_element() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "ab");
+            let (mut element, area) = laid_out_element(&view, ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut lctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let mut event_ctx = TuiEventContext::default();
+            event_ctx.set_origin_view(Some(view.id()));
+            let escape = TuiEvent::KeyDown {
+                keystroke: Keystroke {
+                    key: "escape".to_owned(),
+                    ..Default::default()
+                },
+                chars: String::new(),
+                details: KeyEventDetails::default(),
+                is_composing: false,
+            };
+            assert!(
+                !element.dispatch_event(&escape, area, &mut event_ctx, &mut lctx, ctx),
+                "escape must not be consumed by the element"
+            );
+
+            dispatch(&view, ctx, &[TuiInputAction::ExitShellMode]);
+            assert_eq!(text(&view, ctx), "ab", "no-op outside shell mode");
+        });
+    });
+}
+
+/// The keymap context carries the shell-mode flag exactly while in shell
+/// mode, gating the Esc binding.
+#[test]
+fn keymap_context_flags_shell_mode() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            assert_eq!(
+                view.as_ref(ctx).keymap_context(ctx),
+                TuiInputView::default_keymap_context()
+            );
+
+            type_str(&view, ctx, "!");
+            let mut expected = TuiInputView::default_keymap_context();
+            expected.set.insert(SHELL_MODE_INPUT_FLAG);
+            assert_eq!(view.as_ref(ctx).keymap_context(ctx), expected);
+        });
+    });
+}
+
+/// Lays out the shell-mode composition (the `!` gutter row wrapping the
+/// editor) at width `W`, returning the boxed row element and its area.
+fn laid_out_shell_row(
+    view: &ViewHandle<TuiInputView>,
+    ctx: &AppContext,
+) -> (Box<dyn TuiElement>, TuiRect) {
+    let mut element = view.as_ref(ctx).shell_element(ctx);
+    let mut rendered_views = EntityIdMap::default();
+    let mut lctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
+    (element, TuiRect::new(0, 0, size.width, size.height))
+}
+
+/// Lays out the editor content element in the slot the shell row's flex hands
+/// it: two columns narrower, offset right of the gutter.
+fn laid_out_shell_content_slot(
+    view: &ViewHandle<TuiInputView>,
+    ctx: &AppContext,
+) -> (TuiInputElement, TuiRect) {
+    let mut element = TuiInputElement::new(view.as_ref(ctx), ctx);
+    let mut rendered_views = EntityIdMap::default();
+    let mut lctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(W - 2, 20)),
+        &mut lctx,
+        ctx,
+    );
+    (element, TuiRect::new(2, 0, size.width, size.height))
+}
+
+/// In shell mode the rendered cursor is shifted right by the `!` gutter.
+#[test]
+fn shell_mode_offsets_cursor_by_gutter() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "ab");
+            let (element, area) = laid_out_shell_row(&view, ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            assert_eq!(element.cursor_position(area, &mut paint_ctx), Some((4, 0)));
+        });
+    });
+}
+
+/// In shell mode mouse columns are measured from the editable area (the
+/// editor's slot starts after the gutter), and a click on the gutter itself
+/// is consumed, placing the cursor at the start of the buffer.
+#[test]
+fn shell_mode_offsets_mouse_mapping_by_gutter() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello world");
+            let action = {
+                let (element, area) = laid_out_shell_content_slot(&view, ctx);
+                element.mouse_action(&left_down(2 + 3, 0, 1, false), area, ctx)
+            };
+            let Some(TuiInputAction::SelectionStartAt { offset }) = action else {
+                panic!("expected SelectionStartAt, got {action:?}");
+            };
+            // Screen column 5 = content column 3 = gap offset 4 (1-based).
+            assert_eq!(offset.as_usize(), 4);
+
+            // A press on the gutter arms the `!` affordance's click, and the
+            // release inside it fires the handler (which moves the cursor to
+            // the buffer start); both halves are consumed.
+            let (mut row, area) = laid_out_shell_row(&view, ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut lctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let mut event_ctx = TuiEventContext::default();
+            event_ctx.set_origin_view(Some(view.id()));
+            assert!(
+                row.dispatch_event(
+                    &left_down(0, 0, 1, false),
+                    area,
+                    &mut event_ctx,
+                    &mut lctx,
+                    ctx
+                ),
+                "gutter presses must be consumed"
+            );
+            assert!(
+                row.dispatch_event(&left_up(0, 0), area, &mut event_ctx, &mut lctx, ctx),
+                "the release completing a gutter click must be consumed"
+            );
+        });
+    });
+}
+
+/// The gutter click places the cursor without starting a drag selection
+/// (`SetCursor`), so a later drag cannot extend a stale selection anchored at
+/// the buffer start.
+#[test]
+fn gutter_click_places_cursor_without_selecting() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello");
+            // The gutter's click handler dispatches `SetCursor` at the start.
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::SetCursor {
+                    offset: CharOffset::from(1),
+                }],
+            );
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+            assert!(!view.as_ref(ctx).is_selecting);
+            assert_eq!(selected_text(&view, ctx), None);
+
+            // With no press on the editor itself, a drag maps to no action and
+            // selects nothing.
+            assert!(!mouse(&view, ctx, &left_drag(3, 0)));
+            assert_eq!(selected_text(&view, ctx), None);
+        });
+    });
+}
+
+/// The gutter narrows the editable width, so wrapping happens two columns
+/// earlier in shell mode.
+#[test]
+fn shell_mode_wraps_at_gutter_narrowed_width() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            // W - 1 chars: fits one row at width W, wraps at width W - 2.
+            type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
+            let (_, area) = laid_out_element(&view, ctx);
+            assert_eq!(area.height, 1);
+            let (_, area) = laid_out_shell_row(&view, ctx);
+            assert_eq!(area.height, 2, "shell mode should wrap two columns earlier");
         });
     });
 }

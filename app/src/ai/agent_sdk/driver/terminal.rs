@@ -608,9 +608,6 @@ impl TerminalDriver {
                 Err(BootstrapError::InternalError)
             };
 
-            if let Err(ref e) = result {
-                log::error!("Terminal bootstrap failed: {e}");
-            }
             result
         }
     }
@@ -633,25 +630,13 @@ impl TerminalDriver {
 
             match rx.with_timeout(TERMINAL_SESSION_SHARE_DELAY).await {
                 Ok(Ok(Ok(()))) => Ok(()),
-                Ok(Ok(Err(error))) => {
-                    log::error!("Session sharing failed: {error}");
-                    Err(AgentDriverError::ShareSessionFailed { error })
-                }
-                Ok(Err(_canceled)) => {
-                    log::error!("Session sharing channel dropped");
-                    Err(AgentDriverError::ShareSessionFailed {
-                        error: ShareSessionError::Interrupted,
-                    })
-                }
-                Err(_timeout) => {
-                    log::error!(
-                        "Timed out waiting for session sharing to start after {}s",
-                        TERMINAL_SESSION_SHARE_DELAY.as_secs()
-                    );
-                    Err(AgentDriverError::ShareSessionFailed {
-                        error: ShareSessionError::Timeout,
-                    })
-                }
+                Ok(Ok(Err(error))) => Err(AgentDriverError::ShareSessionFailed { error }),
+                Ok(Err(_canceled)) => Err(AgentDriverError::ShareSessionFailed {
+                    error: ShareSessionError::Interrupted,
+                }),
+                Err(_timeout) => Err(AgentDriverError::ShareSessionFailed {
+                    error: ShareSessionError::Timeout,
+                }),
             }
         }
     }

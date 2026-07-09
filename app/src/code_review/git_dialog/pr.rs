@@ -18,6 +18,7 @@ use crate::code_review::git_dialog::{
 use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
 };
+use crate::report_error;
 use crate::ui_components::icons::Icon;
 use crate::util::git::{FileChangeEntry, PrInfo};
 use crate::view_components::{DismissibleToast, ToastLink};
@@ -144,7 +145,7 @@ pub(super) fn finish_create_pr(
     match &result {
         Ok(pr_info) => show_pr_created_toast(pr_info, ctx),
         Err(err) => {
-            log::error!("Failed to create PR: {err}");
+            report_error!(err);
             show_toast(user_facing_git_error(&err.to_string()), ctx);
         }
     }

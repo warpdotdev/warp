@@ -1010,6 +1010,17 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
                 return
             fi
 
+            # If the user's SSH config sets a RemoteCommand for this destination,
+            # OpenSSH refuses to also run our bootstrap as a command-line remote
+            # command, aborting with "Cannot execute command-line and remote
+            # command." Warpification is structurally impossible there, so fall
+            # back to plain SSH. `ssh -G` prints `remotecommand none` when unset.
+            local user_remote_command=$(command ssh -G "${@:1}" 2>/dev/null | command -p sed -n 's/^remotecommand //p')
+            if [[ -n "$user_remote_command" && "$user_remote_command" != "none" ]]; then
+                command ssh "${@:1}"
+                return
+            fi
+
             # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
             # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
             # and use printf to convert back to plaintext

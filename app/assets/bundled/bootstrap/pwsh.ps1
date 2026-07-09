@@ -146,16 +146,16 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         # avoiding Windows system modules and third-party modules from the Gallery. The rest are
         # loaded asynchronously later.
         $corePsModules = @(
-            'Microsoft.PowerShell.*',  # All built-in PS modules (cross-platform)
-            'Microsoft.WSMan.*',       # WS-Management (Windows PS)
-            'CimCmdlets',              # CIM/WMI (Windows)
-            'PackageManagement',       # Package management
-            'PowerShellGet',           # Package get
-            'PSReadLine',              # Line editor bundled with PS
-            'ThreadJob',               # Thread jobs (PS 7)
-            'PSDiagnostics',           # PS diagnostics
+            'Microsoft.PowerShell.*', # All built-in PS modules (cross-platform)
+            'Microsoft.WSMan.*', # WS-Management (Windows PS)
+            'CimCmdlets', # CIM/WMI (Windows)
+            'PackageManagement', # Package management
+            'PowerShellGet', # Package get
+            'PSReadLine', # Line editor bundled with PS
+            'ThreadJob', # Thread jobs (PS 7)
+            'PSDiagnostics', # PS diagnostics
             'PSDesiredStateConfiguration', # DSC (Windows PS)
-            'PSWorkflow',              # Legacy workflow (Windows PS 5)
+            'PSWorkflow', # Legacy workflow (Windows PS 5)
             'PSWorkflowUtility'        # Legacy workflow utility (Windows PS 5)
         )
         $functionNamesRaw = Get-Command -CommandType Function -Module $corePsModules |

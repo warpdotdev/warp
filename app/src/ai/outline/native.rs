@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ai::index::build_outline;
+use anyhow::Context as _;
 use async_channel::Sender;
 use futures::stream::AbortHandle;
 use instant::Instant;
@@ -21,7 +22,7 @@ use crate::settings::{
     InputSettingsChangedEvent,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{safe_info, safe_warn, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{report_error, safe_info, safe_warn, send_telemetry_from_ctx, TelemetryEvent};
 
 /// State for a repository outline, containing both the repository handle and the outline status.
 #[derive(Debug)]
@@ -245,16 +246,16 @@ impl RepoOutlines {
                                     )
                                 );
                                 // Ensure the repository is registered with DirectoryWatcher.
-                                let repository_handle = match DirectoryWatcher::handle(ctx).update(
-                                    ctx,
-                                    |repo_watcher, ctx| {
+                                let repository_handle = match DirectoryWatcher::handle(ctx)
+                                    .update(ctx, |repo_watcher, ctx| {
                                         repo_watcher
                                             .add_directory(canonicalized_path.clone().into(), ctx)
-                                    },
-                                ) {
+                                    })
+                                    .context("Failed to start tracking repository")
+                                {
                                     Ok(handle) => handle,
                                     Err(e) => {
-                                        log::error!("Failed to start tracking repository: {e:?}");
+                                        report_error!(e);
                                         return;
                                     }
                                 };

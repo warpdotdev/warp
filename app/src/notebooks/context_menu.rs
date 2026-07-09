@@ -2,6 +2,7 @@
 
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::context_flag::ContextFlag;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::{ChildAnchor, OffsetPositioning, ParentAnchor, ParentOffsetBounds, Stack};
 use warpui::keymap::Trigger;
 use warpui::presenter::ChildView;
@@ -33,6 +34,10 @@ where
     menu: ViewHandle<Menu<V::Action>>,
     /// Focus state of the pane containing this context menu.
     focus_handle: Option<PaneFocusHandle>,
+    /// The display path of the file backing this pane, if any. When set, the menu offers a
+    /// "Copy file path" item. Only file-backed views (e.g. the file viewer) set this; for other
+    /// notebooks it stays `None` and the item is hidden.
+    copy_file_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,11 +76,18 @@ where
             source: None,
             menu,
             focus_handle: None,
+            copy_file_path: None,
         }
     }
 
     pub(super) fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle) {
         self.focus_handle = Some(focus_handle);
+    }
+
+    /// Set the display path used by the "Copy file path" menu item. Pass `None` to hide the item
+    /// (e.g. for notebooks not backed by a file).
+    pub(super) fn set_copy_file_path(&mut self, path: Option<String>) {
+        self.copy_file_path = path;
     }
 
     /// Renders the context menu, if it's open.
@@ -132,6 +144,18 @@ where
                 .with_on_select_action(V::Action::from(ContextMenuAction::Paste))
                 .with_key_shortcut_label(custom_action_to_display(CustomAction::Paste));
             items.push(item.into_item());
+        }
+
+        // Section 1b: Copy file path (only for file-backed panes).
+        if self.copy_file_path.is_some() {
+            if !items.is_empty() {
+                items.push(MenuItem::Separator);
+            }
+            items.push(
+                MenuItemFields::new("Copy file path")
+                    .with_on_select_action(V::Action::from(ContextMenuAction::CopyFilePath))
+                    .into_item(),
+            );
         }
 
         // Section 2: Split-pane actions
@@ -297,6 +321,11 @@ where
                 }
                 None => (),
             },
+            ContextMenuAction::CopyFilePath => {
+                if let Some(path) = self.copy_file_path.clone() {
+                    ctx.clipboard().write(ClipboardContent::plain_text(path));
+                }
+            }
             ContextMenuAction::EmitPaneEvent(event) => ctx.emit(V::Event::from(event.clone())),
         }
     }
@@ -347,5 +376,6 @@ pub enum ContextMenuAction {
     CopySelectedText,
     CutSelectedText,
     Paste,
+    CopyFilePath,
     EmitPaneEvent(PaneEvent),
 }

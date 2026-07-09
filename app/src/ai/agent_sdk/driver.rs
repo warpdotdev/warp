@@ -26,6 +26,7 @@ use warp_cli::agent::{Harness, OutputFormat};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
+use warp_core::errors::{register_error, ErrorExt};
 use warp_core::features::FeatureFlag;
 use warp_core::{report_error, report_if_error, safe_debug, safe_error, safe_info};
 use warp_graphql::ai::AgentTaskState;
@@ -583,6 +584,13 @@ pub enum AgentDriverError {
     },
 }
 
+impl ErrorExt for AgentDriverError {
+    fn is_actionable(&self) -> bool {
+        error_classification::classify_driver_error(self).0 == AgentTaskState::Error
+    }
+}
+register_error!(AgentDriverError);
+
 #[derive(Debug, Default)]
 struct ResolvedMcpSpecs {
     local_uuids: Vec<Uuid>,
@@ -867,8 +875,9 @@ impl AgentDriver {
                             None,
                         )
                         .await
+                        .context("Failed to update agent task state to InProgress")
                     {
-                        log::error!("Failed to update agent task state to InProgress: {e}");
+                        report_error!(e);
                     }
                 }
                 let result = Self::run_internal(task, foreground.clone()).await;
@@ -895,7 +904,7 @@ impl AgentDriver {
                 Self::run_snapshot_upload(&foreground).await;
 
                 if tx.send(result).is_err() {
-                    log::error!("Caller did not wait for agent driver to finish");
+                    report_error!("Caller did not wait for agent driver to finish");
                 }
 
                 Self::cleanup(foreground).await;
@@ -917,6 +926,10 @@ impl AgentDriver {
                     Err(AgentDriverError::InvalidRuntimeState)
                 }
             };
+
+            if let Err(err) = &result {
+                report_error!(err);
+            }
 
             // Report driver-level errors directly to the server. These errors
             // occur before or outside a conversation (e.g. bootstrap, MCP startup,
@@ -1975,7 +1988,7 @@ impl AgentDriver {
                         SetupClientEventReporter::new(task_id, ai_client, ctx.background_executor())
                     }
                     None => {
-                        log::error!("No task ID found for driver - cannot report client events");
+                        report_error!("No task ID found for driver - cannot report client events");
                         SetupClientEventReporter::noop(ai_client, ctx.background_executor())
                     }
                 }
@@ -2283,7 +2296,7 @@ impl AgentDriver {
                 let conversation_status = with_credential_refreshes(
                     async move {
                         status_rx.await.map_err(|_| {
-                            log::error!("Subscription dropped before agent finished");
+                            report_error!("Subscription dropped before agent finished");
                             AgentDriverError::InvalidRuntimeState
                         })
                     },
@@ -3311,7 +3324,7 @@ impl AgentDriver {
                         attachments_dir,
                     } => {
                         let Some(task_id) = self.task_id else {
-                            log::error!("ServerSide prompt without task_id");
+                            report_error!("ServerSide prompt without task_id");
                             return;
                         };
                         let ambient_run_id = task_id.to_string();
@@ -3562,7 +3575,7 @@ impl AgentDriver {
             .spawn(|me, _| (std::mem::take(&mut me.cloud_providers), me.task_id))
             .await
         else {
-            log::error!("Unable to retrieve cloud providers for cleanup");
+            report_error!("Unable to retrieve cloud providers for cleanup");
             return;
         };
 
@@ -3613,7 +3626,10 @@ impl AgentDriver {
             })
             .await
         else {
-            log::error!("Unable to retrieve snapshot upload context for cleanup (task {task_id})");
+            report_error!(
+                "Unable to retrieve snapshot upload context for cleanup",
+                extra: { "task_id" => %task_id }
+            );
             return;
         };
 
@@ -3635,10 +3651,10 @@ impl AgentDriver {
             .with_timeout(upload_timeout)
             .await
         {
-            report_error!(anyhow!(
-                "Snapshot upload timed out after {:?}; continuing with cleanup (task {task_id})",
-                upload_timeout
-            ));
+            report_error!(
+                "Snapshot upload timed out; continuing with cleanup",
+                extra: { "timeout" => ?upload_timeout, "task_id" => %task_id }
+            );
         }
     }
 }

@@ -8,6 +8,8 @@ mod noop;
 mod screenshot_utils;
 
 use std::borrow::Cow;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use async_trait::async_trait;
 // Clippy doesn't like us pulling in a file as two different modules,
@@ -18,6 +20,7 @@ use noop as imp;
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
+use thiserror::Error;
 
 /// The platform that computer use is running on.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -36,6 +39,20 @@ pub fn is_supported_on_current_platform() -> bool {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum RecordingError {
+    /// Recording can't run in this environment: unsupported platform, missing or
+    /// unreachable X11 display, unusable display dimensions, or ffmpeg not launchable.
+    #[error("Recording environment error: {reason}")]
+    Environment { reason: String },
+    /// ffmpeg was launched but capture never went live.
+    #[error("Recording failed to start: {reason}")]
+    Start { reason: String },
+    /// A live recording couldn't be finalized into a usable file.
+    #[error("Recording failed to finalize: {reason}")]
+    Finalize { reason: String },
+}
+
 /// Returns an actor that can perform actions on the computer.
 pub fn create_actor() -> Box<dyn Actor> {
     if cfg!(feature = "test-util") {
@@ -45,6 +62,117 @@ pub fn create_actor() -> Box<dyn Actor> {
     }
 }
 
+/// Returns whether background, per-window control (driving a specific window without raising it
+/// or moving the cursor) is available on this client and OS. When false, callers should target
+/// the whole screen / frontmost application.
+pub fn background_supported() -> bool {
+    if cfg!(feature = "test-util") {
+        noop::background_supported()
+    } else {
+        imp::background_supported()
+    }
+}
+
+/// Enumerates the on-screen windows, returning their metadata so a caller can pick one to
+/// target. Returns an empty list on platforms where window enumeration is unsupported.
+pub fn enumerate_windows() -> Vec<WindowInfo> {
+    #[cfg(macos)]
+    {
+        imp::enumerate_windows()
+    }
+    #[cfg(not(macos))]
+    {
+        Vec::new()
+    }
+}
+
+/// Experimental: lists on-screen windows as a formatted diagnostic string. macOS only.
+///
+/// Unlike [`enumerate_windows`], which returns slim [`WindowInfo`] records for window selection
+/// and wire serialization, this function returns richer data including window bounds, formatted
+/// as a human-readable table for CLI debugging. The two use separate types intentionally:
+/// [`WindowInfo`] is kept wire-safe and bounds-free; the diagnostic output carries bounds that
+/// are not part of the API representation.
+#[cfg(macos)]
+pub fn experimental_list_windows() -> Result<String, String> {
+    Ok(imp::list_windows())
+}
+
+/// Experimental: lists on-screen windows. Unsupported on this platform.
+#[cfg(not(macos))]
+pub fn experimental_list_windows() -> Result<String, String> {
+    Err("Window listing is only supported on macOS.".to_string())
+}
+
+/// The surface that a computer-use action or screenshot targets.
+///
+/// `Screen` reproduces the legacy behavior of acting on the whole screen / frontmost
+/// application. `Window` drives a specific background window of a specific process without
+/// raising it or moving the global cursor.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Target {
+    /// Target the whole screen / frontmost application (legacy behavior).
+    #[default]
+    Screen,
+    /// Target a specific background window of a specific process.
+    Window {
+        /// The platform window id (a `CGWindowID` on macOS). Must be a concrete, non-zero id
+        /// selected from the enumerated window list. `0` is the "unknown" sentinel and is
+        /// rejected by the actor, since coordinate remapping and window capture both require a
+        /// known window.
+        window_id: u32,
+        /// The pid of the process that owns the window.
+        pid: i32,
+    },
+}
+
+/// An action paired with the surface it targets.
+///
+/// The target is carried per-action so a single batch can, in principle, drive more than one
+/// window. An absent / `Screen` target reproduces the legacy whole-screen behavior.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TargetedAction {
+    pub action: Action,
+    #[serde(default)]
+    pub target: Target,
+}
+
+impl TargetedAction {
+    /// Builds a screen-targeted action (legacy behavior).
+    pub fn screen(action: Action) -> Self {
+        Self {
+            action,
+            target: Target::Screen,
+        }
+    }
+}
+
+/// Metadata about an on-screen window, so a caller can select a window to target.
+/// Mirrors the fields of the `WindowInfo` API message.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WindowInfo {
+    /// The platform window id (a `CGWindowID` on macOS).
+    pub window_id: u32,
+    /// The pid of the process that owns the window.
+    pub pid: i32,
+    /// The owning application's name (e.g. "Arc", "Notes").
+    pub app_name: String,
+    /// The window title, if available.
+    pub title: String,
+    /// The window layer (0 is a normal application window).
+    pub layer: i32,
+}
+/// Metadata describing a captured window screenshot.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct CapturedWindow {
+    /// The platform window id that was captured.
+    pub window_id: u32,
+    /// The width of the native captured image, in pixels.
+    pub width_px: i32,
+    /// The height of the native captured image, in pixels.
+    pub height_px: i32,
+}
+
 #[async_trait]
 pub trait Actor: Send + Sync + 'static {
     /// Returns the platform that this actor is running on, if known.
@@ -52,9 +180,110 @@ pub trait Actor: Send + Sync + 'static {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
+        actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String>;
+}
+
+/// Returns a recorder that can capture a video of the computer-use display.
+///
+/// A real recorder is only available on Linux (X11); every other platform, and
+/// any `test-util` build, gets a no-op recorder that reports recording as
+/// unsupported.
+pub fn create_recorder() -> Box<dyn Recorder> {
+    if cfg!(feature = "test-util") {
+        Box::new(noop::Recorder::new())
+    } else {
+        Box::new(imp::Recorder::new())
+    }
+}
+
+/// A long-lived capability that records a video of the computer-use display.
+///
+/// Unlike [`Actor`], a recorder spans many tool calls: `start` launches capture
+/// and returns a [`RecordingHandle`] that the caller holds for the duration of
+/// the flow, and `stop` consumes that handle to finalize the video.
+#[async_trait]
+pub trait Recorder: Send + Sync + 'static {
+    /// Begins capturing the display. Resolves once capture is confirmed live
+    /// (the display is open and the encoder has produced its first output).
+    async fn start(&self, config: RecordingConfig) -> Result<RecordingHandle, RecordingError>;
+
+    /// Stops an in-progress recording, finalizes the container, and returns the
+    /// resulting file path and metadata. The file is streamed to disk; the
+    /// caller owns publishing and cleanup.
+    async fn stop(&self, handle: RecordingHandle) -> Result<RecordingOutput, RecordingError>;
+}
+
+/// Runtime-owned capture configuration for a recording.
+#[derive(Debug, Clone)]
+pub struct RecordingConfig {
+    /// Capture frame rate in frames per second.
+    pub frame_rate: u32,
+    /// Maximum duration before the runtime auto-stops recording.
+    pub max_duration: Duration,
+    /// Maximum output size in bytes before the runtime auto-stops recording.
+    pub max_size_bytes: u64,
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            // NOTE: 15fps keeps UI interactions readable while reducing file size and encoder load.
+            frame_rate: 15,
+            // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
+            max_duration: Duration::from_secs(10 * 60),
+            max_size_bytes: 1024 * 1024 * 1024,
+        }
+    }
+}
+
+/// An opaque handle to an in-progress recording, returned by [`Recorder::start`]
+/// and consumed by [`Recorder::stop`]. It owns the live capture process and the
+/// metadata needed to report the applied capture settings.
+pub struct RecordingHandle {
+    width: u32,
+    height: u32,
+    // The live capture process plus the fields used to finalize it are only
+    // populated by the real Linux recorder; the no-op recorders never construct
+    // a handle.
+    #[cfg(linux)]
+    path: PathBuf,
+    #[cfg(linux)]
+    started_at: instant::Instant,
+    #[cfg(linux)]
+    process: tokio::process::Child,
+}
+
+impl RecordingHandle {
+    /// The applied capture width in pixels.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// The applied capture height in pixels.
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+}
+
+/// The finalized output of a stopped recording. Carries the local file path and
+/// metadata only; callers are responsible for publishing and deleting the file.
+#[derive(Debug, Clone)]
+pub struct RecordingOutput {
+    pub path: PathBuf,
+    pub duration: Duration,
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
+    pub completion_status: RecordingCompletionStatus,
+}
+
+/// Whether capture completed normally or stopped before an explicit stop.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RecordingCompletionStatus {
+    Completed,
+    StoppedEarly,
 }
 
 /// A key that can be pressed or released.
@@ -123,7 +352,7 @@ pub enum ScrollDistance {
 }
 
 /// A rectangular region defined by top-left and bottom-right corners.
-/// Coordinates are in physical screen pixels (same coordinate space as mouse actions).
+/// Coordinates are physical pixels relative to the selected screenshot target.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ScreenshotRegion {
     #[serde(with = "Vector2IDef")]
@@ -172,15 +401,24 @@ pub struct ScreenshotParams {
     pub max_long_edge_px: Option<usize>,
     /// The maximum total number of pixels in the screenshot.
     pub max_total_px: Option<usize>,
-    /// Optional region to capture. If `None`, captures the full display.
+    /// Optional sub-region of `target` to capture, in target-relative physical pixels.
+    /// If `None`, captures the full target.
     #[serde(default)]
     pub region: Option<ScreenshotRegion>,
+    /// The surface to capture. `Screen` captures the main display (legacy); `Window` captures
+    /// a specific window's image.
+    #[serde(default)]
+    pub target: Target,
 }
 
 pub struct Options {
     /// If set, a screenshot will be captured after the actions are executed.
     /// The parameters specify what constraints, if any, to apply to the screenshot.
     pub screenshot_params: Option<ScreenshotParams>,
+    /// Whether background, per-window computer use is enabled. When false, actors must behave
+    /// exactly like the legacy full-screen path: any window target is ignored, only the main
+    /// display is captured, and no window list or captured-window metadata is returned.
+    pub background_enabled: bool,
 }
 
 /// The buttons of a mouse.
@@ -200,6 +438,25 @@ pub enum MouseButton {
 pub struct ActionResult {
     pub screenshot: Option<Screenshot>,
     pub cursor_position: Option<Vector2I>,
+    /// The on-screen windows, refreshed after the actions run, so the caller always has a fresh
+    /// list to target next. Empty on platforms without window enumeration.
+    pub windows: Vec<WindowInfo>,
+    /// Metadata about the captured window, populated only when a window target was
+    /// screenshotted, so window-local coordinates map onto the screenshot image.
+    pub captured_window: Option<CapturedWindow>,
+}
+
+impl ActionResult {
+    /// Builds a result that carries no window list or captured-window metadata (used by
+    /// platforms and code paths that do not support per-window targeting).
+    pub fn legacy(screenshot: Option<Screenshot>, cursor_position: Option<Vector2I>) -> Self {
+        Self {
+            screenshot,
+            cursor_position,
+            windows: Vec::new(),
+            captured_window: None,
+        }
+    }
 }
 
 /// A simple representation of a screenshot.

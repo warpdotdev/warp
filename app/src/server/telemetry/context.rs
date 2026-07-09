@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use warpui::platform::wasm;
 
 use super::rudder_message::Message as RudderMessage;
+use crate::report_error;
 use crate::server::OperatingSystemInfo;
 
 static TELEMETRY_CONTEXT: OnceLock<TelemetryContext> = OnceLock::new();
@@ -45,7 +46,8 @@ impl TelemetryContext {
         match serde_json::to_value(context) {
             Ok(value) => Self(value),
             Err(e) => {
-                log::error!("Failed to serialize telemetry context info to JSON value: {e:?}");
+                report_error!(anyhow::Error::new(e)
+                    .context("Failed to serialize telemetry context info to JSON value"));
                 Self(json!({}))
             }
         }

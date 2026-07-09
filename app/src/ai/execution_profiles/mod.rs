@@ -47,7 +47,7 @@ fn effective_base_model<'a>(profile: &AIExecutionProfile, app: &'a AppContext) -
         .base_model
         .as_ref()
         .and_then(|id| prefs.get_llm_info(id))
-        .unwrap_or_else(|| prefs.get_default_base_model())
+        .unwrap_or_else(|| prefs.get_default_base_model(app))
 }
 
 /// Resolves the effective cloud agent computer use state by reading the workspace

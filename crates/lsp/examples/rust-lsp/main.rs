@@ -16,6 +16,7 @@ use log::LevelFilter;
 use lsp::supported_servers::LSPServerType;
 use lsp::{spawn_lsp_service, LspServerConfig, LspService, LspServiceInitializationResult};
 use lsp_types::Position;
+use warp_core::report_error;
 use warpui_core::r#async::executor::Background;
 use warpui_core::r#async::Timer;
 
@@ -106,7 +107,7 @@ fn main() -> anyhow::Result<()> {
 
     let task = executor.spawn(async move {
         if let Err(e) = async_main(executor_clone, workspace_root).await {
-            log::error!("LSP demo failed: {e}");
+            report_error!(&e);
             eprintln!("LSP demo failed: {e}");
         }
     });

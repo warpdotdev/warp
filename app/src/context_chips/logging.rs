@@ -16,6 +16,8 @@ use parking_lot::Mutex;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 
 use super::ContextChipKind;
+#[cfg(not(target_family = "wasm"))]
+use crate::report_error;
 use crate::terminal::shell::ShellType;
 
 const EMPTY_VALUE: &str = "<empty>";
@@ -161,9 +163,9 @@ fn spawn_log_writer(log_path: PathBuf) -> io::Result<mpsc::Sender<String>> {
 fn write_log_entries(mut file: File, rx: mpsc::Receiver<String>, log_path: PathBuf) {
     while let Ok(entry) = rx.recv() {
         if let Err(err) = file.write_all(entry.as_bytes()).and_then(|_| file.flush()) {
-            log::error!(
-                "Failed to write prompt chip log entry to {}: {err:#}",
-                log_path.display()
+            report_error!(
+                anyhow::Error::new(err).context("Failed to write prompt chip log entry"),
+                extra: { "log_path" => %log_path.display() }
             );
             return;
         }

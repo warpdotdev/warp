@@ -27,6 +27,7 @@ use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, InteractionState,
     PropagateAndNoOpNavigationKeys, TextOptions,
 };
+use crate::report_error;
 use crate::ui_components::icons::Icon;
 use crate::util::git::{get_file_change_entries, FileChangeEntry, PrInfo};
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
@@ -424,7 +425,7 @@ pub(super) fn finish_commit_chain(
             show_toast(msg, ctx);
         }
         Err(err) => {
-            log::error!("Commit failed: {err}");
+            report_error!("Commit failed", extra: { "error" => %err });
             show_toast(user_facing_git_error(err), ctx);
         }
     }

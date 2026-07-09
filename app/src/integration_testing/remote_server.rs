@@ -14,6 +14,7 @@ use crate::remote_server::manager::{
     RemoteServerErrorKind, RemoteServerManager, RemoteServerManagerEvent, RemoteServerOperation,
     RemoteSessionState,
 };
+use crate::report_error;
 use crate::terminal::model::session::command_executor::remote_server_executor::RemoteServerCommandExecutor;
 pub type RemoteServerActionCallback = Box<dyn Fn(&mut App, WindowId, &mut StepDataMap) + 'static>;
 
@@ -255,11 +256,14 @@ pub fn write_file_via_remote_server(
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                 let result = rt.block_on(handle.write_file(path.clone(), content));
                 if let Err(e) = &result {
-                    log::error!("write_file_via_remote_server failed for {path}: {e}");
+                    report_error!(
+                        anyhow::anyhow!("{e}").context("write_file_via_remote_server failed"),
+                        extra: { "path" => %path }
+                    );
                 }
             });
         } else {
-            log::error!("write_file_via_remote_server: no connected client");
+            report_error!("write_file_via_remote_server: no connected client");
         }
     })
 }
@@ -277,7 +281,7 @@ pub fn load_repo_metadata_directory_via_remote_server(
         let maybe_session_id = terminal_view.read(app, |view, _ctx| view.active_block_session_id());
 
         let Some(session_id) = maybe_session_id else {
-            log::error!("load_repo_metadata_directory_via_remote_server: no active session");
+            report_error!("load_repo_metadata_directory_via_remote_server: no active session");
             return;
         };
 

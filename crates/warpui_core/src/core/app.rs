@@ -19,6 +19,7 @@ use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use rustc_hash::FxHashMap;
+use warp_errors::report_error;
 
 use super::{
     autotracking, ActionCallback, BlurContext, FocusContext, GlobalActionCallback, GlobalShortcut,
@@ -251,7 +252,7 @@ impl App {
             let responder_chain = ctx.get_responder_chain(window_id);
             let res = ctx.dispatch_standard_action(action, window_id, &responder_chain);
             if let Err(error) = res {
-                log::error!("error dispatching standard action: {error}");
+                report_error!(error.context("error dispatching standard action"));
             }
         });
     }
@@ -1103,10 +1104,15 @@ impl AppContext {
             });
     }
 
-    /// Subscribes to a [`ViewHandle`] for changes, calling `callback` with the emitted event whenever the view is invalidated.
+    /// Subscribes to a GUI or TUI [`ViewHandle`] for emitted events.
+    ///
+    /// The [`ViewHandle`] parameter is the proof that `S` is a view: callers can
+    /// only obtain one through GUI or TUI view creation APIs. The generic bound
+    /// stays at [`Entity`] so this can accept both GUI [`View`](crate::View) and
+    /// TUI [`TuiView`](crate::TuiView) instances while still accessing `S::Event`.
     pub fn subscribe_to_view<S, F>(&mut self, handle: &ViewHandle<S>, mut callback: F)
     where
-        S: View,
+        S: Entity,
         S::Event: 'static,
         F: 'static + FnMut(ViewHandle<S>, &S::Event, &mut AppContext),
     {
@@ -1360,7 +1366,10 @@ impl AppContext {
                         )
                     }
                     None => {
-                        log::error!("Could not downcast argument for action {name_clone}");
+                        report_error!(
+                            "Could not downcast argument for action",
+                            extra: { "action" => name_clone }
+                        );
                         false
                     }
                 }
@@ -1394,7 +1403,10 @@ impl AppContext {
                         false,
                         "Could not downcast argument for action {name_clone}: {location:?}"
                     );
-                    log::error!("Could not downcast argument for action {name_clone}");
+                    report_error!(
+                        "Could not downcast argument for action",
+                        extra: { "action" => name_clone }
+                    );
                 }
             },
         );
@@ -1490,7 +1502,10 @@ impl AppContext {
         if let Some(parents) = self.view_parents.get(&window_id) {
             while let Some(parent_id) = parents.get(&view_id) {
                 if chain.contains(parent_id) {
-                    log::error!("Cycle detected in the view hierarchy at view {parent_id}");
+                    report_error!(
+                        "Cycle detected in the view hierarchy",
+                        extra: { "view" => parent_id }
+                    );
                     break;
                 }
                 view_id = *parent_id;
@@ -1930,7 +1945,7 @@ impl AppContext {
         match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                log::error!("Unable to fetch Key Bindings for View: {error}");
+                report_error!(error.context("Unable to fetch Key Bindings for View"));
                 Vec::new()
             }
         }
@@ -1977,7 +1992,7 @@ impl AppContext {
         let contexts = match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                log::error!("Unable to fetch Key Bindings for View: {error}");
+                report_error!(error.context("Unable to fetch Key Bindings for View"));
                 return Vec::new();
             }
         };
@@ -2084,7 +2099,7 @@ impl AppContext {
             }
 
             if let Err(error) = res {
-                log::error!("error dispatching custom action: {error}");
+                report_error!(error.context("error dispatching custom action"));
             }
         } else {
             // We hit this case when the user is in the course of editing their keybindings.
@@ -2505,7 +2520,7 @@ impl AppContext {
                 let responder_chain = ctx.get_responder_chain(window_id);
                 let res = ctx.dispatch_standard_action(action, window_id, &responder_chain);
                 if let Err(error) = res {
-                    log::error!("error dispatching standard action: {error}");
+                    report_error!(error.context("error dispatching standard action"));
                 }
             }),
             event_callback: Box::new(move |event, ctx| {
@@ -2647,7 +2662,7 @@ impl AppContext {
 
         match window_result {
             Err(err) => {
-                log::error!("error opening window: {err}");
+                report_error!("error opening window", extra: { "error" => %err });
             }
             Ok(_) => {
                 self.on_window_invalidated(window_id, move |window_id, ctx| {
@@ -2776,7 +2791,7 @@ impl AppContext {
             self.windows.remove(&window_id),
             self.window_bounds.remove(&window_id),
         ) else {
-            log::error!("Closed a window that was missing underlying window data!");
+            report_error!("Closed a window that was missing underlying window data!");
             self.flush_effects();
             return None;
         };
@@ -2807,7 +2822,7 @@ impl AppContext {
         } = data;
 
         let Some(bounds) = bounds else {
-            log::error!("Had no bounds for cached closed window!");
+            report_error!("Had no bounds for cached closed window!");
             return;
         };
 
@@ -3476,6 +3491,11 @@ impl AppContext {
         }
     }
 
+    /// Fires each invalidated window's [`Self::on_window_invalidated`] callback.
+    /// Normally run at the end of [`Self::flush_effects`], but also called
+    /// directly to imperatively trigger a redraw after work that doesn't flush
+    /// app effects (e.g. the repaint tasks in this file, and the TUI driver's
+    /// input handling).
     fn update_windows(&mut self) {
         let invalidated_window_ids = self
             .window_invalidations
@@ -3538,7 +3558,7 @@ impl AppContext {
                             keystroke_handled = handled;
                         }
                         Err(error) => {
-                            log::error!("error dispatching keystroke: {error}");
+                            report_error!(error.context("error dispatching keystroke"));
                         }
                     }
                 }
@@ -3693,7 +3713,7 @@ impl AppContext {
                     log::warn!("Unable to load requested fallback font: {e:?}");
                 }
                 AssetState::Loading { .. } => {
-                    log::error!("Fallback font asset should not be in a loading state");
+                    report_error!("Fallback font asset should not be in a loading state");
                 }
             }
         }
@@ -4074,7 +4094,7 @@ impl AppContext {
         }
     }
 
-    fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {
+    pub(crate) fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {
         self.window_invalidations
             .entry(window_id)
             .or_default()

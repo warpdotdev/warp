@@ -1,9 +1,7 @@
-mod config;
 mod glyph_index;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::f32::consts::PI;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -12,9 +10,9 @@ use rangemap::RangeMap;
 use string_offset::CharOffset;
 
 use crate::color::ColorU;
-pub use crate::elements::shimmering_text::config::ShimmerConfig;
+pub use crate::elements::shimmer_math::ShimmerConfig;
 use crate::elements::shimmering_text::glyph_index::GlyphIndex;
-use crate::elements::{Axis, Point, DEFAULT_UI_LINE_HEIGHT_RATIO};
+use crate::elements::{shimmer_math, Axis, Point, DEFAULT_UI_LINE_HEIGHT_RATIO};
 use crate::fonts::{FamilyId, Properties};
 use crate::geometry::rect::RectF;
 use crate::geometry::vector::{vec2f, Vector2F};
@@ -115,37 +113,6 @@ impl ShimmeringTextElement {
         }
     }
 
-    /// Returns the center of the shimmer as a fractional glyph index along the "track".
-    fn shimmer_center(&self, number_of_glyphs: usize, state: &StateInternal) -> GlyphIndex<f32> {
-        if number_of_glyphs <= 1 {
-            return GlyphIndex(0.0);
-        }
-
-        let period_s = self.config.period.as_secs_f32();
-        let elapsed_s = state.animation_start_time.elapsed().as_secs_f32();
-        // Get the percent of the way through we are of the current loop.
-        let progress = (elapsed_s / period_s).fract();
-
-        // Compute the total number of glyphs the band needs to travel.
-        let span = (number_of_glyphs as f32 - 1.0) + (2.0 * self.config.padding as f32);
-        // Get the fractional glyph index for the center of the band, factoring in that the center
-        // can be negative (before any of the text)
-        GlyphIndex((progress * span) - self.config.padding as f32)
-    }
-
-    /// Returns how strong the shimmer effect should be for a given glyph based on how far it is
-    /// from the center of the shimmer.
-    fn intensity_at(&self, glyph_index: GlyphIndex<usize>, center: GlyphIndex<f32>) -> f32 {
-        let dist = (glyph_index.as_f32().0 - center.0).abs();
-        // If the distance is greater than the size of the band, there's no intensity.
-        if dist >= self.config.shimmer_radius as f32 {
-            return 0.0;
-        }
-        // Use a cosine wave to generate the intensity otherwise and normalize it to [0,1].
-        let theta = (dist / self.config.shimmer_radius as f32) * PI;
-        (theta.cos() + 1.0) * 0.5
-    }
-
     fn glyph_index_to_character_index_map(line: &Line) -> HashMap<GlyphIndex<usize>, CharOffset> {
         line.runs
             .iter()
@@ -165,16 +132,14 @@ impl ShimmeringTextElement {
             return PaintStyleOverride::default();
         }
 
-        let center = self.shimmer_center(n, &state);
+        let center =
+            shimmer_math::shimmer_center(n, state.animation_start_time.elapsed(), &self.config);
 
         let mut overrides = RangeMap::new();
         for (glyph_index, char_index) in glyph_indices_in_order.iter() {
-            let intensity = self.intensity_at(*glyph_index, center);
-            let color = self
-                .base_color
-                .to_f32()
-                .lerp(self.shimmer_color.to_f32(), intensity)
-                .to_u8();
+            let intensity = shimmer_math::intensity_at(glyph_index.0, center, &self.config);
+            let color =
+                shimmer_math::shimmer_color_at(self.base_color, self.shimmer_color, intensity);
             overrides.insert(char_index.as_usize()..char_index.as_usize() + 1, color);
         }
 

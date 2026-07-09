@@ -16,6 +16,7 @@ use mio::{self, Events, Interest};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use super::mio_channel::Receiver;
+use crate::report_error;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi;
 use crate::terminal::model::terminal_model::ExitReason;
@@ -482,7 +483,7 @@ where
                 if !child_exited {
                     let res = self.pty.kill();
                     if let Err(err) = res {
-                        log::error!("Failed to kill PTY process {err:?}");
+                        report_error!(err.context("Failed to kill PTY process"));
                     }
                 }
                 // Notify the terminal model that the PTY process has exited.

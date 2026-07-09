@@ -16,6 +16,8 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ViewHandle, WeakViewHan
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::code_review_view::CodeReviewView;
 use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
+#[cfg(not(target_family = "wasm"))]
+use crate::report_error;
 use crate::view_components::find::{FindDirection, FindEvent, FindModel};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,7 +242,7 @@ impl CodeReviewFindModel {
         let view = self.weak_view_handle.upgrade(ctx);
         if view.is_none() {
             if ChannelState::enable_debug_features() {
-                log::error!(
+                report_error!(
                     "Failed to upgrade WeakViewHandle<CodeReviewView> in get_editor_searcher"
                 );
             }
@@ -255,8 +257,9 @@ impl CodeReviewFindModel {
 
         if editor_handle.is_none() {
             if ChannelState::enable_debug_features() {
-                log::error!(
-                    "Failed to find editor with id {editor_id:?} in CodeReviewView editor handles"
+                report_error!(
+                    "Failed to find editor in CodeReviewView editor handles",
+                    extra: { "editor_id" => ?editor_id }
                 );
             }
             return None;

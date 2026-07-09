@@ -10,6 +10,7 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::CloudObject as _;
 use crate::drive::CloudObjectTypeAndId;
+use crate::report_error;
 use crate::server::ids::SyncId;
 
 define_settings_group!(WorkflowAliases, settings: [
@@ -18,6 +19,7 @@ define_settings_group!(WorkflowAliases, settings: [
         default: vec![],
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
         storage_key: "WorkflowAliases",
     }
@@ -49,7 +51,7 @@ impl WorkflowAliases {
             };
 
             if let Err(e) = result {
-                log::error!("Error removing aliases for workflow: {e:?}");
+                report_error!(e.context("Error removing aliases for workflow"));
             }
         });
     }

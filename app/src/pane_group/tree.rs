@@ -14,9 +14,9 @@ use warpui::platform::Cursor;
 use warpui::{AppContext, EntityId, ViewContext};
 
 use super::{ActivationReason, PaneGroup, PaneId};
-use crate::app_state;
 use crate::pane_group::{get_minimum_pane_size, DraggedBorder, PaneGroupAction};
 use crate::themes::theme::WarpTheme;
+use crate::{app_state, report_error};
 
 #[cfg(test)]
 #[path = "tree_tests.rs"]
@@ -268,7 +268,7 @@ impl PaneData {
 
         // Remove the pane from the tree
         if !self.remove(id) {
-            log::error!("Pane not found");
+            report_error!("Pane not found");
             return false;
         }
 
@@ -297,7 +297,7 @@ impl PaneData {
         {
             self.hidden_panes.remove(pos);
         } else {
-            log::error!("Attempted to show pane for the job but couldn't find it.")
+            report_error!("Attempted to show pane for the job but couldn't find it.")
         }
     }
 
@@ -315,7 +315,7 @@ impl PaneData {
         {
             self.hidden_panes.remove(pos);
         } else {
-            log::error!("Attempted to show child agent pane but couldn't find it.")
+            report_error!("Attempted to show child agent pane but couldn't find it.")
         }
     }
 
@@ -1004,7 +1004,7 @@ impl PaneBranch {
                     if *pane == pane_id_to_remove {
                         self.nodes.remove(idx);
                         if self.dividers.is_empty() {
-                            log::error!("Attempted to remove a pane when there are no dividers!");
+                            report_error!("Attempted to remove a pane when there are no dividers!");
                         } else {
                             self.dividers.remove(idx.min(self.dividers.len() - 1));
                         }
