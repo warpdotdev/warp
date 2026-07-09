@@ -5,6 +5,7 @@ use async_broadcast::InactiveReceiver;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
 
+#[cfg(feature = "local_fs")]
 use crate::report_error;
 use crate::settings::{DebugSettings, DebugSettingsChangedEvent};
 use crate::view_components::{DismissibleToast, ToastLink};

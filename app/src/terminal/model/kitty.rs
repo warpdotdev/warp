@@ -16,6 +16,7 @@ use warpui::image_cache::{
 use warpui::util::{parse_i32, parse_u32};
 
 use super::escape_sequences::C1;
+#[cfg(feature = "local_fs")]
 use crate::report_error;
 
 /// Actions specified by the [Kitty Image Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)

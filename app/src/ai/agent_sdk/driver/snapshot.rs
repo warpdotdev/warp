@@ -194,12 +194,12 @@ pub(super) async fn run_declarations_script(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        log::error!("Snapshot declarations script stderr: {stderr}");
         report_error!(
             "Snapshot declarations script exited with non-zero status",
             extra: {
                 "script_path" => %script_path.display(),
                 "status" => %output.status,
-                "stderr" => %stderr,
                 "task_id" => %task_id
             }
         );

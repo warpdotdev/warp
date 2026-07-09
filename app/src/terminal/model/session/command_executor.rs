@@ -34,6 +34,7 @@ use warp_completer::completer::CommandOutput;
 use warpui::ModelContext;
 
 use super::SessionInfo;
+#[cfg(feature = "local_tty")]
 use crate::report_error;
 use crate::terminal::event::ExecutedExecutorCommandEvent;
 use crate::terminal::model::session::Sessions;

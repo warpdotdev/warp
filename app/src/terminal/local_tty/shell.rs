@@ -802,16 +802,12 @@ fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPat
                 // be UTF-8.
                 if wsl_err_msg.is_empty() {
                     if let Ok(inner_err_msg) = String::from_utf8(output.stderr) {
-                        report_error!(
-                            "Error from WSL command",
-                            extra: { "message" => %inner_err_msg }
-                        );
+                        log::error!("Error from WSL command: {inner_err_msg}");
+                        report_error!("Error from WSL command");
                     }
                 } else {
-                    report_error!(
-                        "Error invoking wsl.exe",
-                        extra: { "message" => ?wsl_err_msg }
-                    );
+                    log::error!("Error invoking wsl.exe: {wsl_err_msg:?}");
+                    report_error!("Error invoking wsl.exe");
                 }
                 return None;
             }

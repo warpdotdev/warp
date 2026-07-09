@@ -32,6 +32,7 @@ use crate::banner::BannerState;
 use crate::pane_group::TerminalViewResources;
 #[cfg(feature = "local_tty")]
 use crate::persistence::ModelEvent;
+#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
 use crate::report_error;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::cloud_objects::update_manager::UpdateManager;

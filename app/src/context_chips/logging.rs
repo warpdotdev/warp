@@ -16,6 +16,7 @@ use parking_lot::Mutex;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 
 use super::ContextChipKind;
+#[cfg(not(target_family = "wasm"))]
 use crate::report_error;
 use crate::terminal::shell::ShellType;
 

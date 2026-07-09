@@ -27,6 +27,7 @@ use crate::code_review::comments::{
     AttachedReviewComment, PendingImportedReviewComment, ReviewCommentBatch,
 };
 use crate::code_review::diff_state::{DiffMode, DiffStateModel};
+#[cfg(feature = "local_fs")]
 use crate::report_error;
 use crate::workspace::view::global_search::view::GlobalSearchView;
 

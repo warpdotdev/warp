@@ -15,9 +15,6 @@ struct TestLogger;
 
 static LOGGER: TestLogger = TestLogger;
 static LOGS: OnceLock<Mutex<Vec<LogEntry>>> = OnceLock::new();
-// Serializes tests that share the global logger + LOGS buffer (relevant under `cargo test`, where
-// tests share a process; nextest isolates per-process).
-static LOG_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 impl Log for TestLogger {
     fn enabled(&self, _metadata: &Metadata) -> bool {
@@ -83,9 +80,6 @@ fn report_if_error_once_per_run(result: Result<(), anyhow::Error>) {
 
 #[test]
 fn report_error_log_mode_controls_log_frequency() {
-    let _guard = LOG_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     init_logger();
 
     for _ in 0..2 {
@@ -123,9 +117,6 @@ fn report_error_log_mode_controls_log_frequency() {
 
 #[test]
 fn new_macro_forms_log_as_expected() {
-    let _guard = LOG_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     init_logger();
 
     // Bare string-literal form wraps the message in an anyhow error and reports it.

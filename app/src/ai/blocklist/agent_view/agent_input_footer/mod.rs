@@ -65,6 +65,9 @@ use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::{self, ContextChipKind};
 use crate::features::FeatureFlag;
 use crate::network::NetworkStatus;
+#[cfg(any(not(target_family = "wasm"), feature = "voice_input"))]
+use crate::report_error;
+use crate::send_telemetry_from_ctx;
 #[cfg(feature = "voice_input")]
 use crate::server::server_api::TranscribeError;
 #[cfg(not(target_family = "wasm"))]
@@ -111,7 +114,6 @@ use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, send_telemetry_from_ctx};
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
@@ -1409,9 +1411,10 @@ impl AgentInputFooter {
                             CLIAgentSessionsModel::handle(ctx).update(ctx, |model, _| {
                                 model.record_plugin_auto_failure(agent, remote_host);
                             });
+                            log::error!("Failed plugin operation log: {}", err.log);
                             report_error!(
                                 anyhow::anyhow!("{err}").context("Failed plugin operation"),
-                                extra: { "agent" => ?agent, "log" => %err.log }
+                                extra: { "agent" => ?agent }
                             );
                             let mut toast =
                                 DismissibleToast::error(format!("{error_label}: {err}"));

@@ -67,6 +67,7 @@ pub mod parsing;
 #[cfg(not(target_family = "wasm"))]
 pub use parsing::ParsedTemplatableMCPServerResult;
 
+#[cfg(not(target_family = "wasm"))]
 use crate::report_error;
 #[cfg(not(target_family = "wasm"))]
 pub mod reconnecting_peer;

@@ -66,6 +66,7 @@ use super::{
     FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData, GitDiffWithBaseContent,
     GitFileStatus, GitOpResult,
 };
+#[cfg(feature = "local_fs")]
 use crate::report_error;
 
 // Unicode bidirectional characters that should be flagged

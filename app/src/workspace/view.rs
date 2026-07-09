@@ -25775,9 +25775,10 @@ impl TypedActionView for Workspace {
                             }
                             Ok(Ok(output)) => {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
+                                log::error!("sample command failed with stderr: {stderr}");
                                 report_error!(
                                     "sample command failed",
-                                    extra: { "status" => %output.status, "stderr" => %stderr }
+                                    extra: { "status" => %output.status }
                                 );
                                 "Failed to sample process (check logs)".to_string()
                             }
