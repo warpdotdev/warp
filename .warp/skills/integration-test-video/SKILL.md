@@ -1,6 +1,6 @@
 ---
 name: integration-test-video
-description: Run and author Warp Rust integration tests (the `crates/integration` harness) that capture screenshots and video via `TestStep::with_start_recording()` / `with_take_screenshot()`, including mouse and keyboard event overlays. TRIGGER only for the integration-test recording pipeline: recording or screenshotting a named integration test, authoring a test that captures video/screenshots, or reviewing artifacts a test produced. SKIP for any general request to screenshot or record the running Warp app or a UI flow — capture those with the computer use tool's built-in screen recording / screenshots, not this skill.
+description: 'Run and author Warp Rust integration tests (the `crates/integration` harness) that capture screenshots and video via `TestStep::with_start_recording()` / `with_take_screenshot()`, including mouse and keyboard event overlays. TRIGGER only for the integration-test recording pipeline: recording or screenshotting a named integration test, authoring a test that captures video/screenshots, or reviewing artifacts a test produced. SKIP for any general request to screenshot or record the running Warp app or a UI flow — capture those with the computer use tool''s built-in screen recording / screenshots, not this skill.'
 ---
 
 # Integration Test Video Recording
