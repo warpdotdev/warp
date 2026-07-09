@@ -87,6 +87,11 @@ impl RequestComputerUseExecutor {
         );
 
         let screenshot_params = request.screenshot_params;
+        // Build the actor here, in the synchronous (main-thread) body of `execute()`, before moving
+        // it into the async future below. On macOS this constructs the keycode cache via Carbon
+        // Text Input Source APIs that must run on the main thread; keep it out of the spawned
+        // future (which runs on a background executor thread) to avoid a libdispatch main-thread
+        // assertion. See also `use_computer.rs`.
         let mut actor = computer_use::create_actor();
         let platform = actor.platform();
         // Gate per-window targeting behind the client feature flag. When off, the actor forces the
