@@ -158,61 +158,23 @@ runs:
       shell: bash
       run: corepack enable
 
-    - name: Install protoc for generating rust bindings of protobuf APIs (macOS)
-      # macOS installs protoc from Homebrew. Refreshing the formula index
-      # (brew update) intermittently times out fetching formula.jws.json from
-      # the formulae.brew.sh CDN (curl exit 28), which previously failed the
-      # whole job on a single blip. Retry the index refresh (and the install) to
-      # absorb those transient timeouts; if brew still can't update after all
-      # retries it's a persistent failure, so hard-fail loudly rather than
-      # masking it with a stale cached index.
-      if: ${{ inputs.target_os == 'macos' }}
-      shell: bash
-      env:
-        # Make Homebrew's own curl retry the index/bottle downloads.
-        HOMEBREW_CURL_RETRIES: '3'
-      run: |
-        set -euo pipefail
-
-        run_with_retries() {
-          # Runs "$@" up to 3 times with linear backoff, succeeding on the first
-          # attempt that passes and returning non-zero only if all attempts fail.
-          local attempt
-          for attempt in 1 2 3; do
-            if "$@"; then
-              return 0
-            fi
-            echo "'$*' failed (attempt ${attempt}/3); retrying in $((attempt * 10))s..."
-            sleep $((attempt * 10))
-          done
-          return 1
-        }
-
-        # Refresh the formula index for an up-to-date protobuf. Retries absorb a
-        # transient index-fetch timeout; if it still fails after all retries,
-        # hard-fail — a persistent brew update failure should be surfaced, not
-        # hidden behind a stale cached index.
-        if ! run_with_retries brew update; then
-          echo "::error::brew update failed after 3 attempts on macos (persistent Homebrew formula-index fetch failure)"
-          exit 1
-        fi
-
-        # Install protobuf (provides protoc), retrying to absorb transient
-        # bottle-download blips.
-        if ! run_with_retries brew install protobuf; then
-          echo "::error::protoc (protobuf) install failed after 3 attempts on macos"
-          exit 1
-        fi
-
-    - name: Install protoc for generating rust bindings of protobuf APIs (Windows/Linux)
+    - name: Install protoc for generating rust bindings of protobuf APIs
       id: install_protoc
-      # macOS is handled by the Homebrew step above; this covers Windows (choco).
-      # On Linux protoc comes from the build-deps scripts, so this is a no-op.
-      if: ${{ inputs.target_os != 'macos' }}
       uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
       # Don't fail the job here so the winget fallback below has a chance to run on Windows.
       continue-on-error: true
+      env:
+        # macOS installs protoc via `brew`, whose `brew update` intermittently
+        # times out fetching the formula index (formula.jws.json) from the
+        # formulae.brew.sh CDN (curl exit 28) and can fail the whole job on a
+        # single blip. This makes Homebrew's own curl retry that download
+        # (HOMEBREW_CURL_RETRIES maps to curl --retry, which retries the exit-28
+        # timeout), clearing the transient case; a persistent failure still
+        # fails the step and is surfaced by the guard below. No effect on the
+        # Linux/Windows paths.
+        HOMEBREW_CURL_RETRIES: '3'
       with:
+        brew: protobuf
         choco: protoc
 
     - name: Install protoc via winget (fallback for Windows)
