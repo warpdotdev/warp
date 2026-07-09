@@ -1032,7 +1032,7 @@ pub fn spawn_child_if_necessary(app: &mut AppContext) {
                 log::info!("Terminating app for relaunch. Bye!");
             }
             Err(e) => {
-                report_if_error!(e.context("Error relaunching app after autoupdate"));
+                crate::report_error!(e.context("Error relaunching app after autoupdate"));
                 AutoupdateState::handle(app).update(app, |autoupdate_state, ctx| {
                     autoupdate_state.relaunch_failed(ctx);
                 });
