@@ -484,9 +484,7 @@ impl TuiEditorElement {
     fn offset_at(&self, position: TuiPoint, area: TuiRect, app: &AppContext) -> Option<CharOffset> {
         let inner = self.model.as_ref(app);
         let render_state = inner.render_state().as_ref(app);
-        let Some(char_cell) = render_state.char_cell() else {
-            return None;
-        };
+        let char_cell = render_state.char_cell()?;
         let buffer = inner.content().as_ref(app);
         let text = if buffer.is_empty() {
             String::new()
