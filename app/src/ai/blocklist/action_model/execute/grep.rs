@@ -155,12 +155,8 @@ fn log_grep_error(
     error: GrepError,
     ctx: &mut AppContext,
 ) {
-    let should_collect_ugc = should_collect_ai_ugc_telemetry(
-        ctx,
-        PrivacySettings::handle(ctx)
-            .as_ref(ctx)
-            .is_telemetry_enabled,
-    );
+    let should_collect_ugc =
+        should_collect_ai_ugc_telemetry(PrivacySettings::handle(ctx).as_ref(ctx), ctx);
     let server_output_id = get_server_output_id(conversation_id, ctx);
 
     let event = create_redacted_grep_error_event(

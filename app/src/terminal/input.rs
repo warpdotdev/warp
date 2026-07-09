@@ -7557,10 +7557,8 @@ impl Input {
                             predicted_command: response.most_likely_action.clone(),
                         });
 
-                    let should_collect_ugc = should_collect_ai_ugc_telemetry(
-                        ctx,
-                        PrivacySettings::as_ref(ctx).is_telemetry_enabled,
-                    );
+                    let should_collect_ugc =
+                        should_collect_ai_ugc_telemetry(PrivacySettings::as_ref(ctx), ctx);
                     send_telemetry_from_ctx!(
                         TelemetryEvent::AgentModePrediction {
                             was_suggestion_accepted: self.was_intelligent_autosuggestion_accepted,
@@ -9382,9 +9380,8 @@ impl Input {
     ) {
         let input_buffer_text = self.buffer_text(ctx);
         let buffer_length = input_buffer_text.len();
-        let input =
-            should_collect_ai_ugc_telemetry(ctx, PrivacySettings::as_ref(ctx).is_telemetry_enabled)
-                .then_some(input_buffer_text);
+        let input = should_collect_ai_ugc_telemetry(PrivacySettings::as_ref(ctx), ctx)
+            .then_some(input_buffer_text);
         let is_udi_enabled = InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
         send_telemetry_from_ctx!(
             TelemetryEvent::AgentModeChangedInputType {

@@ -5,15 +5,52 @@ use warp_cli::artifact::{
 };
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_cli::CliCommand;
+use warp_core::features::FeatureFlag;
 use warp_core::telemetry::TelemetryEvent;
 
-use super::{command_requires_auth, command_to_telemetry_event, reconcile_task_harness};
+use super::{
+    command_requires_auth, command_to_telemetry_event, reconcile_task_harness,
+    should_defer_cli_telemetry_until_policy_refresh,
+};
+use crate::settings::PrivacySettingsSnapshot;
+use crate::workspaces::workspace::OrganizationTelemetryPolicy;
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
 #[test]
 fn logout_does_not_require_auth() {
     assert!(!command_requires_auth(&CliCommand::Logout));
+}
+
+#[test]
+fn authenticated_non_agent_cli_telemetry_respects_user_setting_before_policy_refresh() {
+    let _flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
+    let command = CliCommand::Artifact(ArtifactCommand::Download(DownloadArtifactArgs {
+        artifact_uid: "artifact-123".to_string(),
+        out: None,
+    }));
+
+    assert!(command_requires_auth(&command));
+    assert!(!should_defer_cli_telemetry_until_policy_refresh(&command));
+    assert!(!PrivacySettingsSnapshot::mock_with_organization_policy(
+        OrganizationTelemetryPolicy::Unmanaged
+    )
+    .should_disable_telemetry());
+}
+
+#[test]
+fn rollout_off_does_not_defer_or_suppress_authenticated_non_agent_cli_telemetry() {
+    let _flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(false);
+    let command = CliCommand::Artifact(ArtifactCommand::Download(DownloadArtifactArgs {
+        artifact_uid: "artifact-123".to_string(),
+        out: None,
+    }));
+
+    assert!(!should_defer_cli_telemetry_until_policy_refresh(&command));
+    assert!(!PrivacySettingsSnapshot::mock_with_organization_policy(
+        OrganizationTelemetryPolicy::Unmanaged
+    )
+    .should_disable_telemetry());
 }
 
 #[test]

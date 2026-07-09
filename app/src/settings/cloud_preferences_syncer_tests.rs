@@ -193,8 +193,11 @@ fn expect_sync_preferences_setting(server_api: &mut MockObjectClient) -> Vec<Cli
     expect_bulk_create_generic_string_objects(server_api, 1)
 }
 
+/// Covers the four WarpDrive privacy settings (telemetry, crash reporting,
+/// cloud conversation storage, UGC collection) plus the seeded
+/// `CustomSecretRegexList` preference created on first load.
 fn expect_sync_server_stored_privacy_settings(server_api: &mut MockObjectClient) -> Vec<ClientId> {
-    expect_bulk_create_generic_string_objects(server_api, 4)
+    expect_bulk_create_generic_string_objects(server_api, 5)
 }
 
 async fn spawned_sync_queue_future_at_index(app: &mut App, index: usize) {

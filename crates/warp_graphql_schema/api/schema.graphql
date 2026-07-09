@@ -3599,12 +3599,20 @@ type TelemetryDataCollectionPolicy {
   toggleable: Boolean!
 }
 
+enum TelemetryEnabled {
+  DISABLE
+  ENABLE
+  RESPECT_USER_SETTING
+}
+
 type TelemetrySettings {
-  forceEnabled: Boolean!
+  forceEnabled: Boolean! @deprecated(reason: "Use setting instead")
+  setting: TelemetryEnabled!
 }
 
 input TelemetrySettingsInput {
-  enabled: AdminEnablementSetting
+  enabled: AdminEnablementSetting @deprecated(reason: "Use setting instead")
+  setting: TelemetryEnabled
 }
 
 type Tier {
@@ -3979,6 +3987,7 @@ input UpdateUserSettingsInput {
   cloudConversationStorageEnabled: Boolean
   crashReportingEnabled: Boolean
   telemetryEnabled: Boolean
+  ugcCollectionEnabled: Boolean
 }
 
 type UpdateUserSettingsOutput implements Response {
@@ -4300,6 +4309,7 @@ type UserSettings {
   isCloudConversationStorageEnabled: Boolean!
   isCrashReportingEnabled: Boolean!
   isTelemetryEnabled: Boolean!
+  isUgcCollectionEnabled: Boolean!
 }
 
 type WarpAiPolicy {

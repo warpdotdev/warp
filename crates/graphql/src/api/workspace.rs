@@ -156,7 +156,17 @@ pub struct WorkspaceSettings {
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct TelemetrySettings {
+    pub setting: TelemetryEnabled,
     pub force_enabled: bool,
+}
+
+#[derive(cynic::Enum, Clone, Debug)]
+pub enum TelemetryEnabled {
+    Disable,
+    Enable,
+    RespectUserSetting,
+    #[cynic(fallback)]
+    Other(String),
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
