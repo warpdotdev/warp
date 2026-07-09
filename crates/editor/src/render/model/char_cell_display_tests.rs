@@ -23,16 +23,15 @@ fn ghost(content: &str, insert_before: usize) -> CharCellTemporaryBlock {
 
 /// The lattice's rows at `hidden`, for row-structure assertions.
 fn rows(state: &CharCellState, hidden: &[Range<usize>]) -> Vec<DisplayRow> {
-    state.with_display_lattice(hidden, |lattice| lattice.rows().to_vec())
+    state.display_lattice(hidden).rows().to_vec()
 }
 
 /// `offset_to_display_point` as a bare `(row, col)` pair.
 fn point(state: &CharCellState, char_idx: usize, hidden: &[Range<usize>]) -> Option<(u32, u16)> {
-    state.with_display_lattice(hidden, |lattice| {
-        lattice
-            .offset_to_display_point(CharOffset::from(char_idx))
-            .map(|point| (point.row, point.col))
-    })
+    state
+        .display_lattice(hidden)
+        .offset_to_display_point(CharOffset::from(char_idx))
+        .map(|point| (point.row, point.col))
 }
 
 /// `display_point_to_offset` from a bare `(row, col)` pair.
@@ -42,9 +41,9 @@ fn offset(
     col: u16,
     hidden: &[Range<usize>],
 ) -> Option<CharOffset> {
-    state.with_display_lattice(hidden, |lattice| {
-        lattice.display_point_to_offset(DisplayPoint { row, col })
-    })
+    state
+        .display_lattice(hidden)
+        .display_point_to_offset(DisplayPoint { row, col })
 }
 
 /// `(kind, char_range, is_continuation)` triples for compact assertions.

@@ -3,7 +3,7 @@
 //!
 //! The element *paints and interacts*; it does not compute row structure.
 //! Rows come from the render state's single display-row implementation
-//! (`CharCellState::with_display_lattice`), which interleaves ghost rows and
+//! (`CharCellState::display_lattice`), which interleaves ghost rows and
 //! elides hidden line ranges; the element slices its text snapshot by each
 //! row's char range, applies consumer-supplied styles, prefixes gutter cells,
 //! and windows by scroll. Interaction geometry (cursor placement, mouse
@@ -291,8 +291,8 @@ impl TuiEditorElement {
 
         // One projection serves rows, cursor placement, and selection spans,
         // so everything below is geometry over the same lattice.
-        let (column, selected_spans, cursor, visible_end) =
-            char_cell.with_display_lattice(&hidden, |lattice| {
+        let lattice = char_cell.display_lattice(&hidden);
+        let (column, selected_spans, cursor, visible_end) = {
                 let rows = lattice.rows();
                 // The cursor sits one row past the last text row when a logical
                 // line exactly fills the width (deferred wrap); that phantom row
@@ -346,7 +346,7 @@ impl TuiEditorElement {
                     column.add_child(TuiText::new(" ").truncate().finish());
                 }
                 (column, selected_spans, cursor, visible_end)
-            });
+            };
 
         self.column = column;
         self.selected_spans = selected_spans;
@@ -503,30 +503,29 @@ impl TuiEditorElement {
             .saturating_sub(area.x)
             .saturating_sub(self.gutter_cols);
 
-        char_cell.with_display_lattice(&hidden, |lattice| {
-            // The rendered layout can include a "phantom" row one past the last
-            // display row when the final logical line exactly fills the width
-            // (deferred wrap). Resolve it directly to the end-of-buffer gap;
-            // otherwise cap at the last real display row so a drag below the
-            // text resolves within it rather than past it.
-            let last_row = (lattice.rows().len() as u32).saturating_sub(1);
-            if display_row > last_row {
-                let end_char_offset = CharOffset::from(text.chars().count());
-                if lattice
-                    .offset_to_display_point(end_char_offset)
-                    .is_some_and(|point| point.row > last_row)
-                {
-                    return Some(end_char_offset + 1);
-                }
+        let lattice = char_cell.display_lattice(&hidden);
+        // The rendered layout can include a "phantom" row one past the last
+        // display row when the final logical line exactly fills the width
+        // (deferred wrap). Resolve it directly to the end-of-buffer gap;
+        // otherwise cap at the last real display row so a drag below the
+        // text resolves within it rather than past it.
+        let last_row = (lattice.rows().len() as u32).saturating_sub(1);
+        if display_row > last_row {
+            let end_char_offset = CharOffset::from(text.chars().count());
+            if lattice
+                .offset_to_display_point(end_char_offset)
+                .is_some_and(|point| point.row > last_row)
+            {
+                return Some(end_char_offset + 1);
             }
-            let point = DisplayPoint {
-                row: display_row.min(last_row),
-                col,
-            };
-            lattice
-                .display_point_to_offset(point)
-                .map(|offset| offset + 1)
-        })
+        }
+        let point = DisplayPoint {
+            row: display_row.min(last_row),
+            col,
+        };
+        lattice
+            .display_point_to_offset(point)
+            .map(|offset| offset + 1)
     }
 
     /// Maps a mouse `event` to the [`TuiEditorAction`] it should emit, or

@@ -517,32 +517,28 @@ impl CharCellState {
     }
 
     /// Projects the current wrap tables, ghost blocks, and the given hidden
-    /// line ranges into a [`DisplayLattice`] and passes it to `f`: buffer rows
-    /// soft-wrapped, ghosts interleaved, hidden lines elided into gap rows.
-    /// See [`char_cell_display`] for the full semantics.
+    /// line ranges into a [`DisplayLattice`]: buffer rows soft-wrapped, ghosts
+    /// interleaved, hidden lines elided into gap rows. See
+    /// [`char_cell_display`] for the full semantics.
     ///
-    /// The projection is computed once per call and every query `f` makes is
-    /// answered against those same rows, so painting and interaction geometry
-    /// derived in one closure can never disagree. `hidden_line_ranges` is a
-    /// parameter (not internal state) so consumers can append structural
-    /// extras (e.g. a diff view eliding the buffer's final empty line) to the
+    /// The returned lattice owns the immutable borrow guards for its inputs,
+    /// so every query is answered against the same snapshot. The hidden ranges
+    /// are a parameter so consumers can append structural extras to the
     /// model-derived set from [`RenderState::hidden_line_ranges`].
-    pub fn with_display_lattice<R>(
-        &self,
-        hidden_line_ranges: &[Range<usize>],
-        f: impl FnOnce(&DisplayLattice) -> R,
-    ) -> R {
+    pub fn display_lattice<'a>(
+        &'a self,
+        hidden_line_ranges: &'a [Range<usize>],
+    ) -> DisplayLattice<'a> {
         let line_starts = self.line_starts.borrow();
         let char_widths = self.char_widths.borrow();
         let ghosts = self.temporary_blocks.borrow();
-        let lattice = DisplayLattice::new(
-            &line_starts,
-            &char_widths,
+        DisplayLattice::new(
+            line_starts,
+            char_widths,
             self.terminal_width.get(),
-            &ghosts,
+            ghosts,
             hidden_line_ranges,
-        );
-        f(&lattice)
+        )
     }
 
     /// The 0-based character range of the soft-wrapped visual row containing
@@ -637,15 +633,14 @@ impl CharCellState {
         cursor_char_offset: CharOffset,
         hidden_line_ranges: &[Range<usize>],
     ) -> (Option<u32>, u32) {
-        self.with_display_lattice(hidden_line_ranges, |lattice| {
-            let cursor_row = lattice
-                .offset_to_display_point(cursor_char_offset)
-                .map(|point| point.row);
-            let total_rows = cursor_row.map_or(lattice.rows().len() as u32, |cursor_row| {
-                (lattice.rows().len() as u32).max(cursor_row + 1)
-            });
-            (cursor_row, total_rows)
-        })
+        let lattice = self.display_lattice(hidden_line_ranges);
+        let cursor_row = lattice
+            .offset_to_display_point(cursor_char_offset)
+            .map(|point| point.row);
+        let total_rows = cursor_row.map_or(lattice.rows().len() as u32, |cursor_row| {
+            (lattice.rows().len() as u32).max(cursor_row + 1)
+        });
+        (cursor_row, total_rows)
     }
 
     /// Rebuild the char-cell layout index — `line_starts` and the per-char display
@@ -2259,7 +2254,7 @@ impl RenderState {
 
     /// Char-cell only: the hidden line ranges from the attached
     /// [`HiddenLinesModel`], projected to 0-based logical line indices via the
-    /// char-cell line table — the shape [`CharCellState::with_display_lattice`]
+    /// char-cell line table — the shape [`CharCellState::display_lattice`]
     /// consumes. Empty in pixel mode, with no attached model, or with nothing
     /// hidden.
     pub fn hidden_line_ranges(&self, app: &AppContext) -> Vec<Range<usize>> {

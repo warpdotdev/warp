@@ -25,10 +25,11 @@
 //! identical.
 //!
 //! The public entry point is
-//! [`CharCellState::with_display_lattice`](super::CharCellState::with_display_lattice):
+//! [`CharCellState::display_lattice`](super::CharCellState::display_lattice):
 //! it projects the wrap tables and overlays once into a [`DisplayLattice`],
 //! which owns the row list and answers every query against those same rows.
 
+use std::cell::Ref;
 use std::ops::Range;
 use string_offset::CharOffset;
 
@@ -84,33 +85,32 @@ pub struct DisplayPoint {
 /// The display-row projection at one snapshot of wrap tables, ghosts, and
 /// hidden line ranges: the row list plus the inputs it was computed from.
 ///
-/// Constructed once per
-/// [`with_display_lattice`](super::CharCellState::with_display_lattice) call,
-/// so callers can mix row iteration and point queries freely without
-/// re-projecting — and both are guaranteed to describe the same rows, because
-/// the hidden set and ghost set are bound at construction.
+/// Callers can mix row iteration and point queries freely without
+/// re-projecting. The lattice owns the immutable borrow guards for the
+/// char-cell state it was projected from, so every query describes the same
+/// rows.
 pub struct DisplayLattice<'a> {
     rows: Vec<DisplayRow>,
-    line_starts: &'a [usize],
-    char_widths: &'a [u8],
+    line_starts: Ref<'a, Vec<usize>>,
+    char_widths: Ref<'a, Vec<u8>>,
     terminal_width: u16,
-    ghosts: &'a [CharCellTemporaryBlock],
+    ghosts: Ref<'a, Vec<CharCellTemporaryBlock>>,
     hidden_line_ranges: &'a [Range<usize>],
 }
 
 impl<'a> DisplayLattice<'a> {
     pub(super) fn new(
-        line_starts: &'a [usize],
-        char_widths: &'a [u8],
+        line_starts: Ref<'a, Vec<usize>>,
+        char_widths: Ref<'a, Vec<u8>>,
         terminal_width: u16,
-        ghosts: &'a [CharCellTemporaryBlock],
+        ghosts: Ref<'a, Vec<CharCellTemporaryBlock>>,
         hidden_line_ranges: &'a [Range<usize>],
     ) -> Self {
         let rows = display_rows(
-            line_starts,
-            char_widths,
+            &line_starts,
+            &char_widths,
             terminal_width,
-            ghosts,
+            &ghosts,
             hidden_line_ranges,
         );
         Self {
@@ -130,7 +130,7 @@ impl<'a> DisplayLattice<'a> {
 
     /// The ghost blocks that `Ghost` rows' `ghost_index` values index into.
     pub fn ghosts(&self) -> &[CharCellTemporaryBlock] {
-        self.ghosts
+        &self.ghosts
     }
 
     /// The [`DisplayPoint`] of the gap before 0-based `char_offset`.
@@ -157,7 +157,7 @@ impl<'a> DisplayLattice<'a> {
         }
 
         let line_start = self.line_starts.get(line_index).copied().unwrap_or(0);
-        let line = char_cell_logical_line(self.line_starts, self.char_widths, line_index);
+        let line = char_cell_logical_line(&self.line_starts, &self.char_widths, line_index);
         let (row_within_line, col) =
             char_cell_line_gap_position(line, self.terminal_width, char_idx - line_start);
 
