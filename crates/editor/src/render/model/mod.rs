@@ -497,15 +497,6 @@ impl CharCellState {
         }
     }
 
-    /// A clone of the current diff ghost lines, in ascending `insert_before`
-    /// order as produced by the diff model; empty when no diff is displayed.
-    /// Returns owned data rather than a `RefCell` guard so callers can't hold
-    /// a borrow across a layout push that replaces the set; borrow-free access
-    /// for rendering goes through [`Self::with_display_lattice`].
-    pub fn temporary_blocks(&self) -> Vec<CharCellTemporaryBlock> {
-        self.temporary_blocks.borrow().clone()
-    }
-
     /// Replace the stored ghost lines. Replace-all semantics, mirroring the
     /// GUI path's `reset_temporary_block`, so stale ghosts never linger.
     fn set_temporary_blocks(&self, blocks: Vec<CharCellTemporaryBlock>) {

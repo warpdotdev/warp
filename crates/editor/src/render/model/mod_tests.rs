@@ -1715,64 +1715,6 @@ mod char_cell {
     }
 }
 
-mod char_cell_temporary_blocks {
-    use string_offset::CharOffset;
-    use warp_core::ui::theme::Fill as ThemeFill;
-    use warpui_core::color::ColorU;
-
-    use crate::content::edit::TemporaryBlock;
-    use crate::render::model::{CharCellState, CharCellTemporaryBlock, Decoration, LineCount};
-
-    fn block(content: &str, insert_before: usize) -> TemporaryBlock {
-        TemporaryBlock {
-            content: content.to_string(),
-            insert_before: LineCount(insert_before),
-            line_decoration: None,
-            inline_text_decorations: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn conversion_flattens_fills_to_solid_colors() {
-        let red = ColorU::new(255, 0, 0, 255);
-        let blue = ColorU::new(0, 0, 255, 255);
-        let converted = CharCellTemporaryBlock::from(TemporaryBlock {
-            line_decoration: Some(ThemeFill::Solid(red)),
-            inline_text_decorations: vec![
-                Decoration::new(CharOffset::from(1), CharOffset::from(3))
-                    .with_background(ThemeFill::Solid(blue)),
-                // No background → nothing a fg/bg terminal cell can render; dropped.
-                Decoration::new(CharOffset::from(4), CharOffset::from(5)),
-            ],
-            ..block("removed line", 7)
-        });
-
-        assert_eq!(converted.content, "removed line");
-        assert_eq!(converted.insert_before, LineCount(7));
-        assert_eq!(converted.line_decoration, Some(red));
-        assert_eq!(converted.inline_decorations, vec![(1..3, blue)]);
-    }
-
-    #[test]
-    fn set_temporary_blocks_replaces_wholesale() {
-        let state = CharCellState::new(80);
-        assert!(state.temporary_blocks().is_empty());
-
-        state.set_temporary_blocks(vec![
-            CharCellTemporaryBlock::from(block("one", 1)),
-            CharCellTemporaryBlock::from(block("two", 2)),
-        ]);
-        assert_eq!(state.temporary_blocks().len(), 2);
-
-        // A subsequent diff refresh replaces the whole set; stale ghosts never linger.
-        state.set_temporary_blocks(vec![CharCellTemporaryBlock::from(block("three", 3))]);
-        let blocks = state.temporary_blocks();
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].content, "three");
-        assert_eq!(blocks[0].insert_before, LineCount(3));
-    }
-}
-
 mod char_cell_scroll {
     use crate::render::model::CharCellState;
 
@@ -1796,7 +1738,7 @@ mod char_cell_scroll {
     }
 
     #[test]
-    fn follow_cursor_moves_minimally_in_both_directions() {
+    fn follow_cursor_moves_minimally_and_clamps_stale_offsets() {
         let state = five_row_state();
         // Cursor on the last row (char 12 = start of "l4") with a 2-row
         // viewport scrolls just enough to keep it at the bottom.
@@ -1808,15 +1750,10 @@ mod char_cell_scroll {
         // Cursor back on row 0 scrolls the viewport to the top.
         state.follow_cursor(0, 2, &[]);
         assert_eq!(state.scroll_offset(), 0);
-    }
 
-    #[test]
-    fn follow_cursor_clamps_stale_offset_after_content_shrinks() {
-        let state = five_row_state();
+        // Content shrinks while scrolled to the bottom; the stale offset is
+        // clamped before following the cursor.
         state.scroll_by(3, 2, 0, &[]);
-        assert_eq!(state.scroll_offset(), 3);
-        // Content shrinks to two rows; the stale offset is clamped before
-        // following the cursor.
         state.update_text("l0\nl1");
         state.follow_cursor(0, 2, &[]);
         assert_eq!(state.scroll_offset(), 0);

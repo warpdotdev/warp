@@ -27,9 +27,19 @@ The GUI wrapper can annotate *after* inner layout only because GUI layout is ret
 
 Painting (what's on row N) and interaction geometry (what a click on row N means) must agree exactly; implementing them separately would duplicate the row-structure algorithm and any drift shifts the whole row mapping. So the row structure is computed in exactly one place — `CharCellState`, which already owns every input (wrap tables, width, ghost blocks) and already answers char-cell geometry. The GUI analogue is exact: in pixels mode the display structure lives in `RenderState`'s retained block tree, which both painting and geometry read; char-cell mode computes the equivalent on demand (affordable: O(chars), no font shaping). The projection is reified as a short-lived query object, `DisplayLattice`, borrowed out of `CharCellState` for one closure scope: rows are projected once and every point query inside the scope is answered against those same rows.
 
+`CharCellState` itself is *retained* model state — the char-cell arm of `RenderState`'s `LayoutMode` — so it outlives the transient per-frame elements. That retention is what makes it the home for cross-frame session state (the scroll offset, the ghost blocks) alongside the wrap tables, and its fields are interior-mutable (`Cell`/`RefCell`) because its writers — the element pushing the wrap width during layout, scroll updates during event dispatch — hold only a shared `&AppContext`.
+
 Two coordinate spaces stay explicit:
 - **Buffer visual-row space**: soft-wrapped buffer rows only (existing softwrap functions). Used by cursor navigation; unaffected by overlays.
 - **Display-row space**: what is painted — ghost and gap rows interleaved, hidden rows removed. Answered by the `DisplayLattice` queries below. With no overlays the two spaces are identical.
+
+### Recompute, don't cache
+
+The lattice is rebuilt on every `with_display_lattice` call rather than stored on `CharCellState`:
+- Its inputs are not all state. The hidden set is a per-call parameter (consumers pass different sets — the diff body folds in `hide_trailing_empty_line`), and `terminal_width` is pushed during each element layout and varies with gutter columns — so a cached projection has no well-defined key.
+- Every input mutates through `&self` (edits, ghost refreshes, async hidden-range recomputes, width pushes); invalidation tracking across them would reintroduce exactly the staleness class the per-scope projection eliminates. The GUI's retained block tree *is* the cached variant, and pays for it with the async layout pipeline (`LayoutAction`s, pending edits, `LayoutCache`) that char-cell mode exists to skip.
+- Event-time hit-tests *want* a fresh projection: the presenter caches elements across frames, so a mouse event can arrive after the model changed.
+- The cost is small — O(chars) with no shaping over prompt-sized or context-elided buffers, roughly two projections per keystroke. `with_display_lattice` is the single construction point, so memoization (keyed on text version × width × ghost generation × hidden set) can be added behind it later without touching consumers.
 
 ## Changes
 
@@ -37,7 +47,7 @@ Two coordinate spaces stay explicit:
 
 `crates/editor/src/render/model/char_cell_display.rs` (new) plus additions to `mod.rs`:
 
-- `CharCellTemporaryBlock` + storage on `CharCellState` (replace-all semantics; `temporary_blocks()` returns a clone, never a `RefCell` guard, so callers can't hold a borrow across a layout push): ghost lines flattened from the GUI's `TemporaryBlock` (fills → `ColorU`). The `LayoutAction::LayoutTemporaryBlock` char-cell arm stores them instead of no-op'ing (previously a designed-in `TODO(TUI-diff)` extension point). Fixing this arm also fixed a latent counter leak: its early `return` skipped the outstanding-layouts bookkeeping, hanging `layout_complete()` after any char-cell block push.
+- `CharCellTemporaryBlock` + storage on `CharCellState` (replace-all semantics; borrow-free access for rendering goes through `with_display_lattice`, so callers can't hold a `RefCell` guard across a layout push): ghost lines flattened from the GUI's `TemporaryBlock` (fills → `ColorU`). The `LayoutAction::LayoutTemporaryBlock` char-cell arm stores them instead of no-op'ing (previously a designed-in `TODO(TUI-diff)` extension point). Fixing this arm also fixed a latent counter leak: its early `return` skipped the outstanding-layouts bookkeeping, hanging `layout_complete()` after any char-cell block push.
 - `DisplayRow` / `DisplayRowKind` / `DisplayPoint` (public): one row entry per terminal row — `Buffer { line_index }` | `Ghost { ghost_index }` | `Gap { line_range }`, plus a 0-based `char_range` (into buffer text or ghost content) and `is_continuation`. Style- and text-free: consumers supply strings and colors. `DisplayPoint { row: u32, col: u16 }` is the display-space analogue of `SoftWrapPoint` with `ColumnUnit::Chars` columns.
 - `CharCellState::with_display_lattice(hidden, f)` — the single entry point: projects wrap tables + overlays once into a `DisplayLattice` and passes it to `f`. `DisplayLattice::rows()` is the row list — buffer lines wrapped, ghosts interleaved before their `insert_before` line (same width, wide-char aware, trailing-newline stripped; at/past EOF appended), hidden lines elided into single interior gap rows (edge runs emit nothing; a ghost inside a hidden run splits the gap).
 - `DisplayLattice::offset_to_display_point(char_idx)` / `display_point_to_offset(point)` — cursor placement and mouse hit-testing over the lattice's own rows (no re-projection per query). Non-buffer rows resolve to the nearest buffer offset. Offsets in hidden edge runs (which emit no gap row) resolve to the display edge they were elided at. The deferred-wrap phantom cursor mirrors `char_cell_line_gap_position` but skips interleaved ghost/gap rows: it lands on the next buffer row, or one past the entire display when none follows.
@@ -79,9 +89,9 @@ The element *paints and interacts*; it does not compute row structure: at layout
 
 ## Testing and validation
 
-- `char_cell_display_tests.rs`: row structure (wrapping incl. wide chars, ghost interleaving/wrapping/trailing-newline stripping, interior-vs-edge gap elision, ghost-inside-hidden-run splitting) and geometry (offset ↔ display point round-trips with overlays, hidden-offset → gap-row resolution including edge runs, nearest-offset semantics, deferred-wrap phantom row incl. ghost-row skipping, `visual_row_char_range`).
-- `mod_tests.rs`: `TemporaryBlock → CharCellTemporaryBlock` flattening and replace-all storage semantics; `CharCellState` scroll (scroll-by clamping, minimal-move cursor following, stale-offset clamping after content shrinks).
-- `editor_element_tests.rs`: painted rows, gutter numbering/blank rules, trailing-empty-line elision, scroll windowing, empty-buffer row invariant.
+- `char_cell_display_tests.rs`: row structure (wrapping, ghost interleaving/wrapping/trailing-newline stripping, interior-vs-edge gap elision, ghost-inside-hidden-run splitting) and geometry (offset ↔ display point round-trips with overlays incl. gap-row, ghost-row, and past-end nearest-offset resolution; deferred-wrap phantom row incl. ghost-row skipping; `visual_row_char_range`). Wide-char and width-0 wrap math is covered once at the `char_cell_line_row_starts` level in `mod_tests.rs`, not re-tested through the lattice.
+- `mod_tests.rs`: `CharCellState` scroll (scroll-by clamping; minimal-move cursor following incl. stale-offset clamping after content shrinks).
+- `editor_element_tests.rs`: painted rows, gutter numbering/blank rules, trailing-empty-line elision, scroll windowing.
 - Input parity: `input/view_tests.rs` behavioral assertions unchanged (harness updated to the element's types) — empty input occupies one row, wide-char cursor columns, mouse cell → offset mapping, wheel scrolling, kill/yank.
 - Suites: `cargo nextest run -p warp_editor -p warp_tui`; `./script/format` + presubmit clippy.
 

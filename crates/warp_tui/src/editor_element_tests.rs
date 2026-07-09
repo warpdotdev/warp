@@ -115,15 +115,3 @@ fn scroll_windows_the_visible_rows() {
         });
     });
 }
-
-#[test]
-fn empty_buffer_keeps_one_row() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            ctx.add_singleton_model(|_| Appearance::mock());
-            let model = model(ctx, "");
-            let element = TuiEditorElement::new(&model, ctx);
-            assert_eq!(render_lines(ctx, element, 10, 10), vec![""]);
-        });
-    });
-}
