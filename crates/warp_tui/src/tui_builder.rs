@@ -218,13 +218,16 @@ impl TuiUiBuilder {
         )
     }
 
-    /// Prominent [`tui_collapsible`] variant: a bold primary-text header
-    /// (e.g. the task-list header, which the design renders bold white).
-    /// Since the header is already bold, hover signals with an underline
-    /// instead of the muted collapsible's brighten-on-hover.
+    /// Prominent [`tui_collapsible`] variant: a bold primary-text header of
+    /// a leading `glyph` and a `label` (e.g. the task-list header, which the
+    /// design renders bold white). Since the header is already bold, hover
+    /// signals with an underline instead of the muted collapsible's
+    /// brighten-on-hover — applied to the label only, so the decorative
+    /// glyph and the chevron don't pick up a clashing underline.
     pub(crate) fn prominent_collapsible(
         &self,
         collapsed: bool,
+        glyph: impl Into<String>,
         label: impl Into<String>,
         mouse_state: MouseStateHandle,
         body: Box<dyn TuiElement>,
@@ -238,7 +241,10 @@ impl TuiUiBuilder {
         };
         tui_collapsible(
             collapsed,
-            [(label.into(), label_style)],
+            [
+                (format!("{} ", glyph.into()), header_style),
+                (label.into(), label_style),
+            ],
             header_style,
             mouse_state,
             move || body,

@@ -890,6 +890,62 @@ fn task_list_collapse_override_hides_rows() {
 }
 
 #[test]
+fn task_list_header_hover_underlines_only_the_label() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let rows = vec![("Compile list".to_owned(), TodoStatus::Pending)];
+            let states = CollapsibleSectionStates::default();
+            let message_id = MessageId::new("m1".to_owned());
+            let area = TuiRect::new(0, 0, 40, 2);
+
+            // Move the pointer onto the header row so the shared hover state
+            // reports it hovered, as the runtime would.
+            let mut element = render_todo_list_section(&states, &message_id, &rows, app_ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(TuiConstraint::loose(TuiSize::new(40, 2)), &mut ctx, app_ctx);
+            let mut event_ctx = TuiEventContext::default();
+            event_ctx.set_origin_view(Some(EntityId::new()));
+            element.dispatch_event(
+                &TuiEvent::MouseMoved {
+                    position: TuiPoint::new(0, 0),
+                    modifiers: ModifiersState::default(),
+                    is_synthetic: false,
+                },
+                area,
+                &mut event_ctx,
+                &mut ctx,
+                app_ctx,
+            );
+
+            // Re-render hovered: `☰ Tasks 1 ▾` underlines exactly the label's
+            // cells — not the ☰ glyph, the chevron, or trailing cells. The
+            // label's start column is located from the buffer since the
+            // glyph's cell width varies by rendering backend.
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_todo_list_section(&states, &message_id, &rows, app_ctx),
+                area,
+                app_ctx,
+            );
+            assert_eq!(frame.buffer.to_lines()[0].trim_end(), "☰ Tasks 1 ▾");
+            let label_start = (0..40u16)
+                .find(|&x| frame.buffer[(x, 0)].symbol() == "T")
+                .expect("the header row contains the label");
+            let underlined: Vec<u16> = (0..40u16)
+                .filter(|&x| frame.buffer[(x, 0)].modifier.contains(Modifier::UNDERLINED))
+                .collect();
+            // "Tasks 1" spans seven cells.
+            let label_cells: Vec<u16> = (label_start..label_start + 7).collect();
+            assert_eq!(underlined, label_cells);
+        });
+    });
+}
+
+#[test]
 fn task_list_desired_height_accounts_for_rows_and_collapse() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());

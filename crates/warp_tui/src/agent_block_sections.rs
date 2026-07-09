@@ -242,7 +242,6 @@ pub(crate) fn render_todo_list_section(
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    let header = format!("{TASK_LIST_HEADER_GLYPH} Tasks {}", todos.len());
 
     let mut rows = TuiFlex::column();
     for (title, status) in todos {
@@ -276,7 +275,8 @@ pub(crate) fn render_todo_list_section(
     let toggle_message_id = message_id.clone();
     builder.prominent_collapsible(
         collapsed,
-        header,
+        TASK_LIST_HEADER_GLYPH,
+        format!("Tasks {}", todos.len()),
         states.hover_state(message_id),
         body.finish(),
         move |event_ctx, _app| {
