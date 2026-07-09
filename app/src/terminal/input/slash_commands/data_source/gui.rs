@@ -7,7 +7,9 @@ use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::core::subscribe_to_shared_dependencies;
-use super::{InlineItem, SlashCommandDataSource, UpdatedActiveCommands};
+use super::{
+    InlineItem, SlashCommandDataSource, SlashCommandDataSourceState, UpdatedActiveCommands,
+};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
@@ -17,7 +19,7 @@ use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
 use crate::search::slash_command_menu::static_commands::Availability;
-use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
+use crate::search::slash_command_menu::StaticCommand;
 use crate::search::SyncDataSource;
 use crate::settings::{
     InputSettings, InputSettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent,
@@ -35,7 +37,7 @@ pub struct GuiDataSourceArgs {
 }
 
 pub struct GuiSlashCommandDataSource {
-    core: SlashCommandDataSource,
+    state: SlashCommandDataSourceState,
     agent_view_controller: ModelHandle<AgentViewController>,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
     is_cloud_mode_v2: bool,
@@ -96,7 +98,7 @@ impl GuiSlashCommandDataSource {
         });
 
         let mut me = Self {
-            core: SlashCommandDataSource::new(
+            state: SlashCommandDataSourceState::new(
                 active_session,
                 cli_subagent_controller,
                 terminal_view_id,
@@ -131,10 +133,6 @@ impl GuiSlashCommandDataSource {
         self.recompute_active_commands(ctx);
     }
 
-    pub(super) fn core(&self) -> &SlashCommandDataSource {
-        &self.core
-    }
-
     pub(super) fn is_cloud_mode_v2(&self) -> bool {
         self.is_cloud_mode_v2
     }
@@ -143,56 +141,46 @@ impl GuiSlashCommandDataSource {
         self.agent_view_controller.as_ref(ctx).is_active()
     }
 
-    pub fn is_cli_agent_input_open(&self, ctx: &AppContext) -> bool {
-        self.core.is_cli_agent_input_open(ctx)
-    }
-
-    pub fn active_commands(&self) -> impl Iterator<Item = (&SlashCommandId, &StaticCommand)> {
-        self.core.active_commands()
-    }
-
     pub fn set_active_repo_root(
         &mut self,
         repo_root: Option<PathBuf>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.core.set_active_repo_root(repo_root) {
+        if self.update_active_repo_root(repo_root) {
             self.recompute_active_commands(ctx);
         }
     }
 
     pub(crate) fn command_is_active(&self, command: &StaticCommand, ctx: &AppContext) -> bool {
         let availability = self.availability(ctx);
-        let gates = self.core.common_command_gates(ctx);
-        self.core
-            .command_passes_common_gates(command, availability, &gates)
+        let gates = self.common_command_gates(ctx);
+        self.command_passes_common_gates(command, availability, &gates)
             && self.command_passes_gui_gates(command, availability, ctx)
     }
 
     fn recompute_active_commands(&mut self, ctx: &mut ModelContext<Self>) {
         let availability = self.availability(ctx);
-        let gates = self.core.common_command_gates(ctx);
+        let gates = self.common_command_gates(ctx);
         let commands = HashMap::from_iter(
             COMMAND_REGISTRY
                 .all_commands_by_id()
                 .filter(|(_, command)| {
-                    self.core
-                        .command_passes_common_gates(command, availability, &gates)
+                    self.command_passes_common_gates(command, availability, &gates)
                         && self.command_passes_gui_gates(command, availability, ctx)
                 })
                 .map(|(id, command)| (id, command.clone())),
         );
-        if self.core.replace_active_commands(commands) {
+        if self.replace_active_commands(commands) {
             ctx.emit(UpdatedActiveCommands);
         }
     }
 
     fn availability(&self, ctx: &AppContext) -> Availability {
         let is_agent_view_active = self.is_agent_view_active(ctx);
-        let mut availability = self.core.base_availability(ctx)
-            | SlashCommandDataSource::view_availability(is_agent_view_active);
+        let mut availability =
+            self.base_availability(ctx) | self.view_availability(is_agent_view_active);
 
-        if self.core.has_active_conversation(is_agent_view_active, ctx) {
+        if self.has_active_conversation(is_agent_view_active, ctx) {
             availability |= Availability::ACTIVE_CONVERSATION;
         }
 
@@ -247,7 +235,7 @@ impl GuiSlashCommandDataSource {
             .active_conversation_id()
             .or_else(|| {
                 BlocklistAIHistoryModel::as_ref(ctx)
-                    .active_conversation(self.core.terminal_view_id())
+                    .active_conversation(self.terminal_view_id())
                     .map(|conversation| conversation.id())
             })
     }
@@ -303,11 +291,11 @@ impl SyncDataSource for GuiSlashCommandDataSource {
         }
 
         let query_text = query.text.trim().to_lowercase();
-        let mut results = self.core.match_active_commands(&query_text, app);
+        let mut results = self.match_active_commands(&query_text, app);
         // Skills invoke locally, so they're hidden on any cloud pane (live viewer,
         // disconnected follow-up, or read-only tombstone).
         if !self.is_cloud_mode(app) {
-            results.extend(self.core.match_skills(&query_text, app));
+            results.extend(self.match_skills(&query_text, app));
         }
 
         Ok(results
@@ -317,6 +305,15 @@ impl SyncDataSource for GuiSlashCommandDataSource {
     }
 }
 
+impl SlashCommandDataSource for GuiSlashCommandDataSource {
+    fn state(&self) -> &SlashCommandDataSourceState {
+        &self.state
+    }
+
+    fn state_mut(&mut self) -> &mut SlashCommandDataSourceState {
+        &mut self.state
+    }
+}
 impl Entity for GuiSlashCommandDataSource {
     type Event = UpdatedActiveCommands;
 }

@@ -9,7 +9,7 @@ use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::SyncDataSource;
 use crate::settings::AISettings;
 use crate::terminal::input::slash_commands::{
-    AcceptSlashCommandOrSavedPrompt, GuiSlashCommandDataSource, InlineItem,
+    AcceptSlashCommandOrSavedPrompt, GuiSlashCommandDataSource, InlineItem, SlashCommandDataSource,
     TuiSlashCommandDataSource,
 };
 
@@ -43,15 +43,14 @@ impl SyncDataSource for GuiZeroStateDataSource {
 
         let source = self.slash_command_data_source.as_ref(app);
         let is_cloud_mode_v2 = source.is_cloud_mode_v2();
-        let mut results = source.core().ordered_zero_state_commands(app);
+        let mut results = source.ordered_zero_state_commands(app);
 
         if is_cloud_mode_v2
             && FeatureFlag::ListSkills.is_enabled()
             && AISettings::as_ref(app).is_any_ai_enabled(app)
         {
-            let core = source.core();
-            let cli_agent_providers = core.active_cli_agent_providers(app);
-            let active_session = core.active_session().as_ref(app);
+            let cli_agent_providers = source.active_cli_agent_providers(app);
+            let active_session = source.active_session().as_ref(app);
             let cwd = active_session.current_working_directory_location(app);
             let skill_manager_handle = SkillManager::handle(app);
             let skill_manager = skill_manager_handle.as_ref(app);
@@ -126,7 +125,6 @@ impl SyncDataSource for TuiZeroStateDataSource {
         Ok(self
             .slash_command_data_source
             .as_ref(app)
-            .core()
             .ordered_zero_state_commands(app)
             .into_iter()
             .map(Into::into)

@@ -291,7 +291,7 @@ use crate::terminal::input::skills::{InlineSkillSelectorEvent, InlineSkillSelect
 use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::{
     slash_command_is_submitted_as_prompt, CloudModeV2SlashCommandView, GuiSlashCommandDataSource,
-    InlineSlashCommandView, SlashCommandTrigger,
+    InlineSlashCommandView, SlashCommandDataSource as _, SlashCommandTrigger,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,

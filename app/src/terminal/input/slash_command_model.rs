@@ -11,7 +11,9 @@ use crate::ai::skills::SkillManager;
 use crate::search::slash_command_menu::StaticCommand;
 use crate::settings::InputSettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
-use crate::terminal::input::slash_commands::GuiSlashCommandDataSource;
+use crate::terminal::input::slash_commands::{
+    GuiSlashCommandDataSource, SlashCommandDataSource as _,
+};
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// Event emitted by the slash command model when its entry state is updated.

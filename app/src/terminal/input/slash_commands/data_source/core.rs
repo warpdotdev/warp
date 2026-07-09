@@ -42,7 +42,7 @@ const CLI_AGENT_INPUT_ALLOWED_COMMANDS: &[&str] = &["/prompts", "/skills"];
 ///
 /// These do not depend on GUI-only concepts such as cloud mode or the agent view;
 /// they are computed once per recompute and shared by both surfaces.
-pub(super) struct CommonCommandGates {
+pub struct CommonCommandGates {
     is_orchestration_enabled: bool,
     is_cloud_handoff_enabled: bool,
     has_default_host: bool,
@@ -135,23 +135,20 @@ pub(super) fn subscribe_to_shared_dependencies<T>(
     );
 }
 
-/// Shared slash command state and surface-neutral behavior.
+/// State shared by GUI and TUI slash command data sources.
 ///
-/// This concrete component is composed by both `GuiSlashCommandDataSource` and
-/// `TuiSlashCommandDataSource`. It owns the state and helpers whose meaning is identical on
-/// every surface: the active command set, repository context, command/skill matching, and the
-/// availability bits and gates that do not depend on surface-specific concepts. Surface-specific
-/// behavior (agent view, cloud mode, compact rendering) lives on the wrapping surface types.
-pub struct SlashCommandDataSource {
+/// Surface-neutral behavior is provided by [`SlashCommandDataSource`]. Surface-specific behavior
+/// such as agent view, cloud mode, compact rendering, recomputation, and event emission lives on
+/// the wrapping surface types.
+pub struct SlashCommandDataSourceState {
     active_session: ModelHandle<ActiveSession>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     terminal_view_id: EntityId,
     active_commands_by_id: HashMap<SlashCommandId, StaticCommand>,
     active_repo_root: Option<PathBuf>,
 }
-
-impl SlashCommandDataSource {
-    pub fn new(
+impl SlashCommandDataSourceState {
+    pub(super) fn new(
         active_session: ModelHandle<ActiveSession>,
         cli_subagent_controller: ModelHandle<CLISubagentController>,
         terminal_view_id: EntityId,
@@ -164,24 +161,35 @@ impl SlashCommandDataSource {
             active_repo_root: None,
         }
     }
+}
 
-    pub fn active_session(&self) -> &ModelHandle<ActiveSession> {
-        &self.active_session
+/// Surface-neutral slash command behavior shared by GUI and TUI data sources.
+///
+/// Implementors provide access to their shared state. Default methods own the behavior whose
+/// meaning is identical across surfaces, while each concrete surface retains lifecycle wiring,
+/// availability policy, active-command recomputation, event emission, and query presentation.
+pub trait SlashCommandDataSource {
+    fn state(&self) -> &SlashCommandDataSourceState;
+
+    fn state_mut(&mut self) -> &mut SlashCommandDataSourceState;
+
+    fn active_session(&self) -> &ModelHandle<ActiveSession> {
+        &self.state().active_session
     }
 
-    pub fn terminal_view_id(&self) -> EntityId {
-        self.terminal_view_id
+    fn terminal_view_id(&self) -> EntityId {
+        self.state().terminal_view_id
     }
 
-    pub fn active_commands(&self) -> impl Iterator<Item = (&SlashCommandId, &StaticCommand)> {
-        self.active_commands_by_id.iter()
+    fn active_commands(&self) -> impl Iterator<Item = (&SlashCommandId, &StaticCommand)> {
+        self.state().active_commands_by_id.iter()
     }
 
     /// Update the active repository root for this terminal. Returns whether the value changed,
     /// so the caller can decide whether to recompute active commands.
-    pub fn set_active_repo_root(&mut self, repo_root: Option<PathBuf>) -> bool {
-        if self.active_repo_root != repo_root {
-            self.active_repo_root = repo_root;
+    fn update_active_repo_root(&mut self, repo_root: Option<PathBuf>) -> bool {
+        if self.state().active_repo_root != repo_root {
+            self.state_mut().active_repo_root = repo_root;
             true
         } else {
             false
@@ -192,12 +200,12 @@ impl SlashCommandDataSource {
     ///
     /// This is an imperfect heuristic, but better than re-firing unnecessarily. If it actually
     /// matters, we can update it.
-    pub(super) fn replace_active_commands(
+    fn replace_active_commands(
         &mut self,
         commands: HashMap<SlashCommandId, StaticCommand>,
     ) -> bool {
-        let changed = commands.len() != self.active_commands_by_id.len();
-        self.active_commands_by_id = commands;
+        let changed = commands.len() != self.state().active_commands_by_id.len();
+        self.state_mut().active_commands_by_id = commands;
         changed
     }
 
@@ -205,15 +213,14 @@ impl SlashCommandDataSource {
     ///
     /// Surfaces add their own bits (agent view vs. terminal view, cloud mode, active
     /// conversation) on top of this baseline.
-    pub(super) fn base_availability(&self, ctx: &AppContext) -> Availability {
+    fn base_availability(&self, ctx: &AppContext) -> Availability {
         let mut availability = Availability::empty();
-
-        if self.active_repo_root.is_some() {
+        if self.state().active_repo_root.is_some() {
             availability |= Availability::REPOSITORY;
         }
 
         let is_local = self
-            .active_session
+            .active_session()
             .as_ref(ctx)
             .session_type(ctx)
             .is_some_and(|st| st == SessionType::Local);
@@ -222,6 +229,7 @@ impl SlashCommandDataSource {
         }
 
         if !self
+            .state()
             .cli_subagent_controller
             .as_ref(ctx)
             .is_agent_in_control()
@@ -243,7 +251,7 @@ impl SlashCommandDataSource {
     /// View-related availability bits given whether the agent view is active. When the AgentView
     /// feature flag is disabled, both bits are set so either requirement is satisfied (other
     /// requirements like REPOSITORY and LOCAL still apply).
-    pub(super) fn view_availability(is_agent_view_active: bool) -> Availability {
+    fn view_availability(&self, is_agent_view_active: bool) -> Availability {
         if !FeatureFlag::AgentView.is_enabled() {
             Availability::AGENT_VIEW | Availability::TERMINAL_VIEW
         } else if is_agent_view_active {
@@ -254,7 +262,7 @@ impl SlashCommandDataSource {
     }
 
     /// Whether a command should be shown given the availability set and the shared gates.
-    pub(super) fn command_passes_common_gates(
+    fn command_passes_common_gates(
         &self,
         command: &StaticCommand,
         availability: Availability,
@@ -280,7 +288,7 @@ impl SlashCommandDataSource {
         true
     }
 
-    pub(super) fn common_command_gates(&self, ctx: &AppContext) -> CommonCommandGates {
+    fn common_command_gates(&self, ctx: &AppContext) -> CommonCommandGates {
         let ai_settings = AISettings::as_ref(ctx);
         // Hide /host when no default host is configured (env var or workspace setting).
         let has_default_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
@@ -298,43 +306,35 @@ impl SlashCommandDataSource {
 
     /// Whether there is an active conversation, given whether the agent view is active.
     /// There is always an active conversation in the agent view.
-    pub(super) fn has_active_conversation(
-        &self,
-        is_agent_view_active: bool,
-        ctx: &AppContext,
-    ) -> bool {
+    fn has_active_conversation(&self, is_agent_view_active: bool, ctx: &AppContext) -> bool {
         is_agent_view_active
             || crate::ai::blocklist::BlocklistAIHistoryModel::as_ref(ctx)
-                .active_conversation(self.terminal_view_id)
+                .active_conversation(self.terminal_view_id())
                 .is_some()
     }
 
     /// Returns `true` if the CLI agent rich input is currently open for this terminal.
-    pub fn is_cli_agent_input_open(&self, ctx: &AppContext) -> bool {
-        CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
+    fn is_cli_agent_input_open(&self, ctx: &AppContext) -> bool {
+        CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id())
     }
 
     /// Returns the supported skill providers for the active CLI agent, or `None` if
     /// CLI agent input is not open (meaning no filtering should be applied).
-    pub fn active_cli_agent_providers(
+    fn active_cli_agent_providers(
         &self,
         ctx: &AppContext,
     ) -> Option<&'static [ai::skills::SkillProvider]> {
         CLIAgentSessionsModel::as_ref(ctx)
-            .session(self.terminal_view_id)
+            .session(self.terminal_view_id())
             .filter(|s| matches!(s.input_state, CLIAgentInputState::Open { .. }))
             .map(|s| s.agent.supported_skill_providers())
     }
 
     /// Fuzzy-match the active commands against `query_text`. Returns scored [`InlineItem`]s with
     /// compact layout left unset; the caller applies any surface-specific presentation.
-    pub(super) fn match_active_commands(
-        &self,
-        query_text: &str,
-        app: &AppContext,
-    ) -> Vec<InlineItem> {
+    fn match_active_commands(&self, query_text: &str, app: &AppContext) -> Vec<InlineItem> {
         let mut results = Vec::new();
-        for (id, command) in &self.active_commands_by_id {
+        for (id, command) in &self.state().active_commands_by_id {
             let Some(fuzzy_result) = SlashCommandFuzzyMatchResult::try_match(
                 query_text,
                 command.name,
@@ -369,14 +369,14 @@ impl SlashCommandDataSource {
     /// Fuzzy-match skills for the current working directory against `query_text`. Returns an empty
     /// vector when skills are globally unavailable. The caller decides whether skills apply for its
     /// surface (e.g. GUI hides them in cloud mode).
-    pub(super) fn match_skills(&self, query_text: &str, app: &AppContext) -> Vec<InlineItem> {
+    fn match_skills(&self, query_text: &str, app: &AppContext) -> Vec<InlineItem> {
         if !FeatureFlag::ListSkills.is_enabled() || !AISettings::as_ref(app).is_any_ai_enabled(app)
         {
             return Vec::new();
         }
 
         let cli_agent_providers = self.active_cli_agent_providers(app);
-        let active_session = self.active_session.as_ref(app);
+        let active_session = self.active_session().as_ref(app);
         let cwd_path = active_session.current_working_directory_location(app);
         let skills = SkillManager::handle(app)
             .as_ref(app)
@@ -429,7 +429,7 @@ impl SlashCommandDataSource {
     /// DataSource implementations must return highest priority items last (results sorted in
     /// ascending order of priority). This orders all active commands alphabetically, except for
     /// the explicitly prioritized commands, which are appended after them in the listed order.
-    pub(super) fn ordered_zero_state_commands(&self, app: &AppContext) -> Vec<InlineItem> {
+    fn ordered_zero_state_commands(&self, app: &AppContext) -> Vec<InlineItem> {
         use itertools::Itertools;
 
         let prioritized_commands = vec![

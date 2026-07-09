@@ -4,7 +4,10 @@ mod saved_prompts;
 mod tui;
 mod zero_state;
 
-pub use core::{InlineItem, SlashCommandDataSource, UpdatedActiveCommands};
+pub use core::{
+    CommonCommandGates, InlineItem, SlashCommandDataSource, SlashCommandDataSourceState,
+    UpdatedActiveCommands,
+};
 
 pub use gui::{GuiDataSourceArgs, GuiSlashCommandDataSource};
 pub(crate) use saved_prompts::*;

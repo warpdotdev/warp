@@ -51,7 +51,7 @@ pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColor
 pub use crate::terminal::event::AfterBlockCompletedEvent;
 pub use crate::terminal::input::slash_commands::{
     build_slash_command_mixer, slash_command_query, AcceptSlashCommandOrSavedPrompt, InlineItem,
-    SlashCommandMixer, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
+    SlashCommandDataSource, SlashCommandMixer, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
     TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
 };
 pub use crate::terminal::input::CommandExecutionSource;
