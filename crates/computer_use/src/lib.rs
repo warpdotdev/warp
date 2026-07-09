@@ -263,6 +263,8 @@ pub struct RecordingHandle {
     started_at: instant::Instant,
     #[cfg(linux)]
     process: Option<tokio::process::Child>,
+    // The handle owns and deletes partial output until `Recorder::stop`
+    // validates the file and transfers its path to `RecordingOutput`.
     #[cfg(linux)]
     cleanup_on_drop: bool,
 }

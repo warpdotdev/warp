@@ -28,6 +28,8 @@ pub enum StartRecordingControllerError {
 pub enum StopRecordingControllerError {
     #[error("No recording with id '{recording_id}'.")]
     RecordingNotFound { recording_id: String },
+    #[error("Current conversation has not been synced to the server yet.")]
+    ConversationNotSynced,
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -137,8 +139,42 @@ impl RecordingController {
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn claim_finalization_by_id(&mut self, recording_id: &str) -> FinalizationClaim {
+        self.claim_matching_finalization(|id, _| id == recording_id)
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn claim_finalization_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+    ) -> Option<FinalizationClaim> {
+        // A start has no recording ID yet, but its conversation can still
+        // cancel the reservation before the recorder finishes starting.
+        if matches!(
+            self.state,
+            RecordingState::Starting {
+                conversation_id: owner
+            } if owner == conversation_id
+        ) {
+            self.state = RecordingState::Idle;
+            return None;
+        }
+
+        match self.claim_matching_finalization(|_, owner| owner == conversation_id) {
+            FinalizationClaim::NotFound => None,
+            claim => Some(claim),
+        }
+    }
+
+    /// Applies the shared terminal transitions after the caller selects how a
+    /// recording identity should match.
+    fn claim_matching_finalization(
+        &mut self,
+        matches: impl Fn(&str, AIConversationId) -> bool,
+    ) -> FinalizationClaim {
         match mem::replace(&mut self.state, RecordingState::Idle) {
-            RecordingState::Active(recording) if recording.id == recording_id => {
+            RecordingState::Active(recording)
+                if matches(&recording.id, recording.conversation_id) =>
+            {
                 let (sender, receiver) = oneshot::channel();
                 self.state = RecordingState::Finalizing {
                     id: recording.id.clone(),
@@ -154,7 +190,7 @@ impl RecordingController {
                 id,
                 conversation_id,
                 mut waiters,
-            } if id == recording_id => {
+            } if matches(&id, conversation_id) => {
                 let (sender, receiver) = oneshot::channel();
                 waiters.push(sender);
                 self.state = RecordingState::Finalizing {
@@ -168,7 +204,7 @@ impl RecordingController {
                 id,
                 conversation_id,
                 result,
-            } if id == recording_id => {
+            } if matches(&id, conversation_id) => {
                 let ready = result.clone();
                 self.state = RecordingState::Finalized {
                     id,
@@ -180,61 +216,6 @@ impl RecordingController {
             state => {
                 self.state = state;
                 FinalizationClaim::NotFound
-            }
-        }
-    }
-
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub(crate) fn claim_finalization_for_conversation(
-        &mut self,
-        conversation_id: AIConversationId,
-    ) -> Option<FinalizationClaim> {
-        match mem::replace(&mut self.state, RecordingState::Idle) {
-            RecordingState::Starting {
-                conversation_id: owner,
-            } if owner == conversation_id => None,
-            RecordingState::Active(recording) if recording.conversation_id == conversation_id => {
-                let (sender, receiver) = oneshot::channel();
-                self.state = RecordingState::Finalizing {
-                    id: recording.id.clone(),
-                    conversation_id,
-                    waiters: vec![sender],
-                };
-                Some(FinalizationClaim::Claimed {
-                    recording,
-                    result_receiver: receiver,
-                })
-            }
-            RecordingState::Finalizing {
-                id,
-                conversation_id: owner,
-                mut waiters,
-            } if owner == conversation_id => {
-                let (sender, receiver) = oneshot::channel();
-                waiters.push(sender);
-                self.state = RecordingState::Finalizing {
-                    id,
-                    conversation_id: owner,
-                    waiters,
-                };
-                Some(FinalizationClaim::InProgress(receiver))
-            }
-            RecordingState::Finalized {
-                id,
-                conversation_id: owner,
-                result,
-            } if owner == conversation_id => {
-                let ready = result.clone();
-                self.state = RecordingState::Finalized {
-                    id,
-                    conversation_id: owner,
-                    result,
-                };
-                Some(FinalizationClaim::Finished(ready))
-            }
-            state => {
-                self.state = state;
-                None
             }
         }
     }

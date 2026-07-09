@@ -55,6 +55,11 @@ impl FinalizeReason {
     }
 }
 
+/// A handle to the canonical result owned by `RecordingController`.
+///
+/// `Pending` subscribes to work already owned by the controller; dropping the
+/// receiver does not cancel stop or upload. `Ready` exposes the retained result
+/// after that work has completed.
 pub(crate) enum RecordingFinalization {
     Pending(oneshot::Receiver<StopRecordingResult>),
     Ready(StopRecordingResult),
@@ -82,6 +87,8 @@ fn format_upload_error(err: &anyhow::Error) -> String {
     }
 }
 
+/// Stops capture, uploads the finalized file, and produces the result retained
+/// by the controller for all current and future callers.
 async fn finalize_recording(
     recording: ActiveRecording,
     reason: FinalizeReason,
@@ -106,6 +113,8 @@ async fn finalize_recording(
         uploader.upload_with_association(request, association).await
     }
     .await;
+    // Local files are ephemeral regardless of upload outcome. Retrying failed
+    // uploads or retaining their files requires a separate persistence policy.
     let _ = std::fs::remove_file(&local_path);
     let _ = std::fs::remove_file(local_path.with_extension("log"));
 
@@ -123,6 +132,8 @@ async fn finalize_recording(
     }
 }
 
+/// Captures the upload association and clients while the app models are still
+/// available, before stop/upload work moves onto the controller-owned task.
 fn build_finalize_future(
     recording: ActiveRecording,
     reason: FinalizeReason,
@@ -146,6 +157,8 @@ fn build_finalize_future(
     )
 }
 
+/// Runs finalization independently of any action future and stores its result
+/// on the controller before waking subscribers.
 fn spawn_finalize(
     recording: ActiveRecording,
     reason: FinalizeReason,
@@ -157,6 +170,9 @@ fn spawn_finalize(
     });
 }
 
+/// Converts an atomic controller claim into a result handle. Only the caller
+/// that receives `Claimed` starts work; concurrent and later callers subscribe
+/// to the in-flight operation or receive its retained result.
 fn start_or_join_finalization<T: Entity>(
     claim: FinalizationClaim,
     reason: FinalizeReason,
@@ -178,6 +194,10 @@ fn start_or_join_finalization<T: Entity>(
     }
 }
 
+/// Starts or joins finalization for an explicit `StopRecording` request.
+///
+/// The returned handle only observes controller-owned work. The stop executor
+/// decides when a retained result has been delivered and can be consumed.
 pub(crate) fn finalize_recording_by_id<T: Entity>(
     recording_id: &str,
     reason: FinalizeReason,

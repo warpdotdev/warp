@@ -6,6 +6,7 @@
 
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -102,7 +103,7 @@ impl crate::Recorder for Recorder {
         Ok(RecordingHandle {
             width,
             height,
-            exit_state: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            exit_state: Arc::new(Mutex::new(None)),
             path,
             started_at: Instant::now(),
             process: Some(process),
@@ -164,6 +165,7 @@ impl crate::Recorder for Recorder {
                 reason: "recording produced an empty file".to_string(),
             });
         }
+        // The caller now owns the validated file through `RecordingOutput`.
         handle.cleanup_on_drop = false;
 
         Ok(RecordingOutput {
