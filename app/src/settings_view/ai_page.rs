@@ -8155,8 +8155,10 @@ impl ApiKeysWidget {
                             workspace.as_ref(ctx).are_member_byo_keys_allowed();
                         let is_enabled = is_any_ai_enabled && is_byo_enabled;
                         let has_key = !editor_clone.as_ref(ctx).is_empty(ctx);
-                        // If BYO is disabled at the billing layer, clear the API key from the editor and storage.
-                        // Team member policy may hide the controls, but must not delete local keys.
+                        // Clear stored API keys when BYO is disabled at the billing layer.
+                        // Team member policy is reversible: it only hides and ignores local
+                        // keys. Preserve them so they become usable again if the admin later
+                        // re-enables member BYO.
                         if !is_byo_enabled && has_key {
                             editor_clone.update(ctx, |editor, ctx| {
                                 editor.set_buffer_text("", ctx);
@@ -8388,18 +8390,37 @@ impl ApiKeysWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let copy = match (show_provider_keys, show_custom_endpoints) {
-            (true, true) => "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored only on your device, not on Warp's servers. Adding an API key here will override any API key provided by your team admin. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
-            (true, false) => "Use your own API keys from model providers for Warp Agent. API keys are stored only on your device, not on Warp's servers. Adding an API key here will override any API key provided by your team admin. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
-            (false, true) => "You can add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored only on your device, not on Warp's servers. ",
-            (false, false) => "",
+        let mut lines = Vec::new();
+        let mut add_paragraph = |fragments| {
+            if !lines.is_empty() {
+                lines.push(FormattedTextLine::LineBreak);
+            }
+            lines.push(FormattedTextLine::Line(fragments));
         };
-        let text_fragments = vec![
-            FormattedTextFragment::plain_text(copy),
-            FormattedTextFragment::hyperlink("Learn more", CUSTOM_INFERENCE_LEARN_MORE_URL),
-        ];
+
+        if show_provider_keys {
+            add_paragraph(vec![FormattedTextFragment::plain_text(
+                "Use your own API keys from model providers for Warp Agent. Adding an API key here will override any API key provided by your team admin. Models that use neither a personal nor team-provided key may consume Warp credits.",
+            )]);
+        }
+
+        if show_custom_endpoints {
+            add_paragraph(vec![FormattedTextFragment::plain_text(
+                "Add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API.",
+            )]);
+        }
+
+        if show_provider_keys || show_custom_endpoints {
+            add_paragraph(vec![FormattedTextFragment::plain_text(
+                "API keys and custom endpoint credentials you add here are stored only on this device, not on Warp's servers.",
+            )]);
+            add_paragraph(vec![FormattedTextFragment::hyperlink(
+                "Learn more",
+                CUSTOM_INFERENCE_LEARN_MORE_URL,
+            )]);
+        }
         let description = FormattedTextElement::new(
-            FormattedText::new([FormattedTextLine::Line(text_fragments)]),
+            FormattedText::new(lines),
             CONTENT_FONT_SIZE,
             appearance.ui_font_family(),
             appearance.ui_font_family(),
