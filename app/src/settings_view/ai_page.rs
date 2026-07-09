@@ -8075,6 +8075,9 @@ struct ApiKeysWidget {
 
     can_use_warp_credits_for_fallback: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
+    openai_team_key_info_tooltip: MouseStateHandle,
+    anthropic_team_key_info_tooltip: MouseStateHandle,
+    google_team_key_info_tooltip: MouseStateHandle,
 
     custom_inference_info_tooltip: MouseStateHandle,
     custom_inference_terms_index: HighlightedHyperlink,
@@ -8307,17 +8310,98 @@ impl ApiKeysWidget {
 
             can_use_warp_credits_for_fallback: Default::default(),
             upgrade_highlight_index: Default::default(),
+            openai_team_key_info_tooltip: Default::default(),
+            anthropic_team_key_info_tooltip: Default::default(),
+            google_team_key_info_tooltip: Default::default(),
 
             custom_inference_info_tooltip: Default::default(),
             custom_inference_terms_index: Default::default(),
             description_learn_more_index: Default::default(),
         }
     }
+    fn has_team_first_party_key(provider: &LLMProvider, app: &AppContext) -> bool {
+        UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| {
+                workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                    && workspace
+                        .settings
+                        .team_byo
+                        .as_ref()
+                        .is_some_and(|team_byo| {
+                            team_byo.first_party_enabled
+                                && team_byo
+                                    .first_party_keys
+                                    .iter()
+                                    .any(|key| key.provider == *provider)
+                        })
+            })
+    }
+
+    fn render_team_key_info_icon(
+        &self,
+        provider: &LLMProvider,
+        mouse_state: MouseStateHandle,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let provider_name = provider.display_name();
+        let tooltip_text = FormattedText::new([FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text(format!(
+                "Your organization has provided an API key for {provider_name}. A key entered here takes precedence for {provider_name} requests."
+            )),
+        ])]);
+        let tooltip_background = appearance.theme().tooltip_background();
+        let icon_color = appearance.theme().active_ui_text_color();
+
+        Hoverable::new(mouse_state, move |state| {
+            let icon = ConstrainedBox::new(Icon::Info.to_warpui_icon(icon_color).finish())
+                .with_width(13.)
+                .with_height(13.)
+                .finish();
+            let mut stack = Stack::new().with_child(icon);
+            if state.is_hovered() {
+                let tooltip = ConstrainedBox::new(
+                    Container::new(
+                        FormattedTextElement::new(
+                            tooltip_text.clone(),
+                            10.,
+                            appearance.ui_font_family(),
+                            appearance.ui_font_family(),
+                            appearance.theme().background().into_solid(),
+                            HighlightedHyperlink::default(),
+                        )
+                        .finish(),
+                    )
+                    .with_background_color(tooltip_background)
+                    .with_vertical_padding(4.)
+                    .with_horizontal_padding(8.)
+                    .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                    .finish(),
+                )
+                .with_max_width(CUSTOM_INFERENCE_INFO_TOOLTIP_MAX_WIDTH)
+                .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., -3.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomLeft,
+                    ),
+                );
+            }
+            stack.finish()
+        })
+        .finish()
+    }
 
     fn render_api_key_input(
         &self,
         appearance: &Appearance,
         label: &'static str,
+        provider: LLMProvider,
+        team_key_info_tooltip: MouseStateHandle,
         editor: ViewHandle<EditorView>,
         is_enabled: bool,
         app: &AppContext,
@@ -8337,6 +8421,20 @@ impl ApiKeysWidget {
         let label = Text::new_inline(label, appearance.ui_font_family(), CONTENT_FONT_SIZE)
             .with_color(styles::header_font_color(is_enabled, app).into())
             .finish();
+        let mut label_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(label);
+        if Self::has_team_first_party_key(&provider, app) {
+            label_row.add_child(
+                Container::new(self.render_team_key_info_icon(
+                    &provider,
+                    team_key_info_tooltip,
+                    appearance,
+                ))
+                .with_margin_left(4.)
+                .finish(),
+            );
+        }
 
         let input = appearance
             .ui_builder()
@@ -8347,7 +8445,7 @@ impl ApiKeysWidget {
 
         Flex::column()
             .with_spacing(8.)
-            .with_child(label)
+            .with_child(label_row.finish())
             .with_child(input)
             .finish()
     }
@@ -8362,6 +8460,8 @@ impl ApiKeysWidget {
         column.add_child(self.render_api_key_input(
             appearance,
             "OpenAI API key",
+            LLMProvider::OpenAI,
+            self.openai_team_key_info_tooltip.clone(),
             self.openai_api_key_editor.clone(),
             is_enabled,
             app,
@@ -8369,6 +8469,8 @@ impl ApiKeysWidget {
         column.add_child(self.render_api_key_input(
             appearance,
             "Anthropic API key",
+            LLMProvider::Anthropic,
+            self.anthropic_team_key_info_tooltip.clone(),
             self.anthropic_api_key_editor.clone(),
             is_enabled,
             app,
@@ -8376,6 +8478,8 @@ impl ApiKeysWidget {
         column.add_child(self.render_api_key_input(
             appearance,
             "Google API key",
+            LLMProvider::Google,
+            self.google_team_key_info_tooltip.clone(),
             self.google_api_key_editor.clone(),
             is_enabled,
             app,
