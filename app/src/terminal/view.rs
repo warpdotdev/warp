@@ -15397,7 +15397,6 @@ impl TerminalView {
             input.notify_and_notify_children(ctx);
         });
 
-
         ctx.notify();
     }
 
