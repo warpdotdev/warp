@@ -13,7 +13,7 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
-        grok_refresh_in_flight: false,
+        grok_refresh_waiters: None,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         geap_credentials_state: GeapCredentialsState::Missing,
@@ -774,8 +774,15 @@ fn grok_expired_refresh_token_none_when_no_expiry() {
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn grok_expired_refresh_token_none_when_refresh_in_flight() {
+fn grok_expired_refresh_token_ignores_in_flight_refresh() {
+    // Eligibility is independent of whether a refresh is already running: a
+    // request must still be able to attach to the in-flight refresh (that
+    // coordination happens in `begin_expired_grok_refresh`), rather than being
+    // told no refresh is needed and sending the expired token.
     let mut mgr = make_manager_with_grok(ApiKeys::default(), Some(expired_grok_tokens()));
-    mgr.grok_refresh_in_flight = true;
-    assert_eq!(mgr.grok_expired_refresh_token(true), None);
+    mgr.grok_refresh_waiters = Some(Vec::new());
+    assert_eq!(
+        mgr.grok_expired_refresh_token(true),
+        Some("refresh".to_string())
+    );
 }

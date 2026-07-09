@@ -1,5 +1,7 @@
 use std::time::{Duration, SystemTime};
 
+#[cfg(not(target_family = "wasm"))]
+use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_multi_agent_api as api;
@@ -179,12 +181,14 @@ pub struct ApiKeyManager {
     /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_allowed: bool,
-    /// Guards against overlapping Grok token refreshes: the proactive refresh
-    /// timer and the request-time blocking refresh
-    /// (`ApiKeyManager::begin_expired_grok_refresh`) share this so only one
-    /// refresh runs at a time.
+    /// Coordinates Grok token refreshes so only one runs at a time (shared by
+    /// the proactive refresh timer and the request-time blocking refresh in
+    /// `crate::grok_subscription`). `Some` means a refresh is in flight; the
+    /// vector holds the completion senders for any requests waiting on it (it
+    /// may be empty for a proactive refresh with no waiters). `None` means no
+    /// refresh is running. Always cleared when the refresh finishes.
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) grok_refresh_in_flight: bool,
+    pub(crate) grok_refresh_waiters: Option<Vec<oneshot::Sender<()>>>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     /// In-memory Gemini Enterprise (GEAP) credential state.
@@ -203,7 +207,7 @@ impl ApiKeyManager {
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
-            grok_refresh_in_flight: false,
+            grok_refresh_waiters: None,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             geap_credentials_state: GeapCredentialsState::Missing,

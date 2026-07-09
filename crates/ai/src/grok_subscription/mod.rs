@@ -89,16 +89,18 @@ impl ApiKeyManager {
 
     /// Returns the refresh token to use for a request-time blocking refresh
     /// when the stored Grok token is at/past its hard expiry and eligible to be
-    /// sent, or `None` when no blocking refresh is warranted: BYO disabled, a
-    /// refresh already in flight, no stored token, the token not yet expired
-    /// (the proactive timer handles the near-expiry window), or no refresh
-    /// token.
+    /// sent, or `None` when no refresh is warranted: BYO disabled, no stored
+    /// token, the token not yet expired (the proactive timer handles the
+    /// near-expiry window), or no refresh token.
     ///
-    /// Pure read used by [`Self::begin_expired_grok_refresh`] and covered by
-    /// unit tests. `byo_allowed` is the BYO API key policy as freshly evaluated
-    /// by the caller at request time.
+    /// Pure eligibility read used by [`Self::begin_expired_grok_refresh`] and
+    /// covered by unit tests. It deliberately does NOT consider whether a
+    /// refresh is already in flight — that coordination (waiting on the
+    /// existing refresh) lives in `begin_expired_grok_refresh`. `byo_allowed`
+    /// is the BYO API key policy as freshly evaluated by the caller at request
+    /// time.
     pub(crate) fn grok_expired_refresh_token(&self, byo_allowed: bool) -> Option<String> {
-        if !byo_allowed || self.grok_refresh_in_flight {
+        if !byo_allowed {
             return None;
         }
         let tokens = self.grok_tokens()?;
@@ -108,17 +110,18 @@ impl ApiKeyManager {
         tokens.refresh_token.clone()
     }
 
-    /// Starts a single refresh when the stored Grok token is already expired,
-    /// returning a receiver that fires once that refresh finishes (success or
-    /// failure). Returns `None` when no blocking refresh is warranted (see
-    /// [`Self::grok_expired_refresh_token`]) — including when one is already in
-    /// flight, so the proactive timer and this path never overlap (strict
-    /// single-flight).
+    /// Ensures a refresh is running for an already-expired Grok token and
+    /// returns a receiver that fires once that refresh finishes (success or
+    /// failure). Returns `None` when no refresh is warranted (see
+    /// [`Self::grok_expired_refresh_token`]).
     ///
-    /// The refresh runs on this manager's own (singleton) context, so the
-    /// in-flight guard is always released even if the caller's model is dropped
-    /// mid-refresh. The caller waits on the receiver (bounded by its own
-    /// timeout), then reads whichever token is then stored — refreshed on
+    /// If a refresh is already in flight — started by the proactive timer or an
+    /// earlier request — the caller attaches to it rather than starting a
+    /// second one (strict single-flight); every waiter is woken when it
+    /// finishes. The refresh runs on this manager's own (singleton) context, so
+    /// the in-flight state is always cleared even if a caller's model is
+    /// dropped mid-refresh. The caller waits on the receiver (bounded by its
+    /// own timeout), then reads whichever token is then stored — refreshed on
     /// success, unchanged on failure/timeout (the server stays the authority on
     /// validity).
     pub fn begin_expired_grok_refresh(
@@ -128,8 +131,8 @@ impl ApiKeyManager {
     ) -> Option<oneshot::Receiver<()>> {
         let refresh_token = self.grok_expired_refresh_token(byo_allowed)?;
         let (tx, rx) = oneshot::channel();
-        log::info!("Grok OAuth token is expired at request time; refreshing before send");
-        spawn_grok_refresh(self, refresh_token, Some(tx), ctx);
+        log::info!("Grok OAuth token is expired at request time; waiting for refresh before send");
+        spawn_grok_refresh(self, refresh_token, vec![tx], ctx);
         Some(rx)
     }
 }
@@ -193,33 +196,38 @@ fn schedule_grok_token_refresh(manager: &mut ApiKeyManager, ctx: &mut ModelConte
                 .and_then(|t| t.refresh_token.as_deref())
                 == Some(refresh_token.as_str());
             if still_current {
-                spawn_grok_refresh(manager, refresh_token, None, ctx);
+                spawn_grok_refresh(manager, refresh_token, Vec::new(), ctx);
             }
         },
     );
 }
 
 /// Kicks off a background token refresh using `refresh_token`, applying the
-/// result (which reschedules the next refresh) or logging the failure.
+/// result (which reschedules the next refresh) or logging the failure, then
+/// waking every waiter.
 ///
-/// No-op when a refresh is already in flight, so the proactive timer and the
-/// request-time blocking refresh can't issue overlapping refreshes (strict
-/// single-flight). `on_complete`, when set, is signaled once the refresh
-/// finishes (success or failure) to wake a request blocked on it.
+/// If a refresh is already in flight, the new `waiters` are attached to it and
+/// no second refresh starts (strict single-flight). Otherwise the refresh runs
+/// on the manager's own (singleton) context, so the in-flight guard is always
+/// cleared when it finishes even if a waiter's model was dropped meanwhile.
 fn spawn_grok_refresh(
     manager: &mut ApiKeyManager,
     refresh_token: String,
-    on_complete: Option<oneshot::Sender<()>>,
+    waiters: Vec<oneshot::Sender<()>>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    if manager.grok_refresh_in_flight {
+    // A refresh is already running; attach the new waiters to it instead of
+    // starting a second one. They're woken when the in-flight refresh finishes.
+    if let Some(existing) = manager.grok_refresh_waiters.as_mut() {
+        existing.extend(waiters);
         return;
     }
-    manager.grok_refresh_in_flight = true;
+    manager.grok_refresh_waiters = Some(waiters);
     ctx.spawn(
         async move { oauth::refresh_access_token(&refresh_token).await },
         move |manager, result, ctx| {
-            manager.grok_refresh_in_flight = false;
+            // Clear the in-flight guard and take the waiters to wake below.
+            let waiters = manager.grok_refresh_waiters.take().unwrap_or_default();
             match result {
                 Ok(response) => {
                     log::info!(
@@ -232,16 +240,15 @@ fn spawn_grok_refresh(
                 Err(err) => {
                     // Leave the existing (possibly expired) token in place; the
                     // server remains the authority and will reject it if it's
-                    // truly invalid. The request-time blocking refresh
-                    // (`ApiKeyManager::begin_expired_grok_refresh`) retries on
-                    // the next request.
+                    // truly invalid. A later request re-triggers a refresh via
+                    // `ApiKeyManager::begin_expired_grok_refresh`.
                     log::error!("Failed to refresh Grok OAuth token: {err:#}");
                 }
             }
-            // Wake any request blocked on this refresh, regardless of outcome.
-            // A dropped receiver (caller gone) is safe to ignore.
-            if let Some(on_complete) = on_complete {
-                let _ = on_complete.send(());
+            // Wake every request blocked on this refresh, regardless of
+            // outcome. Dropped receivers (callers gone) are safe to ignore.
+            for waiter in waiters {
+                let _ = waiter.send(());
             }
         },
     );
