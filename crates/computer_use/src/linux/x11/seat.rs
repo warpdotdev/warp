@@ -16,10 +16,14 @@
 //! applications, while the user's own pointer, keyboard focus, and modifier state stay put.
 //!
 //! Unlike most X resources, master devices are server-global and outlive the connection that
-//! created them, so the pair is removed explicitly on drop and stale pairs from crashed
-//! processes are reaped on creation (identified by the process id embedded in the seat name).
+//! created them, so the pair is removed explicitly on drop, and every seat creation reaps
+//! leaked pairs: pairs of this process not owned by a live [`AgentSeat`] (per a process-local
+//! registry), and pairs whose owning process (identified by the pid embedded in the seat name)
+//! no longer exists.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xinput::{
@@ -42,6 +46,8 @@ const ALL_DEVICES: u16 = 0;
 /// and keyboard focus instead of the user's.
 pub struct AgentSeat {
     conn: RustConnection,
+    /// The seat name, held in the live-seat registry for as long as this seat exists.
+    name: String,
     master_keyboard: xinput::DeviceId,
     /// The paired master pointer. Retained for the `RemoveMaster` request on drop (removing
     /// either device of a pair removes both).
@@ -71,8 +77,8 @@ impl AgentSeat {
             ));
         }
 
-        // Best-effort: reap seats leaked by crashed processes so their cursors do not
-        // accumulate on the display.
+        // Best-effort: reap seats leaked by crashed processes or by failed constructions in
+        // this process, so their cursors do not accumulate on the display.
         remove_stale_seats(&conn);
 
         let name = format!(
@@ -80,19 +86,45 @@ impl AgentSeat {
             std::process::id(),
             next_sequence()
         );
-        create_master_pair(&conn, &name)?;
-        let (master_pointer, master_keyboard) = find_master_pair(&conn, &name)?;
+        // Reserve the name before creating the devices, so a concurrent seat creation's
+        // stale-seat reaper cannot collect this pair mid-construction. Every failure path below
+        // unregisters the name, which marks any devices that were created as stale.
+        register_live_seat(&name);
+        if let Err(e) = create_master_pair(&conn, &name) {
+            unregister_live_seat(&name);
+            return Err(e);
+        }
+        let (master_pointer, master_keyboard) = match find_master_pair(&conn, &name) {
+            Ok(pair) => pair,
+            Err(e) => {
+                // The pair may exist even though it could not be identified (e.g. a transient
+                // query failure); unregistering lets the next seat creation reap it.
+                unregister_live_seat(&name);
+                return Err(e);
+            }
+        };
 
         // Route this connection's core requests (XTEST fake input, WarpPointer, QueryPointer,
         // SetInputFocus) through the agent master pair instead of the user's virtual core
         // pointer and keyboard. Window `None` selects the requesting client itself.
-        conn.xinput_xi_set_client_pointer(x11rb::NONE, master_pointer)
-            .map_err(|e| format!("Failed to select the agent pointer: {e}"))?
-            .check()
-            .map_err(|e| format!("Failed to select the agent pointer: {e}"))?;
+        let selected = conn
+            .xinput_xi_set_client_pointer(x11rb::NONE, master_pointer)
+            .map_err(|e| format!("Failed to select the agent pointer: {e}"))
+            .and_then(|cookie| {
+                cookie
+                    .check()
+                    .map_err(|e| format!("Failed to select the agent pointer: {e}"))
+            });
+        if let Err(e) = selected {
+            let _ = remove_master(&conn, master_pointer);
+            let _ = conn.flush();
+            unregister_live_seat(&name);
+            return Err(e);
+        }
 
         Ok(Self {
             conn,
+            name,
             master_keyboard,
             master_pointer,
         })
@@ -123,10 +155,11 @@ impl AgentSeat {
 impl Drop for AgentSeat {
     fn drop(&mut self) {
         // Master devices are server-global (they outlive this connection), so remove the pair
-        // explicitly. Failures are ignored: `remove_stale_seats` reaps leftovers on the next
-        // seat creation.
+        // explicitly. Failures are ignored: unregistering marks the pair as stale, so
+        // `remove_stale_seats` reaps any leftovers on the next seat creation.
         let _ = remove_master(&self.conn, self.master_pointer);
         let _ = self.conn.flush();
+        unregister_live_seat(&self.name);
     }
 }
 
@@ -135,6 +168,27 @@ impl Drop for AgentSeat {
 fn next_sequence() -> u64 {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     SEQUENCE.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The names of seats currently owned (or being constructed) by an [`AgentSeat`] in this
+/// process. Same-process seats absent from this registry are leaks from failed constructions
+/// and are reaped by [`remove_stale_seats`]; a plain pid-liveness check cannot classify them
+/// because the owning process (this one) is alive.
+fn live_seats() -> &'static Mutex<HashSet<String>> {
+    static LIVE_SEATS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    LIVE_SEATS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn register_live_seat(name: &str) {
+    live_seats().lock().unwrap().insert(name.to_string());
+}
+
+fn unregister_live_seat(name: &str) {
+    live_seats().lock().unwrap().remove(name);
+}
+
+fn is_live_seat(name: &str) -> bool {
+    live_seats().lock().unwrap().contains(name)
 }
 
 /// Creates a master pointer/keyboard pair named "{name} pointer" / "{name} keyboard". The
@@ -210,9 +264,10 @@ fn find_master_pair(
     }
 }
 
-/// Removes agent seats whose owning process no longer exists. A crashed process never runs
-/// `Drop`, and its master devices (and their on-screen cursors) would otherwise persist until
-/// the X server restarts.
+/// Removes agent seats that no longer have a live owner: seats of this process that are absent
+/// from the live-seat registry (leaked by a failed construction), and seats whose owning
+/// process no longer exists (a crashed process never runs `Drop`, and its master devices — and
+/// their on-screen cursors — would otherwise persist until the X server restarts).
 fn remove_stale_seats(conn: &RustConnection) {
     let Some(reply) = conn
         .xinput_xi_query_device(ALL_DEVICES)
@@ -225,22 +280,34 @@ fn remove_stale_seats(conn: &RustConnection) {
         if info.type_ != DeviceType::MASTER_POINTER {
             continue;
         }
+        // Master pointers are named "{seat name} pointer" by the server.
         let device_name = String::from_utf8_lossy(&info.name);
-        let Some(pid) = seat_pid(&device_name) else {
+        let Some(seat_name) = device_name.strip_suffix(" pointer") else {
             continue;
         };
-        // Live seats belonging to this process are in use by concurrent sessions; skip them.
-        if pid == std::process::id() || process_alive(pid) {
+        let Some(pid) = seat_pid(seat_name) else {
             continue;
+        };
+        let stale = if pid == std::process::id() {
+            // Seats of this process are stale unless a live (or in-construction) `AgentSeat`
+            // owns them.
+            !is_live_seat(seat_name)
+        } else {
+            // NOTE: pid reuse can make a foreign leaked seat look alive; it is then reaped
+            // once the reusing process exits, which bounds the leak without needing a
+            // process-start token in the seat name.
+            !process_alive(pid)
+        };
+        if stale {
+            let _ = remove_master(conn, info.deviceid);
         }
-        let _ = remove_master(conn, info.deviceid);
     }
     let _ = conn.flush();
 }
 
-/// Parses the owning pid out of a seat master pointer name like "warp-agent-cu-1234-0 pointer".
-fn seat_pid(device_name: &str) -> Option<u32> {
-    let rest = device_name.strip_prefix(SEAT_NAME_PREFIX)?;
+/// Parses the owning pid out of a seat name like "warp-agent-cu-1234-0".
+fn seat_pid(seat_name: &str) -> Option<u32> {
+    let rest = seat_name.strip_prefix(SEAT_NAME_PREFIX)?;
     rest.split('-').next()?.parse().ok()
 }
 

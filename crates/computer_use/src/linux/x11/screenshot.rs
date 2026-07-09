@@ -8,6 +8,15 @@ use x11rb::rust_connection::RustConnection;
 use super::windows;
 use crate::{CapturedWindow, Screenshot, ScreenshotParams};
 
+/// The maximum number of native pixels a window capture will read from the server.
+///
+/// The `GetImage` reply and the RGB conversion buffer are allocated at full native size before
+/// the params' downscaling limits apply, so an enormous (or hostile) window could otherwise
+/// make a capture allocate gigabytes. X11 window dimensions go up to `u16::MAX`, far beyond any
+/// real display; this cap (32 * 1024 * 1024 ≈ 33.5M pixels) still comfortably covers a full 8K
+/// display (7680 x 4320 ≈ 33.2M pixels).
+const MAX_WINDOW_CAPTURE_PIXELS: usize = 32 * 1024 * 1024;
+
 /// Takes a screenshot of the root window or a region of it.
 pub fn take(
     conn: &RustConnection,
@@ -93,6 +102,15 @@ pub fn take_window(
     } else {
         (0, 0, geometry.width, geometry.height)
     };
+
+    // Bound the native capture before issuing GetImage; see MAX_WINDOW_CAPTURE_PIXELS.
+    if usize::from(width) * usize::from(height) > MAX_WINDOW_CAPTURE_PIXELS {
+        return Err(format!(
+            "Capturing {width}x{height} pixels of window {window} exceeds the \
+             {MAX_WINDOW_CAPTURE_PIXELS}-pixel capture limit. Capture a smaller region of the \
+             window instead."
+        ));
+    }
 
     let image = capture_window_image(conn, window, geometry.border_width, x, y, width, height)?;
     let rgb_data =
