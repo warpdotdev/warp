@@ -577,7 +577,14 @@ fn remove_database_files(path: &Path) {
 /// cannot be deleted.
 fn recreate_corrupt_database(path: &Path) -> Result<SqliteConnection> {
     remove_database_files(path);
-    setup_database(path)
+    let conn = setup_database(path)?;
+    // Re-apply the owner-only hardening that `init_db` performs so a recovered
+    // database file isn't left at default permissions (this matters for the
+    // remote-server daemon persistence, which `init_db` locks down to 0o600).
+    // This is a no-op on non-unix and is harmless—strictly more restrictive—for
+    // the app scope.
+    ensure_owner_only_file(path)?;
+    Ok(conn)
 }
 
 /// Like [`init_db`], but if the database is corrupt on open, deletes the
