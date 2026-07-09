@@ -179,8 +179,31 @@ fn current_user_from_passwd_file(uid: u32) -> Option<CurrentUser> {
 /// Parse a single `passwd(5)`-format line
 /// (`name:passwd:uid:gid:gecos:dir:shell`) and return it as a [`CurrentUser`]
 /// iff its uid field equals `uid`.
+///
+/// This deliberately mirrors how glibc's own `/etc/passwd` reader
+/// (`fgetpwent_r` + the `nss_files` line parser) treats a line, so this
+/// last-resort fallback stays consistent with the in-process / `getent`
+/// lookups above:
+/// - Leading blanks are stripped and blank or `#`-comment lines are skipped —
+///   glibc's `__nss_readline` strips leading blanks and `__fgetpwent_r` ignores
+///   empty and comment lines.
+/// - The line is split into the seven colon-separated fields, and the seventh
+///   (shell) is taken as the *remainder* of the line. glibc assigns
+///   `pw_shell = line` (the rest after the sixth colon), so a shell field is
+///   never truncated at a stray `:`; `splitn(7, ':')` reproduces that.
+/// - A line whose uid field isn't a base-10 number, or that has fewer than
+///   seven fields, is treated as malformed and skipped rather than matched.
 fn parse_passwd_line(line: &str, uid: u32) -> Option<CurrentUser> {
-    let mut fields = line.split(':');
+    // Strip leading blanks and ignore blank / comment lines, as glibc's passwd
+    // reader does before parsing fields.
+    let line = line.trim_start();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+
+    // `splitn(7, ':')` leaves the shell field (the 7th) as the rest of the
+    // line, including any embedded colons — matching glibc's `pw_shell = line`.
+    let mut fields = line.splitn(7, ':');
     let name = fields.next()?;
     let _passwd = fields.next()?;
     let line_uid: u32 = fields.next()?.parse().ok()?;
@@ -1020,6 +1043,62 @@ fn parse_passwd_line_extracts_matching_uid() {
     // A non-matching uid or a malformed line yields None.
     assert_eq!(parse_passwd_line(line, 1001), None);
     assert_eq!(parse_passwd_line("not a passwd line", 1000), None);
+}
+
+#[test]
+fn parse_passwd_line_matches_glibc_edge_cases() {
+    // An empty shell field (trailing colon) is valid and yields an empty shell,
+    // just as glibc allows `pw_shell` to be empty.
+    assert_eq!(
+        parse_passwd_line("root:x:0:0:root:/root:", 0),
+        Some(CurrentUser {
+            name: "root".to_owned(),
+            dir: "/root".to_owned(),
+            shell: String::new(),
+        })
+    );
+
+    // Blank lines and `#` comment lines (even with leading blanks) are skipped.
+    assert_eq!(parse_passwd_line("", 0), None);
+    assert_eq!(parse_passwd_line("   ", 0), None);
+    assert_eq!(
+        parse_passwd_line("# alice:x:1000:1000:Alice:/home/alice:/bin/zsh", 1000),
+        None
+    );
+
+    // Leading blanks before a real entry are stripped, not treated as part of
+    // the name.
+    assert_eq!(
+        parse_passwd_line("  bob:x:1001:1001:Bob:/home/bob:/bin/bash", 1001),
+        Some(CurrentUser {
+            name: "bob".to_owned(),
+            dir: "/home/bob".to_owned(),
+            shell: "/bin/bash".to_owned(),
+        })
+    );
+
+    // The shell field keeps everything after the sixth colon, so a shell value
+    // containing a `:` is not truncated (matches glibc's `pw_shell = line`).
+    assert_eq!(
+        parse_passwd_line("carol:x:1002:1002:Carol:/home/carol:/weird/shell:arg", 1002),
+        Some(CurrentUser {
+            name: "carol".to_owned(),
+            dir: "/home/carol".to_owned(),
+            shell: "/weird/shell:arg".to_owned(),
+        })
+    );
+
+    // A line missing the shell field (only six fields) is malformed → skipped.
+    assert_eq!(
+        parse_passwd_line("dave:x:1003:1003:Dave:/home/dave", 1003),
+        None
+    );
+
+    // A non-numeric uid field is malformed → skipped.
+    assert_eq!(
+        parse_passwd_line("eve:x:notanumber:1004:Eve:/home/eve:/bin/sh", 1004),
+        None
+    );
 }
 
 #[test]
