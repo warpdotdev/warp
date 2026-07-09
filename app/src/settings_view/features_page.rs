@@ -108,9 +108,8 @@ use crate::util::bindings::{
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 use crate::workspace::tab_settings::{NewTabPlacement, TabSettings, TabSettingsChangedEvent};
 use crate::workspace::WorkspaceAction;
-use crate::{
-    report_error, report_if_error, send_telemetry_from_ctx, themes, GlobalResourceHandles,
-};
+use crate::{send_telemetry_from_ctx, themes, GlobalResourceHandles};
+use warp_errors::{report_error, report_if_error};
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "macos")] {

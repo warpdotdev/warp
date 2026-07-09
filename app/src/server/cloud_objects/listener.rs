@@ -11,11 +11,11 @@ use warpui::{Entity, ModelContext, ModelHandle, RequestState, SingletonEntity};
 use super::update_manager::UpdateManager;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::report_error;
 use crate::server::retry_strategies::LISTENER_RETRY_STRATEGY;
 use crate::server::server_api::object::ObjectClient;
 use crate::system::{SystemStats, SystemStatsEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use warp_errors::report_error;
 
 lazy_static::lazy_static! {
     /// Between successful websocket connections, we ensured at least this amount of time

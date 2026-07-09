@@ -1411,8 +1411,8 @@ pub enum BaselinePositionComputationMethod {
 }
 
 // Re-export voice transcription types for backwards compatibility
-use crate::report_error;
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
+use warp_errors::report_error;
 
 /// Similar to [`ImageContext`], but contains un-processed and un-resized image data.
 #[derive(Clone)]

@@ -38,7 +38,8 @@ use crate::server::telemetry::{AnonymousUserSignupEntrypoint, LoginEventSource, 
 use crate::settings::{AISettings, PrivacySettings};
 use crate::themes::theme::Fill as ThemeFill;
 use crate::util::color::{darken, lighten};
-use crate::{report_error, send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
+use crate::{send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
+use warp_errors::report_error;
 
 const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
 

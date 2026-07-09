@@ -13,7 +13,8 @@ use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::settings::AISettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::{report_if_error, BlocklistAIHistoryModel};
+use crate::BlocklistAIHistoryModel;
+use warp_errors::report_if_error;
 
 fn setup_app(
     app: &mut App,

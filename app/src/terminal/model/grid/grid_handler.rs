@@ -40,7 +40,6 @@ use super::displayed_output::DisplayedOutput;
 use super::grapheme_cursor::{self, GraphemeCursor};
 use super::row::Row;
 use super::{ConvertToAbsolute as _, Cursor, SelectionCursor};
-use crate::report_error;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
 use crate::terminal::model::cell::{Cell, Flags, LineLength, DEFAULT_CHAR};
@@ -54,6 +53,7 @@ use crate::terminal::model::terminal_model::RangeInModel;
 use crate::terminal::model::{Secret, SecretHandle};
 use crate::terminal::SizeInfo;
 use crate::util::extensions::TrimStringExt;
+use warp_errors::report_error;
 
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];

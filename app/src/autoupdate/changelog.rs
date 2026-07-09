@@ -9,8 +9,8 @@ use rand::{thread_rng, Rng as _};
 use super::channel_versions::fetch_channel_versions;
 use super::release_assets_directory_url;
 use crate::channel::{Channel, ChannelState};
-use crate::report_error;
 use crate::server::server_api::ServerApi;
+use warp_errors::report_error;
 
 pub async fn get_current_changelog(server_api: Arc<ServerApi>) -> Result<Option<Changelog>> {
     let rand: String = {

@@ -22,7 +22,8 @@ use crate::settings::{
     InputSettingsChangedEvent,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, safe_info, safe_warn, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{safe_info, safe_warn, send_telemetry_from_ctx, TelemetryEvent};
+use warp_errors::report_error;
 
 /// State for a repository outline, containing both the repository handle and the outline status.
 #[derive(Debug)]

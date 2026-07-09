@@ -48,11 +48,11 @@ use crate::editor::accept_autosuggestion_keybinding_view::{
 use crate::editor::autosuggestion_ignore_view::AutosuggestionIgnore;
 use crate::editor::position_id_for_first_cursor;
 use crate::editor::view::AutosuggestionLocation;
-use crate::report_error;
 use crate::settings::CursorDisplayType;
 use crate::themes::theme::Fill;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use warp_errors::report_error;
 
 // Similar to the terminal::model::ansi::CursorShape, this Editor Element has different cursor
 // shapes. However, this element doesn't implement all the same variants, so we don't share that

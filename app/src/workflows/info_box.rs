@@ -33,7 +33,6 @@ use crate::ai::blocklist::ai_brand_color;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::actions::{ObjectActionType, ObjectActions};
 use crate::cloud_object::CloudObjectMetadataExt;
-use crate::report_error;
 use crate::server::ids::SyncId;
 use crate::settings::InputModeSettings;
 use crate::terminal::block_list_viewport::InputMode;
@@ -45,6 +44,7 @@ use crate::util::color::coloru_with_opacity;
 use crate::view_components::FilterableDropdownOrientation;
 use crate::workflows::WorkflowType;
 use crate::workspace::WorkspaceAction;
+use warp_errors::report_error;
 
 const INFO_BOX_PADDING: f32 = 20.;
 const ARGUMENT_PADDING: f32 = 10.;

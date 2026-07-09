@@ -13,11 +13,11 @@ use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::pane_group::{
     AmbientAgentViewModelHandleExt, PaneGroup, PaneId, TerminalPane, TerminalViewResources,
 };
-use crate::report_error;
 use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
+use warp_errors::report_error;
 
 impl PaneGroup {
     /// Lazily restores hidden child panes for the given parent conversation.

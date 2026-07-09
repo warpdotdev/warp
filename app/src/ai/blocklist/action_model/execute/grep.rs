@@ -27,7 +27,8 @@ use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::{shell_quote_arg, ExecuteCommandOptions, Session};
 use crate::terminal::shell::ShellType;
 use crate::terminal::ShellLaunchData;
-use crate::{report_error, send_telemetry_from_app_ctx, PrivacySettings, TelemetryEvent};
+use crate::{send_telemetry_from_app_ctx, PrivacySettings, TelemetryEvent};
+use warp_errors::report_error;
 
 const GREP_TIMEOUT: Duration = Duration::from_secs(10);
 const NON_ZERO_EXIT_CODE_ERROR: &str = "Grep command exited with non-zero exit code";

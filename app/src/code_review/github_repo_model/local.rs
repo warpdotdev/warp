@@ -7,7 +7,6 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::GitHubRepoEvent;
 use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
-use crate::report_if_error;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
@@ -15,6 +14,7 @@ use crate::util::git::{
     get_pr_for_branch, get_repository_info, is_gh_auth_error, is_gh_missing_error, PrInfo,
     RepositoryInfo,
 };
+use warp_errors::report_if_error;
 
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 const GITHUB_INFO_PERIODIC_REFRESH: Duration = Duration::from_secs(60);

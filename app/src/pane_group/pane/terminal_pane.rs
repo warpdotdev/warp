@@ -63,6 +63,7 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
 // Imports below are only consumed by the non-wasm `launch_local_*_child`
 // dispatch helpers; gating them keeps the wasm build warning-clean.
+use crate::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
@@ -71,7 +72,7 @@ use crate::{
     },
     terminal::shared_session::IsSharedSessionCreator,
 };
-use crate::{report_error, AIExecutionProfilesModel};
+use warp_errors::report_error;
 
 pub type TerminalPaneView = PaneView<TerminalView>;
 

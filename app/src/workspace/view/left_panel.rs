@@ -62,7 +62,8 @@ use crate::workspace::view::{
     TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
 use crate::workspace::WorkspaceAction;
-use crate::{report_error, TelemetryEvent};
+use crate::TelemetryEvent;
+use warp_errors::report_error;
 
 #[derive(Default)]
 struct MouseStateHandles {

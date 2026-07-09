@@ -30,6 +30,7 @@ use crate::referral_theme_status::ReferralThemeStatus;
 use crate::resource_center::{
     mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipsCompleted,
 };
+use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{respect_system_theme, ThemeSettings};
 use crate::themes::theme::{
@@ -42,7 +43,7 @@ use crate::user_config::{load_theme_configs, themes_dir, WarpConfig, WarpConfigU
 use crate::util::traffic_lights::{traffic_light_data, TrafficLightData, TrafficLightSide};
 use crate::window_settings::WindowSettings;
 use crate::workspace::PANEL_HEADER_HEIGHT;
-use crate::{report_if_error, send_telemetry_from_ctx};
+use warp_errors::report_if_error;
 
 // All units in px
 const THEME_CHOOSER_TITLE: &str = "Themes";

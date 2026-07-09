@@ -5,8 +5,8 @@ use ai::skills::{parse_bundled_skill, ParsedSkill, SkillPathOrigin, SkillReferen
 use futures::TryStreamExt;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_core::safe_warn;
 use warp_core::ui::icons::Icon;
-use warp_core::{report_error, safe_warn};
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -16,6 +16,7 @@ use super::SkillDescriptor;
 use crate::ai::mcp::{McpIntegration, TemplatableMCPServerManager};
 use crate::keyboard::keybinding_file_path;
 use crate::settings::user_preferences_toml_file_path;
+use warp_errors::report_error;
 
 /// Activation condition for a bundled skill.
 #[derive(Debug, Clone)]

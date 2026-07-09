@@ -1,7 +1,7 @@
 use rquickjs::{Ctx, Function, Object};
 
 use super::plugin::PluginHandle;
-use crate::report_error;
+use warp_errors::report_error;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "completions_v2")] {

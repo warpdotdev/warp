@@ -11,7 +11,7 @@ use warp_core::AppId;
 use warpui::ApplicationBundleInfo;
 
 use super::*;
-use crate::report_error;
+use warp_errors::report_error;
 
 /// The executable we use to launch the editor.
 #[derive(Debug)]

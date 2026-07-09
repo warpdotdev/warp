@@ -12,13 +12,13 @@ use serde::{Deserialize, Serialize};
 pub use warp_terminal::model::grid::Dimensions;
 
 use crate::features::FeatureFlag;
-use crate::report_error;
 use crate::terminal::model::ansi::{CharsetIndex, StandardCharset};
 use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::grid::row::Row;
 use crate::terminal::model::grid::storage::Storage;
 use crate::terminal::model::index::{IndexRange, Point, VisiblePoint, VisibleRow};
 use crate::terminal::model::secrets::ObfuscateSecrets;
+use warp_errors::report_error;
 
 impl ::std::cmp::PartialEq for GridStorage {
     fn eq(&self, other: &Self) -> bool {

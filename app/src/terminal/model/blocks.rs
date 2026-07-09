@@ -4060,4 +4060,4 @@ impl ToTotalIndex for BlockIndex {
 mod tests;
 #[cfg(test)]
 pub use self::tests::insert_block;
-use crate::report_error;
+use warp_errors::report_error;

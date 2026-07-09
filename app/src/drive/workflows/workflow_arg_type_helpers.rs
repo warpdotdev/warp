@@ -7,11 +7,11 @@ use super::workflow_arg_selector::WorkflowArgSelector;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, Owner};
 use crate::editor::EditorView;
-use crate::report_error;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
 use crate::workflows::workflow::{Argument, ArgumentType};
 use crate::workflows::workflow_enum::WorkflowEnum;
+use warp_errors::report_error;
 
 #[derive(Debug, Clone)]
 pub struct ArgumentEditorRowIndex(pub usize);

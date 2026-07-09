@@ -39,7 +39,8 @@ use crate::terminal::local_tty::shell::{
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
-use crate::{report_error, report_if_error, ASSETS};
+use crate::ASSETS;
+use warp_errors::{report_error, report_if_error};
 
 const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 

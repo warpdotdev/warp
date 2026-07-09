@@ -17,9 +17,9 @@ use super::grid::grid_handler::GridHandler;
 use super::grid::{Dimensions as _, RespectDisplayedOutput};
 use super::terminal_model::RangeInModel;
 use crate::ai::blocklist::TextLocation;
-use crate::report_error;
 use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::index::Point;
+use warp_errors::report_error;
 
 /// A regex pattern that can be used to detect secrets in text.
 pub struct SecretsRegex {

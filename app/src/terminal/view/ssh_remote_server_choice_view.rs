@@ -39,7 +39,8 @@ use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::ui_components::blended_colors;
-use crate::{report_error, send_telemetry_from_ctx, Appearance};
+use crate::{send_telemetry_from_ctx, Appearance};
+use warp_errors::report_error;
 
 const PROMPT_BORDER_RADIUS: f32 = 8.;
 

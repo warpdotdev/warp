@@ -16,9 +16,9 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ViewHandle, WeakViewHan
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::code_review_view::CodeReviewView;
 use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
-#[cfg(not(target_family = "wasm"))]
-use crate::report_error;
 use crate::view_components::find::{FindDirection, FindEvent, FindModel};
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchMatch {

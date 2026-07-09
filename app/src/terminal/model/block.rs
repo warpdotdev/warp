@@ -43,7 +43,6 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::blocklist::agent_view::{AgentViewDisplayMode, AgentViewState};
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
-use crate::report_error;
 use crate::server::block::DisplaySetting;
 use crate::server::ids::SyncId;
 use crate::terminal::block_filter::BlockFilterQuery;
@@ -67,6 +66,7 @@ use crate::terminal::model::GridStorage;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::WithinBlockBanner;
 use crate::terminal::{BlockPadding, ShellHost, SizeInfo};
+use warp_errors::report_error;
 
 pub const LONG_RUNNING_COMMAND_DURATION_MS: u64 = 50;
 pub const LONG_RUNNING_BOTTOM_PADDING_LINES: f32 = 0.2;

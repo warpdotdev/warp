@@ -18,7 +18,7 @@ use mockall::automock;
 use prost::Message;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::client::Operation;
 use warp_graphql::mutations::confirm_file_artifact_upload::{
@@ -3139,7 +3139,7 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmProvider> for LLM
                 report_error!(
                     "Invalid LlmProvider; update client GraphQL types",
                     extra: { "provider" => %value },
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 LLMProvider::Unknown
             }
@@ -3159,7 +3159,7 @@ impl From<warp_graphql::workspace::LlmProvider> for LLMProvider {
                 report_error!(
                     "Invalid LlmProvider; update client GraphQL types",
                     extra: { "provider" => %value },
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 LLMProvider::Unknown
             }
@@ -3253,7 +3253,7 @@ fn convert_harness(harness: warp_graphql::ai::AgentHarness) -> AIAgentHarness {
             report_error!(
                 "Invalid AgentHarness; update client GraphQL types",
                 extra: { "harness" => %value },
-                warp_core::errors::ReportErrorLogMode::OncePerRun
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
             AIAgentHarness::Unknown
         }

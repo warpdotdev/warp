@@ -97,7 +97,8 @@ use crate::workspace::tab_settings::{
     WorkspaceDecorationVisibility,
 };
 use crate::workspace::WorkspaceAction;
-use crate::{report_error, report_if_error, send_telemetry_from_ctx, themes};
+use crate::{send_telemetry_from_ctx, themes};
+use warp_errors::{report_error, report_if_error};
 
 const FONT_SIZE_INPUT_BOX_WIDTH: f32 = 80.;
 const NOTEBOOK_FONT_SIZE_INPUT_BOX_WIDTH: f32 = 50.;

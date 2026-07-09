@@ -18,7 +18,8 @@ use crate::terminal::session_settings::{
     AgentToolbarChipSelection, CLIAgentToolbarChipSelection, SessionSettings,
     SessionSettingsChangedEvent, ToolbarChipSelection,
 };
-use crate::{report_if_error, Appearance};
+use crate::Appearance;
+use warp_errors::report_if_error;
 
 const AGENT_MODAL_TITLE: &str = "Edit agent toolbelt";
 const CLI_MODAL_TITLE: &str = "Edit CLI agent toolbelt";

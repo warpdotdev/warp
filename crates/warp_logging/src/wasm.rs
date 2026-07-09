@@ -162,7 +162,7 @@ impl Log for WasmLogger {
                     console::warn_4(&s, &JsValue::from(&style.lvl_warn), &tgt_style, &args_style)
                 }
                 Level::Error => {
-                    if record.target() == warp_core::errors::LOG_TARGET {
+                    if record.target() == warp_errors::LOG_TARGET {
                         let error = format!(
                             "ERROR: {}\n\n{}:{}",
                             record.args(),

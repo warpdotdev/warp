@@ -12,7 +12,7 @@ use super::model::{AgentConversation, AgentConversationData, AgentConversationSu
 use super::ConversationSummaryBackfill;
 use crate::persistence::model::{AgentConversationRecord, AgentTaskRecord};
 use crate::persistence::schema::{self, agent_conversations, agent_tasks};
-use crate::report_error;
+use warp_errors::report_error;
 
 #[derive(Debug, Insertable, AsChangeset)]
 #[diesel(table_name = agent_conversations)]

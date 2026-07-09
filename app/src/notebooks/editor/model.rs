@@ -50,8 +50,8 @@ use crate::editor::InteractionState;
 use crate::notebooks::editor::interaction_state_model::InteractionStateModelEvent;
 use crate::notebooks::file::MarkdownDisplayMode;
 use crate::notebooks::telemetry::BlockInfo;
-use crate::report_error;
 use crate::terminal::ShellLaunchData;
+use warp_errors::report_error;
 
 const DEBOUNCED_RESIZE_PERIOD: Duration = Duration::from_millis(5);
 

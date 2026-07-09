@@ -17,7 +17,6 @@ use warpui::{SingletonEntity, ViewContext};
 use super::{Event, InlineBannerItem, InlineBannerType, TerminalView};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
-use crate::report_if_error;
 use crate::terminal::event::UserBlockCompleted;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::session::Session;
@@ -25,6 +24,7 @@ use crate::terminal::view::inline_banner::{OpenInWarpBannerAction, OpenInWarpBan
 use crate::util::openable_file_type::{
     is_file_openable_in_warp, renders_in_warp_notebook_viewer, OpenableFileType,
 };
+use warp_errors::report_if_error;
 
 #[cfg(test)]
 #[path = "open_in_warp_tests.rs"]

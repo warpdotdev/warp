@@ -20,13 +20,13 @@ use crate::appearance::Appearance;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
 use crate::notebooks::file::is_markdown_file;
-use crate::report_error;
 use crate::server::ids::ClientId;
 use crate::themes::theme::Fill;
 use crate::ui_components::icons::Icon;
 use crate::workflows::export_workflow::export_deserialize;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::workflow_enum::WorkflowEnum;
+use warp_errors::report_error;
 
 #[cfg(test)]
 #[path = "node_tests.rs"]

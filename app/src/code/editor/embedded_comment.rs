@@ -21,7 +21,7 @@ use warpui::{AppContext, EntityId, EventContext, LayoutContext, ViewHandle, Wind
 
 use crate::code::editor::comment_editor::CommentEditor;
 use crate::code_review::comments::CommentId;
-use crate::report_error;
+use warp_errors::report_error;
 
 const COMMENT_ID_MAPPING_KEY: &str = "comment_id";
 const ENTITY_ID_MAPPING_KEY: &str = "entity_id";

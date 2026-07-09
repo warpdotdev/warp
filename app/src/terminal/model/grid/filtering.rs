@@ -5,12 +5,12 @@ use std::sync::Arc;
 use itertools::Itertools as _;
 
 use super::GridHandler;
-use crate::report_error;
 use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::grid::displayed_output::{
     DisplaySource, DisplayedOutput, DisplayedRows,
 };
 use crate::terminal::model::index::Point;
+use warp_errors::report_error;
 
 /// Structure that represents a filter applied to a block's output.
 #[derive(Clone, Debug)]

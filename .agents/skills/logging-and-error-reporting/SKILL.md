@@ -120,10 +120,7 @@ register_error!(UserAuthenticationError);
 ## Import the macro
 
 Use an imported, unqualified `report_error!` (not `crate::report_error!` / `warp_core::report_error!` / `warp_errors::report_error!`). Import once per file, per tier:
-- `app` and its modules: `use crate::report_error;` (re-exported at `app/src/lib.rs`).
-- `warp_core` itself: `use crate::report_error;`.
-- Other `warp_core`-dependent crates: `use warp_core::report_error;`.
-- The leaf crates that don't depend on `warp_core` (`warpui_core`, `warpui`, `warpui_extras`, `settings`, `command`, `sum_tree`, `asset_cache`, `voice_input`, `jsonrpc`, `watcher`, `input_classifier`, `computer_use`): `use warp_errors::report_error;`.
+- All crates: `use warp_errors::report_error;`.
 
 Add `report_if_error` to the same import when the file uses it. If every call site in a file is behind a `#[cfg(...)]`, gate the import the same way to avoid an unused-import warning. A fully-qualified path is acceptable only to appease macro hygiene inside another `macro_rules!` body (`$crate::report_error!`).
 
@@ -180,7 +177,7 @@ report_error!(
 
 Sites that can fire repeatedly (hot loops, per-frame paths, enum-fallback conversions from GraphQL/protobuf) should report only once per app run so they don't flood Sentry. Default is `EveryTime`.
 ```rust
-use warp_core::errors::ReportErrorLogMode; // leaf crates: use warp_errors::ReportErrorLogMode;
+use warp_errors::ReportErrorLogMode;
 
 report_error!(err, ReportErrorLogMode::OncePerRun);
 // with a static message + incidental data:

@@ -13,11 +13,11 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
-use crate::report_error;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::view_components::action_button::{
     ActionButton, DangerPrimaryTheme, KeystrokeSource, NakedTheme,
 };
+use warp_errors::report_error;
 
 pub(crate) fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;

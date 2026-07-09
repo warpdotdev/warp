@@ -67,7 +67,8 @@ use crate::terminal::view::{
 };
 use crate::terminal::TerminalModel;
 use crate::view_components::{DismissibleToast, ToastFlavor};
-use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use warp_errors::report_error;
 
 impl TerminalView {
     pub fn sharer_session_kind(&self) -> Option<&Kind> {

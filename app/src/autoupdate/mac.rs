@@ -25,7 +25,8 @@ use super::{release_assets_directory_url, DownloadReady};
 use crate::appearance::AppearanceManager;
 use crate::autoupdate::{AutoupdateStage, AutoupdateState};
 use crate::channel::{Channel, ChannelState};
-use crate::{report_error, safe_info};
+use crate::safe_info;
+use warp_errors::report_error;
 
 // Relative path to the directory containing old executables from before an autoupdate.
 //
@@ -544,7 +545,7 @@ async fn download_and_extract_binary(
     // updates.
     if let Err(err) = unmount_dmg(mountpoint).await {
         let err = err.context("Error unmounting dmg for update");
-        crate::report_error!(&err);
+        warp_errors::report_error!(&err);
     }
 
     // Ensure that the new app we just downloaded has both integrity (e.g. no corrupted files)

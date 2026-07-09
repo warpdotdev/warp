@@ -19,7 +19,8 @@ use crate::ai::blocklist::context_model::{
 use crate::ai::blocklist::queued_query::{QueuedQueryId, QueuedQueryModel};
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
-use crate::{report_error, BlocklistAIHistoryModel};
+use crate::BlocklistAIHistoryModel;
+use warp_errors::report_error;
 
 pub enum SlashCommandRequest {
     CreateNewProject {

@@ -5,13 +5,13 @@ use warp_core::settings::Setting;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::auth_state::AuthState;
-use crate::report_if_error;
 use crate::settings::input::InputBoxType;
 use crate::settings::{
     AISettings, FontSettings, InputSettings, PrivacySettings, ThemeSettings, ThinkingDisplayMode,
 };
 use crate::terminal::session_settings::SessionSettings;
 use crate::themes::theme::ThemeKind;
+use warp_errors::report_if_error;
 
 pub struct SettingsInitializer;
 

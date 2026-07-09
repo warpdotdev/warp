@@ -32,7 +32,8 @@ use crate::server::server_api::referral::{ReferralInfo, ReferralsClient};
 use crate::server::telemetry::TelemetryEvent;
 use crate::ui_components::blended_colors;
 use crate::view_components::ToastFlavor;
-use crate::{report_error, safe_info, send_telemetry_from_ctx};
+use crate::{safe_info, send_telemetry_from_ctx};
+use warp_errors::report_error;
 
 const HEADER_FONT_SIZE: f32 = 18.;
 const HEADER_MARGIN_BOTTOM: f32 = 32.;

@@ -9,7 +9,7 @@ use chrono::Local;
 use log::LevelFilter;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
+use warp_errors::report_error;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -478,7 +478,7 @@ fn temp_log_file_path(log_directory: impl AsRef<Path>) -> PathBuf {
 
 #[cfg(feature = "crash_reporting")]
 fn sentry_log_filter(md: &log::Metadata) -> sentry_log::LogFilter {
-    if warp_core::errors::should_ignore_log_for_sentry(md) {
+    if warp_errors::should_ignore_log_for_sentry(md) {
         return sentry_log::LogFilter::Ignore;
     }
 

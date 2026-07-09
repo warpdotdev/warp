@@ -15,7 +15,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::history_model;
 use crate::ai::blocklist::model::{AIRequestType, PassiveRequestType};
 use crate::ai::llms::LLMId;
-use crate::report_error;
+use warp_errors::report_error;
 
 /// Standard [`AIBlock`] impl for live outputs corresponding to an `OutputStream`.
 pub struct AIBlockModelImpl<V> {

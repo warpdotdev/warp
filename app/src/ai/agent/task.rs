@@ -30,7 +30,8 @@ use super::{
 };
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::terminal::model::block::BlockId;
-use crate::{report_error, AIAgentTodoList};
+use crate::AIAgentTodoList;
+use warp_errors::report_error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(String);

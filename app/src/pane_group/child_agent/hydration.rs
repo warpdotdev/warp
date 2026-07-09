@@ -10,10 +10,10 @@ use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{AmbientAgentViewModelHandleExt, PaneGroup, PaneId};
-use crate::report_error;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
+use warp_errors::report_error;
 
 /// How to hydrate a restored hidden remote-child pane given its
 /// [`AmbientAgentTask`]. See [`decide_remote_child_hydration_action`].

@@ -45,7 +45,6 @@ use crate::editor::{
 };
 use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
 use crate::network::NetworkStatus;
-use crate::report_error;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::server_api::ai::AIClient;
@@ -58,6 +57,7 @@ use crate::ui_components::icons::{self, Icon, ICON_DIMENSIONS};
 use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
 use crate::workflows::workflow::{Argument, Workflow};
 use crate::workflows::CloudWorkflow;
+use warp_errors::report_error;
 
 const BREADCRUMBS_VERTICAL_MARGIN: f32 = 6.;
 const MODAL_WIDTH: f32 = 900.;

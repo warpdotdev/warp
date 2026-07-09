@@ -23,7 +23,6 @@ use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
-use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::delete_auth_secret_confirmation_dialog::{
     DeleteAuthSecretConfirmationDialog, DeleteAuthSecretConfirmationDialogEvent,
@@ -35,6 +34,7 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize};
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
+use warp_errors::report_if_error;
 
 const HEADER_FONT_SIZE: f32 = 12.;
 

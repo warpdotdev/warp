@@ -27,10 +27,10 @@ use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, InteractionState,
     PropagateAndNoOpNavigationKeys, TextOptions,
 };
-use crate::report_error;
 use crate::ui_components::icons::Icon;
 use crate::util::git::{get_file_change_entries, FileChangeEntry, PrInfo};
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
+use warp_errors::report_error;
 
 /// Commit-specific sub-actions, dispatched wrapped in `GitDialogAction::Commit`.
 #[derive(Clone, Debug, PartialEq)]

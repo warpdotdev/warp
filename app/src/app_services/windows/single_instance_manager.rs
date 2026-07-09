@@ -9,7 +9,7 @@ use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS
 use windows::Win32::System::Threading::CreateMutexW;
 
 use super::service_impl::UriServiceImpl;
-use crate::report_error;
+use warp_errors::report_error;
 
 /// RAII wrapper around a Windows mutex HANDLE that closes it on drop.
 struct MutexHandle(HANDLE);

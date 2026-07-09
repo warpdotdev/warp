@@ -40,11 +40,11 @@ use crate::editor::{
     SingleLineEditorOptions,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::report_error;
 use crate::terminal::input::MenuPositioning;
 use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_VOLTRON_WIDTH};
 use crate::util::bindings::{self, CustomAction};
 use crate::workflows::categories::CategoriesView;
+use warp_errors::report_error;
 
 const DROPDOWN_BUTTON_WIDTH: f32 = 200.;
 const DROPDOWN_PADDING: f32 = 6.;

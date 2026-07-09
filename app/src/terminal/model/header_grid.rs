@@ -19,10 +19,10 @@ use super::grid::{Cursor, Dimensions as _, RespectDisplayedOutput};
 use super::index::{Point, VisibleRow};
 use super::selection::ScrollDelta;
 use super::{ObfuscateSecrets, RespectObfuscatedSecrets};
-use crate::report_error;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::SizeInfo;
+use warp_errors::report_error;
 
 macro_rules! delegate {
     ($self:ident.$method:ident( $( $arg:expr ),* )) => {

@@ -13,9 +13,9 @@ use warpui::r#async::Timer;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
-use crate::report_error;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use warp_errors::report_error;
 
 const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 

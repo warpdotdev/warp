@@ -99,9 +99,10 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::{
-    report_error, report_if_error, send_telemetry_from_app_ctx, send_telemetry_from_ctx,
-    ChannelState, GlobalResourceHandles, GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
+    send_telemetry_from_app_ctx, send_telemetry_from_ctx, ChannelState, GlobalResourceHandles,
+    GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
 };
+use warp_errors::{report_error, report_if_error};
 
 const WINDOW_TITLE: &str = "Warp";
 

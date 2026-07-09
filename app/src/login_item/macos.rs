@@ -7,8 +7,8 @@
 use ::settings::Setting;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::report_if_error;
 use crate::terminal::general_settings::GeneralSettings;
+use warp_errors::report_if_error;
 
 pub(super) fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
     GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {

@@ -52,7 +52,8 @@ use crate::settings::AISettings;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, send_telemetry_from_ctx, GlobalResourceHandlesProvider};
+use crate::{send_telemetry_from_ctx, GlobalResourceHandlesProvider};
+use warp_errors::report_error;
 
 /// Controls the behavior of `spawn_server_impl`.
 enum SpawnMode {

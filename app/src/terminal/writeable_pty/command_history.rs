@@ -5,10 +5,10 @@ use parking_lot::FairMutex;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use crate::persistence::{ModelEvent, StartedCommandMetadata};
-use crate::report_error;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::view::ExecuteCommandEvent;
 use crate::terminal::{History, HistoryEntry, TerminalModel};
+use warp_errors::report_error;
 
 pub fn update_command_history(
     event: &ExecuteCommandEvent,

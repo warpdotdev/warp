@@ -235,6 +235,7 @@ warp_assets.workspace = true
 warp_channel_config.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
+warp_errors = { workspace = true, features = ["reqwest-errors"] }
 warp_editor.workspace = true
 warp_graphql.workspace = true
 warp_js = { workspace = true, optional = true }
@@ -328,6 +329,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
+warp_errors = { workspace = true, features = ["tokio-errors", "websocket-errors"] }
 
 # AWS SDK (loading credentials for BYO LLM)
 aws-config = { version = "1.8.16", features = ["credentials-login"] }
@@ -498,6 +500,7 @@ crash_reporting = [
     "dep:minidumper",
     "dep:crash-handler",
     "warp_logging/crash_reporting",
+    "warp_errors/crash_reporting",
     "ai/crash_reporting",
 ]
 creating_shared_sessions = []

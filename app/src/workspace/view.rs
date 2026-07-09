@@ -524,9 +524,10 @@ use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
 use crate::{
-    autoupdate, report_error, report_if_error, send_telemetry_from_ctx, settings,
-    AgentNotificationsModel, BlocklistAIHistoryModel, GlobalResourceHandles, TelemetryEvent,
+    autoupdate, send_telemetry_from_ctx, settings, AgentNotificationsModel,
+    BlocklistAIHistoryModel, GlobalResourceHandles, TelemetryEvent,
 };
+use warp_errors::{report_error, report_if_error};
 
 /// The padding that should be applied to the workspace as a whole.
 pub const WORKSPACE_PADDING: f32 = 1.0;

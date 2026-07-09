@@ -15,13 +15,14 @@ use warp_util::on_cancel::OnCancelFutureExt;
 use warpui::r#async::block_on;
 
 use super::ExecuteCommandOptions;
+use crate::safe_info;
 use crate::terminal::event::ExecutedExecutorCommandEvent;
 use crate::terminal::model::session::command_executor::{
     shared, CommandExecutor, ExecutorCommandEvent,
 };
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::SizeInfo;
-use crate::{report_error, safe_info};
+use warp_errors::report_error;
 
 #[derive(Clone, Debug)]
 pub struct InBandCommand {

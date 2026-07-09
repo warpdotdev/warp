@@ -14,9 +14,10 @@ use warpui::platform::Cursor;
 use warpui::{AppContext, EntityId, ViewContext};
 
 use super::{ActivationReason, PaneGroup, PaneId};
+use crate::app_state;
 use crate::pane_group::{get_minimum_pane_size, DraggedBorder, PaneGroupAction};
 use crate::themes::theme::WarpTheme;
-use crate::{app_state, report_error};
+use warp_errors::report_error;
 
 #[cfg(test)]
 #[path = "tree_tests.rs"]

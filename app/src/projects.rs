@@ -7,7 +7,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::model::Project;
 use crate::persistence::ModelEvent;
-use crate::report_error;
+use warp_errors::report_error;
 
 #[derive(Debug)]
 pub enum ProjectEvent {

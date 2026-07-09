@@ -7,7 +7,7 @@ use url::Url;
 use warpui::r#async::executor::Background;
 
 use super::single_instance_manager::uri_named_pipe_name;
-use crate::report_error;
+use warp_errors::report_error;
 
 /// IPC Service to respond to URIs sent to the active Warp instance.
 pub(super) struct UriService {}

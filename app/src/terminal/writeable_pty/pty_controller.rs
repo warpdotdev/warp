@@ -11,8 +11,6 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::Message;
 use crate::ai::agent::AIAgentPtyWriteMode;
-#[cfg(feature = "local_fs")]
-use crate::report_error;
 use crate::terminal::input::CommandExecutionSource;
 use crate::terminal::line_editor_status::{LineEditorStatus, LineEditorStatusEvent};
 use crate::terminal::model::ansi::Handler;
@@ -28,6 +26,8 @@ use crate::terminal::view::LINEFEED_REGEX;
 use crate::terminal::writeable_pty::bootstrap_file::{permanent_bootstrap_file, TempBootstrapFile};
 use crate::terminal::{bootstrap, SizeUpdate, TerminalModel};
 use crate::SessionSettings;
+#[cfg(feature = "local_fs")]
+use warp_errors::report_error;
 
 /// Byte sequence to emulate the user pressing ENTER, used to execute a command in the shell.
 const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::LF];

@@ -14,8 +14,8 @@ use crate::remote_server::manager::{
     RemoteServerErrorKind, RemoteServerManager, RemoteServerManagerEvent, RemoteServerOperation,
     RemoteSessionState,
 };
-use crate::report_error;
 use crate::terminal::model::session::command_executor::remote_server_executor::RemoteServerCommandExecutor;
+use warp_errors::report_error;
 pub type RemoteServerActionCallback = Box<dyn Fn(&mut App, WindowId, &mut StepDataMap) + 'static>;
 
 type RemoteServerNavigationPaths = Rc<RefCell<HashMap<SessionId, String>>>;

@@ -9,7 +9,7 @@ use warp_util::path::LineAndColumnArg;
 use warpui::AppContext;
 
 use super::Editor;
-use crate::report_error;
+use warp_errors::report_error;
 
 static INSTALLED_EDITOR_METADATA: OnceLock<HashMap<Editor, EditorMetadata>> = OnceLock::new();
 

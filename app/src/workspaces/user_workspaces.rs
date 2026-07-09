@@ -20,7 +20,6 @@ use crate::channel::ChannelState;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, ObjectType, Owner, Space};
 use crate::pricing::PricingInfoModel;
-use crate::report_error;
 use crate::server::experiments::{ServerExperiment, ServerExperiments, ServerExperimentsEvent};
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::TeamClient;
@@ -37,6 +36,7 @@ use crate::workspaces::workspace::{
 use crate::workspaces::workspace::{
     AiAutonomySettings, AiOverages, SandboxedAgentSettings, UsageBasedPricingSettings,
 };
+use warp_errors::report_error;
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
 

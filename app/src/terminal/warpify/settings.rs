@@ -9,8 +9,8 @@ use strum_macros::EnumIter;
 use warp_util::path::ShellFamily;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::report_error;
 use crate::terminal::ssh::util::{parse_interactive_ssh_command, SshWarpifyCommand};
+use warp_errors::report_error;
 
 // Cannot directly use Vec<Regex> here b/c Regex doesn't impl Eq, Serialize, and Deserialize.
 maybe_define_setting!(AddedSubshellCommands, group: WarpifySettings, {

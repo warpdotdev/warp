@@ -10,7 +10,7 @@ use warpui::r#async::executor::Background;
 use super::plugin::{AppServiceCallers, PluginRequest, PluginResponse};
 use super::plugin_ref::PluginRef;
 use super::runner::PluginRunner;
-use crate::report_error;
+use warp_errors::report_error;
 
 /// Message type for messages that may be sent to each `PluginRunner`.
 ///

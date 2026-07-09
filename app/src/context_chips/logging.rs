@@ -16,9 +16,9 @@ use parking_lot::Mutex;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 
 use super::ContextChipKind;
-#[cfg(not(target_family = "wasm"))]
-use crate::report_error;
 use crate::terminal::shell::ShellType;
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 
 const EMPTY_VALUE: &str = "<empty>";
 const MISSING_VALUE: &str = "<none>";

@@ -18,7 +18,8 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::undo_close::UndoCloseStack;
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::workspace::{Workspace, WorkspaceAction};
-use crate::{auth, report_error, GlobalResourceHandlesProvider};
+use crate::{auth, GlobalResourceHandlesProvider};
+use warp_errors::report_error;
 
 /// Specifies where a forked conversation should be opened.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

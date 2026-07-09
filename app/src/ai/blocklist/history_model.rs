@@ -55,7 +55,7 @@ pub use conversation_loader::{
     CLIAgentConversation, CloudConversationData,
 };
 
-use crate::report_error;
+use warp_errors::report_error;
 
 /// Mirrors [`crate::persistence::agent::MAX_PERSISTED_CONVERSATION_COUNT`].
 /// Moot at steady state because the disk-side prune already keeps the

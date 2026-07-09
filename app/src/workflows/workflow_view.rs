@@ -96,7 +96,8 @@ use crate::view_components::{DismissibleToast, ToastLink, ToastType};
 use crate::workflows::workflow::{Argument, Workflow};
 use crate::workflows::CloudWorkflow;
 use crate::workspace::{ToastStack, WorkspaceAction};
-use crate::{report_error, send_telemetry_from_ctx, FeatureFlag, UserWorkspaces};
+use crate::{send_telemetry_from_ctx, FeatureFlag, UserWorkspaces};
+use warp_errors::report_error;
 
 mod alias_argument_selector;
 mod alias_bar;

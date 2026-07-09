@@ -49,9 +49,10 @@ use crate::workflows::manager::WorkflowManager;
 use crate::workspace::{Workspace, WorkspaceAction};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::{
-    focus_running_window_and_show_native_modal, persistence, report_error, report_if_error,
-    send_telemetry_sync_from_app_ctx, GlobalResourceHandlesProvider,
+    focus_running_window_and_show_native_modal, persistence, send_telemetry_sync_from_app_ctx,
+    GlobalResourceHandlesProvider,
 };
+use warp_errors::{report_error, report_if_error};
 
 pub fn init(app: &mut AppContext) {
     auth_view_modal::init(app);

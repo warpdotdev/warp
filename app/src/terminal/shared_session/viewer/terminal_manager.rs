@@ -41,7 +41,6 @@ use crate::features::FeatureFlag;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::pane_group::pane::DetachType;
 use crate::pane_group::TerminalViewResources;
-use crate::report_error;
 use crate::settings::{InputModeSettings, WarpPromptSeparator};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
@@ -67,6 +66,7 @@ use crate::terminal::{
     Event as TerminalViewEvent, TerminalModel, TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
 };
 use crate::view_components::ToastFlavor;
+use warp_errors::report_error;
 
 enum NetworkState {
     /// No viewer network is attached yet; deferred cloud-mode viewers start here until the

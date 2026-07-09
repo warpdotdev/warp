@@ -9,7 +9,8 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::ServerExperiment;
 use crate::persistence::ModelEvent;
-use crate::{report_if_error, GlobalResourceHandlesProvider};
+use crate::GlobalResourceHandlesProvider;
+use warp_errors::report_if_error;
 
 /// A global model for maintaining server-side experiment state.
 pub struct ServerExperiments {

@@ -28,10 +28,8 @@ use crate::themes::theme::{CustomTheme, SelectedSystemThemes, ThemeKind};
 use crate::ui_components::blended_colors;
 use crate::user_config::{self, WarpConfig};
 use crate::window_settings::WindowSettings;
-use crate::{
-    report_error, report_if_error, send_telemetry_from_ctx, GlobalResourceHandlesProvider,
-    TelemetryEvent,
-};
+use crate::{send_telemetry_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent};
+use warp_errors::{report_error, report_if_error};
 
 // UI does not scale, so we set a fixed size for all text.
 const FONT_SIZE: f32 = 14.;

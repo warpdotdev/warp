@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use chrono::{DateTime, FixedOffset};
 use settings::Setting as _;
 
-use crate::report_if_error;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::util::bindings::trigger_to_keystroke;
+use warp_errors::report_if_error;
 
 mod main_page;
 pub mod utils;

@@ -43,7 +43,6 @@ use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager
 #[cfg(feature = "local_fs")]
 use crate::code::lsp_telemetry::LspTelemetryEvent;
 use crate::persistence::ModelEvent;
-use crate::report_if_error;
 #[cfg(feature = "local_fs")]
 use crate::send_telemetry_from_ctx;
 #[cfg(feature = "local_fs")]
@@ -55,6 +54,7 @@ use crate::terminal::TerminalView;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 #[cfg(feature = "local_fs")]
 use crate::{view_components::DismissibleToast, workspace::ToastStack};
+use warp_errors::report_if_error;
 
 /// Represents whether an LSP server is enabled or disabled for a workspace.
 ///

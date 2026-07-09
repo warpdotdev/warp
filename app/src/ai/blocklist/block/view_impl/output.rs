@@ -125,7 +125,8 @@ use crate::view_components::compactible_action_button::{
     CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
 };
 use crate::workspace::WorkspaceAction;
-use crate::{report_error, AIAgentTodoList, FeatureFlag};
+use crate::{AIAgentTodoList, FeatureFlag};
+use warp_errors::report_error;
 
 const BLOCKED_ACTION_MESSAGE_FOR_UPLOADING_ARTIFACT: &str = "Grant access to upload this artifact?";
 

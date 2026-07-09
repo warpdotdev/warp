@@ -15,9 +15,9 @@ use warpui::{
 
 use crate::appearance::Appearance;
 use crate::pane_group::PaneId;
-use crate::report_error;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::workspace::TabMovement;
+use warp_errors::report_error;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Copy, Clone)]

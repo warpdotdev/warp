@@ -20,7 +20,8 @@ use crate::server::cloud_objects::update_manager::{
 };
 use crate::server::ids::SyncId;
 use crate::workspace::PaneViewLocator;
-use crate::{report_error, safe_debug, safe_warn};
+use crate::{safe_debug, safe_warn};
+use warp_errors::report_error;
 
 #[cfg(test)]
 #[path = "manager_tests.rs"]

@@ -16,7 +16,6 @@ use crate::ai::mcp::{
 use crate::appearance::Appearance;
 use crate::cloud_object::Space;
 use crate::modal::{Modal, ModalViewState};
-use crate::report_error;
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::settings_view::mcp_servers::edit_page::{
     MCPServersEditPageView, MCPServersEditPageViewEvent,
@@ -32,6 +31,7 @@ use crate::settings_view::settings_page::{MatchData, PageType, SettingsPageMeta,
 use crate::settings_view::SettingsSection;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
+use warp_errors::report_error;
 
 /// Describes where an MCP install request originated.
 ///

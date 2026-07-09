@@ -56,7 +56,8 @@ use crate::view_components::action_button::{
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, GlobalResourceHandlesProvider};
+use crate::GlobalResourceHandlesProvider;
+use warp_errors::report_error;
 
 const DEFAULT_JSON_TEXT: &str = r#"{
     "": {

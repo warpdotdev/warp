@@ -27,7 +27,7 @@ use crate::server::retry_strategies::{
 };
 use crate::server::server_api::team::TeamClient;
 use crate::server::server_api::ServerApiProvider;
-use crate::{report_error, report_if_error};
+use warp_errors::{report_error, report_if_error};
 
 pub enum TeamUpdateManagerEvent {
     LeaveSuccess,

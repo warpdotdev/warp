@@ -20,7 +20,7 @@ pub mod oauth;
 use std::time::{Duration, SystemTime};
 
 use futures::channel::oneshot;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warpui_core::r#async::Timer;
 use warpui_core::ModelContext;
 

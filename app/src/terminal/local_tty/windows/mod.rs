@@ -29,10 +29,10 @@ use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
 use super::shell::{DirectShellStarter, ShellStarter, WslShellStarter};
 use super::spawner::PtyHandle;
 use super::{mio_channel, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
-use crate::report_error;
 use crate::terminal::local_tty::spawner::{PtySpawnInfo, PtySpawner};
 use crate::terminal::local_tty::windows::proc_thread_attribute_list::ProcThreadAttributeList;
 use crate::terminal::writeable_pty;
+use warp_errors::report_error;
 
 trait ToCoord {
     fn to_coord(&self) -> COORD;

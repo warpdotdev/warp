@@ -55,9 +55,8 @@ use crate::util::bindings::CustomAction;
 use crate::view_components::alert::AlertConfig;
 use crate::view_components::{Alert, DismissibleToast, ToastType};
 use crate::workspace::ToastStack;
-use crate::{
-    report_error, send_telemetry_from_ctx, Appearance, CloudObjectTypeAndId, TelemetryEvent,
-};
+use crate::{send_telemetry_from_ctx, Appearance, CloudObjectTypeAndId, TelemetryEvent};
+use warp_errors::report_error;
 
 // Universal
 pub(super) const CORE_HORIZONATAL_MARGIN: f32 = 24.;

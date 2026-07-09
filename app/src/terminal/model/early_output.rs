@@ -13,10 +13,11 @@ use super::iterm_image::ITermImage;
 use super::kitty::{KittyAction, KittyResponse};
 use super::selection::ScrollDelta;
 use super::session::SessionInfo;
+use crate::safe_debug;
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::view::CONTROL_MASTER_ERROR_REGEX;
-use crate::{report_error, safe_debug};
+use warp_errors::report_error;
 
 #[cfg(test)]
 #[path = "early_output_tests.rs"]

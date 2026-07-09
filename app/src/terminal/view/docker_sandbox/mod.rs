@@ -32,8 +32,6 @@ use crate::banner::BannerState;
 use crate::pane_group::TerminalViewResources;
 #[cfg(feature = "local_tty")]
 use crate::persistence::ModelEvent;
-#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
-use crate::report_error;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 #[cfg(not(target_family = "wasm"))]
@@ -57,6 +55,8 @@ use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
 use crate::terminal::shared_session::IsSharedSessionCreator;
 #[cfg(feature = "local_tty")]
 use crate::terminal::TerminalManager;
+#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
+use warp_errors::report_error;
 
 /// Default base Docker image used for newly created sandbox shells.
 ///

@@ -1,7 +1,7 @@
 use url::Url;
 
 use super::web_intent_parser::WebIntent;
-use crate::report_error;
+use warp_errors::report_error;
 
 const DEFAULT_TITLE: &str = "Warp";
 const BASE_APP_PATH: &str = "/app";

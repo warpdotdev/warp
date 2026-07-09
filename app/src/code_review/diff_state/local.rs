@@ -67,7 +67,7 @@ use super::{
     GitFileStatus, GitOpResult,
 };
 #[cfg(feature = "local_fs")]
-use crate::report_error;
+use warp_errors::report_error;
 
 // Unicode bidirectional characters that should be flagged
 const BIDI_CHARS: [char; 9] = [

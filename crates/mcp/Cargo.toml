@@ -28,6 +28,7 @@ tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
 warp_core.workspace = true
+warp_errors.workspace = true
 warpui.workspace = true
 warpui_extras = { workspace = true, features = ["default", "user_preferences-toml"] }
 

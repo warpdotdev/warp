@@ -9,9 +9,9 @@ use crate::ai::agent_conversations_model::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{PaneGroup, PaneId, TerminalPane, TerminalViewResources};
-use crate::report_error;
 use crate::terminal::TerminalView;
 use crate::workspace::WorkspaceAction;
+use warp_errors::report_error;
 
 /// The restoration path for an ambient agent pane.
 pub(in crate::pane_group) enum AmbientRestoreKind {

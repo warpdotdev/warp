@@ -540,10 +540,11 @@ use crate::workspace::{
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
 use crate::{
-    report_error, report_if_error, safe_error, safe_warn, send_telemetry_from_ctx,
-    send_telemetry_on_executor, send_telemetry_sync_from_ctx, AIAgentActionResultType,
-    AIRequestUsageModel, ActiveSession as WindowActiveSession,
+    safe_error, safe_warn, send_telemetry_from_ctx, send_telemetry_on_executor,
+    send_telemetry_sync_from_ctx, AIAgentActionResultType, AIRequestUsageModel,
+    ActiveSession as WindowActiveSession,
 };
+use warp_errors::{report_error, report_if_error};
 
 lazy_static! {
     // A set of commands that perform minimal work that we use as a baseline to measure the latency of blocks.

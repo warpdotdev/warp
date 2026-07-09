@@ -4,11 +4,11 @@ use super::current_prompt::CurrentPrompt;
 use super::prompt_snapshot::PromptSnapshot;
 use super::{ChipResult, ChipValue, ContextChipKind};
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::report_error;
 use crate::settings::WarpPromptSeparator;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
 use crate::terminal::view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction};
+use warp_errors::report_error;
 
 /// The type of warp prompt being used
 #[derive(Clone)]

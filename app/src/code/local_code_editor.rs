@@ -169,7 +169,7 @@ struct LoadedFileMetadata {
 }
 
 pub use super::diff_viewer::DisplayMode;
-use crate::report_error;
+use warp_errors::report_error;
 
 type TerminalTargetFn = dyn Fn(WindowId, &AppContext) -> Option<ViewHandle<TerminalView>>;
 

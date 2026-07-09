@@ -74,7 +74,8 @@ use crate::terminal::model::block::{
 };
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfileWithUID;
-use crate::{report_error, BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
+use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
+use warp_errors::report_error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoStatus {

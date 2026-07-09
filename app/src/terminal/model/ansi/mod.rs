@@ -39,7 +39,8 @@ use crate::terminal::model::completions::{
 use crate::terminal::model::escape_sequences::C0;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::parse_iterm_image_metadata;
-use crate::{report_error, safe_debug, safe_error};
+use crate::{safe_debug, safe_error};
+use warp_errors::report_error;
 
 /// Marks an OSC as one that is sent by Warp logic registered in the shell.
 ///

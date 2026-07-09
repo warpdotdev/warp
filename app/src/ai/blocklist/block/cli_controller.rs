@@ -23,7 +23,8 @@ use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::TerminalModel;
-use crate::{report_error, BlocklistAIHistoryModel};
+use crate::BlocklistAIHistoryModel;
+use warp_errors::report_error;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum UserTakeOverReason {

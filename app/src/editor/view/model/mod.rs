@@ -45,8 +45,8 @@ use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, Singleto
 use self::buffer::Peer;
 use super::{movement, PlainTextEditorViewAction, SelectionInsertion, ValidInputType};
 use crate::editor::RangeExt;
-use crate::report_error;
 use crate::vim_registers::VimRegisters;
+use warp_errors::report_error;
 
 lazy_static! {
     static ref AUTOCOMPLETE_SYMBOLS: HashMap<&'static str, &'static str> = HashMap::from([

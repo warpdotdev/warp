@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::ModelEvent;
-use crate::{report_error, GlobalResourceHandlesProvider};
+use crate::GlobalResourceHandlesProvider;
+use warp_errors::report_error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum SuggestionType {

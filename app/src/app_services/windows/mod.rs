@@ -8,7 +8,7 @@ use {
 };
 
 #[cfg(feature = "release_bundle")]
-use crate::report_error;
+use warp_errors::report_error;
 
 mod registry;
 #[cfg(feature = "release_bundle")]

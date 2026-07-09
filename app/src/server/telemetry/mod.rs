@@ -30,7 +30,8 @@ use crate::features::FeatureFlag;
 use crate::server::telemetry::context::AttachContext;
 use crate::server::telemetry_ext::TelemetryExt;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::{report_error, ChannelState};
+use crate::ChannelState;
+use warp_errors::report_error;
 
 /// Filename for file where telemetry events are written on app quit.
 const RUDDER_TELEMETRY_EVENTS_FILE_NAME: &str = "rudder_telemetry_events.json";

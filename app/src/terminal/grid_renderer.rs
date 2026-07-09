@@ -31,7 +31,6 @@ use super::model::grid::grid_handler::{ContainsPoint, GridHandler, Link};
 use super::model::grid::RespectDisplayedOutput;
 use super::model::image_map::{ImagePlacementData, StoredImageMetadata};
 use super::model::terminal_model::RangeInModel;
-use crate::report_error;
 use crate::settings::EnforceMinimumContrast;
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
 use crate::terminal::model::ansi::{Color, CursorShape, CursorStyle};
@@ -43,6 +42,7 @@ use crate::terminal::model::{ObfuscateSecrets, SecretHandle};
 use crate::terminal::{color, SizeInfo};
 use crate::themes::theme::WarpTheme;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
+use warp_errors::report_error;
 
 // The scale factor of the cursor relative to the cursor width.
 const CURSOR_THICKNESS_SCALE_FACTOR: f32 = 0.15;

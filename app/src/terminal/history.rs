@@ -12,13 +12,13 @@ use super::shell::ShellType;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::Space;
-use crate::report_error;
 use crate::server::ids::{ClientId, HashableId as _, SyncId};
 use crate::terminal::model::session::{Session, SessionId};
 use crate::util::dedupe_from_last;
 use crate::workflows::local_workflows::LocalWorkflows;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowId, WorkflowSource, WorkflowType};
+use warp_errors::report_error;
 
 mod up_arrow;
 pub(crate) use up_arrow::UpArrowHistoryConfig;

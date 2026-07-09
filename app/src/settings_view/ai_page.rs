@@ -161,9 +161,8 @@ use crate::util::bindings;
 use crate::view_components::dropdown::DropdownAction;
 use crate::view_components::{Dropdown, DropdownItem};
 use crate::workspaces::workspace::{AdminEnablementSetting, CustomerType};
-use crate::{
-    report_error, report_if_error, send_telemetry_from_ctx, TelemetryEvent, UserWorkspaces,
-};
+use crate::{send_telemetry_from_ctx, TelemetryEvent, UserWorkspaces};
+use warp_errors::{report_error, report_if_error};
 
 const CONTENT_FONT_SIZE: f32 = 12.;
 const PRIMARY_HEADER_FONT_SIZE: f32 = 24.;

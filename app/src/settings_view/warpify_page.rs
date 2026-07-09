@@ -27,6 +27,7 @@ use super::settings_page::{
 };
 use super::{flags, SettingsAction, SettingsSection, ToggleSettingActionPair};
 use crate::appearance::Appearance;
+use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{ReuseExistingSshControlMaster, SshSettings};
 use crate::terminal::warpify::settings::{
@@ -36,7 +37,7 @@ use crate::terminal::warpify::settings::{
 use crate::ui_components::blended_colors;
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
 use crate::view_components::{SubmittableTextInput, SubmittableTextInputEvent};
-use crate::{report_if_error, send_telemetry_from_ctx};
+use warp_errors::report_if_error;
 
 pub fn init_actions_from_parent_view<T: Action + Clone>(
     app: &mut AppContext,

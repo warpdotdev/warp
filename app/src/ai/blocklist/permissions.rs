@@ -25,7 +25,7 @@ use crate::settings::{
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AiAutonomySettings;
-use crate::{report_error, report_if_error};
+use warp_errors::{report_error, report_if_error};
 
 /// Whether or not a command can be auto-executed, along with a detailed reason.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize)]

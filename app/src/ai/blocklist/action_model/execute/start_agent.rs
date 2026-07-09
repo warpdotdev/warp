@@ -15,7 +15,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
-use crate::report_error;
+use warp_errors::report_error;
 
 /// Per-request outcome of a StartAgent dispatch.
 #[derive(Debug, Clone)]

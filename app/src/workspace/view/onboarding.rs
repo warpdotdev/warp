@@ -12,7 +12,8 @@ use crate::terminal::view::{
     AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction,
 };
 use crate::workspace::Workspace;
-use crate::{report_error, terminal, FeatureFlag};
+use crate::{terminal, FeatureFlag};
+use warp_errors::report_error;
 
 /// Configuration for starting the agent onboarding tutorial.
 #[derive(Debug, Clone)]

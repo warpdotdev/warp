@@ -7,7 +7,7 @@ use warpui::{AppContext, SingletonEntity};
 use zbus::{interface, proxy, zvariant};
 
 use crate::channel::ChannelState;
-use crate::{report_error, report_if_error};
+use warp_errors::{report_error, report_if_error};
 
 /// Initializes application services.
 pub fn init(ctx: &mut AppContext) {

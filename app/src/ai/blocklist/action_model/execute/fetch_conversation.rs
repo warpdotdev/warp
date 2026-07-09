@@ -8,7 +8,8 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{conversation_yaml, AIAgentActionResultType, AIAgentActionType};
 use crate::ai::blocklist::history_model::CloudConversationData;
-use crate::{report_error, BlocklistAIHistoryModel};
+use crate::BlocklistAIHistoryModel;
+use warp_errors::report_error;
 
 pub struct FetchConversationExecutor;
 

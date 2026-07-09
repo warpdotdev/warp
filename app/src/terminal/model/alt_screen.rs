@@ -20,7 +20,6 @@ use super::index::Direction;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::{ExpandedSelectionRange, ScrollDelta};
-use crate::report_error;
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::grid_renderer::ColorSampler;
@@ -38,6 +37,7 @@ use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::selection::{Selection, SelectionRange};
 use crate::terminal::{SizeInfo, SizeUpdate};
+use warp_errors::report_error;
 
 pub struct AltScreen {
     grid_handler: GridHandler,

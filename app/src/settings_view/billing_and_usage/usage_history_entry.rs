@@ -12,10 +12,10 @@ use crate::ai::blocklist::format_credits;
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, DisplayMode,
 };
-use crate::report_error;
 use crate::settings_view::billing_and_usage_page::BillingAndUsagePageAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use warp_errors::report_error;
 
 pub struct UsageHistoryEntry {
     // If no entry is provided, we will assume that this is a placeholder entry

@@ -104,7 +104,8 @@ use crate::view_components::compactible_action_button::{
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::{cmd_or_ctrl_shift, report_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx, TelemetryEvent};
+use warp_errors::report_error;
 
 const REQUESTED_EDIT_CANCEL_LABEL: &str = "Cancel";
 const REQUESTED_EDIT_REFINE_LABEL: &str = "Refine";

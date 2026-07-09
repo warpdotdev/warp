@@ -27,8 +27,6 @@ use crate::drive::{OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
-#[cfg(not(target_family = "wasm"))]
-use crate::report_error;
 use crate::root_view::{
     open_new_window_get_handles, open_new_with_workspace_source, NewWorkspaceSource,
     OpenLaunchConfigArg,
@@ -55,6 +53,8 @@ use crate::{
     quake_mode_window_id, quake_mode_window_is_open, safe_info, send_telemetry_from_app_ctx,
     ChannelState, OpenPath,
 };
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 
 const DESKTOP_REDIRECT_URI_PATH: &str = "/desktop_redirect";
 

@@ -6,8 +6,8 @@ use anyhow::{Context as _, Result};
 use channel_versions::ChannelVersions;
 
 use crate::channel::{Channel, ChannelState};
-use crate::report_error;
 use crate::server::server_api::{ServerApi, FETCH_CHANNEL_VERSIONS_TIMEOUT};
+use warp_errors::report_error;
 
 // Fetches channel versions asynchronously from the Warp server. If the Warp server request fails,
 // then fetches from GCP JSON storage as a fallback.

@@ -7,9 +7,9 @@ use warp_terminal::model::grid::Dimensions as _;
 use warp_terminal::model::{Point, VisiblePoint, VisibleRow};
 
 use super::{FullGridClearBehavior, GridHandler};
-use crate::report_error;
 use crate::terminal::model::grid::Cursor;
 use crate::terminal::SizeInfo;
+use warp_errors::report_error;
 
 impl GridHandler {
     /// Resize terminal to new dimensions.

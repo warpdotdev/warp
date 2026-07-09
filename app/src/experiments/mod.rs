@@ -26,7 +26,8 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::auth::auth_state::AuthStateProvider;
 use crate::channel::{Channel, ChannelState};
-use crate::{report_error, send_telemetry_sync_from_app_ctx};
+use crate::send_telemetry_sync_from_app_ctx;
+use warp_errors::report_error;
 
 /// Number of buckets we are using to partition user traffic. The largest valid
 /// bucket index is NUM_BUCKETS - 1.

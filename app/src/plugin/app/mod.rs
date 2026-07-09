@@ -8,7 +8,7 @@ use service_impl::{LogServiceImpl, PluginHostBootstrapServiceImpl};
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{PLUGIN_HOST_ADDRESS_ENV_VAR, PLUGIN_HOST_FLAG};
-use crate::report_error;
+use warp_errors::report_error;
 
 /// Singleton model responsible for spawning the plugin host child process and initializing IPC
 /// server and clients for communication between the app and plugin host processes.

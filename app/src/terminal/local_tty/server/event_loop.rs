@@ -10,10 +10,10 @@ use signal_hook_mio::v1_0::Signals;
 use warp_cli::TerminalServerArgs;
 
 use super::{api, logging, protocol, RECV_SOCKET_FILENO, SEND_SOCKET_FILENO};
-use crate::report_error;
 use crate::terminal::local_tty::server::protocol::NonblockingSocketFd;
 use crate::terminal::local_tty::{self};
 use crate::terminal::platform;
+use warp_errors::report_error;
 
 const RECV_SOCKET_TOKEN: mio::Token = mio::Token(0);
 const SIGNALS_TOKEN: mio::Token = mio::Token(1);

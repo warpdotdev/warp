@@ -1,6 +1,6 @@
 use settings::Setting;
-use warp_core::report_if_error;
 use warp_core::ui::Icon;
+use warp_errors::report_if_error;
 use warpui::elements::{
     ChildAnchor, Container, CrossAxisAlignment, Flex, MainAxisSize, OffsetPositioning,
     ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable, Stack, Text,
