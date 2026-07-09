@@ -31,6 +31,8 @@ use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::appearance::Appearance;
 use crate::code::lsp_telemetry::{LspEnablementSource, LspTelemetryEvent};
+#[cfg(feature = "local_fs")]
+use crate::report_error;
 use crate::server::telemetry::{
     AgentModeSetupCodebaseContextActionType, AgentModeSetupCreateEnvironmentActionType,
     AgentModeSetupProjectScopedRulesActionType,
@@ -1199,7 +1201,8 @@ impl TypedActionView for InitStepBlock {
                         async move { Self::create_symlink_to_agents_md(&path_clone, &root_path).await },
                         |_me, result, _ctx| {
                             if let Err(e) = result {
-                                log::error!("Failed to create symlink to AGENTS.md: {e}");
+                                report_error!(anyhow::Error::new(e)
+                                    .context("Failed to create symlink to AGENTS.md"));
                             }
                         },
                     );

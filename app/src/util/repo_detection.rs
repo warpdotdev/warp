@@ -1,4 +1,4 @@
-//! Helpers for constructing repo detection calls from view contexts.
+//! Helpers for constructing repo detection calls.
 //!
 //! The core detection logic lives on
 //! [`DetectedRepositories::detect_possible_git_repo`]. This module provides
@@ -15,9 +15,9 @@ use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repositories::RepoDetectionSource;
 use warp_core::SessionId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::AppContext;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
-use warpui::{View, ViewContext};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::manager::RemoteServerManager;
@@ -38,13 +38,16 @@ pub enum RepoDetectionSessionType {
 ///
 /// The caller is responsible for registering remote repo roots in
 /// `DetectedRepositories` and triggering downstream side effects (git status,
-/// code review, etc.) in the spawn callback.
+/// code review, etc.) in the spawn callback. Callers that only need the
+/// `DetectedGitRepo` event side effect (e.g. the TUI front-end's project
+/// rules/skills indexing) may drop the returned future: detection runs on a
+/// task spawned inside [`DetectedRepositories`], so it completes regardless.
 #[cfg(not(target_family = "wasm"))]
-pub fn detect_possible_git_repo<V: View>(
+pub fn detect_possible_git_repo(
     session_type: RepoDetectionSessionType,
     active_directory: &str,
     source: RepoDetectionSource,
-    ctx: &mut ViewContext<V>,
+    ctx: &mut AppContext,
 ) -> impl Future<Output = Option<LocalOrRemotePath>> {
     // Build the remote detection future if this is a remote session.
     // For local sessions, pass None so DetectedRepositories uses the local path.
@@ -76,11 +79,11 @@ pub fn detect_possible_git_repo<V: View>(
 /// Repository detection is not available in WASM builds because
 /// `DetectedRepositories` is not registered there.
 #[cfg(target_family = "wasm")]
-pub fn detect_possible_git_repo<V: View>(
+pub fn detect_possible_git_repo(
     _session_type: RepoDetectionSessionType,
     _active_directory: &str,
     _source: RepoDetectionSource,
-    _ctx: &mut ViewContext<V>,
+    _ctx: &mut AppContext,
 ) -> impl Future<Output = Option<LocalOrRemotePath>> {
     ready(None)
 }

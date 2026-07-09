@@ -4,6 +4,7 @@ use super::current_prompt::CurrentPrompt;
 use super::prompt_snapshot::PromptSnapshot;
 use super::{ChipResult, ChipValue, ContextChipKind};
 use crate::menu::{MenuItem, MenuItemFields};
+use crate::report_error;
 use crate::settings::WarpPromptSeparator;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
@@ -69,7 +70,10 @@ impl PromptType {
                                 .into_item(),
                         )
                     } else {
-                        log::error!("Missing definition for chip: {:?}", chip_result.kind);
+                        report_error!(
+                            "Missing definition for chip",
+                            extra: { "chip_kind" => ?chip_result.kind }
+                        );
                         None
                     }
                 } else {

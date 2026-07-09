@@ -7,7 +7,7 @@
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
 use crate::AppContext;
 
@@ -76,7 +76,7 @@ impl TuiElement for TuiClipped {
         ))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         if area.is_empty() {
             return;
         }
@@ -98,7 +98,7 @@ impl TuiElement for TuiClipped {
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         let child_area = TuiRect::new(area.x, area.y, area.width, self.child_height(area.height));
         let (x, y) = self.child.cursor_position(child_area, ctx)?;
         let y = y.checked_sub(self.viewport_origin_y)?;

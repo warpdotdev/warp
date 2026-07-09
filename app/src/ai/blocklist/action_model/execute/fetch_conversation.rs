@@ -8,7 +8,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{conversation_yaml, AIAgentActionResultType, AIAgentActionType};
 use crate::ai::blocklist::history_model::CloudConversationData;
-use crate::BlocklistAIHistoryModel;
+use crate::{report_error, BlocklistAIHistoryModel};
 
 pub struct FetchConversationExecutor;
 
@@ -95,7 +95,9 @@ fn materialize_conversation(
             })
         }
         Err(e) => {
-            log::error!("FetchConversation: failed to materialize YAML: {e}");
+            report_error!(
+                anyhow::anyhow!("{e}").context("FetchConversation: failed to materialize YAML")
+            );
             AIAgentActionResultType::FetchConversation(FetchConversationResult::Error(format!(
                 "Failed to materialize conversation: {e}"
             )))

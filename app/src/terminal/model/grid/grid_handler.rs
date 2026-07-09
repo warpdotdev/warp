@@ -40,6 +40,7 @@ use super::displayed_output::DisplayedOutput;
 use super::grapheme_cursor::{self, GraphemeCursor};
 use super::row::Row;
 use super::{ConvertToAbsolute as _, Cursor, SelectionCursor};
+use crate::report_error;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
 use crate::terminal::model::cell::{Cell, Flags, LineLength, DEFAULT_CHAR};
@@ -846,8 +847,9 @@ impl GridHandler {
                 let displayed_end =
                     self.maybe_translate_point_from_original_to_displayed(*url.range.end());
                 if displayed_start > displayed_end {
-                    log::error!(
-                        "URL translation to displayed points failed. Displayed range start {displayed_start:?} is greater than displayed range end {displayed_end:?}"
+                    report_error!(
+                        "URL translation to displayed points failed: range start is greater than range end",
+                        extra: { "start" => ?displayed_start, "end" => ?displayed_end }
                     );
                 } else {
                     url.range = displayed_start..=displayed_end;
@@ -1345,8 +1347,9 @@ impl GridHandler {
                         let displayed_ending_point = self
                             .maybe_translate_point_from_original_to_displayed(ending_point);
                         if displayed_starting_point > displayed_ending_point {
-                            log::error!(
-                                "File path range translation to displayed points failed. Displayed range start {displayed_starting_point:?} is greater than displayed range end {displayed_ending_point:?}"
+                            report_error!(
+                                "File path range translation to displayed points failed: range start is greater than range end",
+                                extra: { "start" => ?displayed_starting_point, "end" => ?displayed_ending_point }
                             );
                             starting_point..=ending_point
                         } else {

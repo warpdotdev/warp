@@ -101,11 +101,12 @@ macro_rules! sharer_warn {
 macro_rules! sharer_error {
     ($network:expr, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
-        log::error!(
-            "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
-            message = format_args!($($arg)+),
-            session_id = session_id,
-            source_task_id = source_task_id,
+        $crate::report_error!(
+            anyhow::anyhow!("{}", format_args!($($arg)+)),
+            extra: {
+                "session_id" => ?session_id,
+                "source_task_id" => ?source_task_id
+            }
         );
     }};
 }
@@ -1253,7 +1254,8 @@ impl Network {
                 }
                 log::info!("Closing websocket to session sharing server as sharer");
                 if let Err(e) = sink.close().await {
-                    log::error!("Failed to close session sharing websocket as sharer due to {e}");
+                    crate::report_error!(anyhow::Error::new(e)
+                        .context("Failed to close session sharing websocket as sharer"));
                 }
                 startup_send_failed
             },

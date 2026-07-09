@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use enum_iterator::{cardinality, Sequence};
 
 use crate::channel::ChannelState;
+use crate::report_error;
 
 /// All ContextFlag flag are enabled by default. Environments can conditionally disable flags.
 ///
@@ -48,8 +49,9 @@ impl ContextFlag {
     /// Sets a ContextFlag flag. FOR DEBUG USE ONLY.
     pub fn set(&self, value: bool) {
         if !ChannelState::enable_debug_features() {
-            log::error!(
-                "Tried to set value of `ContextFlag` flag `{self:?}` in non-dogfood context."
+            report_error!(
+                "Tried to set value of ContextFlag in non-dogfood context",
+                extra: { "flag" => ?self }
             );
         }
 

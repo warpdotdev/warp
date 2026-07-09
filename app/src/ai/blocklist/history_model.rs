@@ -1,7 +1,8 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 #[cfg(feature = "local_fs")]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use ai::skills::SkillPathOrigin;
 use anyhow::anyhow;
@@ -53,6 +54,8 @@ pub use conversation_loader::{
     convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,
     CLIAgentConversation, CloudConversationData,
 };
+
+use crate::report_error;
 
 /// Mirrors [`crate::persistence::agent::MAX_PERSISTED_CONVERSATION_COUNT`].
 /// Moot at steady state because the disk-side prune already keeps the
@@ -204,6 +207,15 @@ struct InFlightConversationRename {
     previous_cached_metadata_title: Option<String>,
 }
 
+/// A single agent prompt-history candidate with prompt text and start_ts.
+#[derive(Clone, Debug)]
+pub(crate) struct PromptHistoryEntry {
+    /// The user prompt text.
+    pub(crate) text: Arc<str>,
+    /// When the prompt was submitted.
+    pub(crate) start_ts: DateTime<Local>,
+}
+
 /// Responsible for managing the history of user and AI exchanges.
 #[derive(Default)]
 pub struct BlocklistAIHistoryModel {
@@ -248,6 +260,14 @@ pub struct BlocklistAIHistoryModel {
     /// history.
     persisted_queries: Vec<PersistedAIInput>,
 
+    // TODO: When up-arrow prompt history supports pagination, consolidate
+    // `persisted_queries` and `prompt_history` (both seeded from the same `ai_queries`
+    // read) and share the in-memory conversation appending done by `all_ai_queries`.
+    /// Prompt-history candidates for NLD input classification. Seeded once from `ai_queries`
+    /// at startup, then extended with prompts submitted during the session
+    /// (see [`Self::append_session_prompt`]). Ordered oldest-first.
+    prompt_history: Vec<PromptHistoryEntry>,
+
     /// Metadata for both local and ambient agent conversations.
     /// Does not include the actual content of the conversations.
     all_conversations_metadata: HashMap<AIConversationId, AIConversationMetadata>,
@@ -285,6 +305,7 @@ pub struct BlocklistAIHistoryModel {
 impl BlocklistAIHistoryModel {
     pub(crate) fn new(
         persisted_queries: Vec<PersistedAIInput>,
+        prompt_history: Vec<(String, DateTime<Local>)>,
         multi_agent_conversations: &[AgentConversation],
     ) -> Self {
         #[cfg(feature = "local_fs")]
@@ -296,8 +317,18 @@ impl BlocklistAIHistoryModel {
                     .map(|conn| Arc::new(Mutex::new(conn)))
             });
 
+        let prompt_history = prompt_history
+            .into_iter()
+            .filter(|(text, _)| !text.trim().is_empty())
+            .map(|(text, start_ts)| PromptHistoryEntry {
+                text: Arc::from(text),
+                start_ts,
+            })
+            .collect();
+
         let mut model = Self {
             persisted_queries,
+            prompt_history,
             #[cfg(feature = "local_fs")]
             db_connection,
             ..Self::default()
@@ -987,18 +1018,41 @@ impl BlocklistAIHistoryModel {
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), UpdateHistoryError> {
+        let conversation_id = request_input.conversation_id;
         let conversation = self
             .conversations_by_id
-            .get_mut(&request_input.conversation_id)
-            .ok_or(UpdateHistoryError::ConversationNotFound(
-                request_input.conversation_id,
-            ))?;
+            .get_mut(&conversation_id)
+            .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
+
+        // That first exchange is the synthetic orchestrator prompt (not user input)
+        // which the NLD prompt history needs to exclude.
+        let is_synthetic_orchestrator_prompt = conversation.is_child_agent_conversation()
+            && conversation.root_task_exchanges().next().is_none();
+
+        // Capture the new user query (text + submission time) before `request_input` is consumed.
+        let new_prompt = request_input
+            .all_inputs()
+            .find_map(AIAgentInput::user_query)
+            .map(|text| (text, request_input.request_start_ts));
+
         conversation.update_for_new_request_input(
             request_input,
             stream_id,
             terminal_surface_id,
             ctx,
         )?;
+
+        // Append the new user query to the session NLD prompt history so input classification can
+        // match it. Skip shared ambient agent sessions and the synthetic orchestrator prompt.
+        if !is_synthetic_orchestrator_prompt
+            && !self
+                .ambient_agent_terminal_surface_ids
+                .contains(&terminal_surface_id)
+        {
+            if let Some((text, start_ts)) = new_prompt {
+                self.append_session_prompt(text, start_ts);
+            }
+        }
         Ok(())
     }
 
@@ -1077,7 +1131,7 @@ impl BlocklistAIHistoryModel {
             .get(&terminal_surface_id)
             .is_some_and(|conversation_ids| conversation_ids.contains(&conversation_id))
         {
-            log::error!(
+            report_error!(
                 "Attempted to set active conversation ID for a terminal surface that does not contain that conversation."
             );
             return;
@@ -2015,12 +2069,14 @@ impl BlocklistAIHistoryModel {
                     if let Err(e) = sender.send(ModelEvent::DeleteAIConversation {
                         conversation_id: conversation_id_string.clone(),
                     }) {
-                        log::error!("Error sending DeleteAIConversation event: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error sending DeleteAIConversation event"));
                     }
                     if let Err(e) = sender.send(ModelEvent::DeleteMultiAgentConversations {
                         conversation_ids: vec![conversation_id_string],
                     }) {
-                        log::error!("Error sending DeleteMultiAgentConversations event: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error sending DeleteMultiAgentConversations event"));
                     }
                 }
             },
@@ -2242,6 +2298,24 @@ impl BlocklistAIHistoryModel {
             .into_iter()
             .chain(cleared_queries_vec)
             .chain(live_queries_vec)
+    }
+
+    /// Appends a single user-query prompt to [`Self::prompt_history`], dropping whitespace-only
+    /// prompts. Session prompts arrive in submission order, so pushing keeps the vec ascending.
+    fn append_session_prompt(&mut self, text: String, start_ts: DateTime<Local>) {
+        if text.trim().is_empty() {
+            return;
+        }
+        self.prompt_history.push(PromptHistoryEntry {
+            text: Arc::from(text),
+            start_ts,
+        });
+    }
+
+    /// Returns the prompt-history candidates for NLD input classification, oldest-first
+    /// (ascending). The matcher reverses this to iterate newest-first.
+    pub(crate) fn prompt_history_candidates(&self) -> Vec<PromptHistoryEntry> {
+        self.prompt_history.clone()
     }
 
     /// Returns the active conversation ID for a terminal surface, if one exists.
@@ -2652,6 +2726,7 @@ impl BlocklistAIHistoryModel {
         self.conversation_transcript_viewer_terminal_surface_ids
             .clear();
         self.persisted_queries.clear();
+        self.prompt_history.clear();
         self.all_conversations_metadata.clear();
         self.agent_id_to_conversation_id.clear();
         self.server_token_to_conversation_id.clear();

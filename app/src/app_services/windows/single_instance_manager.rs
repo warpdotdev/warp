@@ -9,6 +9,7 @@ use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS
 use windows::Win32::System::Threading::CreateMutexW;
 
 use super::service_impl::UriServiceImpl;
+use crate::report_error;
 
 /// RAII wrapper around a Windows mutex HANDLE that closes it on drop.
 struct MutexHandle(HANDLE);
@@ -66,7 +67,9 @@ fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {
     let already_exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     handle
         .inspect_err(|err| {
-            log::error!("Failed to create single-instance mutex: {err:#}");
+            report_error!(
+                anyhow::anyhow!("{err:#}").context("Failed to create single-instance mutex")
+            );
         })
         .map(|handle| {
             if already_exists {
@@ -116,7 +119,9 @@ impl SingleInstanceManager {
                 server
             }
             Err(err) => {
-                log::error!("Failed to initialize UriService Server: {err:#}");
+                report_error!(
+                    anyhow::anyhow!("{err:#}").context("Failed to initialize UriService Server")
+                );
                 // If we failed to create a server, we can't receive URI requests so we drop the
                 // lock.
                 *SOLE_INSTANCE_MUTEX.lock() = Ok(None);

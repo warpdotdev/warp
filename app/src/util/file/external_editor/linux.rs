@@ -9,6 +9,7 @@ use warp_util::path::LineAndColumnArg;
 use warpui::AppContext;
 
 use super::Editor;
+use crate::report_error;
 
 static INSTALLED_EDITOR_METADATA: OnceLock<HashMap<Editor, EditorMetadata>> = OnceLock::new();
 
@@ -334,7 +335,10 @@ pub fn open_file_path_with_line_and_col(
         if let Some(editor) = with_editor {
             if let Some(mut command) = editor.command(full_path, line_column_number) {
                 if let Err(err) = command.spawn() {
-                    log::error!("Error launching {editor:?}: {err:#}");
+                    report_error!(
+                        anyhow::Error::new(err).context("Error launching editor"),
+                        extra: { "editor" => ?editor }
+                    );
                 }
                 return;
             }
@@ -617,7 +621,9 @@ impl Editor {
                 Some(metadata) => match metadata.build_default_command(file_path) {
                     Ok(command) => Some(command),
                     Err(err) => {
-                        log::error!("Failed to build editor open command: {err:#}");
+                        report_error!(
+                            anyhow::Error::new(err).context("Failed to build editor open command")
+                        );
                         None
                     }
                 },

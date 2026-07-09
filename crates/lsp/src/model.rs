@@ -16,6 +16,8 @@ use lsp_types::{
 use simple_logger::manager::LogManager;
 #[cfg(not(target_arch = "wasm32"))]
 use warp_core::features::FeatureFlag;
+#[cfg(not(target_arch = "wasm32"))]
+use warp_core::report_error;
 use warpui_core::r#async::executor::Background;
 #[cfg(not(target_arch = "wasm32"))]
 use warpui_core::SingletonEntity;
@@ -307,7 +309,7 @@ impl LspServerModel {
                             ctx.emit(LspEvent::Started);
                         }
                         Err(e) => {
-                            log::error!("Failed to start LSP server: {e}");
+                            report_error!(&e);
                             let error = format!("{e:#}");
                             me.server_state = LspState::Failed { error };
                             ctx.emit(LspEvent::Failed(e));

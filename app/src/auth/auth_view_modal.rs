@@ -27,6 +27,7 @@ use super::UserUid;
 use crate::appearance::Appearance;
 use crate::auth::auth_view_body::AuthViewBody;
 use crate::modal::Modal;
+use crate::report_error;
 use crate::root_view::unthemed_window_border;
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::util::bindings::CustomAction;
@@ -289,7 +290,7 @@ impl AuthView {
             }
             AuthManagerEvent::AuthFailed(err) => {
                 if err.is_actionable() {
-                    log::error!("Failed to log in user: {err:#}");
+                    report_error!(err);
                 }
 
                 if let UserAuthenticationError::InvalidStateParameter = err {

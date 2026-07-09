@@ -36,6 +36,7 @@ use parking_lot::Mutex;
 
 pub use self::client::TerminalServerClient;
 use super::spawner::PtyHandle;
+use crate::report_error;
 
 /// The file descriptor of the Unix domain socket where the terminal server will
 /// receive requests from the host application.
@@ -85,11 +86,13 @@ fn spawn_message_receiver_thread(socket_fd: RawFd, terminated_children: Arc<Mute
                     if let Err(err) =
                         nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::SIGCHLD)
                     {
-                        log::error!("Failed to send SIGCHLD to self: {err:?}");
+                        report_error!(
+                            anyhow::Error::new(err).context("Failed to send SIGCHLD to self")
+                        );
                     }
                 }
                 Some(_) => {
-                    log::error!(
+                    report_error!(
                         "host application received unexpected message from terminal server"
                     );
                 }

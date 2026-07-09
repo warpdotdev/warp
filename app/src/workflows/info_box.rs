@@ -33,6 +33,7 @@ use crate::ai::blocklist::ai_brand_color;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::actions::{ObjectActionType, ObjectActions};
 use crate::cloud_object::CloudObjectMetadataExt;
+use crate::report_error;
 use crate::server::ids::SyncId;
 use crate::settings::InputModeSettings;
 use crate::terminal::block_list_viewport::InputMode;
@@ -94,10 +95,9 @@ impl SelectedWorkflowState {
         if *index < *self.num_arguments {
             self.currently_selected_argument = index;
         } else {
-            log::error!(
-                "Tried to set the argument index to {:?} but the len is {:?}",
-                *index,
-                *self.num_arguments
+            report_error!(
+                "Tried to set the argument index beyond the number of arguments",
+                extra: { "index" => ?*index, "len" => ?*self.num_arguments }
             );
         }
     }

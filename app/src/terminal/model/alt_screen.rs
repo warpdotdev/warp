@@ -20,6 +20,7 @@ use super::index::Direction;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::{ExpandedSelectionRange, ScrollDelta};
+use crate::report_error;
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::grid_renderer::ColorSampler;
@@ -371,7 +372,7 @@ impl AltScreen {
 
 impl ansi::Handler for AltScreen {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method AltScreen::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method AltScreen::set_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn set_cursor_style(&mut self, style: Option<CursorStyle>) {
@@ -606,11 +607,11 @@ impl ansi::Handler for AltScreen {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method AltScreen::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method AltScreen::push_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method AltScreen::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method AltScreen::pop_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn text_area_size_pixels<W: io::Write>(&mut self, writer: &mut W) {

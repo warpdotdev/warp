@@ -16,6 +16,8 @@ use warpui::image_cache::{
 use warpui::util::{parse_i32, parse_u32};
 
 use super::escape_sequences::C1;
+#[cfg(feature = "local_fs")]
+use crate::report_error;
 
 /// Actions specified by the [Kitty Image Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 #[derive(Debug, Clone)]
@@ -762,7 +764,10 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
 fn safe_delete_temp_file(path: &str) {
     if is_path_in_temp_dir(path) && path.contains("tty-graphics-protocol") {
         if let Err(err) = fs::remove_file(path) {
-            log::error!("Failed to delete kitty temporary file (path = {path}): {err}");
+            report_error!(
+                anyhow::Error::new(err).context("Failed to delete kitty temporary file"),
+                extra: { "path" => %path }
+            );
         }
     }
 }

@@ -7,7 +7,7 @@ use super::{
 };
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPoint, TuiRect, TuiScrollable, TuiSize, TuiText,
+    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiScrollable, TuiSize, TuiText,
 };
 use crate::event::ModifiersState;
 use crate::{App, AppContext, EntityId, EntityIdMap};
@@ -90,7 +90,8 @@ fn render_viewport(app: &App, viewport: &mut impl TuiElement, size: TuiSize) -> 
         viewport.layout(TuiConstraint::tight(size), &mut ctx, app_ctx);
         let area = TuiRect::new(0, 0, size.width, size.height);
         let mut buffer = TuiBuffer::empty(area);
-        viewport.render(area, &mut buffer, &mut ctx);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        viewport.render(area, &mut buffer, &mut paint_ctx);
         buffer.to_lines()
     })
 }
@@ -373,9 +374,9 @@ impl TuiElement for CursorElement {
         constraint.clamp(TuiSize::new(1, 3))
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {}
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
 
-    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         Some(self.cursor)
     }
 }
@@ -434,8 +435,9 @@ fn cursor_position_is_shifted_into_the_visible_window() {
             };
             viewport.layout(TuiConstraint::tight(TuiSize::new(3, 2)), &mut ctx, app_ctx);
 
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
             assert_eq!(
-                viewport.cursor_position(TuiRect::new(0, 0, 3, 2), &mut ctx),
+                viewport.cursor_position(TuiRect::new(0, 0, 3, 2), &mut paint_ctx),
                 Some((0, 1)),
             );
         });
@@ -456,7 +458,7 @@ impl TuiElement for DispatchRecorder {
         constraint.clamp(TuiSize::new(1, 3))
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {}
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
 
     fn dispatch_event(
         &mut self,

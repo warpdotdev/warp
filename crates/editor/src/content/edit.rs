@@ -14,6 +14,7 @@ use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
 use warp_core::features::FeatureFlag;
+use warp_core::report_error;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui_core::fonts::Weight;
@@ -408,10 +409,12 @@ impl LayOutArgs {
                 .checked_sub(self.frame_offset_from_block_start)
             else {
                 // Autodetected URLs cannot cross frame boundaries.
-                log::error!(
-                    "URL starts at {} but frame starts at {}",
-                    index_range.start,
-                    self.frame_offset_from_block_start
+                report_error!(
+                    "URL start offset precedes frame start offset",
+                    extra: {
+                        "url_start" => %index_range.start,
+                        "frame_start" => %self.frame_offset_from_block_start
+                    }
                 );
                 continue;
             };
@@ -559,10 +562,9 @@ impl EditDelta {
                 match task.run(layout, location, is_hidden) {
                     Ok(result) => Some(result),
                     Err(e) => {
-                        log::error!(
-                            "Failed to lay out BlockItem at offset {:?}: {:?}",
-                            self.old_offset,
-                            e
+                        report_error!(
+                            e.context("Failed to lay out BlockItem"),
+                            extra: { "offset" => ?self.old_offset }
                         );
                         None
                     }
@@ -645,7 +647,7 @@ pub fn layout_temporary_blocks(
             match task.run(layout, location, false) {
                 Ok(result) => Some((line_count, result.0)),
                 Err(e) => {
-                    log::error!("Failed to lay out temporary blocks: {e:?}");
+                    report_error!(e.context("Failed to lay out temporary blocks"));
                     None
                 }
             }

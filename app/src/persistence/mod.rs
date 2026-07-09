@@ -50,6 +50,7 @@ use crate::cloud_object::{
 };
 use crate::drive::folders::CloudFolder;
 use crate::notebooks::CloudNotebook;
+use crate::report_error;
 use crate::server::experiments::ServerExperiment;
 use crate::server::ids::SyncId;
 use crate::suggestions::ignored_suggestions_model::SuggestionType;
@@ -65,6 +66,55 @@ pub enum PersistenceScope {
     RemoteServerDaemon { identity_key: String },
 }
 
+/// Which subsets of [`PersistedData`] a launch mode actually consumes.
+///
+/// Loading everything unconditionally is expensive (GUI session-restore
+/// payloads dominate startup on large databases), so headless launch modes
+/// opt out of the data they never read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistedDataScope {
+    /// The GUI app: everything, including window/tab/block session
+    /// restoration and command history.
+    Full,
+    /// The `warp-tui` front-end: cloud objects and agent/conversation state,
+    /// but no GUI session restoration, command history, user profiles, or
+    /// pending object actions.
+    TuiFrontend,
+    /// The remote server daemon: only codebase index metadata.
+    CodebaseIndicesOnly,
+}
+
+impl PersistedDataScope {
+    /// Window/tab/pane snapshots and restored blocks.
+    fn session_restoration(self) -> bool {
+        matches!(self, PersistedDataScope::Full)
+    }
+
+    /// Command history, user profiles, and pending object actions, which
+    /// only the GUI consumes.
+    fn gui_history(self) -> bool {
+        matches!(self, PersistedDataScope::Full)
+    }
+}
+
+/// A conversation whose `summary` column had to be derived from its task
+/// snapshot at read time (rows written before the column existed, or rows
+/// whose stored summary failed to parse). Sent to the SQLite writer thread
+/// so the derivation happens only once per row.
+#[derive(Debug)]
+pub struct ConversationSummaryBackfill {
+    pub conversation_id: String,
+    /// Serialized [`model::AgentConversationSummary`].
+    pub summary_json: String,
+    /// The `summary` column value observed at read time (`None` or invalid
+    /// JSON). The backfill only applies while the column still holds this
+    /// value, so it never overwrites a newer write.
+    pub previous_summary: Option<String>,
+    /// The row's pre-backfill `last_modified_at`, restored after the
+    /// update trigger bumps it.
+    pub last_modified_at: chrono::NaiveDateTime,
+}
+
 /// Initializes the persistence "subsystem".
 ///
 /// Returns the previously-persisted data, if any, and handles for
@@ -75,10 +125,11 @@ pub enum PersistenceScope {
 pub fn initialize(
     ctx: &mut AppContext,
     scope: PersistenceScope,
+    data_scope: PersistedDataScope,
 ) -> (Option<Box<PersistedData>>, Option<WriterHandles>) {
     cfg_if::cfg_if! {
         if #[cfg(feature = "local_fs")] {
-            sqlite::initialize(ctx, scope)
+            sqlite::initialize(ctx, scope, data_scope)
         } else {
             (None, None)
         }
@@ -148,15 +199,17 @@ impl PersistenceWriter {
         if let Some(handle) = self.thread_handle.take() {
             let start = Instant::now();
             let Some(sender) = self.sender() else {
-                log::error!("Model event sender should exist if thread handle is set");
+                report_error!("Model event sender should exist if thread handle is set");
                 return;
             };
             if let Err(err) = sender.send(ModelEvent::Terminate) {
-                log::error!("Could not terminate SQLite writer thread: {err}");
+                report_error!(
+                    anyhow::Error::new(err).context("Could not terminate SQLite writer thread")
+                );
             }
             if handle.join().is_err() {
                 // If crash reporting is enabled, Sentry will have already handled the panic.
-                log::error!("SQLite writer thread panicked");
+                report_error!("SQLite writer thread panicked");
             }
             log::info!("Shut down SQLite writer in {:?}", start.elapsed());
         }
@@ -182,8 +235,9 @@ impl SingletonEntity for PersistenceWriter {}
 ///
 /// For now, to address the global scoping here, we clear all persisted data on logout.
 pub struct PersistedData {
-    /// Session restoration data
-    pub app_state: AppState,
+    /// Session restoration data. `None` when the launch mode's
+    /// [`PersistedDataScope`] excludes it entirely (the daemon).
+    pub app_state: Option<AppState>,
 
     /// Shareable objects.
     pub cloud_objects: Vec<Box<dyn CloudObject>>,
@@ -195,6 +249,7 @@ pub struct PersistedData {
     pub object_actions: Vec<ObjectAction>,
     pub experiments: Vec<ServerExperiment>,
     pub ai_queries: Vec<PersistedAIInput>,
+    pub nld_prompts: Vec<(String, DateTime<Local>)>,
     pub codebase_indices: Vec<CodeWorkspaceMetadata>,
     pub workspace_language_servers: HashMap<PathBuf, HashMap<LSPServerType, EnablementState>>,
     pub multi_agent_conversations: Vec<AgentConversation>,
@@ -203,6 +258,10 @@ pub struct PersistedData {
     pub ignored_suggestions: Vec<(String, SuggestionType)>,
     pub mcp_server_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
     pub mcp_servers_to_restore: Vec<Uuid>,
+    /// Conversation summaries derived at read time for pre-`summary`-column
+    /// rows. Drained by `sqlite::initialize`, which hands them to the writer
+    /// thread for persistence; not intended for other consumers.
+    pub conversation_summary_backfills: Vec<ConversationSummaryBackfill>,
 }
 
 #[derive(Clone, Debug)]
@@ -324,6 +383,11 @@ pub enum ModelEvent {
         conversation_id: String,
         updated_tasks: Vec<api::Task>,
         conversation_data: AgentConversationData,
+    },
+    /// Persists read-time-derived conversation summaries for rows written
+    /// before the `summary` column existed.
+    BackfillConversationSummaries {
+        backfills: Vec<ConversationSummaryBackfill>,
     },
     DeleteMultiAgentConversations {
         conversation_ids: Vec<String>,

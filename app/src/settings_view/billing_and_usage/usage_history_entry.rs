@@ -12,6 +12,7 @@ use crate::ai::blocklist::format_credits;
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, DisplayMode,
 };
+use crate::report_error;
 use crate::settings_view::billing_and_usage_page::BillingAndUsagePageAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -82,7 +83,7 @@ impl UsageHistoryEntry {
         };
         let Some(mouse_state) = &self.mouse_state else {
             // If there is a provided entry, there should always be a mouse state as well.
-            log::error!("Mouse state is required to render usage history entry header");
+            report_error!("Mouse state is required to render usage history entry header");
             return Empty::new().finish();
         };
 

@@ -349,24 +349,7 @@ impl BlocklistAIStatusBar {
             )
         });
 
-        if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {
-            ctx.subscribe_to_model(ambient_agent_view_model, |me, _, event, ctx| match event {
-                AmbientAgentViewModelEvent::DispatchedAgent
-                | AmbientAgentViewModelEvent::ProgressUpdated => {
-                    me.update_agent_tip(ctx);
-                    ctx.notify();
-                }
-                AmbientAgentViewModelEvent::SessionReady { .. }
-                | AmbientAgentViewModelEvent::Failed { .. }
-                | AmbientAgentViewModelEvent::NeedsGithubAuth
-                | AmbientAgentViewModelEvent::Cancelled => {
-                    ctx.notify();
-                }
-                _ => (),
-            });
-        }
-
-        Self {
+        let mut me = Self {
             active_exchange_model: None,
             shimmering_text_handle: ShimmeringTextStateHandle::new(),
             action_model,
@@ -388,11 +371,52 @@ impl BlocklistAIStatusBar {
             summarization_timer_handle: None,
             summarization_start_time: None,
             last_read_refresh_handle: None,
-            ambient_agent_view_model,
+            ambient_agent_view_model: None,
             current_tip: None,
             ephemeral_message_model,
             agent_message_bar,
+        };
+        // Route ambient wiring through the setter so construction and the lazy shared-session
+        // viewer path share one implementation.
+        if let Some(ambient_agent_view_model) = ambient_agent_view_model {
+            me.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
         }
+        me
+    }
+
+    /// Attaches an ambient agent view model to an already-constructed status bar. Used on the
+    /// shared-session viewer path where the model is created lazily at `SessionJoined` (a raw
+    /// `shared_session` link that turns out to be a cloud run), after the status bar was built
+    /// with `None`. Without this, `render_cloud_mode_setup_status` has no model and the
+    /// "connecting to host / creating environment" progress never renders for the viewer's
+    /// follow-up. Wires the same subscription as [`Self::new`] so the status bar re-renders as
+    /// setup progress updates. Idempotent: a no-op when a model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        ctx.subscribe_to_model(&view_model, |me, _, event, ctx| match event {
+            AmbientAgentViewModelEvent::DispatchedAgent
+            | AmbientAgentViewModelEvent::FollowupDispatched
+            | AmbientAgentViewModelEvent::ProgressUpdated => {
+                me.update_agent_tip(ctx);
+                ctx.notify();
+            }
+            AmbientAgentViewModelEvent::SessionReady { .. }
+            | AmbientAgentViewModelEvent::ExecutionSessionReady { .. }
+            | AmbientAgentViewModelEvent::Failed { .. }
+            | AmbientAgentViewModelEvent::NeedsGithubAuth
+            | AmbientAgentViewModelEvent::Cancelled => {
+                ctx.notify();
+            }
+            _ => (),
+        });
+        self.ambient_agent_view_model = Some(view_model);
+        ctx.notify();
     }
 
     pub fn should_show_summarization_cancel_dialog(&self, app: &AppContext) -> bool {

@@ -7,6 +7,7 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
+use crate::report_error;
 use crate::server::ids::ServerId;
 
 pub struct TransferOwnershipConfirmationModal {
@@ -136,7 +137,9 @@ impl TypedActionView for TransferOwnershipConfirmationModal {
             TransferOwnershipConfirmationAction::Confirm => {
                 let (Some(new_owner_uid), Some(team_uid)) = (self.new_owner_uid, self.team_uid)
                 else {
-                    log::error!("Transfer ownership confirm button pressed with no new owner set");
+                    report_error!(
+                        "Transfer ownership confirm button pressed with no new owner set"
+                    );
                     return;
                 };
                 ctx.emit(TransferOwnershipConfirmationEvent::Confirm {

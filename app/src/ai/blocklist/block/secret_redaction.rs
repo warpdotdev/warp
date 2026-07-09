@@ -8,6 +8,7 @@ use warpui::platform::Cursor;
 
 use super::{AIBlockAction, TextLocation};
 use crate::ai::agent::{AIAgentOutput, AIAgentTextSection, AgentOutputText};
+use crate::report_error;
 use crate::terminal::model::secrets::{SecretLevel, SecretsRegex, SECRETS_REGEX};
 
 pub const SECRET_REDACTION_REPLACEMENT_CHARACTER: &str = "*";
@@ -60,7 +61,10 @@ pub(crate) fn find_secrets_in_text_with_levels_using_regex(
         let pattern_id = mat.pattern().as_usize();
         let total_patterns = level_metadata.enterprise_count + level_metadata.user_count;
         if pattern_id >= total_patterns {
-            log::error!("Secret level not found for pattern ID {pattern_id}");
+            report_error!(
+                "Secret level not found for pattern ID",
+                extra: { "pattern_id" => %pattern_id }
+            );
             continue;
         }
         let secret_level = if pattern_id < level_metadata.enterprise_count {

@@ -39,7 +39,7 @@ use crate::terminal::local_tty::shell::{
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
-use crate::{report_if_error, ASSETS};
+use crate::{report_error, report_if_error, ASSETS};
 
 const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 
@@ -654,7 +654,7 @@ impl EventedPty for Pty {
                 Ok(true) => Some(ChildEvent::Exited),
                 Ok(false) => None,
                 Err(e) => {
-                    log::error!("Error checking child process termination: {e}");
+                    report_error!(e.context("Error checking child process termination"));
                     None
                 }
             }
@@ -727,7 +727,7 @@ fn spawn_docker_sandbox(
     // itself is created + attached in a single step via `sbx run` when
     // the PTY process spawns below.
     if let Err(e) = prepare_docker_sandbox(&docker_starter) {
-        log::error!("Failed to prepare Docker sandbox: {e}");
+        report_error!(&e);
         return Err(Error::msg(format!("Docker sandbox setup failed: {e}")));
     }
 

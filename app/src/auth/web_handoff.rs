@@ -99,7 +99,7 @@ impl WebHandoffView {
                     return;
                 }
 
-                log::error!("Failed to import user from host application: {err:#}");
+                report_error!(err);
                 self.state = HandoffState::Failed;
                 ctx.notify();
             }

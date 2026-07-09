@@ -3,11 +3,13 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use instant::Instant;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F, Vector2I};
+use warp_errors::report_error;
 
 use super::{CornerRadius, Element, Point};
 use crate::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -287,23 +289,22 @@ impl Image {
             self.right_aligned,
         ) else {
             self.origin = None;
-            log::error!(
-                "invalid image rect before draw_image source={:?} element_size=({}, {}) image_size=({}, {}) desired_image_size=({}, {}) logical_image_size=({}, {}) origin=({}, {}) bounds=({}, {}) fit_type={:?} cache_option={:?}",
-                self.source,
-                size.x(),
-                size.y(),
-                image.width(),
-                image.height(),
-                desired_image_size.x(),
-                desired_image_size.y(),
-                logical_image_size.x(),
-                logical_image_size.y(),
-                origin.x(),
-                origin.y(),
-                bounds.x(),
-                bounds.y(),
-                self.fit_type,
-                self.cache_option,
+            report_error!(
+                "invalid image rect before draw_image",
+                extra: {
+                    "source" => ?self.source,
+                    "fit_type" => ?self.fit_type,
+                    "cache_option" => ?self.cache_option,
+                    "image_size" => ?image.size(),
+                    "bounds" => ?bounds,
+                    "desired_image_size" => ?desired_image_size,
+                    "scale_factor" => ?ctx.scene.scale_factor(),
+                    "logical_image_size" => ?logical_image_size,
+                    "size" => ?size,
+                    "origin" => ?origin,
+                    "top_aligned" => ?self.top_aligned,
+                    "right_aligned" => ?self.right_aligned
+                }
             );
             return;
         };
@@ -333,7 +334,10 @@ impl Image {
         // After about ~50 days, casting `elapsed_time` to a u32 will
         // silently overflow. The gif may jump and start playing from a
         // different frame.
-        match animated_image.get_current_frame(elapsed_time as u32) {
+        match animated_image
+            .get_current_frame(elapsed_time as u32)
+            .context("Unable to retrieve current frame from image")
+        {
             Ok((frame, remaining_delay)) => {
                 self.paint_static_image(frame.clone(), size, origin, bounds, ctx);
                 // Only repaint if self.started_at is set. Otherwise
@@ -344,7 +348,7 @@ impl Image {
                 }
             }
             Err(e) => {
-                log::error!("Unable to retrieve current frame from image: {e:?}");
+                report_error!(e);
             }
         }
     }

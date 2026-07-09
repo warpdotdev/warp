@@ -13,10 +13,10 @@ use super::iterm_image::ITermImage;
 use super::kitty::{KittyAction, KittyResponse};
 use super::selection::ScrollDelta;
 use super::session::SessionInfo;
-use crate::safe_debug;
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::view::CONTROL_MASTER_ERROR_REGEX;
+use crate::{report_error, safe_debug};
 
 #[cfg(test)]
 #[path = "early_output_tests.rs"]
@@ -658,7 +658,7 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn prompt_marker(&mut self, _marker: ansi::PromptMarker) {
-        log::error!(
+        report_error!(
             "Received prompt_marker in EarlyOutput, but it should be sent to the active block by the blocklist"
         );
     }

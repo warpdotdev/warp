@@ -48,6 +48,7 @@ use crate::editor::accept_autosuggestion_keybinding_view::{
 use crate::editor::autosuggestion_ignore_view::AutosuggestionIgnore;
 use crate::editor::position_id_for_first_cursor;
 use crate::editor::view::AutosuggestionLocation;
+use crate::report_error;
 use crate::settings::CursorDisplayType;
 use crate::themes::theme::Fill;
 use crate::ui_components::blended_colors;
@@ -1588,7 +1589,7 @@ impl Element for EditorElement {
             app,
         ) {
             Err(error) => {
-                log::error!("error laying out lines: {error}");
+                report_error!(error.context("error laying out lines"));
                 return size;
             }
             Ok(layouts) => layouts,

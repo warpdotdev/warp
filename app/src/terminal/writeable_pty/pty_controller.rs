@@ -11,6 +11,8 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::Message;
 use crate::ai::agent::AIAgentPtyWriteMode;
+#[cfg(feature = "local_fs")]
+use crate::report_error;
 use crate::terminal::input::CommandExecutionSource;
 use crate::terminal::line_editor_status::{LineEditorStatus, LineEditorStatusEvent};
 use crate::terminal::model::ansi::Handler;
@@ -427,7 +429,7 @@ impl<T: EventLoopSender> PtyController<T> {
                     self.source_bootstrap_script(path, shell_type, ctx);
                 } else {
                     self.write_terminating_bootstrap_bytes(ctx);
-                    log::error!("Could not convert bootstrap script file path to str");
+                    report_error!("Could not convert bootstrap script file path to str");
                 }
 
                 self.bootstrap_file = Some(file);

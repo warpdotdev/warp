@@ -78,7 +78,7 @@ pub enum DiffSessionType {
 }
 
 /// Derives the 1-indexed changed line ranges described by a diff's deltas.
-pub(crate) fn changed_lines_from_op(diff_type: &DiffType) -> Vec<Range<usize>> {
+pub fn changed_lines_from_op(diff_type: &DiffType) -> Vec<Range<usize>> {
     match diff_type {
         DiffType::Create { delta } => inserted_content_range(1, &delta.insertion)
             .into_iter()

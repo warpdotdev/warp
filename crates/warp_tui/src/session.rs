@@ -14,6 +14,7 @@ use warp::tui_export::{
     TerminalManagerTrait, TerminalSurfaceResult,
 };
 use warp::{TuiLoginModel, TuiLoginPhase};
+use warp_core::report_error;
 use warpui::SingletonEntity;
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
@@ -21,6 +22,7 @@ use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, ViewHandle}
 
 use crate::root_view::RootTuiView;
 use crate::terminal_session_view::TuiTerminalSessionView;
+use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 
 /// Holds the live TUI driver and, after login, the terminal manager.
 struct TuiSession {
@@ -100,8 +102,9 @@ fn init(ctx: &mut AppContext) {
             }
         }
         Err(error) => {
-            log::error!("failed to start transcript TUI: {error}");
-            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error.into())));
+            let error = anyhow::Error::new(error);
+            report_error!(&error);
+            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
         }
     }
 }
@@ -127,6 +130,7 @@ fn create_terminal_session_after_login(
         Vector2F::new(120., 24.),
         None,
         None,
+        TRANSCRIPT_BLOCK_SPACING,
         ctx,
         move |surface_init, ctx| {
             let surface = root.update(ctx, |root, ctx| {

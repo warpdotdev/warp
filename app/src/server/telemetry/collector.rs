@@ -88,7 +88,7 @@ impl TelemetryCollector {
                 log::info!("Successfully wrote telemetry events to disk")
             }
             Err(e) => {
-                log::error!("Failed to write telemetry events to disk {e:#}");
+                report_error!(e.context("Failed to write telemetry events to disk"));
             }
         }
     }

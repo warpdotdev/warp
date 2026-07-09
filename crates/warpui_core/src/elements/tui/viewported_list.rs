@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
 };
 use crate::AppContext;
 
@@ -325,7 +325,7 @@ where
         self.size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         for visible in &self.visible_elements {
             let slot_y = area.y.saturating_add(visible.viewport_y);
             if slot_y >= area.bottom() {
@@ -337,7 +337,7 @@ where
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         for visible in &self.visible_elements {
             let slot_y = area.y.saturating_add(visible.viewport_y);
             if slot_y >= area.bottom() {

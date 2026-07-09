@@ -59,6 +59,7 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
+use crate::report_error;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
@@ -959,9 +960,9 @@ impl View for RunAgentsCardView {
             if let AIAgentActionResultType::RunAgents(orchestrate_result) = &result.result {
                 return render_terminal_state(orchestrate_result, appearance, app);
             }
-            log::error!(
-                "Unexpected action result type for orchestrate: {:?}",
-                result.result
+            report_error!(
+                "Unexpected action result type for orchestrate",
+                extra: { "result_type" => ?result.result }
             );
             return Empty::new().finish();
         }

@@ -58,6 +58,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                     })
                     .expect("child conversation data should serialize"),
                     last_modified_at: now,
+                    summary: None,
                 },
                 tasks: vec![warp_multi_agent_api::Task {
                     id: format!("task-{child_id}"),
@@ -108,6 +109,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                     })
                     .expect("parent conversation data should serialize"),
                     last_modified_at: now - chrono::Duration::seconds(1),
+                    summary: None,
                 },
                 tasks: vec![warp_multi_agent_api::Task {
                     id: format!("task-{parent_id}"),
@@ -137,8 +139,8 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
             },
         ];
 
-        let history_model =
-            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &conversations));
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
 
         history_model.read(&app, |model, _| {
             // pill_specs walks `descendant_conversation_ids_in_spawn_order`

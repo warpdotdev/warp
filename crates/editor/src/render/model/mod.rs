@@ -20,6 +20,7 @@ use sum_tree::{SeekBias, SumTree};
 use vec1::Vec1;
 use vim::vim::{MotionType, VimMode};
 use warp_core::channel::ChannelState;
+use warp_core::report_error;
 use warp_core::ui::Icon;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui_core::assets::asset_cache::AssetSource;
@@ -1719,8 +1720,9 @@ impl Add for BlockLocation {
             _ => {
                 // Out-of-order block locations should not be added together.
                 if ChannelState::enable_debug_features() {
-                    log::error!(
-                        "Tried to combine block location {self:?} with later location {rhs:?}"
+                    report_error!(
+                        "Tried to combine block location with later location",
+                        extra: { "location" => ?self, "later_location" => ?rhs }
                     );
                 }
                 Self::Middle

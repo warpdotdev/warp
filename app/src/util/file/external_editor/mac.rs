@@ -11,6 +11,7 @@ use warp_core::AppId;
 use warpui::ApplicationBundleInfo;
 
 use super::*;
+use crate::report_error;
 
 /// The executable we use to launch the editor.
 #[derive(Debug)]
@@ -279,7 +280,9 @@ impl<'a> Editor {
                                 );
                             }
                             Err(err) => {
-                                log::error!("unable to await process {err:?}");
+                                report_error!(
+                                    anyhow::Error::new(err).context("unable to await process")
+                                );
                             }
                         };
                     })
@@ -288,7 +291,10 @@ impl<'a> Editor {
                 true
             }
             Err(e) => {
-                log::error!("Error launching {self:?} {e:?}");
+                report_error!(
+                    anyhow::Error::new(e).context("Error launching editor"),
+                    extra: { "editor" => ?self }
+                );
                 false
             }
         }

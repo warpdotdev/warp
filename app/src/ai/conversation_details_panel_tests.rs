@@ -211,7 +211,8 @@ fn create_test_server_metadata(
 #[test]
 fn test_from_task_includes_linked_directory_when_run_id_matches() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let conversation_id = AIConversationId::new();
         let task_id = "550e8400-e29b-41d4-a716-000000004000";
@@ -292,7 +293,8 @@ fn test_from_conversation_metadata_passes_harness_through() {
 #[test]
 fn test_from_task_resolves_harness() {
     App::test((), |mut app| async move {
-        let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let _history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // Base task has `agent_config_snapshot: None`; cloning lets us mutate per case.
         let base_task = create_test_task("550e8400-e29b-41d4-a716-000000004020");
@@ -330,7 +332,8 @@ fn test_from_task_resolves_harness() {
 #[test]
 fn test_from_task_populates_executor() {
     App::test((), |mut app| async move {
-        let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let _history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let mut task = create_test_task("550e8400-e29b-41d4-a716-000000004030");
         task.executor = Some(TaskPrincipalInfo {
             creator_type: "service_account".to_string(),
@@ -356,7 +359,8 @@ fn test_from_conversation_populates_local_conversation_fields() {
     // and surfaces the conversation-derived fields the conversation details panel
     // renders for local Warp Agent runs (APP-3595).
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let conversation_id = AIConversationId::new();
         let directory = "/tmp/local-conversation-directory";
@@ -425,7 +429,8 @@ fn test_from_conversation_populates_local_conversation_fields() {
 #[test]
 fn test_from_task_includes_linked_directory_when_server_token_matches() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let conversation_id = AIConversationId::new();
         let server_token = "server-token-123";

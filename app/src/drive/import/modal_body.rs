@@ -21,6 +21,7 @@ use super::nodes::{
 use super::queue::{ImportQueue, ImportQueueArgs, ImportQueueEvent, ParentId, RequestContent};
 use crate::appearance::Appearance;
 use crate::cloud_object::Owner;
+use crate::report_error;
 use crate::server::ids::{ClientId, SyncId};
 use crate::server::sync_queue::SyncQueue;
 use crate::ui_components::icons::Icon;
@@ -346,7 +347,7 @@ impl ImportModalBody {
 
             self.in_progress_handle = Some(handle.abort_handle());
         } else {
-            log::error!("State should be path expanded when parsing files");
+            report_error!("State should be path expanded when parsing files");
         };
     }
 

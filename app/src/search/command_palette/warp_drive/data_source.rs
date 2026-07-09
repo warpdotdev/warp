@@ -12,6 +12,7 @@ use crate::cloud_object::{
 use crate::drive::folders::CloudFolder;
 use crate::env_vars::CloudEnvVarCollection;
 use crate::notebooks::CloudNotebook;
+use crate::report_error;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
 use crate::search::env_var_collections::fuzzy_match::FuzzyMatchEnvVarCollectionResult;
@@ -47,7 +48,7 @@ impl DataSource {
         ctx.subscribe_to_model(&CloudModel::handle(ctx), Self::handle_cloud_object_updated);
         let mut searcher = Box::new(FuzzyWarpDriveSearcher::default());
         searcher.refresh_search_index(ctx).unwrap_or_else(|err| {
-            log::error!("Error refreshing search index: {err:?}");
+            report_error!(err.context("Error refreshing search index"));
         });
         DataSource { searcher }
     }
@@ -59,7 +60,7 @@ impl DataSource {
             ctx.background_executor(),
         ));
         searcher.refresh_search_index(ctx).unwrap_or_else(|err| {
-            log::error!("Error refreshing search index: {err:?}");
+            report_error!(err.context("Error refreshing search index"));
         });
         DataSource { searcher }
     }
@@ -77,7 +78,7 @@ impl DataSource {
             self.searcher
                 .refresh_search_index(ctx)
                 .unwrap_or_else(|err| {
-                    log::error!("Error refreshing search index after initial load: {err:?}");
+                    report_error!(err.context("Error refreshing search index after initial load"));
                 });
             return;
         }
@@ -92,17 +93,17 @@ impl DataSource {
                     self.searcher
                         .insert_searchable_object(obj, type_and_id.object_type(), ctx)
                         .unwrap_or_else(|err| {
-                            log::error!("Error inserting object into search index: {err:?}");
+                            report_error!(err.context("Error inserting object into search index"));
                         });
                 } else {
-                    log::error!("Object with ID {type_and_id:?} not found in CloudModel");
+                    report_error!("Object not found in CloudModel", extra: { "id" => ?type_and_id });
                 }
             }
             CloudModelEvent::ObjectTrashed { type_and_id, .. } => self
                 .searcher
                 .delete_searchable_object(type_and_id.uid(), type_and_id.object_type(), ctx)
                 .unwrap_or_else(|err| {
-                    log::error!("Error deleting object from search index: {err:?}");
+                    report_error!(err.context("Error deleting object from search index"));
                 }),
             CloudModelEvent::ObjectSynced {
                 type_and_id,

@@ -4,15 +4,15 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentExchangeId, AIAgentInput, AIBlockModel, AIBlockOutputStatus, AIConversationId,
-    AIRequestType, BlockHeightItem, BlocklistAIHistoryModel, LLMId, OutputStatusUpdateCallback,
-    RichContentItem, RichContentType, ServerOutputId, TerminalModel,
+    AIRequestType, BlockHeightItem, LLMId, OutputStatusUpdateCallback, RichContentItem,
+    RichContentType, ServerOutputId, TerminalModel,
 };
 use warpui::event::ModifiersState;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, EntityId, EntityIdMap, TuiView};
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiRect, TuiSize,
+    TuiLayoutContext, TuiPaintContext, TuiRect, TuiSize,
 };
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -20,22 +20,23 @@ use warpui_core::{AppContext, ViewContext};
 
 use super::TuiTranscriptView;
 use crate::agent_block::TuiAIBlock;
+use crate::test_fixtures::add_test_action_model;
 
 #[test]
 fn transcript_view_renders_terminal_blocks_from_canonical_order() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
         let mut terminal_model = TerminalModel::mock(None, None);
         terminal_model.simulate_block("echo 1", "1\r\n");
         let terminal_model = Arc::new(FairMutex::new(terminal_model));
         let model_for_view = terminal_model.clone();
+        let action_model = add_test_action_model(&mut app);
         let (_, transcript) = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {
                     window_style: WindowStyle::NotStealFocus,
                     ..Default::default()
                 },
-                |ctx| TuiTranscriptView::new(EntityId::new(), model_for_view, ctx),
+                |ctx| TuiTranscriptView::new(EntityId::new(), model_for_view, action_model, ctx),
             )
         });
 
@@ -99,27 +100,32 @@ impl AIBlockModel for EmptyAgentBlockModel {
 #[test]
 fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
         let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
         let model_for_view = terminal_model.clone();
+        let action_model = add_test_action_model(&mut app);
         let (_, transcript) = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {
                     window_style: WindowStyle::NotStealFocus,
                     ..Default::default()
                 },
-                |ctx| TuiTranscriptView::new(EntityId::new(), model_for_view, ctx),
+                |ctx| TuiTranscriptView::new(EntityId::new(), model_for_view, action_model, ctx),
             )
         });
         let original_conversation_id = AIConversationId::new();
         let exchange_id = AIAgentExchangeId::new();
 
         transcript.update(&mut app, |view, ctx| {
-            let agent_block = ctx.add_tui_view(|_| {
+            let action_model = view.action_model.clone();
+            let terminal_model = view.model.clone();
+            let agent_block = ctx.add_tui_view(|ctx| {
                 TuiAIBlock::new(
                     original_conversation_id,
                     exchange_id,
                     Rc::new(EmptyAgentBlockModel),
+                    action_model,
+                    terminal_model,
+                    ctx,
                 )
             });
             let agent_block_id = agent_block.id();
@@ -175,7 +181,6 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
 #[test]
 fn transcript_view_scrolls_only_with_the_mouse_wheel() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
         let mut terminal_model = TerminalModel::mock(None, None);
         for index in 0..8 {
             let command = format!("echo {index}");
@@ -184,13 +189,14 @@ fn transcript_view_scrolls_only_with_the_mouse_wheel() {
         }
         let terminal_model = Arc::new(FairMutex::new(terminal_model));
         let model_for_view = terminal_model.clone();
+        let action_model = add_test_action_model(&mut app);
         let (_, transcript) = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {
                     window_style: WindowStyle::NotStealFocus,
                     ..Default::default()
                 },
-                |ctx| TuiTranscriptView::new(EntityId::new(), model_for_view, ctx),
+                |ctx| TuiTranscriptView::new(EntityId::new(), model_for_view, action_model, ctx),
             )
         });
         let mut element = transcript.read(&app, |view, app| view.render(app));
@@ -235,7 +241,8 @@ fn render_element(app: &App, element: &mut dyn TuiElement, area: TuiRect) -> Vec
             app,
         );
         let mut buffer = TuiBuffer::empty(area);
-        element.render(area, &mut buffer, &mut ctx);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        element.render(area, &mut buffer, &mut paint_ctx);
         buffer.to_lines()
     })
 }

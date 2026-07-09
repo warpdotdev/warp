@@ -5,6 +5,8 @@ use async_broadcast::InactiveReceiver;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
 
+#[cfg(feature = "local_fs")]
+use crate::report_error;
 use crate::settings::{DebugSettings, DebugSettingsChangedEvent};
 use crate::view_components::{DismissibleToast, ToastLink};
 use crate::workspace::{ToastStack, WorkspaceAction};
@@ -132,7 +134,9 @@ impl PtyRecorder {
 
         let recordings_dir = self.path.parent()?;
         if let Err(e) = fs::create_dir_all(recordings_dir) {
-            log::error!("Failed to create PTY recordings directory: {e}");
+            report_error!(
+                anyhow::Error::new(e).context("Failed to create PTY recordings directory")
+            );
             return None;
         }
 

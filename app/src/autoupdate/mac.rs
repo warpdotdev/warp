@@ -25,7 +25,7 @@ use super::{release_assets_directory_url, DownloadReady};
 use crate::appearance::AppearanceManager;
 use crate::autoupdate::{AutoupdateStage, AutoupdateState};
 use crate::channel::{Channel, ChannelState};
-use crate::safe_info;
+use crate::{report_error, safe_info};
 
 // Relative path to the directory containing old executables from before an autoupdate.
 //
@@ -502,7 +502,7 @@ impl Drop for StagedBundle {
         if self.in_app_directory {
             log::info!("Removing temporary app bundle");
             if let Err(err) = fs::remove_dir_all(&self.path) {
-                log::error!("Failed to remove temporary bundle: {err:#}");
+                report_error!(anyhow::Error::new(err).context("Failed to remove temporary bundle"));
             }
         }
     }

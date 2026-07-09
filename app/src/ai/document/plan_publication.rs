@@ -10,6 +10,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentModelEvent};
+use crate::report_error;
 
 /// Bounded wait per plan so a failed or slow publication cannot stall callers
 /// indefinitely.
@@ -79,15 +80,15 @@ pub(in crate::ai) async fn wait_for_plan_publications(pending: Vec<PendingPlanPu
         {
             Ok(Ok(())) => {}
             Ok(Err(_)) => {
-                log::error!(
-                    "Stopped waiting for plan document {} before it became server-backed.",
-                    pending.document_id
+                report_error!(
+                    "Stopped waiting for plan document before it became server-backed.",
+                    extra: { "document_id" => %pending.document_id }
                 );
             }
             Err(_) => {
-                log::error!(
-                    "Timed out waiting for plan document {} to become server-backed before child-agent launch.",
-                    pending.document_id
+                report_error!(
+                    "Timed out waiting for plan document to become server-backed before child-agent launch.",
+                    extra: { "document_id" => %pending.document_id }
                 );
             }
         }

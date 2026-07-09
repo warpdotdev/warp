@@ -5,6 +5,7 @@ mod x11;
 
 use async_trait::async_trait;
 pub use recording::Recorder;
+use warp_errors::report_error;
 
 use crate::{ActionResult, Options, TargetedAction};
 
@@ -52,7 +53,7 @@ impl Actor {
             match wayland::Actor::new() {
                 Ok(actor) => ActorInner::Wayland(Box::new(actor)),
                 Err(e) => {
-                    log::error!("Failed to create Wayland actor: {e}");
+                    report_error!(anyhow::anyhow!(e).context("Failed to create Wayland actor"));
                     ActorInner::Unsupported
                 }
             }
@@ -61,7 +62,7 @@ impl Actor {
             match x11::Actor::new() {
                 Ok(actor) => ActorInner::X11(Box::new(actor)),
                 Err(e) => {
-                    log::error!("Failed to create X11 actor: {e}");
+                    report_error!(anyhow::anyhow!(e).context("Failed to create X11 actor"));
                     ActorInner::Unsupported
                 }
             }

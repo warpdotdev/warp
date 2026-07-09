@@ -13,10 +13,10 @@ To connect Warp client to a local warp-server instance:
 
 ```bash
 # Connect to server on default port 8080
-cargo run --features with_local_server
+WITH_LOCAL_SERVER=1 ./script/run
 
 # Connect to server on custom port (e.g., 8082)
-SERVER_ROOT_URL=http://localhost:8082 WS_SERVER_URL=ws://localhost:8082/graphql/v2 cargo run --features with_local_server
+WITH_LOCAL_SERVER=1 SERVER_ROOT_URL=http://localhost:8082 WS_SERVER_URL=ws://localhost:8082/graphql/v2 ./script/run
 ```
 
 Environment variables:

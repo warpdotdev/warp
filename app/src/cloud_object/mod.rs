@@ -343,7 +343,7 @@ pub trait CloudObject: Debug {
                     return false;
                 }
             }
-            _ => log::error!(
+            _ => report_error!(
                 "called decrement_in_flight_request_count with a non-`InFlight` cloud status"
             ),
         }
@@ -986,6 +986,8 @@ pub use cloud_object_models::{
     ServerPreference, ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflow,
     ServerWorkflowEnum, TryFromGql,
 };
+
+use crate::report_error;
 
 #[derive(Default, Clone, Copy, Debug, Eq, Derivative)]
 #[derivative(PartialEq, Hash)]

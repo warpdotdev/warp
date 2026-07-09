@@ -61,7 +61,6 @@ use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::NetworkStatus;
 use crate::pricing::PricingInfoModel;
-use crate::send_telemetry_from_ctx;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
@@ -79,6 +78,7 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{
     BillingMetadata, CustomerType, DelinquencyStatus, WorkspaceSizePolicy,
 };
+use crate::{report_error, send_telemetry_from_ctx};
 
 const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header";
 // Styling for team create page
@@ -1019,7 +1019,7 @@ impl TeamsPageView {
             }
             UserWorkspacesEvent::FetchDiscoverableTeamsRejected(e) => {
                 // Don't show toast, only log to sentry
-                log::error!("Failed to fetch discoverable teams: {e:?}");
+                report_error!(e);
             }
             UserWorkspacesEvent::TransferTeamOwnershipSuccess => {
                 self.show_success("Successfully transferred team ownership", ctx);
@@ -1427,9 +1427,9 @@ impl TeamsPageView {
 
         // Log error to sentry
         if let Some(error) = error {
-            log::error!("{message}: {error:#}");
+            report_error!(error);
         } else {
-            log::error!("{message}");
+            report_error!(anyhow::Error::msg(message.clone()));
         }
     }
 

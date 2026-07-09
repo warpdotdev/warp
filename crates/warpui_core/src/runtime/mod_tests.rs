@@ -9,7 +9,7 @@ use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyM
 use super::*;
 use crate::elements::tui::{
     TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext,
-    TuiStyle, TuiText,
+    TuiPaintContext, TuiStyle, TuiText,
 };
 use crate::keymap::macros::*;
 use crate::keymap::FixedBinding;
@@ -32,7 +32,7 @@ impl TuiElement for TextElement {
         constraint.clamp(TuiSize::new(width, 1))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
         buffer.set_stringn(
             area.x,
             area.y,

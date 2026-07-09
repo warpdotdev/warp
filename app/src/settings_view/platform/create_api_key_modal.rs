@@ -24,6 +24,7 @@ use crate::editor::{
     TextOptions,
 };
 use crate::modal::{Modal, ModalViewState};
+use crate::report_error;
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
 use crate::view_components::{Dropdown as DropdownView, DropdownItem, FilterableDropdown};
@@ -294,7 +295,7 @@ impl CreateApiKeyModal {
                         me.populate_agent_dropdown(ctx);
                     }
                     Err(err) => {
-                        log::error!("Failed to load agent identities: {err}");
+                        report_error!(err.context("Failed to load agent identities"));
                         ctx.emit(CreateApiKeyModalEvent::Error {
                             message: "Failed to load agents. Please close and try again."
                                 .to_string(),

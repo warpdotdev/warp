@@ -10,6 +10,7 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::CloudObject as _;
 use crate::drive::CloudObjectTypeAndId;
+use crate::report_error;
 use crate::server::ids::SyncId;
 
 define_settings_group!(WorkflowAliases, settings: [
@@ -50,7 +51,7 @@ impl WorkflowAliases {
             };
 
             if let Err(e) = result {
-                log::error!("Error removing aliases for workflow: {e:?}");
+                report_error!(e.context("Error removing aliases for workflow"));
             }
         });
     }

@@ -95,7 +95,6 @@ pub fn init(app: &mut AppContext) {
     view::cloud_agent_capacity_modal::init(app);
     view::codex_modal::init(app);
     view::free_ai_removal_modal::init(app);
-    view::free_tier_limit_hit_modal::init(app);
     view::global_search::view::GlobalSearchView::init(app);
     view::right_panel::RightPanelView::init(app);
     header_toolbar_editor::init(app);
@@ -1414,6 +1413,13 @@ pub fn init(app: &mut AppContext) {
     }
 
     app.register_editable_bindings([
+        EditableBinding::new(
+            "workspace:copy_current_path",
+            BindingDescription::new("Copy current path")
+                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Copy Current Path"),
+            WorkspaceAction::CopyCurrentPath,
+        )
+        .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
             "workspace:open_repository",
             BindingDescription::new("Open repository")

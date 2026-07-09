@@ -29,7 +29,8 @@ use crate::ui_components::blended_colors;
 use crate::user_config::{self, WarpConfig};
 use crate::window_settings::WindowSettings;
 use crate::{
-    report_if_error, send_telemetry_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent,
+    report_error, report_if_error, send_telemetry_from_ctx, GlobalResourceHandlesProvider,
+    TelemetryEvent,
 };
 
 // UI does not scale, so we set a fixed size for all text.
@@ -864,7 +865,10 @@ impl SettingsImportView {
         let model = ImportedConfigModel::handle(ctx);
         let imported_settings = model.read(ctx, |model, _ctx| {
             let Some(config) = model.config(terminal_type_and_profile) else {
-                log::error!("Could not find config for terminal {terminal_type_and_profile:?}");
+                report_error!(
+                    "Could not find config for terminal",
+                    extra: { "terminal" => ?terminal_type_and_profile }
+                );
                 return Default::default();
             };
 

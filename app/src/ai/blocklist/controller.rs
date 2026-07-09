@@ -65,7 +65,6 @@ use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::persistence::ModelEvent;
-use crate::send_telemetry_from_ctx;
 use crate::server::server_api::AIApiError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
@@ -81,6 +80,7 @@ use crate::terminal::ShellLaunchData;
 use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{report_error, send_telemetry_from_ctx};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {
@@ -188,8 +188,6 @@ pub enum BlocklistAIControllerEvent {
     ExecuteLocalHarnessCommand {
         command: String,
     },
-
-    FreeTierLimitCheckTriggered,
 }
 
 #[derive(Debug)]
@@ -857,7 +855,7 @@ impl BlocklistAIController {
         // If the request failed, re-insert the dirty events so they aren't
         // silently lost.
         if let Err(e) = &send_result {
-            log::error!("Failed to send agent request: {e:?}");
+            report_error!(e);
             if !taken_dirty_events.is_empty() {
                 AIDocumentModel::handle(ctx).update(ctx, |model, _| {
                     model.set_dirty_orchestration_events(conversation_id, taken_dirty_events);
@@ -1013,7 +1011,8 @@ impl BlocklistAIController {
             }) {
                 Ok(task_id) => task_id,
                 Err(e) => {
-                    log::error!("Could not create CLI subagent task optimistically: {e:?}");
+                    report_error!(anyhow::Error::new(e)
+                        .context("Could not create CLI subagent task optimistically"));
                     return;
                 }
             };
@@ -1188,7 +1187,7 @@ impl BlocklistAIController {
             .shared_session_status()
             .is_viewer();
         if is_viewer {
-            log::error!("Viewers should never attempt to send queries directly");
+            report_error!("Viewers should never attempt to send queries directly");
         }
 
         // Ensure we capture all pending context blocks before promoting and attaching them to the conversation.
@@ -1229,7 +1228,8 @@ impl BlocklistAIController {
                 }) {
                     Ok(task_id) => (task_id, Some(running_command)),
                     Err(e) => {
-                        log::error!("Could not create CLI subagent task optimistically: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Could not create CLI subagent task optimistically"));
                         return;
                     }
                 }
@@ -1244,8 +1244,9 @@ impl BlocklistAIController {
             } else {
                 let history_model = BlocklistAIHistoryModel::as_ref(ctx);
                 let Some(conversation) = history_model.conversation(&conversation_id) else {
-                    log::error!(
-                        "Tried to send follow-up query for non-existent conversation: {conversation_id:?}"
+                    report_error!(
+                        "Tried to send follow-up query for non-existent conversation",
+                        extra: { "conversation_id" => ?conversation_id }
                     );
                     return;
                 };
@@ -1268,7 +1269,8 @@ impl BlocklistAIController {
                         block_id: block_id.to_string(),
                         agent_view_visibility: agent_view_visibility.into(),
                     }) {
-                        log::error!("Error sending UpdateBlockAgentViewVisibility event: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error sending UpdateBlockAgentViewVisibility event"));
                     }
                 }
             }
@@ -1332,7 +1334,7 @@ impl BlocklistAIController {
             Some(id) => {
                 let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx).conversation(&id)
                 else {
-                    log::error!(
+                    report_error!(
                         "Tried to send custom AI input query as follow-up in non-existent conversation"
                     );
                     return;
@@ -1444,7 +1446,10 @@ impl BlocklistAIController {
             Some(id) => {
                 let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx).conversation(&id)
                 else {
-                    log::error!("[passive-suggestion-result] conversation not found for id {id:?}");
+                    report_error!(
+                        "[passive-suggestion-result] conversation not found",
+                        extra: { "id" => ?id }
+                    );
                     return;
                 };
                 WhichTask::Task {
@@ -1932,7 +1937,10 @@ impl BlocklistAIController {
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
-            log::error!("Tried to resume non-existent conversation: {conversation_id:?}");
+            report_error!(
+                "Tried to resume non-existent conversation",
+                extra: { "conversation_id" => ?conversation_id }
+            );
             return;
         };
         let task_id = {
@@ -2870,9 +2878,8 @@ impl BlocklistAIController {
                                         )
                                     });
                                 if let Err(e) = apply_result {
-                                    log::error!(
-                                        "Failed to apply client actions to conversation: {e:?}"
-                                    );
+                                    report_error!(anyhow::Error::new(e)
+                                        .context("Failed to apply client actions to conversation"));
                                 }
                             }
                         }
@@ -3336,7 +3343,6 @@ impl BlocklistAIController {
             LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
                 llm_preferences.refresh_authed_models(ctx);
             });
-            ctx.emit(BlocklistAIControllerEvent::FreeTierLimitCheckTriggered);
         }
     }
 }

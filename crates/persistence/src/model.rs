@@ -906,6 +906,12 @@ pub struct AgentConversationRecord {
     pub conversation_id: String,
     pub conversation_data: String,
     pub last_modified_at: NaiveDateTime,
+    /// Serialized [`AgentConversationSummary`], computed from the task
+    /// snapshot at write time so startup can list conversations without
+    /// loading or decoding `agent_tasks`. `None` on rows written before the
+    /// column existed; readers fall back to deriving from tasks (and
+    /// backfill the column).
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Queryable, Selectable)]
@@ -950,48 +956,181 @@ pub struct AgentConversation {
 impl AgentConversation {
     /// Returns `true` if the conversation is restorable.
     ///
-    /// A conversation is restorable if:
-    /// - It contains a single task or fewer, OR
-    /// - It has exactly one parentless (root) task, OR
-    /// - It has multiple parentless tasks but exactly one of them has
-    ///   non-empty `messages`. This permits restoring conversations whose
-    ///   persisted state was corrupted by the pre-QUALITY-774 optimistic-root
-    ///   writer bug, where a stub root row co-existed with the real server
-    ///   root row. `AIConversation::new_restored` deterministically picks
-    ///   the real root in that shape via its restore-side dedupe.
-    ///
-    /// Non-root tasks need not be validated here: any task that does not
-    /// match the parentless predicate has, by construction, a non-empty
-    /// `parent_task_id`.
+    /// See [`tasks_are_restorable`] for the exact rules.
     pub fn is_restorable(&self) -> bool {
-        if self.tasks.len() <= 1 {
-            return true;
+        tasks_are_restorable(self.tasks.iter())
+    }
+}
+
+/// Returns `true` if a conversation with the given task snapshot is
+/// restorable.
+///
+/// A conversation is restorable if:
+/// - It contains a single task or fewer, OR
+/// - It has exactly one parentless (root) task, OR
+/// - It has multiple parentless tasks but exactly one of them has
+///   non-empty `messages`. This permits restoring conversations whose
+///   persisted state was corrupted by the pre-QUALITY-774 optimistic-root
+///   writer bug, where a stub root row co-existed with the real server
+///   root row. `AIConversation::new_restored` deterministically picks
+///   the real root in that shape via its restore-side dedupe.
+///
+/// Non-root tasks need not be validated here: any task that does not
+/// match the parentless predicate has, by construction, a non-empty
+/// `parent_task_id`.
+pub fn tasks_are_restorable<'a>(tasks: impl IntoIterator<Item = &'a api::Task>) -> bool {
+    let tasks: Vec<&api::Task> = tasks.into_iter().collect();
+    if tasks.len() <= 1 {
+        return true;
+    }
+
+    // Find parentless (root) tasks - tasks with no dependencies or with an
+    // empty parent_task_id.
+    let root_tasks: Vec<_> = tasks
+        .iter()
+        .filter(|task| {
+            task.dependencies
+                .as_ref()
+                .map(|deps| deps.parent_task_id.is_empty())
+                .unwrap_or(true)
+        })
+        .collect();
+
+    match root_tasks.len() {
+        // Malformed: no parentless task means no root to anchor restore on.
+        0 => false,
+        // Single root: the normal happy path.
+        1 => true,
+        // Multi-root: only permit the specific [stub + real] shape
+        // produced by the pre-QUALITY-774 optimistic-root writer bug,
+        // where exactly one parentless row carries the real conversation
+        // content. The restore-side dedupe in
+        // `AIConversation::new_restored` will pick that real root.
+        _ => root_tasks.iter().filter(|t| !t.messages.is_empty()).count() == 1,
+    }
+}
+
+/// Returns the working directory of the first message in the task that
+/// carries directory context, if any.
+pub fn api_task_initial_working_directory(task: &api::Task) -> Option<String> {
+    task.messages
+        .iter()
+        .find_map(|message| {
+            message.message.as_ref().and_then(|content| {
+                let context = match content {
+                    api::message::Message::UserQuery(user_query) => user_query.context.as_ref(),
+                    api::message::Message::ToolCallResult(tool_call_result) => {
+                        tool_call_result.context.as_ref()
+                    }
+                    api::message::Message::SystemQuery(system_query) => {
+                        system_query.context.as_ref()
+                    }
+                    _ => None,
+                };
+
+                context
+                    .and_then(|ctx| ctx.directory.as_ref())
+                    .map(|dir| dir.pwd.clone())
+            })
+        })
+        .filter(|pwd| !pwd.is_empty())
+}
+
+/// Task-derived conversation metadata, serialized into the `summary` column
+/// of `agent_conversations` at write time.
+///
+/// This lets startup build the conversation history list from
+/// `agent_conversations` rows alone, without loading or protobuf-decoding the
+/// (potentially very large) `agent_tasks` blobs.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AgentConversationSummary {
+    /// The conversation's initial user query (or passive diff summary).
+    /// Empty when the conversation has no root task with a user query.
+    #[serde(default)]
+    pub initial_query: String,
+    /// Display title: the root task description, falling back to
+    /// `initial_query`.
+    #[serde(default)]
+    pub title: String,
+    /// The working directory of the first message carrying directory context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_working_directory: Option<String>,
+    /// Mirror of [`tasks_are_restorable`] over the persisted task snapshot.
+    pub is_restorable: bool,
+    /// True when the conversation only contains passive `AutoCodeDiff` system
+    /// queries and no user queries; such conversations are hidden from the
+    /// history list.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_unlisted_auto_code_diff: bool,
+}
+
+impl AgentConversationSummary {
+    /// Derives the summary from a conversation's full task snapshot.
+    pub fn from_tasks<'a>(tasks: impl IntoIterator<Item = &'a api::Task>) -> Self {
+        let tasks: Vec<&api::Task> = tasks.into_iter().collect();
+
+        let mut has_user_query = false;
+        let mut has_auto_code_diff = false;
+        for task in &tasks {
+            for message in &task.messages {
+                match &message.message {
+                    Some(api::message::Message::UserQuery(_)) => {
+                        has_user_query = true;
+                    }
+                    Some(api::message::Message::SystemQuery(sys)) => {
+                        if let Some(api::message::system_query::Type::AutoCodeDiff(_)) = &sys.r#type
+                        {
+                            has_auto_code_diff = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
 
-        // Find parentless (root) tasks - tasks with no dependencies or with an
-        // empty parent_task_id.
-        let root_tasks: Vec<_> = self
-            .tasks
-            .iter()
-            .filter(|task| {
-                task.dependencies
-                    .as_ref()
-                    .map(|deps| deps.parent_task_id.is_empty())
-                    .unwrap_or(true)
-            })
-            .collect();
+        let root_task = tasks.iter().find(|task| task.dependencies.is_none());
 
-        match root_tasks.len() {
-            // Malformed: no parentless task means no root to anchor restore on.
-            0 => false,
-            // Single root: the normal happy path.
-            1 => true,
-            // Multi-root: only permit the specific [stub + real] shape
-            // produced by the pre-QUALITY-774 optimistic-root writer bug,
-            // where exactly one parentless row carries the real conversation
-            // content. The restore-side dedupe in
-            // `AIConversation::new_restored` will pick that real root.
-            _ => root_tasks.iter().filter(|t| !t.messages.is_empty()).count() == 1,
+        // The first user query in the root task (or, for a passive code
+        // diff, the summary of the diff).
+        let initial_query = root_task
+            .map(|task| {
+                task.messages
+                    .iter()
+                    .find_map(|msg| match &msg.message {
+                        Some(api::message::Message::UserQuery(user_query)) => {
+                            Some(user_query.query.clone())
+                        }
+                        Some(api::message::Message::ToolCall(tool_call)) => {
+                            match tool_call.tool.as_ref()? {
+                                api::message::tool_call::Tool::ApplyFileDiffs(diff_suggestion) => {
+                                    Some(diff_suggestion.summary.clone())
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
+        // The title is the root task description, falling back to
+        // `initial_query` when the description is empty.
+        let title = root_task
+            .map(|task| task.description.clone())
+            .filter(|desc| !desc.is_empty())
+            .unwrap_or_else(|| initial_query.clone());
+
+        let initial_working_directory = tasks
+            .iter()
+            .find_map(|task| api_task_initial_working_directory(task));
+
+        Self {
+            initial_query,
+            title,
+            initial_working_directory,
+            is_restorable: tasks_are_restorable(tasks.iter().copied()),
+            is_unlisted_auto_code_diff: has_auto_code_diff && !has_user_query,
         }
     }
 }

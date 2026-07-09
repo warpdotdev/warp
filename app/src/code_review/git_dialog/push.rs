@@ -26,6 +26,7 @@ use crate::code_review::git_dialog::{
 use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
 };
+use crate::report_error;
 use crate::ui_components::icons::Icon;
 use crate::util::git::Commit;
 
@@ -134,7 +135,7 @@ pub(super) fn finish_push(
             show_toast(toast_msg, ctx);
         }
         Err(e) => {
-            log::error!("Push failed: {e}");
+            report_error!(&e);
             show_toast(user_facing_git_error(&e.to_string()), ctx);
         }
     }

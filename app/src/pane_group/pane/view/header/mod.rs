@@ -31,13 +31,13 @@ use crate::pane_group::pane::{
 use crate::pane_group::{
     BackingView, Direction, PaneDragDropLocation, PaneId, TabBarAxis, TabBarHoverIndex,
 };
-use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{SharingDialogSource, TelemetryEvent};
 use crate::settings::CodeSettings;
 use crate::tab::tab_position_id;
 use crate::terminal::view::TerminalAction;
 use crate::view_components::{FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel};
 use crate::workspace::{TabBarDropTargetData, TabBarLocation, VerticalTabsPaneDropTargetData};
+use crate::{report_error, send_telemetry_from_ctx};
 
 mod sharing;
 
@@ -966,8 +966,9 @@ impl<P: BackingView> TypedActionView for PaneHeader<P> {
                             });
                         }
                     } else {
-                        log::error!(
-                            "Attempting to move to pane that does not exist with id: {target_id:?}"
+                        report_error!(
+                            "Attempting to move to pane that does not exist",
+                            extra: { "target_id" => ?target_id }
                         );
                     }
                 }

@@ -321,12 +321,14 @@ impl DiffViewer for InlineDiffView {
                 .expect("backing_file_id must be Some — checked by early return above");
 
             if self.is_new_file {
-                // For newly created files, delete instead of restoring.
+                // For newly created files, delete instead of restoring. The
+                // delete's completion is observed via `FileSaved` events.
                 let version = self.editor.as_ref(_ctx).version(_ctx);
                 FileModel::handle(_ctx)
                     .update(_ctx, |file_model, ctx| {
                         file_model.delete(file_id, version, ctx)
                     })
+                    .map(drop)
                     .map_err(|e| format!("Failed to delete file: {e:?}"))?;
                 return Ok(());
             }

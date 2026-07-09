@@ -45,6 +45,7 @@ use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, Singleto
 use self::buffer::Peer;
 use super::{movement, PlainTextEditorViewAction, SelectionInsertion, ValidInputType};
 use crate::editor::RangeExt;
+use crate::report_error;
 use crate::vim_registers::VimRegisters;
 
 lazy_static! {
@@ -1041,7 +1042,7 @@ impl EditorModel {
         if let Some((start, end)) = start.ok().zip(end.ok()) {
             self.buffer_handle().update(ctx, |buffer, ctx| {
                 if let Err(error) = buffer.indent(start.row..end.row + 1, ctx) {
-                    log::error!("error indenting text: {error}");
+                    report_error!(error.context("error indenting text"));
                 }
             });
         }
@@ -1062,7 +1063,7 @@ impl EditorModel {
                 .collect::<Vec<_>>();
 
             if let Err(error) = buffer.unindent(row_ranges, ctx) {
-                log::error!("error unindenting text: {error}");
+                report_error!(error.context("error unindenting text"));
             };
         });
     }
@@ -1097,7 +1098,7 @@ impl EditorModel {
     {
         self.buffer_handle().update(ctx, |buffer, ctx| {
             if let Err(e) = buffer.update_styles(old_ranges, text_style_operation, ctx) {
-                log::error!("Error with updating styles: {e:?}")
+                report_error!(e.context("Error with updating styles"))
             }
         });
     }
@@ -1187,7 +1188,7 @@ impl EditorModel {
                 self.buffer_handle().update(ctx, |buffer, ctx| {
                     if let Err(error) = buffer.edit(offset_ranges.iter().cloned(), *completion, ctx)
                     {
-                        log::error!("error inserting text: {error}");
+                        report_error!(error.context("error inserting text"));
                     };
                 });
                 self.consecutive_autocomplete_insertion_edits_counter += 1;
@@ -1220,7 +1221,7 @@ impl EditorModel {
                 Text::new(text, text_style),
                 ctx,
             ) {
-                log::error!("error inserting text: {error}");
+                report_error!(error.context("error inserting text"));
             };
         });
 
@@ -1358,7 +1359,7 @@ impl EditorModel {
                     Text::new(styled_text.text(), Some(styled_text.text_style())),
                     ctx,
                 ) {
-                    log::error!("error inserting text: {error}");
+                    report_error!(error.context("error inserting text"));
                 };
                 text_added_offset += styled_text.text().chars().count();
             }
@@ -1378,18 +1379,16 @@ impl EditorModel {
                 // Handle the error to convert saved selection offsets to editor anchors gracefully
                 // as the restored buffer state might not match exactly to the saved snapshot.
                 let Some(end) = buffer.anchor_before(range.end).ok() else {
-                    log::error!(
-                        "error restoring snapshot with selection end {} on text with max range {}",
-                        range.end,
-                        text_added_offset
+                    report_error!(
+                        "error restoring snapshot: selection end is past text max range",
+                        extra: { "selection_end" => %range.end, "max_range" => %text_added_offset }
                     );
                     return None;
                 };
                 let Some(start) = buffer.anchor_before(range.start).ok() else {
-                    log::error!(
-                        "error restoring snapshot with selection start {} on text with max range {}",
-                        range.start,
-                        text_added_offset
+                    report_error!(
+                        "error restoring snapshot: selection start is past text max range",
+                        extra: { "selection_start" => %range.start, "max_range" => %text_added_offset }
                     );
                     return None;
                 };
@@ -2048,7 +2047,7 @@ impl EditorModel {
     pub fn clear_buffer(&mut self, ctx: &mut ModelContext<Self>) {
         self.buffer_handle().update(ctx, |buffer, ctx| {
             if let Err(error) = buffer.edit(Some(0.into()..buffer.len()), "", ctx) {
-                log::error!("error clearing text: {error}");
+                report_error!(error.context("error clearing text"));
             };
         });
         self.clear_selections(ctx);
@@ -2065,7 +2064,7 @@ impl EditorModel {
     ) {
         self.buffer_handle().update(ctx, |buffer, ctx| {
             if let Err(error) = buffer.edit(Some(0.into()..n), text, ctx) {
-                log::error!("error replacing first n chars: {error}");
+                report_error!(error.context("error replacing first n chars"));
             };
         });
     }
@@ -2083,7 +2082,7 @@ impl EditorModel {
             let len = buffer.len();
             let start = len.saturating_sub(&n);
             if let Err(error) = buffer.edit(Some(start..len), text, ctx) {
-                log::error!("error replacing last n chars: {error}");
+                report_error!(error.context("error replacing last n chars"));
             };
         });
     }
@@ -3089,7 +3088,7 @@ impl EditorModel {
                 before_cursor_text,
                 ctx,
             ) {
-                log::error!("error inserting text: {error}");
+                report_error!(error.context("error inserting text"));
             };
 
             // Inserting the autocompleted characters. Because the buffer has
@@ -3104,7 +3103,7 @@ impl EditorModel {
                 after_cursor_text,
                 ctx,
             ) {
-                log::error!("error inserting text: {error}");
+                report_error!(error.context("error inserting text"));
             };
         });
 

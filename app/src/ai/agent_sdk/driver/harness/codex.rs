@@ -34,6 +34,7 @@ use crate::ai::agent_sdk::setup_observability::{
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::mcp::JSONTransportType;
+use crate::report_error;
 use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
 use crate::server::server_api::ServerApi;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -322,7 +323,7 @@ impl HarnessRunner for CodexHarnessRunner {
                             .create_external_conversation(CODEX_CLI_FORMAT)
                             .await
                             .map_err(|e| {
-                                log::error!("Failed to create external conversation: {e}");
+                                report_error!(&e);
                                 AgentDriverError::ConfigBuildFailed(e)
                             })
                     })

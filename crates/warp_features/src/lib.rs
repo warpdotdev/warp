@@ -896,6 +896,11 @@ pub enum FeatureFlag {
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
 
+    /// Gates NLD input classification matching the buffer against agent
+    /// prompt history (in addition to shell command history). Still in
+    /// development, so enabled only for dev/dogfood builds.
+    NldPromptHistoryMatch,
+
     /// Gates the custom model router feature, which allows users to define
     /// their own model routers.
     CustomModelRouters,
@@ -981,6 +986,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
+    FeatureFlag::NldPromptHistoryMatch,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::BackgroundComputerUse,

@@ -12,14 +12,15 @@ use warp::tui_export::{
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityId, EntityIdMap, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiElement, TuiLayoutContext, TuiSize, TuiText, TuiViewportContent,
-    TuiViewportWindow, TuiViewportedElement,
+    TuiConstraint, TuiLayoutContext, TuiSize, TuiViewportContent, TuiViewportWindow,
+    TuiViewportedElement,
 };
-use warpui_core::{App, AppContext, Entity, TuiView, TypedActionView, ViewContext};
+use warpui_core::{App, AppContext, ViewContext};
 
 use super::{AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource};
 use crate::agent_block::TuiAIBlock;
 use crate::terminal_block::should_render_terminal_block;
+use crate::test_fixtures::{add_test_action_model, TestHostView};
 
 #[test]
 fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
@@ -227,6 +228,8 @@ fn request_top_window(
 /// window and returns its handle.
 fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
     let query = query.to_owned();
+    let action_model = add_test_action_model(app);
+    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
             AddWindowOptions {
@@ -235,13 +238,16 @@ fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
             },
             |_| TestHostView,
         );
-        ctx.add_tui_view(window_id, move |_| {
+        ctx.add_tui_view(window_id, move |ctx| {
             TuiAIBlock::new(
                 AIConversationId::new(),
                 AIAgentExchangeId::new(),
                 Rc::new(QueryAgentBlockModel {
                     inputs: vec![query_input(&query)],
                 }),
+                action_model,
+                terminal_model,
+                ctx,
             )
         })
     })
@@ -249,26 +255,6 @@ fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
 
 struct QueryAgentBlockModel {
     inputs: Vec<AIAgentInput>,
-}
-
-struct TestHostView;
-
-impl Entity for TestHostView {
-    type Event = ();
-}
-
-impl TuiView for TestHostView {
-    fn ui_name() -> &'static str {
-        "TestHostView"
-    }
-
-    fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
-        Box::new(TuiText::new(""))
-    }
-}
-
-impl TypedActionView for TestHostView {
-    type Action = ();
 }
 
 impl AIBlockModel for QueryAgentBlockModel {

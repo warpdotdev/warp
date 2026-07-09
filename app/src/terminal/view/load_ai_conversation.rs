@@ -37,6 +37,7 @@ use crate::ai::blocklist::{
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::persistence::model::AgentConversationData;
+use crate::report_error;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::find::TerminalFindModel;
 use crate::terminal::input::message_bar::{Message as InputMessage, MessageItem};
@@ -967,7 +968,9 @@ impl TerminalView {
                 );
             }
             Err(e) => {
-                log::error!("Failed to load conversation from tasks: {e:?}");
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to load conversation from tasks")
+                );
             }
         }
     }
@@ -1107,7 +1110,7 @@ impl TerminalView {
                 .not()
                 .then_some(content.plain_text))
         else {
-            log::error!("Clipboard contents are not a conversation debug link");
+            report_error!("Clipboard contents are not a conversation debug link");
             return;
         };
 
@@ -1128,7 +1131,7 @@ impl TerminalView {
 
             url
         } else {
-            log::error!(
+            report_error!(
                 "Invalid debug link format. Expected format: http://host/debug/maa/conversation-id"
             );
             return;

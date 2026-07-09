@@ -4,27 +4,14 @@ use std::rc::Rc;
 use ratatui::style::Color;
 
 use super::TuiContainer;
+use crate::elements::tui::test_support::{render_to_lines, with_paint_context};
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiEventHandler, TuiLayoutContext, TuiPresentationContext, TuiRect, TuiSize, TuiText,
+    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiEventHandler,
+    TuiLayoutContext, TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize, TuiText,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::{App, AppContext, EntityId, EntityIdMap};
-
-fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
-    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
-    let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    element.render(
-        TuiRect::new(0, 0, size.width, size.height),
-        &mut buffer,
-        &mut ctx,
-    );
-    buffer.to_lines()
-}
 
 #[test]
 fn padding_offsets_the_child() {
@@ -101,11 +88,7 @@ fn background_fills_the_padding_area() {
         .with_background(Color::Blue);
 
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 3, 3));
-    let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    container.render(TuiRect::new(0, 0, 3, 3), &mut buffer, &mut ctx);
+    with_paint_context(|ctx| container.render(TuiRect::new(0, 0, 3, 3), &mut buffer, ctx));
 
     // A padding cell carries the background fill...
     assert_eq!(buffer[(0, 0)].bg, Color::Blue);
@@ -185,9 +168,9 @@ impl TuiElement for CursorElement {
         constraint.clamp(TuiSize::new(1, 1))
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {}
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
 
-    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         Some((0, 0))
     }
 }
@@ -200,10 +183,6 @@ fn cursor_position_offsets_by_border_and_padding() {
     let container = TuiContainer::new(CursorElement.finish())
         .with_border()
         .with_padding(1);
-    let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    let cursor = container.cursor_position(TuiRect::new(0, 0, 5, 5), &mut ctx);
+    let cursor = with_paint_context(|ctx| container.cursor_position(TuiRect::new(0, 0, 5, 5), ctx));
     assert_eq!(cursor, Some((2, 2)));
 }

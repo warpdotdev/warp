@@ -61,7 +61,6 @@ use crate::terminal::{TerminalManager, TerminalView};
 use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
-use crate::AIExecutionProfilesModel;
 // Imports below are only consumed by the non-wasm `launch_local_*_child`
 // dispatch helpers; gating them keeps the wasm build warning-clean.
 #[cfg(not(target_family = "wasm"))]
@@ -72,6 +71,7 @@ use crate::{
     },
     terminal::shared_session::IsSharedSessionCreator,
 };
+use crate::{report_error, AIExecutionProfilesModel};
 
 pub type TerminalPaneView = PaneView<TerminalView>;
 
@@ -243,10 +243,9 @@ impl TerminalPane {
         if let Some(sender) = &self.model_event_sender {
             let model_event = ModelEvent::DeleteBlocks(self.uuid.clone());
             if let Err(err) = sender.send(model_event) {
-                log::error!(
-                    "Error sending blocks deleted event for terminal id {} {:?}",
-                    self.terminal_view(ctx).id(),
-                    err
+                report_error!(
+                    anyhow::Error::new(err).context("Error sending blocks deleted event"),
+                    extra: { "terminal_id" => ?self.terminal_view(ctx).id() }
                 );
             }
         }
@@ -1031,20 +1030,30 @@ fn handle_terminal_view_event(
                                 });
 
                                 let sender_clone = sender.clone();
-                                let _ = ctx.spawn(async move {
-                                // Sending over a sync sender can block the current thread, so we do this async.
-                                sender_clone.send(block_completed_event)
-                            }, move |_, res, _| {
-                                if let Err(err) = res {
-                                    log::error!("Error sending block completed event for terminal id {terminal_pane_id:?} {err:?}");
-                                }
-                            });
+                                let _ = ctx.spawn(
+                                    async move {
+                                        // Sending over a sync sender can block the current thread, so we do this async.
+                                        sender_clone.send(block_completed_event)
+                                    },
+                                    move |_, res, _| {
+                                        if let Err(err) = res {
+                                            report_error!(
+                                                anyhow::Error::new(err)
+                                                    .context("Error sending block completed event"),
+                                                extra: { "terminal_pane_id" => ?terminal_pane_id }
+                                            );
+                                        }
+                                    },
+                                );
                             }
                         }
                         ctx.emit(pane_group::Event::ActiveSessionChanged);
                     }
                     None => {
-                        log::error!("Could not find uuid for terminal id: {terminal_pane_id:?}");
+                        report_error!(
+                            "Could not find uuid for terminal id",
+                            extra: { "terminal_pane_id" => ?terminal_pane_id }
+                        );
                     }
                 };
             }
@@ -1437,9 +1446,6 @@ fn handle_terminal_view_event(
             }
             Event::ShowCloudAgentCapacityModal { variant } => {
                 ctx.emit(pane_group::Event::ShowCloudAgentCapacityModal { variant: *variant });
-            }
-            Event::FreeTierLimitCheckTriggered => {
-                ctx.emit(pane_group::Event::FreeTierLimitCheckTriggered);
             }
             Event::RevealChildAgent { conversation_id } => {
                 // Routed through the swap mechanism to land all reveal cases in one path.
@@ -1955,9 +1961,9 @@ fn launch_remote_child(
         Harness::parse_orchestration_harness(&harness_type).unwrap_or(Harness::Unknown)
     };
     let Some(parent_run_id) = request.parent_run_id.clone() else {
-        log::error!(
-            "Remote StartAgent request missing parent_run_id for {:?}",
-            request.parent_conversation_id
+        report_error!(
+            "Remote StartAgent request missing parent_run_id",
+            extra: { "parent_conversation_id" => ?request.parent_conversation_id }
         );
         return None;
     };
@@ -1968,7 +1974,7 @@ fn launch_remote_child(
     let new_pane_id = group.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
 
     let Some(new_terminal_view) = group.terminal_view_from_pane_id(new_pane_id, ctx) else {
-        log::error!("Failed to get terminal view for new remote StartAgent pane");
+        report_error!("Failed to get terminal view for new remote StartAgent pane");
         group.discard_pane(new_pane_id.into(), ctx);
         return None;
     };
@@ -1999,10 +2005,12 @@ fn launch_remote_child(
                 "Failed to resolve child agent skills: {}",
                 unresolved_references.join(", ")
             );
-            log::error!(
-                "Failed to resolve StartAgentV2 skill references for remote child {:?}: {}",
-                conversation_id,
-                unresolved_references.join(", ")
+            report_error!(
+                "Failed to resolve StartAgentV2 skill references for remote child",
+                extra: {
+                    "conversation_id" => ?conversation_id,
+                    "unresolved_references" => %unresolved_references.join(", ")
+                }
             );
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                 history_model.update_conversation_status_with_error(
@@ -2103,7 +2111,7 @@ fn launch_remote_child(
                 model.spawn_agent_with_request(spawn_request, ctx);
             });
         } else {
-            log::error!("Remote StartAgent child pane missing ambient agent view model");
+            report_error!("Remote StartAgent child pane missing ambient agent view model");
         }
     });
 
@@ -2212,8 +2220,9 @@ fn handle_ai_history_event(
                 async move { model_event_sender.send(upsert_ai_query_event) },
                 move |_, res, _| {
                     if let Err(err) = res {
-                        log::error!(
-                            "Error sending upsert AI query event for terminal id {terminal_pane_id:?} {err:?}"
+                        report_error!(
+                            anyhow::Error::new(err).context("Error sending upsert AI query event"),
+                            extra: { "terminal_pane_id" => ?terminal_pane_id }
                         );
                     }
                 },
@@ -2239,7 +2248,8 @@ fn handle_ai_history_event(
                 },
                 |_, res, _| {
                     if let Err(err) = res {
-                        log::error!("Error sending delete events for conversation: {err:?}");
+                        report_error!(anyhow::Error::new(err)
+                            .context("Error sending delete events for conversation"));
                     }
                 },
             );

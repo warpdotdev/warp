@@ -13,6 +13,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::report_error;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::view_components::action_button::{
     ActionButton, DangerPrimaryTheme, KeystrokeSource, NakedTheme,
@@ -153,7 +154,7 @@ impl TypedActionView for RemoveTabConfigConfirmationDialog {
         match action {
             RemoveTabConfigConfirmationAction::Confirm => {
                 let Some(path) = self.config_path.clone() else {
-                    log::error!("Remove confirm button pressed with no config path");
+                    report_error!("Remove confirm button pressed with no config path");
                     return;
                 };
                 ctx.emit(RemoveTabConfigConfirmationEvent::Confirm { path });

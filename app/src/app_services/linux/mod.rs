@@ -7,7 +7,7 @@ use warpui::{AppContext, SingletonEntity};
 use zbus::{interface, proxy, zvariant};
 
 use crate::channel::ChannelState;
-use crate::report_if_error;
+use crate::{report_error, report_if_error};
 
 /// Initializes application services.
 pub fn init(ctx: &mut AppContext) {
@@ -203,9 +203,8 @@ impl DBusServiceHost {
             }
             .map(|result: anyhow::Result<()>| {
                 if let Err(err) = result {
-                    log::error!(
-                        "Failed to initialize org.freedesktop.Application D-Bus service: {err:#}"
-                    );
+                    report_error!(err
+                        .context("Failed to initialize org.freedesktop.Application D-Bus service"));
                 }
             }),
         );

@@ -12,6 +12,7 @@ use super::shell::ShellType;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::Space;
+use crate::report_error;
 use crate::server::ids::{ClientId, HashableId as _, SyncId};
 use crate::terminal::model::session::{Session, SessionId};
 use crate::util::dedupe_from_last;
@@ -595,7 +596,7 @@ impl History {
             }
             Some(ReadHistoryFileState::Done) => {
                 let Some(history_file_commands) = self.history_file_commands.get(&host) else {
-                    log::error!(
+                    report_error!(
                         "History file commands should exist if history file has been read."
                     );
                     return;

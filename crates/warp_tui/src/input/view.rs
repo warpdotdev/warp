@@ -22,6 +22,7 @@ use std::ops::Range;
 
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
+use warp::tui_export::{BlocklistAIInputModel, InputTypeAutoDetectionSource};
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::render::model::{
     char_cell_display_width, char_cell_line_gap_position, char_cell_line_row_starts, ColumnUnit,
@@ -29,19 +30,28 @@ use warp_editor::render::model::{
 };
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{
-    Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
-    TuiLayoutContext, TuiParentElement, TuiPoint, TuiRect, TuiRectExt, TuiSize, TuiStyle, TuiText,
+    Modifier, TuiBuffer, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext,
+    TuiFlex, TuiHoverable, TuiLayoutContext, TuiPaintContext, TuiParentElement, TuiPoint, TuiRect,
+    TuiRectExt, TuiSize, TuiStyle, TuiText,
 };
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::keymap::macros::*;
-use warpui_core::keymap::EditableBinding;
+use warpui_core::keymap::{Context, EditableBinding};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
 use super::kill_buffer::KillBuffer;
+use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::keybindings::TUI_BINDING_GROUP;
+use crate::tui_builder::TuiUiBuilder;
 
 /// Logical rows scrolled per mouse-wheel notch (matches `TuiScrollable`).
 const WHEEL_STEP: isize = 2;
+
+/// Keymap-context flag set by [`TuiInputView::keymap_context`] while the input
+/// is in `!` shell mode; gates the `tui:input:exit_shell_mode` binding so Esc
+/// stays available to ancestors otherwise.
+const SHELL_MODE_INPUT_FLAG: &str = "ShellModeInput";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
@@ -435,6 +445,15 @@ pub fn init(app: &mut AppContext) {
             .with_context_predicate(id!("TuiInputView"))
             .with_group(TUI_BINDING_GROUP)
             .with_key_binding("ctrl-shift-Z"),
+        // ── Shell mode ──────────────────────────────────────────────────
+        EditableBinding::new(
+            "tui:input:exit_shell_mode",
+            "Exit shell mode",
+            TuiInputAction::ExitShellMode,
+        )
+        .with_context_predicate(id!("TuiInputView") & id!(SHELL_MODE_INPUT_FLAG))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("escape"),
     ]);
 }
 
@@ -512,6 +531,8 @@ pub enum TuiInputAction {
     Undo,
     /// Redo (`Ctrl+Shift+Z`).
     Redo,
+    /// Exit shell mode, keeping any typed text (`Esc`, only while in shell mode).
+    ExitShellMode,
     /// Place the cursor / begin a character selection at `offset` (single click).
     SelectionStartAt { offset: CharOffset },
     /// Extend the active selection's head to `offset` (shift-click).
@@ -524,6 +545,9 @@ pub enum TuiInputAction {
     SelectionUpdateTo { offset: CharOffset },
     /// Finish the in-progress drag selection (mouse up).
     SelectionEnd,
+    /// Place the cursor at `offset` without starting a drag selection
+    /// (the `!` gutter click).
+    SetCursor { offset: CharOffset },
     /// Scroll the viewport by `rows` visual rows without moving the cursor
     /// (negative scrolls toward the top). Driven by the mouse wheel.
     Scroll { rows: isize },
@@ -537,6 +561,8 @@ pub enum TuiInputAction {
 pub struct TuiInputView {
     /// The backing code editor in char-cell (terminal) mode.
     model: ModelHandle<CodeEditorModel>,
+    /// Shared input-mode state driving `!` shell-mode handling.
+    input_mode: ModelHandle<BlocklistAIInputModel>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
     kill_buffer: KillBuffer,
     /// First visible visual row (0-indexed).
@@ -546,6 +572,9 @@ pub struct TuiInputView {
     /// Whether a mouse drag-selection is in progress (set on mouse-down, cleared
     /// on mouse-up). Mirrors the GUI editor's `is_selecting`.
     is_selecting: bool,
+    /// Mouse state for the shell-mode `!` gutter; created once here (not inline
+    /// during render) so mouse tracking survives per-frame element rebuilds.
+    prefix_mouse_state: MouseStateHandle,
 }
 
 impl Entity for TuiInputView {
@@ -557,21 +586,38 @@ impl TuiInputView {
     /// mode). The model carries the terminal width (set via
     /// [`CodeEditorModel::new_tui`]); the view does not keep its own copy.
     ///
+    /// `input_mode` is the shared input-mode model backing `!` shell-mode
+    /// handling; the view re-renders whenever the mode changes.
+    ///
     /// Subscribes to [`CodeEditorModelEvent::ContentChanged`] to trigger re-renders
     /// whenever the buffer changes from outside `handle_action`.
-    pub fn new(model: ModelHandle<CodeEditorModel>, ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(
+        model: ModelHandle<CodeEditorModel>,
+        input_mode: ModelHandle<BlocklistAIInputModel>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
             if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 ctx.notify();
             }
         });
+        // The model only emits on real config changes, and rendering branches
+        // on the config (shell-mode gutter/border), so every event re-renders.
+        ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
         Self {
             model,
+            input_mode,
             kill_buffer: KillBuffer::default(),
             scroll_offset: 0,
             max_visible_rows: 6,
             is_selecting: false,
+            prefix_mouse_state: MouseStateHandle::default(),
         }
+    }
+
+    /// Whether the input is in `!` shell mode (locked shell input).
+    pub(crate) fn is_shell_mode(&self, ctx: &AppContext) -> bool {
+        input_mode_policy::is_shell_mode(self.input_mode.as_ref(ctx))
     }
 
     /// Returns a handle to the backing [`CodeEditorModel`].
@@ -591,35 +637,32 @@ impl TuiInputView {
         ctx.notify();
     }
 
-    /// Builds the concrete `TuiInputElement` for this frame. `render` wraps it in
-    /// a `Box`; tests construct it directly to exercise mouse dispatch.
-    ///
-    /// Only width-independent state is gathered here; width-dependent layout (row
-    /// wrapping, cursor placement, selection spans) happens later in
-    /// `TuiInputElement::layout`, the first point that knows the terminal width.
-    fn render_element(&self, ctx: &AppContext) -> TuiInputElement {
-        let text = self.plain_text(ctx);
-        let cursor_offset = self.cursor_offset(ctx);
-        let sel_char_range = self.selection_range(ctx).map(|r| {
-            let start = r.start.as_usize().saturating_sub(1);
-            let end = r.end.as_usize().saturating_sub(1);
-            (start, end)
-        });
+    /// The editor element for this frame, boxed for the render tree.
+    fn render_input(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        TuiInputElement::new(self, ctx).finish()
+    }
 
-        TuiInputElement {
-            model: self.model.clone(),
-            text,
-            cursor_offset,
-            sel_char_range,
-            scroll_offset: self.scroll_offset,
-            max_visible_rows: self.max_visible_rows,
-            is_selecting: self.is_selecting,
-            column: TuiFlex::column(),
-            cursor_col: 0,
-            cursor_row_in_view: 0,
-            cursor_visible: false,
-            selected_spans: Vec::new(),
-        }
+    /// Composes the shell-mode input row: the accent-styled `!` affordance in a
+    /// two-column gutter (glyph plus one column of right padding), then the
+    /// editor filling the remaining width. The gutter is outside the editable
+    /// area; clicking it places the cursor at the start of the buffer.
+    fn shell_element(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let prefix_style = TuiUiBuilder::from_app(ctx).shell_mode_accent_style();
+        let prefix = TuiHoverable::new(
+            self.prefix_mouse_state.clone(),
+            TuiContainer::new(TuiText::new("!").with_style(prefix_style).finish())
+                .with_padding_right(1)
+                .finish(),
+        )
+        .on_click(|event_ctx, _| {
+            event_ctx.dispatch_typed_action(TuiInputAction::SetCursor {
+                offset: CharOffset::from(1),
+            });
+        });
+        TuiFlex::row()
+            .child(prefix.finish())
+            .flex_child(self.render_input(ctx))
+            .finish()
     }
 }
 
@@ -629,7 +672,19 @@ impl TuiView for TuiInputView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        Box::new(self.render_element(ctx))
+        if self.is_shell_mode(ctx) {
+            self.shell_element(ctx)
+        } else {
+            self.render_input(ctx)
+        }
+    }
+
+    fn keymap_context(&self, app: &AppContext) -> Context {
+        let mut ctx = Self::default_keymap_context();
+        if self.is_shell_mode(app) {
+            ctx.set.insert(SHELL_MODE_INPUT_FLAG);
+        }
+        ctx
     }
 }
 
@@ -639,15 +694,27 @@ impl TypedActionView for TuiInputView {
     fn handle_action(&mut self, action: &TuiInputAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiInputAction::InsertChar(c) => {
-                let s = c.to_string();
-                self.model.update(ctx, |m, ctx| m.user_insert(&s, ctx));
+                // A `!` typed at the very start of the input enters shell mode
+                // instead of inserting (matching the GUI's typed-only trigger).
+                if *c == '!' && !self.is_shell_mode(ctx) && self.is_cursor_at_start(ctx) {
+                    self.enter_shell_mode(ctx);
+                } else {
+                    let s = c.to_string();
+                    self.model.update(ctx, |m, ctx| m.user_insert(&s, ctx));
+                }
             }
             TuiInputAction::InsertNewline => {
                 self.model.update(ctx, |m, ctx| m.user_insert("\n", ctx));
             }
             TuiInputAction::Submit => self.submit(ctx),
             TuiInputAction::Backspace => {
-                self.model.update(ctx, |m, ctx| m.backspace(ctx));
+                // With nothing left to delete, backspace removes the `!`
+                // affordance instead; typed text is preserved.
+                if self.is_shell_mode(ctx) && self.is_cursor_at_start(ctx) {
+                    self.exit_shell_mode(ctx);
+                } else {
+                    self.model.update(ctx, |m, ctx| m.backspace(ctx));
+                }
             }
             TuiInputAction::DeleteForward => {
                 self.model.update(ctx, |m, ctx| {
@@ -757,6 +824,11 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::Redo => {
                 self.model.update(ctx, |m, ctx| m.redo(ctx));
             }
+            TuiInputAction::ExitShellMode => {
+                if self.is_shell_mode(ctx) {
+                    self.exit_shell_mode(ctx);
+                }
+            }
             TuiInputAction::SelectionStartAt { offset } => {
                 self.is_selecting = true;
                 self.model
@@ -788,6 +860,12 @@ impl TypedActionView for TuiInputView {
                     self.model.update(ctx, |m, ctx| m.end_selection(ctx));
                 }
             }
+            TuiInputAction::SetCursor { offset } => {
+                self.model.update(ctx, |m, ctx| {
+                    m.select_at(*offset, false, ctx);
+                    m.end_selection(ctx);
+                });
+            }
             TuiInputAction::Scroll { rows } => {
                 // Wheel scrolling moves the viewport only; it must NOT snap back
                 // to the cursor, so it returns early (skipping `scroll_to_cursor`).
@@ -797,8 +875,9 @@ impl TypedActionView for TuiInputView {
             }
         }
 
-        let visible_rows = cmp::min(self.visual_line_count(ctx), self.max_visible_rows);
-        self.scroll_to_cursor(visible_rows.max(1), ctx);
+        let total_rows = self.total_visual_rows(ctx);
+        let visible_rows = cmp::min(total_rows, self.max_visible_rows);
+        self.scroll_to_cursor(total_rows, visible_rows.max(1), ctx);
         ctx.notify();
     }
 }
@@ -857,6 +936,12 @@ impl TuiInputView {
         }
     }
 
+    /// Whether the cursor sits at the very start of the buffer with no active
+    /// selection (the position where `!` toggles shell mode).
+    fn is_cursor_at_start(&self, ctx: &AppContext) -> bool {
+        self.cursor_offset(ctx).as_usize() <= 1 && self.selection_range(ctx).is_none()
+    }
+
     pub fn visual_line_count(&self, ctx: &AppContext) -> u32 {
         self.model
             .as_ref(ctx)
@@ -867,17 +952,39 @@ impl TuiInputView {
             .max(1)
     }
 
-    // ── Scroll ────────────────────────────────────────────────────────────────
-
-    fn scroll_to_cursor(&mut self, visible_rows: u32, ctx: &AppContext) {
+    /// The cursor's visual row in the char-cell soft-wrap map (0-based).
+    fn cursor_visual_row(&self, ctx: &AppContext) -> u32 {
         let cursor_offset = self.cursor_offset(ctx);
         let inner = self.model.as_ref(ctx);
         let render = inner.render_state().as_ref(ctx);
         // `offset_to_softwrap_point` is 0-based (see `char_cell_offset_to_softwrap_point`),
         // while the cursor is a 1-based `CharOffset`, so convert by subtracting 1.
         let cursor_char_index = CharOffset::from(cursor_offset.as_usize().saturating_sub(1));
-        let pt = render.offset_to_softwrap_point(cursor_char_index);
-        let cursor_row = pt.row();
+        render.offset_to_softwrap_point(cursor_char_index).row()
+    }
+
+    /// Total visual rows the input occupies, including the "phantom" row the
+    /// cursor wraps onto when a logical line exactly fills the terminal width
+    /// (deferred wrap). [`Self::visual_line_count`] never counts that row — the
+    /// soft-wrap map only adds a row once a character actually overflows — but
+    /// the cursor legitimately sits there, so sizing and scrolling must include
+    /// it or the viewport scrolls to a row that is never rendered.
+    fn total_visual_rows(&self, ctx: &AppContext) -> u32 {
+        self.visual_line_count(ctx)
+            .max(self.cursor_visual_row(ctx) + 1)
+    }
+
+    // ── Scroll ────────────────────────────────────────────────────────────────────
+
+    fn scroll_to_cursor(&mut self, total_rows: u32, visible_rows: u32, ctx: &AppContext) {
+        let cursor_row = self.cursor_visual_row(ctx);
+
+        // A stale offset can point past the last remaining row (e.g. after a
+        // deletion shrank the content); clamp it so the visible window always
+        // overlaps real rows before following the cursor.
+        self.scroll_offset = self
+            .scroll_offset
+            .min(total_rows.saturating_sub(visible_rows));
 
         if cursor_row < self.scroll_offset {
             self.scroll_offset = cursor_row;
@@ -890,19 +997,45 @@ impl TuiInputView {
     /// top), clamped to `[0, max_scroll]`. Independent of the cursor, so callers
     /// must not follow it with `scroll_to_cursor`.
     fn scroll_by(&mut self, rows: isize, ctx: &AppContext) {
-        let lines = self.visual_line_count(ctx);
+        let lines = self.total_visual_rows(ctx);
         let visible_rows = cmp::min(lines, self.max_visible_rows).max(1);
         let max_scroll = lines.saturating_sub(visible_rows) as isize;
         let new_offset = (self.scroll_offset as isize + rows).clamp(0, max_scroll);
         self.scroll_offset = new_offset as u32;
     }
 
+    // ── Shell mode ────────────────────────────────────────────────────────────
+
+    /// Locks the shared input mode to shell with the `!` shell-prefix source.
+    fn enter_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_input_buffer_empty = self.plain_text(ctx).is_empty();
+        self.input_mode.clone().update(ctx, |input_mode, ctx| {
+            input_mode.set_input_config(
+                SHELL_LOCKED_CONFIG,
+                is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::ShellPrefix),
+                ctx,
+            );
+        });
+    }
+
+    /// Restores the TUI's default agent input mode; any typed text is
+    /// preserved. Also called by the session view after an accepted shell
+    /// submission clears the input.
+    pub(crate) fn exit_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_input_buffer_empty = self.plain_text(ctx).is_empty();
+        self.input_mode.clone().update(ctx, |input_mode, ctx| {
+            input_mode.set_input_config(AI_LOCKED_CONFIG, is_input_buffer_empty, None, ctx);
+        });
+    }
+
     // ── Submit ────────────────────────────────────────────────────────────────
 
+    /// Emits [`TuiInputViewEvent::Submitted`] without clearing the buffer; the
+    /// owner decides whether the submission is accepted and calls [`Self::clear`].
     fn submit(&mut self, ctx: &mut ViewContext<Self>) {
         let text = self.plain_text(ctx);
         ctx.emit(TuiInputViewEvent::Submitted(text));
-        self.clear(ctx);
     }
 
     // ── Kill / yank ───────────────────────────────────────────────────────────
@@ -1118,6 +1251,34 @@ struct TuiInputElement {
 }
 
 impl TuiInputElement {
+    /// Captures `view`'s width-independent state for this frame; width-dependent
+    /// layout (row wrapping, cursor placement, selection spans) happens later in
+    /// [`TuiElement::layout`], the first point that knows the terminal width.
+    fn new(view: &TuiInputView, ctx: &AppContext) -> Self {
+        let text = view.plain_text(ctx);
+        let cursor_offset = view.cursor_offset(ctx);
+        let sel_char_range = view.selection_range(ctx).map(|r| {
+            let start = r.start.as_usize().saturating_sub(1);
+            let end = r.end.as_usize().saturating_sub(1);
+            (start, end)
+        });
+
+        Self {
+            model: view.model.clone(),
+            text,
+            cursor_offset,
+            sel_char_range,
+            scroll_offset: view.scroll_offset,
+            max_visible_rows: view.max_visible_rows,
+            is_selecting: view.is_selecting,
+            column: TuiFlex::column(),
+            cursor_col: 0,
+            cursor_row_in_view: 0,
+            cursor_visible: false,
+            selected_spans: Vec::new(),
+        }
+    }
+
     /// Builds the visible rows, cursor position, and selection spans for
     /// `terminal_width`, storing them for `render`/`cursor_position`.
     fn build(&mut self, terminal_width: u16, visible_rows: u32) {
@@ -1128,14 +1289,28 @@ impl TuiInputElement {
             && cursor_visual_row < self.scroll_offset + visible_rows;
 
         let rows_with_offsets = build_visual_rows_with_offsets(&self.text, terminal_width);
+        // The cursor sits one row past the last text row when a logical line
+        // exactly fills the width (deferred wrap); that phantom row is part of
+        // the layout, so include it when windowing the visible rows.
+        let total_rows = rows_with_offsets.len().max(cursor_visual_row as usize + 1);
         let visible_start = self.scroll_offset as usize;
-        let visible_end =
-            (self.scroll_offset as usize + visible_rows as usize).min(rows_with_offsets.len());
-        let visible_rows_slice: Vec<(String, usize)> = if visible_start < rows_with_offsets.len() {
-            rows_with_offsets[visible_start..visible_end].to_vec()
+        let visible_end = (visible_start + visible_rows as usize).min(total_rows);
+        let text_rows_end = visible_end.min(rows_with_offsets.len());
+        let mut visible_rows_slice: Vec<(String, usize)> = if visible_start < text_rows_end {
+            rows_with_offsets[visible_start..text_rows_end].to_vec()
         } else {
-            vec![(String::new(), 0)]
+            Vec::new()
         };
+        // Pad any phantom rows in the window with empty text at the buffer's
+        // end offset, so the cursor's row renders and selection math stays
+        // in bounds.
+        let end_char_offset = self.text.chars().count();
+        while visible_rows_slice.len() < visible_end.saturating_sub(visible_start) {
+            visible_rows_slice.push((String::new(), end_char_offset));
+        }
+        if visible_rows_slice.is_empty() {
+            visible_rows_slice.push((String::new(), 0));
+        }
 
         // Selection spans per visible row. Selection offsets are char indices;
         // terminal highlighting works in display columns, so convert via each
@@ -1209,12 +1384,26 @@ impl TuiInputElement {
         // so the buffer row under the pointer is `scroll_offset + row_in_view`
         // (floored at the first row).
         let visual_row = (i64::from(self.scroll_offset) + row_in_view).max(0) as u32;
-        // ...and capped at the last real visual row, so a drag below the text
-        // resolves to the buffer's end rather than past it.
+        // The rendered layout can include a "phantom" row one past the soft-wrap
+        // map's last row when the final logical line exactly fills the terminal
+        // width (deferred wrap; see `build`). The map has no entry for it —
+        // every cell on it is the end-of-buffer gap — so resolve it directly
+        // instead of clamping into the preceding real row (which would map the
+        // click near that row's start).
         let last_row = render.max_line().as_u32().max(1).saturating_sub(1);
+        let end_char_count = self.text.chars().count();
+        let end_gap_row = render
+            .offset_to_softwrap_point(CharOffset::from(end_char_count))
+            .row();
+        if visual_row > last_row && end_gap_row > last_row {
+            return CharOffset::from(end_char_count + 1);
+        }
+        // ...otherwise cap at the last real visual row, so a drag below the
+        // text resolves to the buffer's end rather than past it.
         let visual_row = visual_row.min(last_row);
 
-        // Column within that row, in display cells (0 is the input's left edge).
+        // Column within that row, in display cells (0 is the input's left edge;
+        // drags left of it clamp to column 0).
         let col = position.x.saturating_sub(area.x);
 
         // Step 3: resolve (visual_row, col) to a char offset. The soft-wrap map
@@ -1286,23 +1475,38 @@ impl TuiElement for TuiInputElement {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiSize {
-        // The layout constraint is the first place the real terminal width is
-        // known. Push it onto the model (interior-mutable) so event-time
-        // navigation/scroll read the right width, then build the rows at that
-        // width — mirroring how the GUI computes geometry during layout.
-        let terminal_width = constraint.constrain_width(constraint.max.width);
+        // The layout constraint is the first place the real editor width is
+        // known (in shell mode the enclosing row has already reserved the `!`
+        // gutter, so the constraint is the editable width). Push that width
+        // onto the model (interior-mutable) so event-time navigation/scroll
+        // read the right width, then build the rows at that width — mirroring
+        // how the GUI computes geometry during layout.
+        let editor_width = constraint.constrain_width(constraint.max.width);
         let render_state = self.model.as_ref(app).render_state().clone();
         if let Some(cc) = render_state.as_ref(app).char_cell() {
-            cc.set_terminal_width(terminal_width);
+            cc.set_terminal_width(editor_width);
         }
         let visual_line_count = render_state.as_ref(app).max_line().as_u32().max(1);
-        let visible_rows = cmp::min(visual_line_count, self.max_visible_rows);
+        // Include the "phantom" row the cursor wraps onto when a logical line
+        // exactly fills the width (deferred wrap): `max_line` doesn't count it,
+        // but the input must grow so the cursor's row is rendered.
+        let (cursor_row, _) = char_cell_cursor_pos(&self.text, self.cursor_offset, editor_width);
+        let total_rows = visual_line_count.max(cursor_row + 1);
+        let visible_rows = cmp::min(total_rows, self.max_visible_rows);
 
-        self.build(terminal_width, visible_rows);
-        self.column.layout(constraint, ctx, app)
+        self.build(editor_width, visible_rows);
+        let content_size = self.column.layout(
+            TuiConstraint::loose(TuiSize::new(editor_width, constraint.max.height)),
+            ctx,
+            app,
+        );
+        // The editor claims the full width it was offered (its wrap width),
+        // not just the longest row's width the content-sized column reports.
+        // Both components are already within `constraint`.
+        TuiSize::new(editor_width, content_size.height)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         self.column.render(area, buffer, ctx);
         if !self.selected_spans.is_empty() {
             let reversed = TuiStyle::default().add_modifier(Modifier::REVERSED);
@@ -1319,7 +1523,7 @@ impl TuiElement for TuiInputElement {
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         if !self.cursor_visible
             || self.cursor_col >= area.width
             || self.cursor_row_in_view >= area.height
@@ -1353,9 +1557,11 @@ impl TuiElement for TuiInputElement {
             // The chorded editing commands (movement, deletion, kill/yank,
             // undo/redo, …) are dispatched by the keymap pass via the
             // `tui:input:*` bindings registered in [`TuiInputView::init`],
-            // which runs before the element pass ever sees the key. Only
-            // printable-character insertion stays element-level — text
-            // insertion is not a keybinding, matching the GUI.
+            // which runs before the element pass ever sees the key — including
+            // the shell-mode Esc, whose binding is gated on the view's
+            // shell-mode keymap-context flag. Only printable-character
+            // insertion stays element-level — text insertion is not a
+            // keybinding, matching the GUI.
             if !keystroke.ctrl && !keystroke.alt && !chars.is_empty() {
                 if let Some(char) = chars.chars().next() {
                     event_ctx.dispatch_typed_action(TuiInputAction::InsertChar(char));

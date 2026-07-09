@@ -40,6 +40,7 @@ use crate::drive::folders::CloudFolderModel;
 use crate::drive::CloudObjectTypeAndId;
 use crate::env_vars::CloudEnvVarCollectionModel;
 use crate::notebooks::CloudNotebookModel;
+use crate::report_error;
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::settings::cloud_preferences::CloudPreferenceModel;
 use crate::workflows::workflow_enum::CloudWorkflowEnumModel;
@@ -978,7 +979,9 @@ impl SyncQueue {
                                 if let Some(initial_folder_id) = self.try_server_id(sync_id) {
                                     Some(initial_folder_id)
                                 } else {
-                                    log::error!("Couldn't find corresponding folder id: skipping");
+                                    report_error!(
+                                        "Couldn't find corresponding folder id: skipping"
+                                    );
                                     // Dequeue the next item
                                     self.dequeue(ctx);
                                     return;
@@ -1116,7 +1119,7 @@ impl SyncQueue {
         let server_id = match self.try_server_id(id) {
             Some(id) => id,
             None => {
-                log::error!("Couldn't find corresponding server id: skipping");
+                report_error!("Couldn't find corresponding server id: skipping");
                 // Dequeue the next item.
                 self.dequeue(ctx);
                 return;
@@ -1201,7 +1204,7 @@ impl SyncQueue {
                 if let Some(initial_folder_id) = self.try_server_id(sync_id) {
                     Some(initial_folder_id)
                 } else {
-                    log::error!("Couldn't find corresponding folder id: skipping");
+                    report_error!("Couldn't find corresponding folder id: skipping");
                     // Dequeue the next item
                     self.dequeue(ctx);
                     return;
@@ -1434,7 +1437,7 @@ impl SyncQueue {
         let object_id = match self.try_server_id(sync_id) {
             Some(object_id) => object_id,
             None => {
-                log::error!("Couldn't find corresponding object id: skipping");
+                report_error!("Couldn't find corresponding object id: skipping");
 
                 // Fail the update
                 self.handle_update_failure_response(sync_id, queue_item_id, ctx);

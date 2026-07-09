@@ -28,6 +28,7 @@ use crate::env_vars::manager::EnvVarCollectionSource;
 use crate::env_vars::CloudEnvVarCollection;
 use crate::notebooks::manager::NotebookSource;
 use crate::notebooks::CloudNotebook;
+use crate::report_error;
 use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::telemetry::SharingDialogSource;
@@ -150,7 +151,10 @@ impl DrivePanel {
                     }));
                 }
                 None => {
-                    log::error!("Cannot identify a notebook owner from {space:?}");
+                    report_error!(
+                        "Cannot identify a notebook owner",
+                        extra: { "space" => ?space }
+                    );
                 }
             },
             DriveIndexEvent::OpenImportModal {
@@ -162,7 +166,10 @@ impl DrivePanel {
                     initial_folder_id: *initial_folder_id,
                 }),
                 None => {
-                    log::error!("Cannot identify an import target from {space:?}");
+                    report_error!(
+                        "Cannot identify an import target",
+                        extra: { "space" => ?space }
+                    );
                 }
             },
             DriveIndexEvent::CreateFolder {
@@ -185,7 +192,10 @@ impl DrivePanel {
                     });
                 }
                 None => {
-                    log::error!("Cannot identify a folder owner from {space:?}");
+                    report_error!(
+                        "Cannot identify a folder owner",
+                        extra: { "space" => ?space }
+                    );
                 }
             },
             DriveIndexEvent::CreateEnvVarCollection {
@@ -201,7 +211,10 @@ impl DrivePanel {
                     },
                 )),
                 None => {
-                    log::error!("Cannot identify an env var owner from {space:?}");
+                    report_error!(
+                        "Cannot identify an env var owner",
+                        extra: { "space" => ?space }
+                    );
                 }
             },
             DriveIndexEvent::CreateWorkflow {
@@ -222,7 +235,10 @@ impl DrivePanel {
                     WorkflowViewMode::Create,
                 )),
                 None => {
-                    log::error!("Cannot identify a workflow owner from {space:?}");
+                    report_error!(
+                        "Cannot identify a workflow owner",
+                        extra: { "space" => ?space }
+                    );
                 }
             },
             DriveIndexEvent::OpenAIFactCollection => {
@@ -343,7 +359,10 @@ impl DrivePanel {
                     });
                 }
                 None => {
-                    log::error!("Cannot identify an AI rule owner from {space:?}");
+                    report_error!(
+                        "Cannot identify an AI rule owner",
+                        extra: { "space" => ?space }
+                    );
                 }
             },
             DriveIndexEvent::AttachPlanAsContext(id) => {

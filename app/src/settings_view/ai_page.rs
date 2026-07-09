@@ -1738,8 +1738,9 @@ impl AISettingsPageView {
         });
 
         // Custom inference
-        let custom_inference_controls_enabled =
-            is_any_ai_enabled && UserWorkspaces::as_ref(ctx).is_custom_inference_enabled(ctx);
+        let custom_inference_controls_enabled = is_any_ai_enabled
+            && UserWorkspaces::as_ref(ctx).is_custom_inference_enabled(ctx)
+            && UserWorkspaces::as_ref(ctx).are_member_byo_endpoints_allowed();
         let custom_inference_add_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("+ Add custom model", SecondaryTheme)
                 .with_size(ButtonSize::Small)
@@ -2284,6 +2285,7 @@ impl AISettingsPageView {
     fn can_use_custom_inference_controls(app: &AppContext) -> bool {
         AISettings::as_ref(app).is_any_ai_enabled(app)
             && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
+            && UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed()
     }
 
     fn show_add_custom_endpoint_modal(&mut self, ctx: &mut ViewContext<Self>) {
@@ -8073,6 +8075,9 @@ struct ApiKeysWidget {
 
     can_use_warp_credits_for_fallback: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
+    openai_team_key_info_tooltip: MouseStateHandle,
+    anthropic_team_key_info_tooltip: MouseStateHandle,
+    google_team_key_info_tooltip: MouseStateHandle,
 
     custom_inference_info_tooltip: MouseStateHandle,
     custom_inference_terms_index: HighlightedHyperlink,
@@ -8085,6 +8090,7 @@ impl ApiKeysWidget {
         let workspace_handle = UserWorkspaces::handle(ctx);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(ctx);
         let is_byo_enabled = workspace_handle.as_ref(ctx).is_byo_api_key_enabled(ctx);
+        let member_byo_keys_allowed = workspace_handle.as_ref(ctx).are_member_byo_keys_allowed();
 
         let ApiKeys {
             openai: openai_key,
@@ -8127,7 +8133,7 @@ impl ApiKeysWidget {
                 });
                 AISettingsPageView::update_editor_interaction_state(
                     $editor.clone(),
-                    is_any_ai_enabled && is_byo_enabled,
+                    is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed,
                     ctx,
                 );
                 // The default-model prompt is driven off `KeysUpdated` (see the
@@ -8148,10 +8154,14 @@ impl ApiKeysWidget {
                         let is_any_ai_enabled =
                             AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
                         let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled(ctx);
+                        let member_byo_keys_allowed =
+                            workspace.as_ref(ctx).are_member_byo_keys_allowed();
                         let is_enabled = is_any_ai_enabled && is_byo_enabled;
                         let has_key = !editor_clone.as_ref(ctx).is_empty(ctx);
-
-                        // If BYO is disabled, clear the API key from the editor and storage
+                        // Clear stored API keys when BYO is disabled at the billing layer.
+                        // Team member policy is reversible: it only hides and ignores local
+                        // keys. Preserve them so they become usable again if the admin later
+                        // re-enables member BYO.
                         if !is_byo_enabled && has_key {
                             editor_clone.update(ctx, |editor, ctx| {
                                 editor.set_buffer_text("", ctx);
@@ -8163,7 +8173,7 @@ impl ApiKeysWidget {
 
                         AISettingsPageView::update_editor_interaction_state(
                             editor_clone.clone(),
-                            is_enabled,
+                            is_enabled && member_byo_keys_allowed,
                             ctx,
                         );
                         ctx.notify();
@@ -8254,7 +8264,10 @@ impl ApiKeysWidget {
         });
         for button in [&grok_connect_button, &grok_disconnect_button] {
             button.update(ctx, |button, ctx| {
-                button.set_disabled(!(is_any_ai_enabled && is_byo_enabled), ctx);
+                button.set_disabled(
+                    !(is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed),
+                    ctx,
+                );
             });
         }
 
@@ -8265,9 +8278,13 @@ impl ApiKeysWidget {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 let is_any_ai_enabled = AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
                 let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled(ctx);
+                let member_byo_keys_allowed = workspace.as_ref(ctx).are_member_byo_keys_allowed();
                 for button in &grok_buttons {
                     button.update(ctx, |button, ctx| {
-                        button.set_disabled(!(is_any_ai_enabled && is_byo_enabled), ctx);
+                        button.set_disabled(
+                            !(is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed),
+                            ctx,
+                        );
                     });
                 }
                 ctx.notify();
@@ -8293,17 +8310,99 @@ impl ApiKeysWidget {
 
             can_use_warp_credits_for_fallback: Default::default(),
             upgrade_highlight_index: Default::default(),
+            openai_team_key_info_tooltip: Default::default(),
+            anthropic_team_key_info_tooltip: Default::default(),
+            google_team_key_info_tooltip: Default::default(),
 
             custom_inference_info_tooltip: Default::default(),
             custom_inference_terms_index: Default::default(),
             description_learn_more_index: Default::default(),
         }
     }
+    fn has_team_first_party_key(provider: &LLMProvider, app: &AppContext) -> bool {
+        UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| {
+                workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                    && workspace
+                        .settings
+                        .team_byo
+                        .as_ref()
+                        .is_some_and(|team_byo| {
+                            team_byo.first_party_enabled
+                                && team_byo
+                                    .first_party_keys
+                                    .iter()
+                                    .any(|key| key.provider == *provider)
+                        })
+            })
+    }
 
+    fn render_team_key_info_icon(
+        &self,
+        provider: &LLMProvider,
+        mouse_state: MouseStateHandle,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let provider_name = provider.display_name();
+        let tooltip_text = FormattedText::new([FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text(format!(
+                "Your organization has provided an API key for {provider_name}. A key entered here takes precedence for {provider_name} requests."
+            )),
+        ])]);
+        let tooltip_background = appearance.theme().tooltip_background();
+        let icon_color = appearance.theme().active_ui_text_color();
+
+        Hoverable::new(mouse_state, move |state| {
+            let icon = ConstrainedBox::new(Icon::Info.to_warpui_icon(icon_color).finish())
+                .with_width(13.)
+                .with_height(13.)
+                .finish();
+            let mut stack = Stack::new().with_child(icon);
+            if state.is_hovered() {
+                let tooltip = ConstrainedBox::new(
+                    Container::new(
+                        FormattedTextElement::new(
+                            tooltip_text.clone(),
+                            10.,
+                            appearance.ui_font_family(),
+                            appearance.ui_font_family(),
+                            appearance.theme().background().into_solid(),
+                            HighlightedHyperlink::default(),
+                        )
+                        .finish(),
+                    )
+                    .with_background_color(tooltip_background)
+                    .with_vertical_padding(4.)
+                    .with_horizontal_padding(8.)
+                    .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                    .finish(),
+                )
+                .with_max_width(CUSTOM_INFERENCE_INFO_TOOLTIP_MAX_WIDTH)
+                .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., -3.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomLeft,
+                    ),
+                );
+            }
+            stack.finish()
+        })
+        .finish()
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn render_api_key_input(
         &self,
         appearance: &Appearance,
         label: &'static str,
+        provider: LLMProvider,
+        team_key_info_tooltip: MouseStateHandle,
         editor: ViewHandle<EditorView>,
         is_enabled: bool,
         app: &AppContext,
@@ -8323,6 +8422,20 @@ impl ApiKeysWidget {
         let label = Text::new_inline(label, appearance.ui_font_family(), CONTENT_FONT_SIZE)
             .with_color(styles::header_font_color(is_enabled, app).into())
             .finish();
+        let mut label_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(label);
+        if Self::has_team_first_party_key(&provider, app) {
+            label_row.add_child(
+                Container::new(self.render_team_key_info_icon(
+                    &provider,
+                    team_key_info_tooltip,
+                    appearance,
+                ))
+                .with_margin_left(4.)
+                .finish(),
+            );
+        }
 
         let input = appearance
             .ui_builder()
@@ -8333,7 +8446,7 @@ impl ApiKeysWidget {
 
         Flex::column()
             .with_spacing(8.)
-            .with_child(label)
+            .with_child(label_row.finish())
             .with_child(input)
             .finish()
     }
@@ -8348,6 +8461,8 @@ impl ApiKeysWidget {
         column.add_child(self.render_api_key_input(
             appearance,
             "OpenAI API key",
+            LLMProvider::OpenAI,
+            self.openai_team_key_info_tooltip.clone(),
             self.openai_api_key_editor.clone(),
             is_enabled,
             app,
@@ -8355,6 +8470,8 @@ impl ApiKeysWidget {
         column.add_child(self.render_api_key_input(
             appearance,
             "Anthropic API key",
+            LLMProvider::Anthropic,
+            self.anthropic_team_key_info_tooltip.clone(),
             self.anthropic_api_key_editor.clone(),
             is_enabled,
             app,
@@ -8362,6 +8479,8 @@ impl ApiKeysWidget {
         column.add_child(self.render_api_key_input(
             appearance,
             "Google API key",
+            LLMProvider::Google,
+            self.google_team_key_info_tooltip.clone(),
             self.google_api_key_editor.clone(),
             is_enabled,
             app,
@@ -8369,16 +8488,44 @@ impl ApiKeysWidget {
         column.finish()
     }
 
-    fn render_custom_inference_description(&self, app: &AppContext) -> Box<dyn Element> {
+    fn render_custom_inference_description(
+        &self,
+        show_provider_keys: bool,
+        show_custom_endpoints: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let text_fragments = vec![
-            FormattedTextFragment::plain_text(
-                "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored only on your device, never on Warp's servers. They're used to make requests to your chosen model provider. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
-            ),
-            FormattedTextFragment::hyperlink("Learn more", CUSTOM_INFERENCE_LEARN_MORE_URL),
-        ];
+        let mut lines = Vec::new();
+        let mut add_paragraph = |fragments| {
+            if !lines.is_empty() {
+                lines.push(FormattedTextLine::LineBreak);
+            }
+            lines.push(FormattedTextLine::Line(fragments));
+        };
+
+        if show_provider_keys {
+            add_paragraph(vec![FormattedTextFragment::plain_text(
+                "Use your own API keys from model providers for Warp Agent. API keys are used to make requests to your chosen model provider. Using auto models or models you do not have available API keys for will consume Warp credits.",
+            )]);
+        }
+
+        if show_custom_endpoints {
+            add_paragraph(vec![FormattedTextFragment::plain_text(
+                "Add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API.",
+            )]);
+        }
+
+        if show_provider_keys || show_custom_endpoints {
+            add_paragraph(vec![FormattedTextFragment::plain_text(
+                "API keys added here are stored only on this device, not on Warp's servers.",
+            )]);
+            add_paragraph(vec![FormattedTextFragment::hyperlink(
+                "Learn more",
+                CUSTOM_INFERENCE_LEARN_MORE_URL,
+            )]);
+        }
         let description = FormattedTextElement::new(
-            FormattedText::new([FormattedTextLine::Line(text_fragments)]),
+            FormattedText::new(lines),
             CONTENT_FONT_SIZE,
             appearance.ui_font_family(),
             appearance.ui_font_family(),
@@ -8396,7 +8543,11 @@ impl ApiKeysWidget {
             .finish()
     }
 
-    fn render_custom_inference_info_icon(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_custom_inference_info_icon(
+        &self,
+        appearance: &Appearance,
+        managed_byok_byoe_enabled: bool,
+    ) -> Box<dyn Element> {
         let icon = Container::new(
             ConstrainedBox::new(
                 Icon::Info
@@ -8409,15 +8560,23 @@ impl ApiKeysWidget {
         )
         .finish();
 
-        let tooltip_text = FormattedText::new([FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text(
-                "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
-            ),
-            FormattedTextFragment::hyperlink("Warp's Terms of Service", CUSTOM_INFERENCE_TERMS_URL),
-            FormattedTextFragment::plain_text(
-                ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
-            ),
-        ])]);
+        let tooltip_text = if managed_byok_byoe_enabled {
+            FormattedText::new([FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text(
+                    "Custom inference settings are managed by your organization.",
+                ),
+            ])])
+        } else {
+            FormattedText::new([FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text(
+                    "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
+                ),
+                FormattedTextFragment::hyperlink("Warp's Terms of Service", CUSTOM_INFERENCE_TERMS_URL),
+                FormattedTextFragment::plain_text(
+                    ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
+                ),
+            ])])
+        };
         let tooltip_background = appearance.theme().tooltip_background();
 
         let info_button =
@@ -8721,6 +8880,60 @@ impl ApiKeysWidget {
     }
 }
 
+/// Visibility and enabled-state rules for the member-facing Custom Inference
+/// settings section (provider API keys + custom endpoints).
+#[derive(Clone, Copy)]
+struct CustomInferenceVisibility {
+    is_any_ai_enabled: bool,
+    is_byo_enabled: bool,
+    show_provider_keys: bool,
+    provider_keys_enabled: bool,
+    show_custom_inference: bool,
+    custom_inference_controls_enabled: bool,
+    managed_byok_byoe_enabled: bool,
+}
+
+impl CustomInferenceVisibility {
+    fn compute(app: &AppContext) -> Self {
+        let workspaces = UserWorkspaces::as_ref(app);
+        let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
+        let is_byo_enabled = workspaces.is_byo_api_key_enabled(app);
+        let is_custom_inference_enabled = workspaces.is_custom_inference_enabled(app);
+        let member_byo_keys_allowed = workspaces.are_member_byo_keys_allowed();
+        let member_byo_endpoints_allowed = workspaces.are_member_byo_endpoints_allowed();
+
+        // BYOK: shown even when BYO is off so the upgrade CTA can render.
+        let show_provider_keys = member_byo_keys_allowed;
+        let provider_keys_enabled = show_provider_keys && is_any_ai_enabled && is_byo_enabled;
+
+        // BYOE (custom endpoints).
+        let show_custom_inference = is_custom_inference_enabled && member_byo_endpoints_allowed;
+        let custom_inference_controls_enabled = show_custom_inference && is_any_ai_enabled;
+
+        Self {
+            is_any_ai_enabled,
+            is_byo_enabled,
+            show_provider_keys,
+            provider_keys_enabled,
+            show_custom_inference,
+            custom_inference_controls_enabled,
+            managed_byok_byoe_enabled: workspaces
+                .current_workspace()
+                .is_some_and(|workspace| workspace.billing_metadata.is_managed_byok_byoe_enabled()),
+        }
+    }
+
+    /// Whether any member-facing Custom Inference content renders at all.
+    fn show_section(&self) -> bool {
+        self.show_provider_keys || self.show_custom_inference
+    }
+
+    /// Whether the section header renders in the enabled color.
+    fn section_enabled(&self) -> bool {
+        self.provider_keys_enabled || self.custom_inference_controls_enabled
+    }
+}
+
 impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
@@ -8734,43 +8947,48 @@ impl SettingsWidget for ApiKeysWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-        let is_byo_enabled = UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app);
-        let is_custom_inference_enabled =
-            UserWorkspaces::as_ref(app).is_custom_inference_enabled(app);
-        let provider_keys_enabled = is_any_ai_enabled && is_byo_enabled;
-        let custom_inference_controls_enabled = is_any_ai_enabled && is_custom_inference_enabled;
-        let show_custom_inference = is_custom_inference_enabled;
+        let visibility = CustomInferenceVisibility::compute(app);
+        let CustomInferenceVisibility {
+            is_any_ai_enabled,
+            is_byo_enabled,
+            show_provider_keys,
+            provider_keys_enabled,
+            show_custom_inference,
+            custom_inference_controls_enabled,
+            managed_byok_byoe_enabled,
+        } = visibility;
 
         let mut column = Flex::column().with_child(render_separator(appearance));
 
-        if show_custom_inference {
-            // Header row: "Custom inference" + info icon on left, "+ Add custom model" on right
+        if visibility.show_section() {
+            // Header row: "Custom Inference" + info icon on left, "+ Add custom model" on right
             let header_left = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
                     build_sub_header(
                         appearance,
-                        "Custom inference",
-                        Some(styles::header_font_color(
-                            custom_inference_controls_enabled,
-                            app,
-                        )),
+                        "Custom Inference",
+                        Some(styles::header_font_color(visibility.section_enabled(), app)),
                     )
                     .with_margin_bottom(0.)
                     .finish(),
                 )
-                .with_child(self.render_custom_inference_info_icon(appearance))
+                .with_child(
+                    self.render_custom_inference_info_icon(appearance, managed_byok_byoe_enabled),
+                )
                 .finish();
 
             let header_row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(header_left)
-                .with_child(view.custom_inference_add_button.as_ref(app).render(app))
-                .finish();
+                .with_child(header_left);
+            let header_row = if show_custom_inference {
+                header_row.with_child(view.custom_inference_add_button.as_ref(app).render(app))
+            } else {
+                header_row
+            }
+            .finish();
 
             column.add_child(
                 Container::new(header_row)
@@ -8779,7 +8997,26 @@ impl SettingsWidget for ApiKeysWidget {
             );
 
             // Description with Learn more link
-            column.add_child(self.render_custom_inference_description(app));
+            column.add_child(self.render_custom_inference_description(
+                show_provider_keys,
+                show_custom_inference,
+                app,
+            ));
+        } else if managed_byok_byoe_enabled {
+            column.add_child(
+                build_sub_header(
+                    appearance,
+                    "Custom Inference",
+                    Some(styles::header_font_color(is_any_ai_enabled, app)),
+                )
+                .with_padding_bottom(HEADER_PADDING)
+                .finish(),
+            );
+            column.add_child(render_ai_setting_description(
+                "Your organization manages custom inference. Personal API keys and custom endpoints are currently disabled.",
+                is_any_ai_enabled,
+                app,
+            ));
         } else {
             // Fallback: old "API Keys" header only
             column.add_child(
@@ -8793,8 +9030,13 @@ impl SettingsWidget for ApiKeysWidget {
             );
         }
 
-        // Provider key editors (always visible)
-        column.add_child(self.render_provider_key_editors(appearance, provider_keys_enabled, app));
+        if show_provider_keys {
+            column.add_child(self.render_provider_key_editors(
+                appearance,
+                provider_keys_enabled,
+                app,
+            ));
+        }
 
         // Custom endpoints sub-label + list (only when flag on and endpoints non-empty)
         if show_custom_inference {
@@ -8818,17 +9060,27 @@ impl SettingsWidget for ApiKeysWidget {
                     .with_margin_bottom(8.)
                     .finish(),
                 );
-                column.add_child(self.render_custom_endpoints_list(
+                let endpoints_list = self.render_custom_endpoints_list(
                     view,
                     appearance,
                     custom_inference_controls_enabled,
                     app,
-                ));
+                );
+                // When the provider-key rows are hidden, this list is the
+                // section's last child, so pad it from the next separator.
+                let endpoints_list = if show_provider_keys {
+                    endpoints_list
+                } else {
+                    Container::new(endpoints_list)
+                        .with_margin_bottom(16.)
+                        .finish()
+                };
+                column.add_child(endpoints_list);
             }
         }
 
         // Entrypoint for connecting a SuperGrok (xAI) subscription via OAuth.
-        if FeatureFlag::SuperGrok.is_enabled() {
+        if FeatureFlag::SuperGrok.is_enabled() && show_provider_keys {
             #[cfg(not(target_family = "wasm"))]
             let grok_tokens = ApiKeyManager::as_ref(app).grok_tokens();
             #[cfg(not(target_family = "wasm"))]
@@ -8858,8 +9110,8 @@ impl SettingsWidget for ApiKeysWidget {
             }
         }
 
-        // Warp credit fallback toggle (shown when BYO or custom inference is enabled)
-        if is_byo_enabled || show_custom_inference {
+        // Warp credit fallback applies to member-provided API keys, not custom endpoints.
+        if is_byo_enabled && show_provider_keys {
             column.add_child(
                 Container::new(self.render_warp_credit_fallback_toggle(view, app))
                     .with_margin_top(16.)
@@ -8868,7 +9120,7 @@ impl SettingsWidget for ApiKeysWidget {
         }
 
         // Upgrade CTA if BYOK not enabled
-        if !is_byo_enabled {
+        if !is_byo_enabled && show_provider_keys {
             let auth_state = AuthStateProvider::as_ref(app).get();
             let upgrade_text_fragments = if let Some(team) =
                 UserWorkspaces::as_ref(app).current_team()

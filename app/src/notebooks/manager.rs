@@ -20,7 +20,7 @@ use crate::server::cloud_objects::update_manager::{
 };
 use crate::server::ids::SyncId;
 use crate::workspace::PaneViewLocator;
-use crate::{safe_debug, safe_warn};
+use crate::{report_error, safe_debug, safe_warn};
 
 #[cfg(test)]
 #[path = "manager_tests.rs"]
@@ -118,7 +118,7 @@ impl NotebookManager {
                     manager
                         .raw_text_by_hashed_id
                         .insert(hashed_id, NotebookRawTextStatus::ParseError);
-                    log::error!("Cached Notebook raw text failed to parse: {err}.");
+                    report_error!(err.context("Cached Notebook raw text failed to parse"));
                 }
             },
         )

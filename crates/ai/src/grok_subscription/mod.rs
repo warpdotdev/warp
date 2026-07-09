@@ -20,6 +20,7 @@ pub mod oauth;
 use std::time::{Duration, SystemTime};
 
 use futures::channel::oneshot;
+use warp_core::report_error;
 use warpui_core::r#async::Timer;
 use warpui_core::ModelContext;
 
@@ -248,7 +249,7 @@ fn spawn_grok_refresh(
                     // Leave the existing (possibly expired) token in place. The
                     // waiting request surfaces this failure instead of sending
                     // with the dead token; a later request re-triggers a refresh.
-                    log::error!("Failed to refresh Grok OAuth token: {err:#}");
+                    report_error!(err.context("Failed to refresh Grok OAuth token"));
                     GrokRefreshOutcome::Failed
                 }
             };

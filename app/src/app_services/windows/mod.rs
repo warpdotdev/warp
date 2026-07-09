@@ -7,6 +7,9 @@ use {
     warp_core::channel::ChannelState,
 };
 
+#[cfg(feature = "release_bundle")]
+use crate::report_error;
+
 mod registry;
 #[cfg(feature = "release_bundle")]
 mod service_impl;
@@ -48,7 +51,10 @@ pub fn pass_startup_args_to_existing_instance(
                 match current_dir.into_os_string().into_string() {
                     Ok(current_dir) => open_new_url.push_str(&format!("?path={}", current_dir)),
                     Err(os_string) => {
-                        log::error!("Failed to convert OsString {os_string:?} to ");
+                        report_error!(
+                            "Failed to convert OsString to String",
+                            extra: { "os_string" => ?os_string }
+                        );
                     }
                 }
             }

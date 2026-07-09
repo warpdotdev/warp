@@ -23,6 +23,7 @@ settings_value = ["dep:settings_value"]
 test-util = []
 
 [dependencies]
+warp_errors.workspace = true
 anyhow = "1.0"
 async-broadcast.workspace = true
 async-channel.workspace = true

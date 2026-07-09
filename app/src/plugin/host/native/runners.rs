@@ -10,6 +10,7 @@ use warpui::r#async::executor::Background;
 use super::plugin::{AppServiceCallers, PluginRequest, PluginResponse};
 use super::plugin_ref::PluginRef;
 use super::runner::PluginRunner;
+use crate::report_error;
 
 /// Message type for messages that may be sent to each `PluginRunner`.
 ///
@@ -99,14 +100,16 @@ impl PluginRunners {
                 AppServiceCallers::new(app_client),
                 registered_js_function_id,
             ) else {
-                log::error!(
-                    "Failed to instantiate PluginRunner for plugin {:?}.",
-                    &plugin_ref
+                report_error!(
+                    "Failed to instantiate PluginRunner for plugin",
+                    extra: { "plugin_ref" => ?plugin_ref }
                 );
                 return;
             };
-            if let Err(e) = runner.run(&plugin_ref) {
-                log::error!("Failed to run plugin: {e:?}");
+            if let Err(e) =
+                anyhow::Context::context(runner.run(&plugin_ref), "Failed to run plugin")
+            {
+                report_error!(e);
             }
         });
     }

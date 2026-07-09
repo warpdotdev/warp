@@ -345,9 +345,9 @@ impl PrivacySettings {
                         name: enterprise_regex.name,
                     });
                 } else {
-                    log::error!(
-                        "Invalid enterprise secret regex pattern: {}",
-                        enterprise_regex.pattern
+                    report_error!(
+                        "Invalid enterprise secret regex pattern",
+                        extra: { "pattern" => %enterprise_regex.pattern }
                     );
                 }
             }
@@ -606,7 +606,7 @@ impl PrivacySettings {
             .set_value(new_user_secret_regex_list, ctx)
             .is_err()
         {
-            log::error!("Custom Secret Regex List failed to serialize")
+            report_error!("Custom Secret Regex List failed to serialize")
         }
     }
 
@@ -628,7 +628,10 @@ impl PrivacySettings {
                     new_user_secret_regex_list.push(custom_regex);
                 }
             } else {
-                log::error!("Failed to compile default regex: {}", default_regex.pattern);
+                report_error!(
+                    "Failed to compile default regex",
+                    extra: { "pattern" => %default_regex.pattern }
+                );
             }
         }
 
@@ -641,7 +644,7 @@ impl PrivacySettings {
             .set_value(new_user_secret_regex_list, ctx)
             .is_err()
         {
-            log::error!("Failed to serialize default regexes to custom secret regex list")
+            report_error!("Failed to serialize default regexes to custom secret regex list")
         }
 
         ctx.notify();
@@ -654,7 +657,7 @@ impl PrivacySettings {
             .set_value(true, ctx)
             .is_err()
         {
-            log::error!("Failed to disable default regex trigger");
+            report_error!("Failed to disable default regex trigger");
         }
     }
 
@@ -671,7 +674,7 @@ impl PrivacySettings {
                 .set_value(true, ctx)
                 .is_err()
             {
-                log::error!("Failed to set has_initialized_default_secret_regexes flag");
+                report_error!("Failed to set has_initialized_default_secret_regexes flag");
             }
         }
     }
