@@ -30,6 +30,7 @@
 //! which owns the row list and answers every query against those same rows.
 
 use std::ops::Range;
+use string_offset::CharOffset;
 
 use super::{
     CharCellTemporaryBlock, char_cell_display_width, char_cell_line_gap_position,
@@ -64,7 +65,7 @@ pub struct DisplayRow {
     /// 0-based char range of this row's content: into the buffer text for
     /// `Buffer` rows, into the ghost's `content` for `Ghost` rows, empty for
     /// `Gap` rows.
-    pub char_range: Range<usize>,
+    pub char_range: Range<CharOffset>,
     /// Whether this is a soft-wrap continuation of the previous row.
     pub is_continuation: bool,
 }
@@ -132,7 +133,7 @@ impl<'a> DisplayLattice<'a> {
         self.ghosts
     }
 
-    /// The [`DisplayPoint`] of the gap before 0-based char index `char_idx`.
+    /// The [`DisplayPoint`] of the gap before 0-based `char_offset`.
     ///
     /// Returns `None` when the offset is inside a hidden line. A deferred-wrap
     /// cursor at the end of a line that exactly fills the width lands on the
@@ -140,7 +141,8 @@ impl<'a> DisplayLattice<'a> {
     /// follows — never on an interleaved ghost or gap row, which holds no
     /// buffer gap for a cursor. Callers sizing a viewport must accommodate
     /// that phantom row.
-    pub fn offset_to_display_point(&self, char_idx: usize) -> Option<DisplayPoint> {
+    pub fn offset_to_display_point(&self, char_offset: CharOffset) -> Option<DisplayPoint> {
+        let char_idx = char_offset.as_usize();
         let line_index = self
             .line_starts
             .partition_point(|&start| start <= char_idx)
@@ -185,11 +187,11 @@ impl<'a> DisplayLattice<'a> {
         })
     }
 
-    /// The 0-based char index of the gap at `point`.
+    /// The 0-based character offset of the gap at `point`.
     ///
     /// Returns `None` for ghost, gap, and out-of-range rows because they have
     /// no corresponding buffer offset.
-    pub fn display_point_to_offset(&self, point: DisplayPoint) -> Option<usize> {
+    pub fn display_point_to_offset(&self, point: DisplayPoint) -> Option<CharOffset> {
         let row = self.rows.get(point.row as usize)?;
         match &row.kind {
             DisplayRowKind::Buffer { .. } => {
@@ -197,16 +199,16 @@ impl<'a> DisplayLattice<'a> {
                 // `point.col`, clamped to the row's end.
                 let target_col = point.col as usize;
                 let mut col = 0usize;
-                let mut idx = row.char_range.start;
-                while idx < row.char_range.end {
-                    let width = self.char_widths[idx] as usize;
+                let mut offset = row.char_range.start;
+                while offset < row.char_range.end {
+                    let width = self.char_widths[offset.as_usize()] as usize;
                     if col + width > target_col {
                         break;
                     }
                     col += width;
-                    idx += 1;
+                    offset += 1;
                 }
-                Some(idx)
+                Some(offset)
             }
             DisplayRowKind::Ghost { .. } | DisplayRowKind::Gap { .. } => None,
         }
@@ -240,7 +242,7 @@ fn display_rows(
             {
                 rows.push(DisplayRow {
                     kind: DisplayRowKind::Gap { line_range },
-                    char_range: 0..0,
+                    char_range: CharOffset::zero().empty_range(),
                     is_continuation: false,
                 });
             }
@@ -311,7 +313,7 @@ fn push_buffer_line_rows(
         let end = row_starts.get(row + 1).copied().unwrap_or(line.len());
         rows.push(DisplayRow {
             kind: DisplayRowKind::Buffer { line_index },
-            char_range: (line_start + start)..(line_start + end),
+            char_range: CharOffset::range((line_start + start)..(line_start + end)),
             is_continuation: row > 0,
         });
     }
@@ -338,7 +340,7 @@ fn push_ghost_rows(
         let end = row_starts.get(row + 1).copied().unwrap_or(widths.len());
         rows.push(DisplayRow {
             kind: DisplayRowKind::Ghost { ghost_index },
-            char_range: start..end,
+            char_range: CharOffset::range(start..end),
             is_continuation: row > 0,
         });
     }

@@ -972,9 +972,10 @@ impl TuiInputView {
         let Some(char_cell) = render.char_cell() else {
             return;
         };
-        let cursor_idx = self.cursor_offset(ctx).as_usize().saturating_sub(1);
+        let cursor_offset =
+            CharOffset::from(self.cursor_offset(ctx).as_usize().saturating_sub(1));
         let hidden = render.hidden_line_ranges(ctx);
-        char_cell.follow_cursor(cursor_idx, self.max_visible_rows, &hidden);
+        char_cell.follow_cursor(cursor_offset, self.max_visible_rows, &hidden);
     }
 
     /// Scrolls the viewport by `rows` display rows (negative scrolls toward
@@ -985,9 +986,10 @@ impl TuiInputView {
         let Some(char_cell) = render.char_cell() else {
             return;
         };
-        let cursor_idx = self.cursor_offset(ctx).as_usize().saturating_sub(1);
+        let cursor_offset =
+            CharOffset::from(self.cursor_offset(ctx).as_usize().saturating_sub(1));
         let hidden = render.hidden_line_ranges(ctx);
-        char_cell.scroll_by(rows, self.max_visible_rows, cursor_idx, &hidden);
+        char_cell.scroll_by(rows, self.max_visible_rows, cursor_offset, &hidden);
     }
 
     // ── Shell mode ────────────────────────────────────────────────────────────

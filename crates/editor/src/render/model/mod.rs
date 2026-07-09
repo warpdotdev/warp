@@ -545,13 +545,14 @@ impl CharCellState {
         f(&lattice)
     }
 
-    /// The 0-based char range of the soft-wrapped visual row containing the
-    /// gap at 0-based char index `char_idx`, excluding any trailing newline.
+    /// The 0-based character range of the soft-wrapped visual row containing
+    /// the gap at `char_offset`, excluding any trailing newline.
     ///
     /// Buffer visual-row space (no ghosts/hidden ranges); the row boundaries
     /// follow the same display-width wrapping as everything else in this
     /// state, so e.g. kill-to-visual-line-end ranges match the rendered rows.
-    pub fn visual_row_char_range(&self, char_idx: usize) -> Range<usize> {
+    pub fn visual_row_char_range(&self, char_offset: CharOffset) -> Range<CharOffset> {
+        let char_idx = char_offset.as_usize();
         let line_starts = self.line_starts.borrow();
         let char_widths = self.char_widths.borrow();
         let line_index = line_starts
@@ -566,7 +567,7 @@ impl CharCellState {
             .saturating_sub(1);
         let start = row_starts[row];
         let end = row_starts.get(row + 1).copied().unwrap_or(line.len());
-        (line_start + start)..(line_start + end)
+        CharOffset::range((line_start + start)..(line_start + end))
     }
 
     /// The first visible display row of the scroll-windowed viewport.
@@ -578,16 +579,16 @@ impl CharCellState {
     /// the top), clamped to `[0, total_rows - visible_rows]`. Independent of
     /// the cursor: wheel scrolling must not snap the viewport back to it.
     ///
-    /// `cursor_char_idx` (0-based) only sizes the row total — the cursor's
+    /// `cursor_char_offset` (0-based) only sizes the row total — the cursor's
     /// deferred-wrap phantom row is part of the scrollable layout.
     pub fn scroll_by(
         &self,
         rows: isize,
         viewport_rows: u32,
-        cursor_char_idx: usize,
+        cursor_char_offset: CharOffset,
         hidden_line_ranges: &[Range<usize>],
     ) {
-        let (_, total_rows) = self.display_geometry(cursor_char_idx, hidden_line_ranges);
+        let (_, total_rows) = self.display_geometry(cursor_char_offset, hidden_line_ranges);
         let visible_rows = total_rows.min(viewport_rows).max(1);
         let max_scroll = total_rows.saturating_sub(visible_rows) as isize;
         let offset = (self.scroll_offset.get() as isize + rows).clamp(0, max_scroll);
@@ -595,17 +596,18 @@ impl CharCellState {
     }
 
     /// Clamps a stale scroll offset, then moves the viewport the minimal
-    /// amount needed to keep the display row of the cursor at 0-based char
-    /// index `cursor_char_idx` visible within `viewport_rows` rows. A cursor
+    /// amount needed to keep the display row of the cursor at 0-based
+    /// `cursor_char_offset` visible within `viewport_rows` rows. A cursor
     /// inside a hidden line has no display row, so this only clamps stale
     /// scroll state without moving the viewport toward the cursor.
     pub fn follow_cursor(
         &self,
-        cursor_char_idx: usize,
+        cursor_char_offset: CharOffset,
         viewport_rows: u32,
         hidden_line_ranges: &[Range<usize>],
     ) {
-        let (cursor_row, total_rows) = self.display_geometry(cursor_char_idx, hidden_line_ranges);
+        let (cursor_row, total_rows) =
+            self.display_geometry(cursor_char_offset, hidden_line_ranges);
         let visible_rows = total_rows.min(viewport_rows).max(1);
         // A stale offset can point past the last remaining row (e.g. after a
         // deletion shrank the content); clamp it so the visible window always
@@ -632,12 +634,12 @@ impl CharCellState {
     /// but sizing and scrolling must include.
     fn display_geometry(
         &self,
-        cursor_char_idx: usize,
+        cursor_char_offset: CharOffset,
         hidden_line_ranges: &[Range<usize>],
     ) -> (Option<u32>, u32) {
         self.with_display_lattice(hidden_line_ranges, |lattice| {
             let cursor_row = lattice
-                .offset_to_display_point(cursor_char_idx)
+                .offset_to_display_point(cursor_char_offset)
                 .map(|point| point.row);
             let total_rows = cursor_row.map_or(lattice.rows().len() as u32, |cursor_row| {
                 (lattice.rows().len() as u32).max(cursor_row + 1)

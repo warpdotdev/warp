@@ -2,6 +2,7 @@ use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
+use string_offset::CharOffset;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect,
@@ -107,7 +108,7 @@ fn scroll_windows_the_visible_rows() {
                 let render = model.as_ref(ctx).render_state().as_ref(ctx);
                 let char_cell = render.char_cell().expect("char-cell model");
                 char_cell.set_terminal_width(10);
-                char_cell.scroll_by(2, 2, 0, &[]);
+                char_cell.scroll_by(2, 2, CharOffset::zero(), &[]);
                 assert_eq!(char_cell.scroll_offset(), 2);
             }
             let element = TuiEditorElement::new(&model, ctx).with_viewport_rows(2);

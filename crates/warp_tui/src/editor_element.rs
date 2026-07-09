@@ -94,8 +94,8 @@ pub(crate) struct TuiEditorElement {
     text: String,
     /// Cursor gap offset (1-based) captured at construction.
     cursor_offset: CharOffset,
-    /// Selection as 0-based `(start, end)` char indices, if any.
-    sel_char_range: Option<(usize, usize)>,
+    /// Selection as a 0-based character-offset range, if any.
+    sel_char_range: Option<Range<CharOffset>>,
     /// Model-derived hidden line ranges captured at construction. Structural
     /// extras are folded in via [`Self::effective_hidden_ranges`], which is
     /// also what the event path uses over fresh model state.
@@ -149,9 +149,9 @@ impl TuiEditorElement {
         let sel = inner.buffer_selection_model().as_ref(app);
         let (head, tail) = (sel.first_selection_head(), sel.first_selection_tail());
         let sel_char_range = (head != tail).then(|| {
-            let start = head.min(tail).as_usize().saturating_sub(1);
-            let end = head.max(tail).as_usize().saturating_sub(1);
-            (start, end)
+            let start = CharOffset::from(head.min(tail).as_usize().saturating_sub(1));
+            let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
+            start..end
         });
         let hidden_line_ranges = inner.render_state().as_ref(app).hidden_line_ranges(app);
 
@@ -279,7 +279,8 @@ impl TuiEditorElement {
         char_cell.set_terminal_width(content_width);
 
         let chars: Vec<char> = self.text.chars().collect();
-        let cursor_idx = self.cursor_offset.as_usize().saturating_sub(1);
+        let cursor_offset =
+            CharOffset::from(self.cursor_offset.as_usize().saturating_sub(1));
         // The first visible row is model-side scroll state; unwindowed
         // consumers always render from the top.
         let first_visible_row = if self.viewport_rows.is_some() {
@@ -296,7 +297,7 @@ impl TuiEditorElement {
                 // The cursor sits one row past the last text row when a logical
                 // line exactly fills the width (deferred wrap); that phantom row
                 // is part of the layout, so include it when sizing and windowing.
-                let cursor = lattice.offset_to_display_point(cursor_idx);
+                let cursor = lattice.offset_to_display_point(cursor_offset);
                 let total_rows = if self.editable {
                     cursor.map_or(rows.len(), |cursor| rows.len().max(cursor.row as usize + 1))
                 } else {
@@ -442,23 +443,24 @@ impl TuiEditorElement {
     /// overlaps it. Selection offsets are char indices; terminal highlighting
     /// works in display columns, so convert via each char's display width.
     fn selection_span_in_row(&self, row: &DisplayRow, chars: &[char]) -> Option<(u16, u16)> {
-        let (sel_start, sel_end) = self.sel_char_range?;
+        let selection = self.sel_char_range.clone()?;
         if !matches!(row.kind, DisplayRowKind::Buffer { .. }) {
             return None;
         }
-        if sel_end <= row.char_range.start || sel_start >= row.char_range.end {
+        if selection.end <= row.char_range.start || selection.start >= row.char_range.end {
             return None;
         }
-        let start_char = sel_start.max(row.char_range.start);
-        let end_char = sel_end.min(row.char_range.end);
-        let display_col = |char_idx: usize| -> u16 {
-            chars[row.char_range.start..char_idx]
+        let start_offset = selection.start.max(row.char_range.start);
+        let end_offset = selection.end.min(row.char_range.end);
+        let row_start = row.char_range.start.as_usize();
+        let display_col = |offset: CharOffset| -> u16 {
+            chars[row_start..offset.as_usize()]
                 .iter()
                 .map(|&c| char_cell_display_width(c) as u16)
                 .sum()
         };
-        let start_col = display_col(start_char);
-        let end_col = display_col(end_char);
+        let start_col = display_col(start_offset);
+        let end_col = display_col(end_offset);
         (end_col > start_col).then_some((start_col, end_col))
     }
 
@@ -509,12 +511,12 @@ impl TuiEditorElement {
             // text resolves within it rather than past it.
             let last_row = (lattice.rows().len() as u32).saturating_sub(1);
             if display_row > last_row {
-                let end_char_count = text.chars().count();
+                let end_char_offset = CharOffset::from(text.chars().count());
                 if lattice
-                    .offset_to_display_point(end_char_count)
+                    .offset_to_display_point(end_char_offset)
                     .is_some_and(|point| point.row > last_row)
                 {
-                    return Some(CharOffset::from(end_char_count + 1));
+                    return Some(end_char_offset + 1);
                 }
             }
             let point = DisplayPoint {
@@ -523,7 +525,7 @@ impl TuiEditorElement {
             };
             lattice
                 .display_point_to_offset(point)
-                .map(|offset| CharOffset::from(offset + 1))
+                .map(|offset| offset + 1)
         })
     }
 
@@ -684,9 +686,9 @@ impl TuiElement for TuiEditorElement {
 }
 
 /// The chars in `range`, collected into the row's paint text.
-fn slice_chars(chars: &[char], range: &Range<usize>) -> String {
-    let start = range.start.min(chars.len());
-    let end = range.end.min(chars.len());
+fn slice_chars(chars: &[char], range: &Range<CharOffset>) -> String {
+    let start = range.start.as_usize().min(chars.len());
+    let end = range.end.as_usize().min(chars.len());
     chars[start..end].iter().collect()
 }
 

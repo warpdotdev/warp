@@ -1936,15 +1936,15 @@ impl CodeEditorModel {
         // `cursor_gap` is a 1-indexed gap position (gap 1 sits before the
         // first character); `text_in_range` / `Delete` use those same
         // coordinates, so the kill range starts exactly at `cursor_gap`.
-        let cursor_gap = self.primary_cursor_gap(ctx).as_usize();
-        let cursor_idx = cursor_gap.saturating_sub(1);
-        let row = self.cursor_visual_row_range(cursor_idx, ctx)?;
-        if row.end <= cursor_idx {
+        let cursor_gap = self.primary_cursor_gap(ctx);
+        let cursor_offset = CharOffset::from(cursor_gap.as_usize().saturating_sub(1));
+        let row = self.cursor_visual_row_range(cursor_offset, ctx)?;
+        if row.end <= cursor_offset {
             return None;
         }
         // `text[i]` lives at gap `i + 1`, so the exclusive end gap is `row.end + 1`.
         Some(self.delete_range_returning_text(
-            CharOffset::from(cursor_gap)..CharOffset::from(row.end + 1),
+            cursor_gap..row.end + 1,
             ctx,
         ))
     }
@@ -1953,14 +1953,14 @@ impl CodeEditorModel {
     /// up to the cursor, returning the deleted text; `None` when the cursor
     /// is already at the row start. Char-cell (TUI) mode only.
     pub fn kill_to_visual_row_start(&mut self, ctx: &mut ModelContext<Self>) -> Option<String> {
-        let cursor_gap = self.primary_cursor_gap(ctx).as_usize();
-        let cursor_idx = cursor_gap.saturating_sub(1);
-        let row = self.cursor_visual_row_range(cursor_idx, ctx)?;
-        if row.start >= cursor_idx {
+        let cursor_gap = self.primary_cursor_gap(ctx);
+        let cursor_offset = CharOffset::from(cursor_gap.as_usize().saturating_sub(1));
+        let row = self.cursor_visual_row_range(cursor_offset, ctx)?;
+        if row.start >= cursor_offset {
             return None;
         }
         Some(self.delete_range_returning_text(
-            CharOffset::from(row.start + 1)..CharOffset::from(cursor_gap),
+            row.start + 1..cursor_gap,
             ctx,
         ))
     }
@@ -1970,15 +1970,19 @@ impl CodeEditorModel {
         *self.selection.as_ref(ctx).cursors(ctx).first()
     }
 
-    /// The soft-wrapped visual row containing 0-based char index `cursor_idx`
-    /// as 0-based char indices; `None` outside char-cell (TUI) mode.
+    /// The soft-wrapped visual row containing 0-based `cursor_offset`, as
+    /// 0-based character offsets; `None` outside char-cell (TUI) mode.
     fn cursor_visual_row_range(
         &self,
-        cursor_idx: usize,
+        cursor_offset: CharOffset,
         ctx: &impl ModelAsRef,
-    ) -> Option<Range<usize>> {
+    ) -> Option<Range<CharOffset>> {
         let render = self.render_state.as_ref(ctx);
-        Some(render.char_cell()?.visual_row_char_range(cursor_idx))
+        Some(
+            render
+                .char_cell()?
+                .visual_row_char_range(cursor_offset),
+        )
     }
 
     /// Deletes `range` (1-indexed gap offsets) as a user edit, returning the

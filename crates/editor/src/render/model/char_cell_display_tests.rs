@@ -1,4 +1,5 @@
 use std::ops::Range;
+use string_offset::CharOffset;
 
 use super::super::{CharCellState, CharCellTemporaryBlock, LineCount};
 use super::{DisplayPoint, DisplayRow, DisplayRowKind};
@@ -29,20 +30,25 @@ fn rows(state: &CharCellState, hidden: &[Range<usize>]) -> Vec<DisplayRow> {
 fn point(state: &CharCellState, char_idx: usize, hidden: &[Range<usize>]) -> Option<(u32, u16)> {
     state.with_display_lattice(hidden, |lattice| {
         lattice
-            .offset_to_display_point(char_idx)
+            .offset_to_display_point(CharOffset::from(char_idx))
             .map(|point| (point.row, point.col))
     })
 }
 
 /// `display_point_to_offset` from a bare `(row, col)` pair.
-fn offset(state: &CharCellState, row: u32, col: u16, hidden: &[Range<usize>]) -> Option<usize> {
+fn offset(
+    state: &CharCellState,
+    row: u32,
+    col: u16,
+    hidden: &[Range<usize>],
+) -> Option<CharOffset> {
     state.with_display_lattice(hidden, |lattice| {
         lattice.display_point_to_offset(DisplayPoint { row, col })
     })
 }
 
 /// `(kind, char_range, is_continuation)` triples for compact assertions.
-fn summarize(rows: &[DisplayRow]) -> Vec<(DisplayRowKind, Range<usize>, bool)> {
+fn summarize(rows: &[DisplayRow]) -> Vec<(DisplayRowKind, Range<CharOffset>, bool)> {
     rows.iter()
         .map(|row| {
             (
@@ -57,6 +63,9 @@ fn summarize(rows: &[DisplayRow]) -> Vec<(DisplayRowKind, Range<usize>, bool)> {
 fn buffer(line_index: usize) -> DisplayRowKind {
     DisplayRowKind::Buffer { line_index }
 }
+fn char_range(range: Range<usize>) -> Range<CharOffset> {
+    CharOffset::range(range)
+}
 
 #[test]
 fn plain_text_wraps_with_char_ranges() {
@@ -65,9 +74,9 @@ fn plain_text_wraps_with_char_ranges() {
     assert_eq!(
         summarize(&rows(&state, &[])),
         vec![
-            (buffer(0), 0..4, false),
-            (buffer(0), 4..6, true),
-            (buffer(1), 7..9, false),
+            (buffer(0), char_range(0..4), false),
+            (buffer(0), char_range(4..6), true),
+            (buffer(1), char_range(7..9), false),
         ]
     );
 }
@@ -82,12 +91,24 @@ fn ghosts_interleave_before_their_line_and_wrap() {
     assert_eq!(
         summarize(&rows(&state, &[])),
         vec![
-            (buffer(0), 0..5, false),
-            (DisplayRowKind::Ghost { ghost_index: 0 }, 0..9, false),
+            (buffer(0), char_range(0..5), false),
+            (
+                DisplayRowKind::Ghost { ghost_index: 0 },
+                char_range(0..9),
+                false,
+            ),
             // The second ghost is 11 chars: wraps at width 9.
-            (DisplayRowKind::Ghost { ghost_index: 1 }, 0..9, false),
-            (DisplayRowKind::Ghost { ghost_index: 1 }, 9..11, true),
-            (buffer(1), 6..11, false),
+            (
+                DisplayRowKind::Ghost { ghost_index: 1 },
+                char_range(0..9),
+                false,
+            ),
+            (
+                DisplayRowKind::Ghost { ghost_index: 1 },
+                char_range(9..11),
+                true,
+            ),
+            (buffer(1), char_range(6..11), false),
         ]
     );
 }
@@ -99,9 +120,13 @@ fn interior_hidden_ranges_become_gaps_edges_render_nothing() {
     assert_eq!(
         summarize(&rows(&state, &[0..2, 3..6, 7..8])),
         vec![
-            (buffer(2), 6..8, false),
-            (DisplayRowKind::Gap { line_range: 3..6 }, 0..0, false),
-            (buffer(6), 18..20, false),
+            (buffer(2), char_range(6..8), false),
+            (
+                DisplayRowKind::Gap { line_range: 3..6 },
+                CharOffset::zero().empty_range(),
+                false,
+            ),
+            (buffer(6), char_range(18..20), false),
         ]
     );
 }
@@ -117,11 +142,23 @@ fn ghost_inside_hidden_region_still_renders_and_splits_the_gap() {
     assert_eq!(
         summarize(&rows(&state, &hidden)),
         vec![
-            (buffer(0), 0..2, false),
-            (DisplayRowKind::Gap { line_range: 1..3 }, 0..0, false),
-            (DisplayRowKind::Ghost { ghost_index: 0 }, 0..7, false),
-            (DisplayRowKind::Gap { line_range: 3..5 }, 0..0, false),
-            (buffer(5), 15..17, false),
+            (buffer(0), char_range(0..2), false),
+            (
+                DisplayRowKind::Gap { line_range: 1..3 },
+                CharOffset::zero().empty_range(),
+                false,
+            ),
+            (
+                DisplayRowKind::Ghost { ghost_index: 0 },
+                char_range(0..7),
+                false,
+            ),
+            (
+                DisplayRowKind::Gap { line_range: 3..5 },
+                CharOffset::zero().empty_range(),
+                false,
+            ),
+            (buffer(5), char_range(15..17), false),
         ]
     );
 }
@@ -142,12 +179,21 @@ mod geometry {
         // Display rows: 0=line0, 1=ghost, 2=gap, 3=line3.
         assert_eq!(point(&state, 9, &hidden), Some((3, 0)));
         assert_eq!(point(&state, 10, &hidden), Some((3, 1)));
-        assert_eq!(offset(&state, 3, 0, &hidden), Some(9));
-        assert_eq!(offset(&state, 3, 1, &hidden), Some(10));
+        assert_eq!(
+            offset(&state, 3, 0, &hidden),
+            Some(CharOffset::from(9))
+        );
+        assert_eq!(
+            offset(&state, 3, 1, &hidden),
+            Some(CharOffset::from(10))
+        );
 
         // Line 0 is unaffected by overlays below it.
         assert_eq!(point(&state, 0, &hidden), Some((0, 0)));
-        assert_eq!(offset(&state, 0, 1, &hidden), Some(1));
+        assert_eq!(
+            offset(&state, 0, 1, &hidden),
+            Some(CharOffset::from(1))
+        );
 
         // Hidden offsets and synthetic display rows have no exact inverse.
         assert_eq!(point(&state, 4, &hidden), None);
@@ -186,11 +232,26 @@ mod geometry {
     fn visual_row_char_range_follows_softwrap_rows() {
         // Width 4: "abcdef" wraps into 0..4 + 4..6; "gh" is 7..9.
         let state = state("abcdef\ngh", 4);
-        assert_eq!(state.visual_row_char_range(0), 0..4);
-        assert_eq!(state.visual_row_char_range(3), 0..4);
-        assert_eq!(state.visual_row_char_range(4), 4..6);
+        assert_eq!(
+            state.visual_row_char_range(CharOffset::from(0)),
+            char_range(0..4)
+        );
+        assert_eq!(
+            state.visual_row_char_range(CharOffset::from(3)),
+            char_range(0..4)
+        );
+        assert_eq!(
+            state.visual_row_char_range(CharOffset::from(4)),
+            char_range(4..6)
+        );
         // The trailing newline is excluded from the row's range.
-        assert_eq!(state.visual_row_char_range(5), 4..6);
-        assert_eq!(state.visual_row_char_range(7), 7..9);
+        assert_eq!(
+            state.visual_row_char_range(CharOffset::from(5)),
+            char_range(4..6)
+        );
+        assert_eq!(
+            state.visual_row_char_range(CharOffset::from(7)),
+            char_range(7..9)
+        );
     }
 }
