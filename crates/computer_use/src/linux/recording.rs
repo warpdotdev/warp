@@ -102,22 +102,25 @@ impl crate::Recorder for Recorder {
         Ok(RecordingHandle {
             width,
             height,
+            exit_state: std::sync::Arc::new(std::sync::Mutex::new(None)),
             path,
             started_at: Instant::now(),
-            process,
+            process: Some(process),
+            cleanup_on_drop: true,
         })
     }
 
-    async fn stop(&self, handle: RecordingHandle) -> Result<RecordingOutput, RecordingError> {
-        let RecordingHandle {
-            width,
-            height,
-            path,
-            started_at,
-            mut process,
-        } = handle;
-
-        let duration = started_at.elapsed();
+    async fn stop(&self, mut handle: RecordingHandle) -> Result<RecordingOutput, RecordingError> {
+        let width = handle.width;
+        let height = handle.height;
+        let path = handle.path.clone();
+        let duration = handle.started_at.elapsed();
+        let mut process = handle
+            .process
+            .take()
+            .ok_or_else(|| RecordingError::Finalize {
+                reason: "recording process is unavailable".to_string(),
+            })?;
 
         // Finalize gracefully: SIGINT makes ffmpeg flush and write the moov atom.
         let completion_status = match process.try_wait().map_err(|e| RecordingError::Finalize {
@@ -161,6 +164,7 @@ impl crate::Recorder for Recorder {
                 reason: "recording produced an empty file".to_string(),
             });
         }
+        handle.cleanup_on_drop = false;
 
         Ok(RecordingOutput {
             path,

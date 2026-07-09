@@ -57,7 +57,8 @@ use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
+    finalize_recording_for_conversation, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    BlocklistAIPermissions, FinalizeReason,
 };
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo, SourceRepo,
@@ -901,6 +902,23 @@ impl AgentDriver {
                 // async it awaits (presigned URL fetch, uploads, timers) would get abandoned
                 // mid-flight. Provider cleanup is just local temp-file teardown, so it's safe
                 // to run after the send.
+                if let Ok(Some(finalization)) = foreground
+                    .spawn(|me, ctx| {
+                        me.run_conversation_id.and_then(|conversation_id| {
+                            finalize_recording_for_conversation(
+                                conversation_id,
+                                FinalizeReason::AgentFinished,
+                                ctx,
+                            )
+                        })
+                    })
+                    .await
+                {
+                    let finalization_result = finalization.resolve().await;
+                    log::info!(
+                        "Recording finalization completed before agent driver exit: {finalization_result:?}"
+                    );
+                }
                 Self::run_snapshot_upload(&foreground).await;
 
                 if tx.send(result).is_err() {
