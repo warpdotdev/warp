@@ -16,8 +16,24 @@
 //! This module is intentionally lightweight: it does byte-range matching only and does
 //! not track `SecretLevel`s or character ranges, since the telemetry path doesn't need
 //! either.
+//!
+//! ## Cache pool design
+//!
+//! `regex_automata::meta::Regex` maintains an internal pool of `Cache` objects that grows
+//! to accommodate the peak number of *concurrent* callers. With many simultaneous async
+//! tokio tasks each calling `redact_secrets_in_value`, the pool would create one cache per
+//! concurrent task and retain them all — each cache for our 20-pattern regex consumes
+//! hundreds of MiB, leading to multi-GB memory usage over time.
+//!
+//! The fix: instead of sharing one `Regex` (and therefore one pool) across all threads,
+//! each OS thread keeps a *clone* of the regex in thread-local storage. Cloning a `Regex`
+//! is cheap — the compiled NFA is shared via `Arc` — but each clone gets its own pool.
+//! Because the thread-local clone is used by at most one task at a time per thread, the
+//! pool for each clone never grows beyond a single cached `Cache`.
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
@@ -26,6 +42,28 @@ use serde_json::Value;
 
 use crate::terminal::model::secrets::regexes::DEFAULT_REGEXES_WITH_NAMES;
 const REDACTION_REPLACEMENT_CHARACTER: &str = "*";
+
+/// Version counter for the global telemetry regex. Incremented each time
+/// [`update_telemetry_secrets_regex`] successfully rebuilds the regex, so that
+/// thread-local clones can detect staleness and refresh.
+static REGEX_VERSION: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// Thread-local clone of the telemetry secrets regex.
+    ///
+    /// Each OS thread keeps its own clone with its own internal cache pool.
+    /// Cloning a `regex_automata::meta::Regex` shares the compiled NFA via
+    /// `Arc` (cheap) but gives the clone a fresh, empty pool. Because the
+    /// thread-local clone is only ever used by one task at a time, the pool
+    /// never accumulates more than one `Cache` entry, bounding the per-thread
+    /// memory to a single cache regardless of peak concurrency.
+    ///
+    /// The `u64` field records the version of the global regex at the time
+    /// this thread's clone was last refreshed, so stale clones are detected
+    /// and updated on the next call.
+    static THREAD_LOCAL_REGEX: RefCell<(u64, Option<Regex>)> = const { RefCell::new((0, None)) };
+}
+
 lazy_static! {
     /// Regex used to redact secrets from telemetry payloads. Initialized with the
     /// default patterns so that redaction works even before the user's privacy
@@ -56,7 +94,11 @@ where
         enterprise_secrets.into_iter().map(regex::Regex::as_str),
     );
     match Regex::new_many(&patterns) {
-        Ok(regex) => *TELEMETRY_SECRETS_REGEX.write() = regex,
+        Ok(regex) => {
+            *TELEMETRY_SECRETS_REGEX.write() = regex;
+            // Signal thread-local clones to refresh on their next use.
+            REGEX_VERSION.fetch_add(1, Ordering::Release);
+        }
         Err(err) => log::error!("Failed to build telemetry secrets regex: {err:?}"),
     }
 }
@@ -84,11 +126,31 @@ fn compose_patterns<'a>(
 /// the same region) are merged before replacement, so each character is replaced
 /// at most once.
 pub fn redact_secrets_in_string(input: &mut String) {
-    let ranges: Vec<Range<usize>> = {
-        let regex = TELEMETRY_SECRETS_REGEX.read();
+    let ranges: Vec<Range<usize>> = with_thread_local_regex(|regex| {
         regex.find_iter(input.as_str()).map(|m| m.range()).collect()
-    };
+    });
     replace_byte_ranges_with_asterisks(input, ranges);
+}
+
+/// Calls `f` with a reference to this thread's local clone of the telemetry
+/// secrets regex, refreshing the clone if the global regex has been updated
+/// since the last call.
+///
+/// Each thread's clone has its own `Cache` pool that never grows beyond a
+/// single entry, avoiding the multi-GB pool accumulation that occurs when
+/// many concurrent async tasks all share the same global `Regex`.
+fn with_thread_local_regex<R>(f: impl FnOnce(&Regex) -> R) -> R {
+    THREAD_LOCAL_REGEX.with(|cell| {
+        let mut state = cell.borrow_mut();
+        let current_version = REGEX_VERSION.load(Ordering::Acquire);
+        if state.1.is_none() || state.0 != current_version {
+            // Thread-local copy is absent or stale; clone the latest global regex.
+            state.1 = Some(TELEMETRY_SECRETS_REGEX.read().clone());
+            state.0 = current_version;
+        }
+        // Safety: we just ensured state.1 is Some above.
+        f(state.1.as_ref().unwrap())
+    })
 }
 /// Replaces each byte range in `input` with a run of asterisks of the same byte
 /// length. Handles overlapping ranges by merging them first, and replaces from
