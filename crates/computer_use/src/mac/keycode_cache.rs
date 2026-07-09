@@ -76,9 +76,9 @@ const SHIFT_MODIFIER: u32 = 1 << 1;
 pub fn build_cache() -> HashMap<char, CGKeyCode> {
     // Fail loudly in debug if a caller ever invokes this off the main thread, so the regression is
     // caught here rather than as an opaque libdispatch abort deep inside the Carbon TIS call.
-    // `pthread_main_np()` returns non-zero on the main thread.
+    // `MainThreadMarker::new()` returns `Some` only on the main thread.
     debug_assert!(
-        unsafe { libc::pthread_main_np() } != 0,
+        objc2::MainThreadMarker::new().is_some(),
         "keycode cache must be built on the main thread; Carbon Text Input Source APIs assert \
          they run on the main thread"
     );
