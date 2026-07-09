@@ -221,16 +221,7 @@ impl BillingCycleUsageSectionView {
         let Some(data) = workspace.billing_cycle_usage.as_ref() else {
             return;
         };
-        let items: Vec<MenuItem<BillingCycleUsageAction>> = data
-            .summaries
-            .iter()
-            .map(|summary| {
-                let label = format_period_range(summary.period_start, summary.period_end);
-                MenuItem::Item(MenuItemFields::new(label).with_on_select_action(
-                    BillingCycleUsageAction::SelectPeriod(Some(summary.period_end)),
-                ))
-            })
-            .collect();
+        let items = build_period_menu_items(&data.summaries, self.selected_period_end);
 
         self.period_menu
             .update(ctx, |menu: &mut Menu<BillingCycleUsageAction>, ctx| {
@@ -799,3 +790,37 @@ fn format_period_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
         )
     }
 }
+
+/// Builds the period-picker menu items for the usage section, marking the
+/// currently-selected period with a leading check so it's visually
+/// distinguished from the others (the rest are indented so their labels stay
+/// aligned with the checked row). The selected period is the explicitly-picked
+/// `selected_period_end`, or — when nothing has been picked yet — the most
+/// recent cycle (`summaries.first()`), mirroring how `current_summary`
+/// resolves the summary shown in the header.
+fn build_period_menu_items(
+    summaries: &[BillingCycleUsageSummary],
+    selected_period_end: Option<DateTime<Utc>>,
+) -> Vec<MenuItem<BillingCycleUsageAction>> {
+    let selected_period_end =
+        selected_period_end.or_else(|| summaries.first().map(|s| s.period_end));
+    summaries
+        .iter()
+        .map(|summary| {
+            let label = format_period_range(summary.period_start, summary.period_end);
+            let mut fields = MenuItemFields::new(label).with_on_select_action(
+                BillingCycleUsageAction::SelectPeriod(Some(summary.period_end)),
+            );
+            if Some(summary.period_end) == selected_period_end {
+                fields = fields.with_icon(Icon::Check);
+            } else {
+                fields = fields.with_indent();
+            }
+            MenuItem::Item(fields)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "billing_cycle_usage_section_tests.rs"]
+mod tests;
