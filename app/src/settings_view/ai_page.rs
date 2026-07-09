@@ -9060,12 +9060,22 @@ impl SettingsWidget for ApiKeysWidget {
                     .with_margin_bottom(8.)
                     .finish(),
                 );
-                column.add_child(self.render_custom_endpoints_list(
+                let endpoints_list = self.render_custom_endpoints_list(
                     view,
                     appearance,
                     custom_inference_controls_enabled,
                     app,
-                ));
+                );
+                // When the provider-key rows are hidden, this list is the
+                // section's last child, so pad it from the next separator.
+                let endpoints_list = if show_provider_keys {
+                    endpoints_list
+                } else {
+                    Container::new(endpoints_list)
+                        .with_margin_bottom(16.)
+                        .finish()
+                };
+                column.add_child(endpoints_list);
             }
         }
 
