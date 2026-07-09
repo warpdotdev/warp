@@ -26,15 +26,16 @@ fn rows(state: &CharCellState, hidden: &[Range<usize>]) -> Vec<DisplayRow> {
 }
 
 /// `offset_to_display_point` as a bare `(row, col)` pair.
-fn point(state: &CharCellState, char_idx: usize, hidden: &[Range<usize>]) -> (u32, u16) {
+fn point(state: &CharCellState, char_idx: usize, hidden: &[Range<usize>]) -> Option<(u32, u16)> {
     state.with_display_lattice(hidden, |lattice| {
-        let point = lattice.offset_to_display_point(char_idx);
-        (point.row, point.col)
+        lattice
+            .offset_to_display_point(char_idx)
+            .map(|point| (point.row, point.col))
     })
 }
 
 /// `display_point_to_offset` from a bare `(row, col)` pair.
-fn offset(state: &CharCellState, row: u32, col: u16, hidden: &[Range<usize>]) -> usize {
+fn offset(state: &CharCellState, row: u32, col: u16, hidden: &[Range<usize>]) -> Option<usize> {
     state.with_display_lattice(hidden, |lattice| {
         lattice.display_point_to_offset(DisplayPoint { row, col })
     })
@@ -139,25 +140,24 @@ mod geometry {
 
         // Char 9 = 'l' of line3 (chars: l0\n=0..3, l1\n=3..6, l2\n=6..9, l3=9..11).
         // Display rows: 0=line0, 1=ghost, 2=gap, 3=line3.
-        assert_eq!(point(&state, 9, &hidden), (3, 0));
-        assert_eq!(point(&state, 10, &hidden), (3, 1));
-        assert_eq!(offset(&state, 3, 0, &hidden), 9);
-        assert_eq!(offset(&state, 3, 1, &hidden), 10);
+        assert_eq!(point(&state, 9, &hidden), Some((3, 0)));
+        assert_eq!(point(&state, 10, &hidden), Some((3, 1)));
+        assert_eq!(offset(&state, 3, 0, &hidden), Some(9));
+        assert_eq!(offset(&state, 3, 1, &hidden), Some(10));
 
         // Line 0 is unaffected by overlays below it.
-        assert_eq!(point(&state, 0, &hidden), (0, 0));
-        assert_eq!(offset(&state, 0, 1, &hidden), 1);
+        assert_eq!(point(&state, 0, &hidden), Some((0, 0)));
+        assert_eq!(offset(&state, 0, 1, &hidden), Some(1));
 
-        // Char 4 is inside hidden line 1: it resolves to the gap row, and
-        // clicking the gap resolves to the start of its first hidden line.
-        assert_eq!(point(&state, 4, &hidden), (2, 0));
-        assert_eq!(offset(&state, 2, 0, &hidden), 3);
+        // Hidden offsets and synthetic display rows have no exact inverse.
+        assert_eq!(point(&state, 4, &hidden), None);
+        assert_eq!(offset(&state, 2, 0, &hidden), None);
 
-        // Clicking the ghost row resolves to its insert position's line start.
-        assert_eq!(offset(&state, 1, 4, &hidden), 3);
+        // Ghost rows do not correspond to buffer offsets.
+        assert_eq!(offset(&state, 1, 4, &hidden), None);
 
-        // Points past the display resolve to the buffer's end.
-        assert_eq!(offset(&state, 99, 0, &hidden), 11);
+        // Points past the display have no corresponding buffer offset.
+        assert_eq!(offset(&state, 99, 0, &hidden), None);
     }
 
     #[test]
@@ -166,20 +166,20 @@ mod geometry {
         // one past the single text row.
         let state = state("abcd", 4);
         assert_eq!(rows(&state, &[]).len(), 1);
-        assert_eq!(point(&state, 4, &[]), (1, 0));
+        assert_eq!(point(&state, 4, &[]), Some((1, 0)));
 
         // With a ghost at EOF the cursor cannot sit on the ghost row; it
         // lands one past the entire display (which also pins that EOF ghosts
         // render at all — the post-loop flush).
         state.set_temporary_blocks(vec![ghost("rm", 1)]);
         assert_eq!(rows(&state, &[]).len(), 2);
-        assert_eq!(point(&state, 4, &[]), (2, 0));
+        assert_eq!(point(&state, 4, &[]), Some((2, 0)));
 
         // On an interior line that exactly fills the width, the cursor skips
         // the interleaved ghost and lands on the next buffer row.
         state.update_text("abcd\nef");
         // Rows: 0=line0, 1=ghost, 2=line1.
-        assert_eq!(point(&state, 4, &[]), (2, 0));
+        assert_eq!(point(&state, 4, &[]), Some((2, 0)));
     }
 
     #[test]

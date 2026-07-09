@@ -596,7 +596,9 @@ impl CharCellState {
 
     /// Clamps a stale scroll offset, then moves the viewport the minimal
     /// amount needed to keep the display row of the cursor at 0-based char
-    /// index `cursor_char_idx` visible within `viewport_rows` rows.
+    /// index `cursor_char_idx` visible within `viewport_rows` rows. A cursor
+    /// inside a hidden line has no display row, so this only clamps stale
+    /// scroll state without moving the viewport toward the cursor.
     pub fn follow_cursor(
         &self,
         cursor_char_idx: usize,
@@ -612,6 +614,10 @@ impl CharCellState {
             .scroll_offset
             .get()
             .min(total_rows.saturating_sub(visible_rows));
+        let Some(cursor_row) = cursor_row else {
+            self.scroll_offset.set(offset);
+            return;
+        };
         if cursor_row < offset {
             offset = cursor_row;
         } else if cursor_row >= offset + visible_rows {
@@ -628,10 +634,14 @@ impl CharCellState {
         &self,
         cursor_char_idx: usize,
         hidden_line_ranges: &[Range<usize>],
-    ) -> (u32, u32) {
+    ) -> (Option<u32>, u32) {
         self.with_display_lattice(hidden_line_ranges, |lattice| {
-            let cursor_row = lattice.offset_to_display_point(cursor_char_idx).row;
-            let total_rows = (lattice.rows().len() as u32).max(cursor_row + 1);
+            let cursor_row = lattice
+                .offset_to_display_point(cursor_char_idx)
+                .map(|point| point.row);
+            let total_rows = cursor_row.map_or(lattice.rows().len() as u32, |cursor_row| {
+                (lattice.rows().len() as u32).max(cursor_row + 1)
+            });
             (cursor_row, total_rows)
         })
     }

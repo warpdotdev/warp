@@ -134,15 +134,13 @@ impl<'a> DisplayLattice<'a> {
 
     /// The [`DisplayPoint`] of the gap before 0-based char index `char_idx`.
     ///
-    /// Offsets inside hidden lines resolve to their gap row; when the hidden
-    /// run produced no gap (edge runs emit no rows), leading runs resolve to
-    /// the first display row and trailing runs to the last. A deferred-wrap
+    /// Returns `None` when the offset is inside a hidden line. A deferred-wrap
     /// cursor at the end of a line that exactly fills the width lands on the
     /// next *buffer* row, or one past the entire display when no buffer row
     /// follows — never on an interleaved ghost or gap row, which holds no
     /// buffer gap for a cursor. Callers sizing a viewport must accommodate
     /// that phantom row.
-    pub fn offset_to_display_point(&self, char_idx: usize) -> DisplayPoint {
+    pub fn offset_to_display_point(&self, char_idx: usize) -> Option<DisplayPoint> {
         let line_index = self
             .line_starts
             .partition_point(|&start| start <= char_idx)
@@ -153,10 +151,7 @@ impl<'a> DisplayLattice<'a> {
             .iter()
             .any(|range| range.contains(&line_index))
         {
-            return DisplayPoint {
-                row: self.hidden_line_row(line_index),
-                col: 0,
-            };
+            return None;
         }
 
         let line_start = self.line_starts.get(line_index).copied().unwrap_or(0);
@@ -168,20 +163,13 @@ impl<'a> DisplayLattice<'a> {
         let mut line_rows = self.rows.iter().enumerate().filter(|(_, row)| {
             matches!(row.kind, DisplayRowKind::Buffer { line_index: l } if l == line_index)
         });
-        let Some((first_row, _)) = line_rows.next() else {
-            // Unreachable — a visible line always emits rows — but degrade to
-            // one past the display rather than panicking.
-            return DisplayPoint {
-                row: self.rows.len() as u32,
-                col,
-            };
-        };
+        let (first_row, _) = line_rows.next()?;
         let last_row = line_rows.next_back().map_or(first_row, |(index, _)| index);
         if (row_within_line as usize) <= last_row - first_row {
-            return DisplayPoint {
+            return Some(DisplayPoint {
                 row: first_row as u32 + row_within_line,
                 col,
-            };
+            });
         }
 
         // Deferred wrap: the cursor sits one row past the line's last row.
@@ -191,23 +179,18 @@ impl<'a> DisplayLattice<'a> {
             .iter()
             .position(|row| matches!(row.kind, DisplayRowKind::Buffer { .. }))
             .map_or(self.rows.len(), |offset| last_row + 1 + offset);
-        DisplayPoint {
+        Some(DisplayPoint {
             row: row as u32,
             col,
-        }
+        })
     }
 
-    /// The 0-based char index of the gap at `point` — the inverse of
-    /// [`Self::offset_to_display_point`] for buffer rows.
+    /// The 0-based char index of the gap at `point`.
     ///
-    /// Non-buffer rows resolve to the *nearest buffer offset* so mouse drags
-    /// have sensible semantics: ghost rows map to their insert position's
-    /// line start, gap rows to the start of their first hidden line, and rows
-    /// past the end of the display to the end of the buffer.
-    pub fn display_point_to_offset(&self, point: DisplayPoint) -> usize {
-        let Some(row) = self.rows.get(point.row as usize) else {
-            return self.char_widths.len();
-        };
+    /// Returns `None` for ghost, gap, and out-of-range rows because they have
+    /// no corresponding buffer offset.
+    pub fn display_point_to_offset(&self, point: DisplayPoint) -> Option<usize> {
+        let row = self.rows.get(point.row as usize)?;
         match &row.kind {
             DisplayRowKind::Buffer { .. } => {
                 // Walk the row's per-char widths to the gap at or just before
@@ -223,44 +206,9 @@ impl<'a> DisplayLattice<'a> {
                     col += width;
                     idx += 1;
                 }
-                idx
+                Some(idx)
             }
-            DisplayRowKind::Ghost { ghost_index } => {
-                let insert_before = self.ghosts[*ghost_index].insert_before.as_u32() as usize;
-                self.line_starts
-                    .get(insert_before)
-                    .copied()
-                    .unwrap_or(self.char_widths.len())
-            }
-            DisplayRowKind::Gap { line_range } => self
-                .line_starts
-                .get(line_range.start)
-                .copied()
-                .unwrap_or(self.char_widths.len()),
-        }
-    }
-
-    /// The display row for an offset inside hidden line `line_index`: its gap
-    /// row when the run produced one, else the display edge the run was
-    /// elided at (leading runs → the first row, trailing runs → the last).
-    fn hidden_line_row(&self, line_index: usize) -> u32 {
-        let gap_row = self.rows.iter().position(|row| {
-            matches!(&row.kind, DisplayRowKind::Gap { line_range } if line_range.contains(&line_index))
-        });
-        if let Some(row) = gap_row {
-            return row as u32;
-        }
-        let has_content_before = self.rows.iter().any(|row| match &row.kind {
-            DisplayRowKind::Buffer { line_index: l } => *l < line_index,
-            DisplayRowKind::Gap { line_range } => line_range.start < line_index,
-            DisplayRowKind::Ghost { ghost_index } => {
-                (self.ghosts[*ghost_index].insert_before.as_u32() as usize) <= line_index
-            }
-        });
-        if has_content_before {
-            self.rows.len().saturating_sub(1) as u32
-        } else {
-            0
+            DisplayRowKind::Ghost { .. } | DisplayRowKind::Gap { .. } => None,
         }
     }
 }

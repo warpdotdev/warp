@@ -298,7 +298,7 @@ impl TuiEditorElement {
                 // is part of the layout, so include it when sizing and windowing.
                 let cursor = lattice.offset_to_display_point(cursor_idx);
                 let total_rows = if self.editable {
-                    rows.len().max(cursor.row as usize + 1)
+                    cursor.map_or(rows.len(), |cursor| rows.len().max(cursor.row as usize + 1))
                 } else {
                     rows.len()
                 };
@@ -349,11 +349,17 @@ impl TuiEditorElement {
 
         self.column = column;
         self.selected_spans = selected_spans;
-        self.cursor_col = cursor.col + self.gutter_cols;
-        self.cursor_row_in_view = cursor.row.saturating_sub(first_visible_row) as u16;
-        self.cursor_visible = self.editable
-            && cursor.row >= first_visible_row
-            && (cursor.row as usize) < visible_end.max(1);
+        if let Some(cursor) = cursor {
+            self.cursor_col = cursor.col + self.gutter_cols;
+            self.cursor_row_in_view = cursor.row.saturating_sub(first_visible_row) as u16;
+            self.cursor_visible = self.editable
+                && cursor.row >= first_visible_row
+                && (cursor.row as usize) < visible_end.max(1);
+        } else {
+            self.cursor_col = 0;
+            self.cursor_row_in_view = 0;
+            self.cursor_visible = false;
+        }
     }
 
     /// The largest line number the gutter can display: the buffer's line
@@ -469,11 +475,11 @@ impl TuiEditorElement {
     /// below maps to the last display row (or the buffer's end on the
     /// deferred-wrap phantom row), so a drag that leaves the element drives
     /// auto-scroll.
-    fn offset_at(&self, position: TuiPoint, area: TuiRect, app: &AppContext) -> CharOffset {
+    fn offset_at(&self, position: TuiPoint, area: TuiRect, app: &AppContext) -> Option<CharOffset> {
         let inner = self.model.as_ref(app);
         let render_state = inner.render_state().as_ref(app);
         let Some(char_cell) = render_state.char_cell() else {
-            return CharOffset::default();
+            return None;
         };
         let buffer = inner.content().as_ref(app);
         let text = if buffer.is_empty() {
@@ -504,15 +510,20 @@ impl TuiEditorElement {
             let last_row = (lattice.rows().len() as u32).saturating_sub(1);
             if display_row > last_row {
                 let end_char_count = text.chars().count();
-                if lattice.offset_to_display_point(end_char_count).row > last_row {
-                    return CharOffset::from(end_char_count + 1);
+                if lattice
+                    .offset_to_display_point(end_char_count)
+                    .is_some_and(|point| point.row > last_row)
+                {
+                    return Some(CharOffset::from(end_char_count + 1));
                 }
             }
             let point = DisplayPoint {
                 row: display_row.min(last_row),
                 col,
             };
-            CharOffset::from(lattice.display_point_to_offset(point) + 1)
+            lattice
+                .display_point_to_offset(point)
+                .map(|offset| CharOffset::from(offset + 1))
         })
     }
 
@@ -541,7 +552,7 @@ impl TuiEditorElement {
                 if *is_first_mouse || !area.contains_point(*position) {
                     return None;
                 }
-                let offset = self.offset_at(*position, area, app);
+                let offset = self.offset_at(*position, area, app)?;
                 Some(match *click_count {
                     0 | 1 if modifiers.shift => TuiEditorAction::SelectionExtendTo { offset },
                     0 | 1 => TuiEditorAction::SelectionStartAt { offset },
@@ -553,7 +564,7 @@ impl TuiEditorElement {
             // but only while a selection that began inside it is active.
             TuiEvent::LeftMouseDragged { position, .. } if self.drag_in_progress(app) => {
                 Some(TuiEditorAction::SelectionUpdateTo {
-                    offset: self.offset_at(*position, area, app),
+                    offset: self.offset_at(*position, area, app)?,
                 })
             }
             TuiEvent::LeftMouseUp { .. } if self.drag_in_progress(app) => {
