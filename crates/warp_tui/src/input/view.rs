@@ -836,7 +836,7 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::KillToLineEnd => {
                 if let Some(killed) = self
                     .model
-                    .update(ctx, |m, ctx| m.kill_to_visual_row_end(ctx))
+                    .update(ctx, |m, ctx| m.kill_to_char_cell_visual_row_end(ctx))
                 {
                     self.kill_buffer.kill(killed);
                 }
@@ -844,7 +844,7 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::KillToLineStart => {
                 if let Some(killed) = self
                     .model
-                    .update(ctx, |m, ctx| m.kill_to_visual_row_start(ctx))
+                    .update(ctx, |m, ctx| m.kill_to_char_cell_visual_row_start(ctx))
                 {
                     self.kill_buffer.kill(killed);
                 }
@@ -1029,8 +1029,8 @@ impl TuiInputView {
     // ── Kill / yank ───────────────────────────────────────────────────────────
     //
     // The kill *edits* (visual-row range computation and deletion) live on
-    // `CodeEditorModel::kill_to_visual_row_end` / `_start`; the view owns only
-    // the kill buffer the deleted text lands in.
+    // `CodeEditorModel::kill_to_char_cell_visual_row_end` / `_start`; the view
+    // owns only the kill buffer the deleted text lands in.
 
     fn yank(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(text) = self.kill_buffer.yank().map(str::to_owned) {

@@ -1932,13 +1932,16 @@ impl CodeEditorModel {
     /// row, returning the deleted text; `None` when the cursor is already at
     /// the row end. Char-cell (TUI) mode only — visual rows follow the
     /// terminal-width wrap math.
-    pub fn kill_to_visual_row_end(&mut self, ctx: &mut ModelContext<Self>) -> Option<String> {
+    pub fn kill_to_char_cell_visual_row_end(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<String> {
         // `cursor_gap` is a 1-indexed gap position (gap 1 sits before the
         // first character); `text_in_range` / `Delete` use those same
         // coordinates, so the kill range starts exactly at `cursor_gap`.
         let cursor_gap = self.primary_cursor_gap(ctx);
         let cursor_offset = CharOffset::from(cursor_gap.as_usize().saturating_sub(1));
-        let row = self.cursor_visual_row_range(cursor_offset, ctx)?;
+        let row = self.char_cell_visual_row_range(cursor_offset, ctx)?;
         if row.end <= cursor_offset {
             return None;
         }
@@ -1952,10 +1955,13 @@ impl CodeEditorModel {
     /// Deletes from the start of the primary cursor's soft-wrapped visual row
     /// up to the cursor, returning the deleted text; `None` when the cursor
     /// is already at the row start. Char-cell (TUI) mode only.
-    pub fn kill_to_visual_row_start(&mut self, ctx: &mut ModelContext<Self>) -> Option<String> {
+    pub fn kill_to_char_cell_visual_row_start(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<String> {
         let cursor_gap = self.primary_cursor_gap(ctx);
         let cursor_offset = CharOffset::from(cursor_gap.as_usize().saturating_sub(1));
-        let row = self.cursor_visual_row_range(cursor_offset, ctx)?;
+        let row = self.char_cell_visual_row_range(cursor_offset, ctx)?;
         if row.start >= cursor_offset {
             return None;
         }
@@ -1972,7 +1978,7 @@ impl CodeEditorModel {
 
     /// The soft-wrapped visual row containing 0-based `cursor_offset`, as
     /// 0-based character offsets; `None` outside char-cell (TUI) mode.
-    fn cursor_visual_row_range(
+    fn char_cell_visual_row_range(
         &self,
         cursor_offset: CharOffset,
         ctx: &impl ModelAsRef,
