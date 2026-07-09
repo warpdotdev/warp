@@ -164,33 +164,60 @@ pub fn reconstruct(sender: &Option<SyncSender<ModelEvent>>) {
     }
 }
 
+/// A notification emitted by the persistence layer (the SQLite writer thread or
+/// the startup path) that the main thread should react to — e.g. to surface a
+/// user-facing toast.
+#[derive(Debug, Clone, Copy)]
+pub enum PersistenceNotification {
+    /// The local database was detected as corrupt and automatically recreated.
+    /// Locally-cached cloud data will re-sync from the server.
+    DatabaseCorruptionRecovered,
+}
+
 /// Holds interfaces to the writer thread.
 pub struct WriterHandles {
     pub handle: JoinHandle<()>,
     pub sender: SyncSender<ModelEvent>,
+    /// Receives [`PersistenceNotification`]s emitted by the writer thread (and
+    /// the startup path) for the main thread to consume.
+    pub notification_receiver: async_channel::Receiver<PersistenceNotification>,
 }
 
 /// Model for interacting with the writer thread.
 pub struct PersistenceWriter {
     thread_handle: Option<JoinHandle<()>>,
     model_event_sender: Option<SyncSender<ModelEvent>>,
+    notification_receiver: Option<async_channel::Receiver<PersistenceNotification>>,
 }
 
 impl PersistenceWriter {
     pub fn new(handle: Option<WriterHandles>) -> Self {
-        let (thread_handle, model_event_sender) = match handle {
-            Some(handle) => (Some(handle.handle), Some(handle.sender)),
-            None => (None, None),
+        let (thread_handle, model_event_sender, notification_receiver) = match handle {
+            Some(handle) => (
+                Some(handle.handle),
+                Some(handle.sender),
+                Some(handle.notification_receiver),
+            ),
+            None => (None, None, None),
         };
         Self {
             thread_handle,
             model_event_sender,
+            notification_receiver,
         }
     }
 
     /// Sending half for sending model updates to the persistence writer thread.
     pub fn sender(&self) -> Option<SyncSender<ModelEvent>> {
         self.model_event_sender.clone()
+    }
+
+    /// Takes the receiver for [`PersistenceNotification`]s. Consumed once by the
+    /// main thread to wire up the user-facing toast and telemetry.
+    pub fn take_notification_receiver(
+        &mut self,
+    ) -> Option<async_channel::Receiver<PersistenceNotification>> {
+        self.notification_receiver.take()
     }
 
     /// Synchronously terminate the SQLite writer thread.

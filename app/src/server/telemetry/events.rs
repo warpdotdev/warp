@@ -1403,6 +1403,10 @@ pub enum TelemetryEvent {
     DatabaseStartUpError(String),
     DatabaseReadError(String),
     DatabaseWriteError(String),
+    /// The local SQLite database was detected as corrupt at runtime or startup
+    /// and was automatically deleted and recreated. Tracks how often on-disk
+    /// corruption happens in the wild.
+    DatabaseCorruptionRecovered,
     AppStartup(AppStartupInfo),
     /// The native app was opened while logged out. Since Warp requires login,
     /// this usually means a new user.
@@ -3156,6 +3160,7 @@ impl TelemetryEvent {
             TelemetryEvent::DatabaseStartUpError(error) => Some(json!(error)),
             TelemetryEvent::DatabaseReadError(error) => Some(json!(error)),
             TelemetryEvent::DatabaseWriteError(error) => Some(json!(error)),
+            TelemetryEvent::DatabaseCorruptionRecovered => None,
             TelemetryEvent::AppStartup(info) => Some(json!(info)),
             TelemetryEvent::DownloadSource(source) => Some(json!(source)),
             TelemetryEvent::BaselineCommandLatency(info) => Some(json!(info)),
@@ -4887,6 +4892,7 @@ impl TelemetryEvent {
             | TelemetryEvent::DatabaseStartUpError(_)
             | TelemetryEvent::DatabaseReadError(_)
             | TelemetryEvent::DatabaseWriteError(_)
+            | TelemetryEvent::DatabaseCorruptionRecovered
             | TelemetryEvent::AppStartup(_)
             | TelemetryEvent::LoggedOutStartup
             | TelemetryEvent::DownloadSource(_)
@@ -5445,6 +5451,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::DatabaseStartUpError => EnablementState::Always,
             Self::DatabaseReadError => EnablementState::Always,
             Self::DatabaseWriteError => EnablementState::Always,
+            Self::DatabaseCorruptionRecovered => EnablementState::Always,
             Self::AppStartup => EnablementState::Always,
             Self::LoggedOutStartup => EnablementState::Always,
             Self::DownloadSource => EnablementState::Always,
@@ -5940,6 +5947,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::DatabaseStartUpError => "Database Startup Error",
             Self::DatabaseWriteError => "Database Write Error",
             Self::DatabaseReadError => "Database Read Error",
+            Self::DatabaseCorruptionRecovered => "Database Corruption Recovered",
             Self::AppStartup => "App Startup",
             Self::LoggedOutStartup => "Logged-out App Startup",
             Self::DownloadSource => "App Download Source",
@@ -6521,6 +6529,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::DatabaseWriteError => {
                 "Database write error when trying to write app state for session restoration"
+            }
+            Self::DatabaseCorruptionRecovered => {
+                "Recovered from a corrupt local SQLite database by deleting the malformed files and recreating it"
             }
             Self::AppStartup => "App is launched",
             Self::LoggedOutStartup => "Started Warp in the logged-out / signed-out state",

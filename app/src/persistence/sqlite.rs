@@ -66,7 +66,7 @@ use super::model::{
 };
 use super::{
     schema, BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData, PersistedDataScope,
-    PersistenceScope, StartedCommandMetadata, WriterHandles,
+    PersistenceNotification, PersistenceScope, StartedCommandMetadata, WriterHandles,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -139,11 +139,17 @@ pub fn initialize(
         init_logging();
     }
     let database_path = database_file_path_for_scope(&scope);
-    match init_db(&scope) {
-        Ok(mut conn) => {
+    let (notification_tx, notification_rx) = async_channel::unbounded::<PersistenceNotification>();
+    match init_db_with_corruption_recovery(&scope) {
+        Ok((mut conn, recovered_on_startup)) => {
             let mut persisted_data = read_persisted_data(&mut conn, ctx, data_scope);
 
-            let writer_handles = match start_writer(conn, database_path.clone()) {
+            let writer_handles = match start_writer(
+                conn,
+                database_path.clone(),
+                notification_tx.clone(),
+                notification_rx,
+            ) {
                 Ok(writer_handles) => Some(writer_handles),
                 Err(err) => {
                     send_telemetry_from_app_ctx!(
@@ -154,6 +160,19 @@ pub fn initialize(
                     None
                 }
             };
+
+            // If the database was corrupt at startup we recreated it above.
+            // Enqueue a notification (buffered until the main thread wires up the
+            // consumer) so the user sees a toast and we record telemetry, exactly
+            // like the mid-session writer-thread recovery path. Telemetry is
+            // emitted once, by the notification consumer.
+            if recovered_on_startup {
+                if let Err(err) =
+                    notification_tx.try_send(PersistenceNotification::DatabaseCorruptionRecovered)
+                {
+                    log::warn!("Failed to enqueue startup database-corruption notification: {err}");
+                }
+            }
 
             // Persist any read-time-derived conversation summaries so the
             // derivation only happens once per pre-`summary`-column row.
@@ -507,9 +526,100 @@ fn reconstruct_database(path: &Path) -> Result<SqliteConnection> {
     setup_database(path)
 }
 
-fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<WriterHandles> {
+/// The three files that make up a SQLite database in WAL mode: the main
+/// database file plus its write-ahead-log and shared-memory sidecars.
+fn database_files(path: &Path) -> [PathBuf; 3] {
+    [
+        path.to_path_buf(),
+        path.with_extension("sqlite-wal"),
+        path.with_extension("sqlite-shm"),
+    ]
+}
+
+/// Returns true when `err` (anywhere in its source chain) is a SQLite
+/// corruption error. Diesel's public `Error::DatabaseError` only exposes the
+/// error message (not the raw extended result code), so we match on the specific
+/// corruption message classes. The allowlist is intentionally narrow — only
+/// SQLITE_CORRUPT and SQLITE_NOTADB — so that transient, locking, or constraint
+/// errors never trigger the destructive delete-and-recreate recovery below.
+fn is_corruption_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        if let Some(Error::DatabaseError(_, info)) = cause.downcast_ref::<Error>() {
+            let message = info.message().to_ascii_lowercase();
+            // "database disk image is malformed" == SQLITE_CORRUPT,
+            // "file is not a database" == SQLITE_NOTADB.
+            message.contains("database disk image is malformed")
+                || message.contains("file is not a database")
+        } else {
+            false
+        }
+    })
+}
+
+/// Deletes the SQLite database file and its WAL/SHM sidecars. A missing file is
+/// not an error (there is often no WAL/SHM). Used when recovering from
+/// corruption both at runtime and at startup.
+fn remove_database_files(path: &Path) {
+    for file in database_files(path) {
+        match std::fs::remove_file(&file) {
+            Ok(()) => log::info!("Removed SQLite file during recovery: {}", file.display()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => report_error!(anyhow::Error::new(err)
+                .context(format!("Failed to remove SQLite file {}", file.display()))),
+        }
+    }
+}
+
+/// Recreates a corrupt database in place: removes the malformed `.sqlite`,
+/// `.sqlite-wal`, and `.sqlite-shm` files, then recreates a fresh database and
+/// re-runs migrations. The caller MUST drop the existing connection before
+/// calling this so the OS releases the file handles — on Windows an open file
+/// cannot be deleted.
+fn recreate_corrupt_database(path: &Path) -> Result<SqliteConnection> {
+    remove_database_files(path);
+    let conn = setup_database(path)?;
+    // Re-apply the owner-only hardening that `init_db` performs so a recovered
+    // database file isn't left at default permissions (this matters for the
+    // remote-server daemon persistence, which `init_db` locks down to 0o600).
+    // This is a no-op on non-unix and is harmless—strictly more restrictive—for
+    // the app scope.
+    ensure_owner_only_file(path)?;
+    Ok(conn)
+}
+
+/// Like [`init_db`], but if the database is corrupt on open, deletes the
+/// malformed files and recreates a fresh one, retrying once. Returns whether
+/// recovery occurred so the caller can notify the user and record telemetry.
+/// Non-corruption errors are propagated unchanged.
+fn init_db_with_corruption_recovery(scope: &PersistenceScope) -> Result<(SqliteConnection, bool)> {
+    match init_db(scope) {
+        Ok(conn) => Ok((conn, false)),
+        Err(err) if is_corruption_error(&err) => {
+            let db_path = database_file_path_for_scope(scope);
+            report_db_error("startup corruption detected", err, &db_path);
+            remove_database_files(&db_path);
+            let conn = init_db(scope).context("Failed to recreate corrupt database on startup")?;
+            log::info!("Recreated corrupt SQLite database on startup");
+            Ok((conn, true))
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn start_writer(
+    conn: SqliteConnection,
+    database_path: PathBuf,
+    notification_tx: async_channel::Sender<PersistenceNotification>,
+    notification_receiver: async_channel::Receiver<PersistenceNotification>,
+) -> Result<WriterHandles> {
     let (tx, rx) = std::sync::mpsc::sync_channel(CHANNEL_SIZE);
-    let mut current_conn = conn;
+    // The connection is held in an `Option` so we can drop it before deleting the
+    // underlying files during corruption recovery (required on Windows).
+    let mut current_conn = Some(conn);
+    // One-shot guard: after we have recreated the database once this session, a
+    // further write failure falls back to log-and-continue rather than looping
+    // through delete/recreate again.
+    let mut recovered_from_corruption = false;
     let handle = thread::Builder::new()
         .name("SQLite Writer".into())
         .spawn(move || {
@@ -537,7 +647,7 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                         ModelEvent::ReconstructAndResume => {
                             match reconstruct_database(&database_path) {
                                 Ok(conn) => {
-                                    current_conn = conn;
+                                    current_conn = Some(conn);
                                     paused = false;
                                     log::info!("SQLite Writer is resumed");
                                 }
@@ -566,15 +676,60 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                                 log::info!("Ignoring event as SQLite Writer is on pause");
                                 continue;
                             }
-                            if let Err(err) = handle_model_event(event, &mut current_conn) {
-                                report_db_error("Model", err, &database_path);
+                            let Some(conn) = current_conn.as_mut() else {
+                                log::warn!(
+                                    "Ignoring event: SQLite writer has no active connection"
+                                );
+                                continue;
+                            };
+                            if let Err(err) = handle_model_event(event, conn) {
+                                if !recovered_from_corruption && is_corruption_error(&err) {
+                                    report_db_error(
+                                        "Model (database corruption detected)",
+                                        err,
+                                        &database_path,
+                                    );
+                                    // Drop the corrupt connection before deleting the
+                                    // files (required on Windows) and recreate a fresh
+                                    // database in place.
+                                    current_conn = None;
+                                    match recreate_corrupt_database(&database_path) {
+                                        Ok(new_conn) => {
+                                            current_conn = Some(new_conn);
+                                            recovered_from_corruption = true;
+                                            log::info!(
+                                                "Recreated corrupt SQLite database; writes will resume"
+                                            );
+                                            if let Err(err) = notification_tx.try_send(
+                                                PersistenceNotification::DatabaseCorruptionRecovered,
+                                            ) {
+                                                log::warn!(
+                                                    "Failed to enqueue corruption-recovery notification: {err}"
+                                                );
+                                            }
+                                        }
+                                        Err(err) => {
+                                            report_db_error(
+                                                "database corruption recovery",
+                                                err,
+                                                &database_path,
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    report_db_error("Model", err, &database_path);
+                                }
                             }
                         }
                     }
                 }
             }
         })?;
-    Ok(WriterHandles { handle, sender: tx })
+    Ok(WriterHandles {
+        handle,
+        sender: tx,
+        notification_receiver,
+    })
 }
 
 /// Handles a single [`ModelEvent`] by dispatching to an event-specific function.

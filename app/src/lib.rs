@@ -281,7 +281,7 @@ use crate::notebooks::CloudNotebook;
 use crate::notification::NotificationContext;
 use crate::palette::PaletteMode;
 use crate::persistence::model::AgentConversationData;
-use crate::persistence::PersistenceWriter;
+use crate::persistence::{PersistenceNotification, PersistenceWriter};
 use crate::projects::ProjectManagementModel;
 use crate::root_view::{
     quake_mode_window_id, quake_mode_window_is_open, OpenFromRestoredArg, OpenPath,
@@ -1407,7 +1407,11 @@ pub(crate) fn initialize_app(
         persistence::initialize(ctx, persistence_scope, persisted_data_scope);
     timer.mark_interval_end("SQLITE_INITIALIZED");
 
-    let persistence_writer = PersistenceWriter::new(writer_handles);
+    let mut persistence_writer = PersistenceWriter::new(writer_handles);
+    // Consumed once below (after ToastStack is registered) to surface a
+    // user-facing toast if the local database had to be recreated after
+    // corruption.
+    let corruption_notification_rx = persistence_writer.take_notification_receiver();
 
     let model_event_sender = persistence_writer.sender();
 
@@ -1898,6 +1902,40 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| VimRegisters::new());
     ctx.add_singleton_model(UndoCloseStack::new);
     ctx.add_singleton_model(|_| ToastStack);
+    // If the SQLite writer thread (or the startup path) had to recreate a corrupt
+    // local database, surface a one-time toast telling the user their local data
+    // was reset and that cloud data will restore automatically, and record a
+    // telemetry event so we can track how often corruption happens in the wild.
+    if let Some(corruption_notification_rx) = corruption_notification_rx {
+        ToastStack::handle(ctx).update(ctx, |_, ctx| {
+            ctx.spawn_stream_local(
+                corruption_notification_rx,
+                |stack, notification, ctx| match notification {
+                    PersistenceNotification::DatabaseCorruptionRecovered => {
+                        send_telemetry_from_app_ctx!(
+                            TelemetryEvent::DatabaseCorruptionRecovered,
+                            ctx
+                        );
+                        let window_id = ctx
+                            .windows()
+                            .active_window()
+                            .or_else(|| ctx.windows().ordered_window_ids().first().copied());
+                        let Some(window_id) = window_id else {
+                            return;
+                        };
+                        let toast: DismissibleToast<WorkspaceAction> = DismissibleToast::default(
+                            "Warp's local database was reset after it became corrupted. Your \
+                             cloud data (Notebooks, Workflows, folders) will restore automatically."
+                                .to_string(),
+                        )
+                        .with_object_id("database_corruption_recovered".to_string());
+                        stack.add_persistent_toast(toast, window_id, ctx);
+                    }
+                },
+                |_, _| {},
+            );
+        });
+    }
     ctx.add_singleton_model(|_| GlobalCodeReviewModel);
     ctx.add_singleton_model(workspace::OneTimeModalModel::new);
     ctx.add_singleton_model(

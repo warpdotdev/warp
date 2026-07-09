@@ -5,6 +5,7 @@ use ai::workspace::WorkspaceMetadata;
 use chrono::Utc;
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
+use diesel::RunQueryDsl;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
@@ -12,8 +13,9 @@ use warp_graphql::scalars::time::ServerTimestamp;
 
 use super::{
     app_database_file_path, database_file_path_for_scope, decode_path, deduplicate_events,
-    encode_path, get_all_codebase_index_metadata, read_sqlite_data, save_app_state,
-    save_codebase_index_metadata, setup_database, start_writer,
+    encode_path, get_all_codebase_index_metadata, is_corruption_error, read_sqlite_data,
+    recreate_corrupt_database, save_app_state, save_codebase_index_metadata, setup_database,
+    start_writer,
 };
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
@@ -133,7 +135,9 @@ fn sqlite_writer_reuses_codebase_index_metadata_events() {
     let database_path = tempdir.path().join("warp.sqlite");
     let conn = setup_database(&database_path).expect("database should initialize");
 
-    let writer = start_writer(conn, database_path.clone()).expect("writer should start");
+    let (notify_tx, notify_rx) = async_channel::unbounded();
+    let writer = start_writer(conn, database_path.clone(), notify_tx, notify_rx)
+        .expect("writer should start");
     let metadata = test_codebase_metadata("/tmp/writer-repo");
     writer
         .sender
@@ -152,7 +156,9 @@ fn sqlite_writer_reuses_codebase_index_metadata_events() {
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].path, metadata.path);
 
-    let writer = start_writer(conn, database_path.clone()).expect("writer should restart");
+    let (notify_tx, notify_rx) = async_channel::unbounded();
+    let writer = start_writer(conn, database_path.clone(), notify_tx, notify_rx)
+        .expect("writer should restart");
     writer
         .sender
         .send(ModelEvent::DeleteCodebaseIndexMetadata {
@@ -169,6 +175,93 @@ fn sqlite_writer_reuses_codebase_index_metadata_events() {
     let restored = get_all_codebase_index_metadata(&mut conn).expect("metadata should load");
     assert!(restored.is_empty());
 }
+/// Overwrites the SQLite database file with non-database bytes so the next
+/// connection reports corruption (SQLITE_NOTADB / SQLITE_CORRUPT).
+fn corrupt_database_file(path: &std::path::Path) {
+    std::fs::write(path, b"this is definitely not a valid sqlite database file")
+        .expect("should be able to overwrite the database file");
+}
+
+/// Regression: a corrupt on-disk database must be detected, deleted (all three
+/// `.sqlite`/`-wal`/`-shm` files), and recreated so subsequent writes persist
+/// instead of failing silently for the rest of the session. This exercises the
+/// exact detection + recovery code the SQLite writer thread and the startup path
+/// both call. Fails before the fix (the helpers don't exist / the DB stays
+/// corrupt); passes after.
+#[test]
+fn recreate_corrupt_database_recovers_and_persists_subsequent_writes() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+
+    // Seed a valid database with a row.
+    {
+        let mut conn = setup_database(&database_path).expect("database should initialize");
+        save_codebase_index_metadata(&mut conn, test_codebase_metadata("/tmp/pre-corruption"))
+            .expect("seed row should save");
+    }
+
+    // Corrupt the main file and drop stale WAL/SHM sidecars with garbage.
+    corrupt_database_file(&database_path);
+    std::fs::write(database_path.with_extension("sqlite-wal"), b"garbage-wal").ok();
+    std::fs::write(database_path.with_extension("sqlite-shm"), b"garbage-shm").ok();
+
+    // Sanity check: the corrupt database no longer opens.
+    assert!(
+        setup_database(&database_path).is_err(),
+        "a corrupt database should fail to open before recovery"
+    );
+
+    // Recover: delete the malformed files and recreate a fresh, usable database.
+    let mut conn = recreate_corrupt_database(&database_path)
+        .expect("recreation should produce a usable database");
+
+    // The recreated database is fresh (the old row is gone) and writable.
+    let existing = get_all_codebase_index_metadata(&mut conn).expect("metadata should load");
+    assert!(existing.is_empty(), "recreated database should start empty");
+    save_codebase_index_metadata(&mut conn, test_codebase_metadata("/tmp/post-recovery"))
+        .expect("writes should persist after recovery");
+    let restored = get_all_codebase_index_metadata(&mut conn).expect("metadata should load");
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].path, PathBuf::from("/tmp/post-recovery"));
+    drop(conn);
+
+    // The recreated database reopens cleanly (no residual corruption).
+    setup_database(&database_path).expect("recreated database should reopen cleanly");
+}
+
+/// The corruption classifier must fire only on genuine corruption, never on
+/// ordinary errors — otherwise a transient failure would trigger the
+/// destructive delete-and-recreate path.
+#[test]
+fn is_corruption_error_detects_only_corruption() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+
+    // Positive: opening a genuinely corrupt file yields a corruption error.
+    let corrupt_path = tempdir.path().join("corrupt.sqlite");
+    corrupt_database_file(&corrupt_path);
+    // `SqliteConnection` isn't `Debug`, so we can't use `expect_err` here.
+    let corruption_err = match setup_database(&corrupt_path) {
+        Ok(_) => panic!("opening a corrupt database should fail"),
+        Err(err) => err,
+    };
+    assert!(
+        is_corruption_error(&corruption_err),
+        "a malformed-database error should be classified as corruption: {corruption_err:#}"
+    );
+
+    // Negative: an ordinary query error (missing table) is NOT corruption.
+    let valid_path = tempdir.path().join("valid.sqlite");
+    let mut conn = setup_database(&valid_path).expect("valid database should initialize");
+    let non_corruption_err: anyhow::Error = diesel::sql_query("SELECT * FROM does_not_exist")
+        .execute(&mut conn)
+        .expect_err("querying a missing table should fail")
+        .into();
+    assert!(
+        !is_corruption_error(&non_corruption_err),
+        "a missing-table error must not be treated as corruption"
+    );
+}
+
 #[test]
 fn test_deduplicate_snapshots() {
     let local_notebook = CloudNotebook::new_local(
