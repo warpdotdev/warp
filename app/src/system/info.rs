@@ -334,7 +334,7 @@ impl ResourceUsageReporter {
         samples: impl Iterator<Item = &'a Sample>,
         ctx: &mut AppContext,
     ) {
-        let cpu_usage_stats = Self::compute_cpu_usage_stats(samples);
+        let _cpu_usage_stats = Self::compute_cpu_usage_stats(samples);
         let memory_usage_stats = Self::compute_memory_usage_stats(total_application_usage, ctx);
 
         // We send two different events at the moment, as one contains general
