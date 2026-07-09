@@ -12,7 +12,7 @@ The shared editor runs headlessly in the TUI: `CodeEditorModel::new_tui` (`app/s
 
 The GUI layering this design mirrors:
 - **Model** decides *what*: `CodeEditorModel` owns `DiffModel`/`HiddenLinesModel`; `refresh_diff_state` turns hunks into removed-line `TemporaryBlock`s and decorations.
-- **RenderState** stores render *mechanisms*, diff-agnostic: temporary-block storage, decorations, the `hidden_lines` handle; it answers geometry queries.
+- **RenderState** stores render *mechanisms*, diff-agnostic: temporary-block storage and decorations; its `CharCellState` owns the TUI `hidden_lines` handle and answers char-cell geometry queries.
 - **Core element** renders any conforming model: `RichTextElement` (`crates/editor/src/render/element/mod.rs:91`). The input's view renders it directly; the GUI diff view wraps it in `EditorWrapper` (`app/src/code/editor/element.rs:381`), which adds gutter and chrome. Read-only is achieved by not wiring editing bindings — there is no read-only mode in the core.
 
 ## Design overview
@@ -59,7 +59,7 @@ Two coordinate spaces stay explicit:
 - `CharCellState::visual_row_char_range(char_offset)` — buffer visual-row space: the soft-wrapped `Range<CharOffset>` containing an offset (backs the model's kill-to-visual-row edits).
 - `CharCellState` scroll state — `scroll_offset()` / `scroll_by(rows, viewport_rows, cursor_char_offset, hidden)` / `follow_cursor(cursor_char_offset, viewport_rows, hidden)`: the first visible display row of a scroll-windowed viewport plus its clamping and cursor-following policy, kept next to the display-row math it windows (the char-cell mirror of the GUI's `RenderState`-owned scroll). Both methods size the row total including the deferred-wrap phantom row the cursor can occupy.
 - `SelectionModel::has_pending_selection()` (`crates/editor/src/selection.rs`) — whether a drag selection is in progress (begun by `begin_selection` on mouse down, cleared by `end_selection` on mouse up). Consumers derive drag gating from this instead of mirroring an `is_selecting` flag.
-- `RenderState::hidden_line_ranges(app)` — `HiddenLinesModel` offset ranges projected to 0-based line ranges via `line_starts`. Wired by a new required `hidden_lines` parameter on `RenderState::new_tui` (the GUI's `RenderState::new` takes an optional one; every char-cell editor is built through `CodeEditorModel::new_tui`, which always has one).
+- `CharCellState::hidden_line_ranges(app)` — its attached `HiddenLinesModel` offset ranges projected to 0-based line ranges via `line_starts`. The method is only reachable after `RenderState::char_cell()` succeeds. The handle is supplied by `RenderState::new_tui`; pixel mode retains its separate optional handle for the font-layout pipeline.
 
 Hidden line ranges are a *parameter* to `display_lattice` rather than internal state, so consumers can append structural extras (e.g. eliding a trailing empty line) to the model-derived set. Because the returned lattice binds the hidden and ghost sets at construction, painting and geometry queries against it cannot diverge.
 

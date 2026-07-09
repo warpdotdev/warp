@@ -1721,7 +1721,7 @@ mod char_cell_scroll {
 
     /// A 4-column state with five one-row logical lines ("l0".."l4").
     fn five_row_state() -> CharCellState {
-        let state = CharCellState::new(4);
+        let state = CharCellState::new(4, None);
         state.update_text("l0\nl1\nl2\nl3\nl4");
         state
     }

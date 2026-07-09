@@ -475,6 +475,9 @@ pub struct CharCellState {
     /// part of the wrap tables above: ghost rows are interleaved by row
     /// renderers at render time, so buffer offset math is unaffected.
     temporary_blocks: RefCell<Vec<CharCellTemporaryBlock>>,
+    /// Hidden-line model projected into logical line ranges for char-cell
+    /// rendering. Absent only in unit tests that construct this state directly.
+    hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
     /// First visible display row (0-indexed) of a scroll-windowed viewport
     /// (e.g. the TUI prompt input); stays 0 for consumers that render full
     /// height. Lives here — with the display-row math it windows — mirroring
@@ -483,7 +486,10 @@ pub struct CharCellState {
 }
 
 impl CharCellState {
-    fn new(terminal_width: u16) -> Self {
+    fn new(
+        terminal_width: u16,
+        hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
+    ) -> Self {
         Self {
             terminal_width: Cell::new(terminal_width),
             // Seed with logical line 0 so `line_starts` is never empty, matching
@@ -493,6 +499,7 @@ impl CharCellState {
             line_starts: RefCell::new(vec![0]),
             char_widths: RefCell::new(Vec::new()),
             temporary_blocks: RefCell::new(Vec::new()),
+            hidden_lines,
             scroll_offset: Cell::new(0),
         }
     }
@@ -516,6 +523,32 @@ impl CharCellState {
         self.terminal_width.set(terminal_width);
     }
 
+    /// The attached [`HiddenLinesModel`] projected to 0-based logical line
+    /// ranges using this state's char-cell line table.
+    pub fn hidden_line_ranges(&self, app: &AppContext) -> Vec<Range<usize>> {
+        let Some(hidden_lines) = self.hidden_lines.as_ref() else {
+            return Vec::new();
+        };
+        let line_starts = self.line_starts.borrow();
+        hidden_lines
+            .as_ref(app)
+            .hidden_ranges_at_latest(app)
+            .iter()
+            .filter_map(|range| {
+                // Anchor offsets are 1-based gaps sitting at line starts;
+                // convert to 0-based char indices, then to line indices. The
+                // end offset is the start of the first line *after* the run.
+                let start_char = range.start.as_usize().saturating_sub(1);
+                let end_char = range.end.as_usize().saturating_sub(1);
+                let start_line = line_starts
+                    .partition_point(|&start| start <= start_char)
+                    .saturating_sub(1);
+                let end_line = line_starts.partition_point(|&start| start < end_char);
+                (start_line < end_line).then_some(start_line..end_line)
+            })
+            .collect()
+    }
+
     /// Projects the current wrap tables, ghost blocks, and the given hidden
     /// line ranges into a [`DisplayLattice`]: buffer rows soft-wrapped, ghosts
     /// interleaved, hidden lines elided into gap rows. See
@@ -524,7 +557,7 @@ impl CharCellState {
     /// The returned lattice owns the immutable borrow guards for its inputs,
     /// so every query is answered against the same snapshot. The hidden ranges
     /// are a parameter so consumers can append structural extras to the
-    /// model-derived set from [`RenderState::hidden_line_ranges`].
+    /// model-derived set from [`CharCellState::hidden_line_ranges`].
     pub fn display_lattice<'a>(
         &'a self,
         hidden_line_ranges: &'a [Range<usize>],
@@ -718,6 +751,7 @@ pub struct RenderState {
 
     selections: RefCell<RenderedSelectionSet>,
     decorations: RenderDecoration,
+    /// Pixel-mode hidden lines consumed by the font-layout pipeline.
     hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
 
     /// Position IDs saved during paint.
@@ -2125,8 +2159,8 @@ impl RenderState {
     /// don't cause panics), but `BufferEdit` actions are no-ops — the caller must drive layout
     /// updates via [`Self::update_char_cell_text`].
     ///
-    /// `hidden_lines` backs [`Self::hidden_line_ranges`]; pass the owning editor's
-    /// [`HiddenLinesModel`] so char-cell consumers see model-driven line hiding.
+    /// `hidden_lines` backs [`CharCellState::hidden_line_ranges`]; pass the owning
+    /// editor's [`HiddenLinesModel`] so char-cell consumers see model-driven line hiding.
     /// Required (unlike [`Self::new`]'s optional handle): every char-cell editor is
     /// built through `CodeEditorModel::new_tui`, which always has one.
     ///
@@ -2168,8 +2202,11 @@ impl RenderState {
             pending_selection_change: Mutex::new(None),
             layout_options: Default::default(),
             document_path: None,
-            hidden_lines: Some(hidden_lines),
-            layout_mode: LayoutMode::CharCell(CharCellState::new(terminal_width)),
+            hidden_lines: None,
+            layout_mode: LayoutMode::CharCell(CharCellState::new(
+                terminal_width,
+                Some(hidden_lines),
+            )),
         }
     }
 
@@ -2252,35 +2289,6 @@ impl RenderState {
         }
     }
 
-    /// Char-cell only: the hidden line ranges from the attached
-    /// [`HiddenLinesModel`], projected to 0-based logical line indices via the
-    /// char-cell line table — the shape [`CharCellState::display_lattice`]
-    /// consumes. Empty in pixel mode, with no attached model, or with nothing
-    /// hidden.
-    pub fn hidden_line_ranges(&self, app: &AppContext) -> Vec<Range<usize>> {
-        let (Some(char_cell), Some(hidden_lines)) = (self.char_cell(), self.hidden_lines.as_ref())
-        else {
-            return Vec::new();
-        };
-        let line_starts = char_cell.line_starts.borrow();
-        hidden_lines
-            .as_ref(app)
-            .hidden_ranges_at_latest(app)
-            .iter()
-            .filter_map(|range| {
-                // Anchor offsets are 1-based gaps sitting at line starts;
-                // convert to 0-based char indices, then to line indices. The
-                // end offset is the start of the first line *after* the run.
-                let start_char = range.start.as_usize().saturating_sub(1);
-                let end_char = range.end.as_usize().saturating_sub(1);
-                let start_line = line_starts
-                    .partition_point(|&start| start <= start_char)
-                    .saturating_sub(1);
-                let end_line = line_starts.partition_point(|&start| start < end_char);
-                (start_line < end_line).then_some(start_line..end_line)
-            })
-            .collect()
-    }
 
     fn final_trailing_newline_cursor(styles: &RichTextStyles) -> BlockItem {
         BlockItem::TrailingNewLine(Cursor::new(

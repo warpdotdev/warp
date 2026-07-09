@@ -153,7 +153,12 @@ impl TuiEditorElement {
             let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
             start..end
         });
-        let hidden_line_ranges = inner.render_state().as_ref(app).hidden_line_ranges(app);
+        let hidden_line_ranges = inner
+            .render_state()
+            .as_ref(app)
+            .char_cell()
+            .map(|char_cell| char_cell.hidden_line_ranges(app))
+            .unwrap_or_default();
 
         Self {
             model: model.clone(),
@@ -489,7 +494,7 @@ impl TuiEditorElement {
         } else {
             buffer.text().into_string()
         };
-        let hidden = self.effective_hidden_ranges(&text, render_state.hidden_line_ranges(app));
+        let hidden = self.effective_hidden_ranges(&text, char_cell.hidden_line_ranges(app));
         let first_visible_row = if self.viewport_rows.is_some() {
             char_cell.scroll_offset()
         } else {

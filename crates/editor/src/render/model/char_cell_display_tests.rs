@@ -7,7 +7,7 @@ use super::{DisplayPoint, DisplayRow, DisplayRowKind};
 /// A `CharCellState` with wrap tables built for `text`, the public entry
 /// point for everything under test.
 fn state(text: &str, terminal_width: u16) -> CharCellState {
-    let state = CharCellState::new(terminal_width);
+    let state = CharCellState::new(terminal_width, None);
     state.update_text(text);
     state
 }
