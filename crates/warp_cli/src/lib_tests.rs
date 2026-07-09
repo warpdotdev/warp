@@ -68,6 +68,36 @@ fn run_cloud_help_lists_harness_and_auth_secret_flags() {
         help.contains("oz secret create codex api-key"),
         "--codex-auth-secret help should explain how to create a secret:\n{help}"
     );
+
+    // Only GA cloud harnesses are surfaced; gemini/opencode are hidden.
+    assert!(
+        !help.contains("opencode"),
+        "help should not surface the opencode harness (not GA for cloud):\n{help}"
+    );
+    assert!(
+        !help.contains("gemini"),
+        "help should not surface the gemini harness (not GA for cloud):\n{help}"
+    );
+}
+
+#[test]
+fn harness_help_visibility_matches_should_display_predicate() {
+    use clap::ValueEnum;
+    for harness in Harness::value_variants() {
+        // Skipped variants (e.g. Unknown) have no possible value and are never shown.
+        let Some(pv) = harness.to_possible_value() else {
+            assert!(
+                !harness.should_display_in_help_text(),
+                "{harness:?} is skipped from the value enum but marked displayable"
+            );
+            continue;
+        };
+        assert_eq!(
+            !pv.is_hide_set(),
+            harness.should_display_in_help_text(),
+            "help visibility for {harness:?} must match should_display_in_help_text()"
+        );
+    }
 }
 
 #[test]

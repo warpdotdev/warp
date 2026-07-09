@@ -137,10 +137,10 @@ pub enum Harness {
     #[value(name = "claude", alias = "claude-code")]
     Claude,
     /// Delegate to the `opencode` CLI.
-    #[value(name = "opencode", alias = "open-code")]
+    #[value(name = "opencode", alias = "open-code", hide = true)]
     OpenCode,
     /// Delegate to the `gemini` CLI.
-    #[value(name = "gemini")]
+    #[value(name = "gemini", hide = true)]
     Gemini,
     /// Delegate to the `codex` CLI.
     #[value(name = "codex")]
@@ -164,6 +164,21 @@ impl Harness {
         match Self::parse_orchestration_harness(value) {
             Some(harness @ (Self::Claude | Self::OpenCode | Self::Codex)) => Some(harness),
             Some(Self::Oz) | Some(Self::Gemini) | Some(Self::Unknown) | None => None,
+        }
+    }
+
+    /// Whether this harness is surfaced to users in CLI `--help` for cloud runs
+    /// (`oz agent run-cloud --harness`). Only the harnesses that are generally
+    /// available for cloud runs are shown; gemini and opencode aren't available
+    /// yet, so they're hidden from help and rejected on run (see the run-cloud
+    /// dispatch). Update this when a harness becomes GA for cloud.
+    ///
+    /// This is the source of truth for the per-variant `#[value(hide = ...)]`
+    /// attributes above; a unit test asserts the two stay in sync.
+    pub fn should_display_in_help_text(self) -> bool {
+        match self {
+            Self::Oz | Self::Claude | Self::Codex => true,
+            Self::OpenCode | Self::Gemini | Self::Unknown => false,
         }
     }
 

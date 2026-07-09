@@ -313,6 +313,14 @@ fn run_agent(
             if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--harness' found"));
             }
+            // Only harnesses surfaced in `--help` are accepted for cloud runs;
+            // gemini/opencode aren't available yet (see `should_display_in_help_text`).
+            if !args.harness.should_display_in_help_text() {
+                return Err(anyhow::anyhow!(
+                    "The {} harness is not available for cloud runs yet.",
+                    args.harness.display_name()
+                ));
+            }
             if let Err(msg) = args.validate_auth_secrets() {
                 return Err(anyhow::anyhow!(msg));
             }
