@@ -8396,6 +8396,7 @@ impl ApiKeysWidget {
         .finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_api_key_input(
         &self,
         appearance: &Appearance,
