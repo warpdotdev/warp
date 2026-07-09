@@ -12808,7 +12808,7 @@ impl TerminalView {
             ModelEvent::ImageReceived {
                 image_id,
                 image_data,
-                image_protocol,
+                image_protocol: _,
             } => {
                 AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
                     asset_cache.insert_raw_asset_bytes::<ImageType>(
@@ -15360,7 +15360,7 @@ impl TerminalView {
         &mut self,
         prompt: &str,
         label: &Option<String>,
-        request_duration_ms: u64,
+        _request_duration_ms: u64,
         trigger: Option<PassiveSuggestionTrigger>,
         conversation_id: Option<AIConversationId>,
         server_request_token: Option<String>,
