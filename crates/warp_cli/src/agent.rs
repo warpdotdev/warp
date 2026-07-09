@@ -164,11 +164,17 @@ impl ValueEnum for Harness {
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         let mut pv = match self {
-            Harness::Oz => PossibleValue::new("oz"),
-            Harness::Claude => PossibleValue::new("claude").alias("claude-code"),
-            Harness::OpenCode => PossibleValue::new("opencode").alias("open-code"),
-            Harness::Gemini => PossibleValue::new("gemini"),
-            Harness::Codex => PossibleValue::new("codex"),
+            Harness::Oz => {
+                PossibleValue::new("oz").help("Use Warp's built-in MAA infrastructure (default)")
+            }
+            Harness::Claude => PossibleValue::new("claude")
+                .alias("claude-code")
+                .help("Delegate to the `claude` CLI"),
+            Harness::OpenCode => PossibleValue::new("opencode")
+                .alias("open-code")
+                .help("Delegate to the `opencode` CLI"),
+            Harness::Gemini => PossibleValue::new("gemini").help("Delegate to the `gemini` CLI"),
+            Harness::Codex => PossibleValue::new("codex").help("Delegate to the `codex` CLI"),
             Harness::Unknown => return None,
         };
         if !self.should_display_in_help_text() {

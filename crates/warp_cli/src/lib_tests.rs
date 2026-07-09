@@ -78,6 +78,20 @@ fn run_cloud_help_lists_harness_and_auth_secret_flags() {
         !help.contains("gemini"),
         "help should not surface the gemini harness (not GA for cloud):\n{help}"
     );
+
+    // Surfaced harness values keep their per-value descriptions.
+    assert!(
+        help.contains("Use Warp's built-in MAA infrastructure"),
+        "help should describe the oz harness value:\n{help}"
+    );
+    assert!(
+        help.contains("Delegate to the `claude` CLI"),
+        "help should describe the claude harness value:\n{help}"
+    );
+    assert!(
+        help.contains("Delegate to the `codex` CLI"),
+        "help should describe the codex harness value:\n{help}"
+    );
 }
 
 #[test]
