@@ -15488,6 +15488,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "warp_errors",
  "warp_features",
  "warp_util",
  "warpui_core",

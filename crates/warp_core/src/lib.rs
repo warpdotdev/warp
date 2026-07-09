@@ -25,10 +25,12 @@ pub mod telemetry;
 pub mod ui;
 pub mod user_preferences;
 
-pub use app_id::AppId;
 #[doc(hidden)]
-pub use log as __log;
+pub use anyhow as __anyhow;
+pub use app_id::AppId;
 pub use session_id::SessionId;
+#[doc(hidden)]
+pub use warp_errors as __warp_errors;
 pub use warp_util::host_id::HostId;
 // Re-export warpui_core so that it can be referenced safely from the
 // telemetry macros.

@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use enum_iterator::{cardinality, Sequence};
+use warp_errors::report_error;
 
 use crate::channel::ChannelState;
 
@@ -48,7 +49,10 @@ impl ContextFlag {
     /// Sets a ContextFlag flag. FOR DEBUG USE ONLY.
     pub fn set(&self, value: bool) {
         if !ChannelState::enable_debug_features() {
-            log::error!("Tried to set value of ContextFlag in non-dogfood context: {self:?}");
+            report_error!(
+                "Tried to set value of ContextFlag in non-dogfood context",
+                extra: { "flag" => ?self }
+            );
         }
 
         FLAG_STATES[*self as usize].store(value, Ordering::Relaxed);
