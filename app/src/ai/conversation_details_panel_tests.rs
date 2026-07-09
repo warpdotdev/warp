@@ -432,7 +432,8 @@ fn test_oz_run_url_present_for_task_and_absent_for_conversation() {
     // `oz_run_url` yields a URL, which happens for task-backed runs but not for
     // plain local conversations.
     App::test((), |mut app| async move {
-        let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let _history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let task_id = "550e8400-e29b-41d4-a716-000000004050";
         let task = create_test_task(task_id);
 
