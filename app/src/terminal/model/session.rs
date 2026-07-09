@@ -1429,7 +1429,6 @@ impl Session {
             Err(e) => e,
         };
 
-        // Log the detailed error as a breadcrumb; the caller reports the failure it receives.
         log::error!("Failed to read history using PowerShell commands: {powershell_error:?}");
 
         // If Kaspersky is running, early return since we can't use [`async_fs`] to read the history
