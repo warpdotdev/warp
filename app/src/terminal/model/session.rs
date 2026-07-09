@@ -48,6 +48,8 @@ use crate::terminal::warpify::SubshellSource;
 use crate::terminal::{History, ShellHost, ShellLaunchData};
 
 #[derive(thiserror::Error, Debug)]
+// Each variant names a distinct read failure, so the shared `Error` suffix is intentional.
+#[allow(clippy::enum_variant_names)]
 enum ReadHistoryContentsError {
     #[cfg(windows)]
     #[error("Error running PowerShell commands to read history file")]
@@ -1490,12 +1492,8 @@ impl Session {
             .arg("-NoProfile")
             .arg("-NoLogo")
             .arg("-Command")
-            .arg({
-                let mut cmd = std::ffi::OsString::from("[System.IO.File]::ReadAllText('");
-                cmd.push(history_file_path);
-                cmd.push("')");
-                cmd
-            })
+            .arg("[System.IO.File]::ReadAllText($args[0])")
+            .arg(history_file_path)
             .output()
             .await;
         match read_result {
