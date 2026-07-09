@@ -5,6 +5,7 @@ pub(crate) mod codex_modal;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
+pub(crate) mod feature_intro_modal;
 pub(crate) mod free_ai_removal_modal;
 pub mod global_search;
 pub(crate) mod launch_modal;
@@ -504,6 +505,10 @@ use crate::workspace::view::cloud_agent_capacity_modal::{
     CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
 };
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
+use crate::workspace::view::feature_intro_modal::{
+    feature_intro_by_id, FeatureIntroCtaTarget, FeatureIntroId, FeatureIntroModal,
+    FeatureIntroModalEvent,
+};
 use crate::workspace::view::free_ai_removal_modal::{
     FreeAiRemovalModal, FreeAiRemovalModalEvent, FreeAiRemovalModalTelemetryEvent,
     FreeAiRemovalModalVariant,
@@ -661,6 +666,10 @@ const MOBILE_OVERLAY_SCRIM_ALPHA: u8 = 128;
 
 pub const NEW_TAB_BUTTON_POSITION_ID: &str = "new_tab_button";
 pub const NEW_SESSION_MENU_BUTTON_POSITION_ID: &str = "new_session_menu_button";
+
+/// Save position for the feature-intro popover, so the changelog chip can float
+/// just above it (see `feature_intro_chip_positioning`).
+const FEATURE_INTRO_MODAL_POSITION_ID: &str = "workspace:feature_intro_modal";
 
 // The max length of the title of a fork toast (after which we truncate it).
 const MAX_FORK_TOAST_TITLE_LENGTH: usize = 100;
@@ -1083,6 +1092,7 @@ pub struct Workspace {
     oz_launch_modal: ModalWithTab<LaunchModal<OzLaunchSlide>>,
     openwarp_launch_modal: ViewHandle<OpenWarpLaunchModal>,
     orchestration_launch_modal: ViewHandle<OrchestrationLaunchModal>,
+    feature_intro_modal: ViewHandle<FeatureIntroModal>,
     auto_handoff_sleep_modal: ViewHandle<AutoHandoffSleepModal>,
     enable_auto_reload_modal: ViewHandle<EnableAutoReloadModal>,
     build_plan_migration_modal: ViewHandle<BuildPlanMigrationModal>,
@@ -2978,6 +2988,11 @@ impl Workspace {
             me.handle_orchestration_launch_modal_event(event, ctx);
         });
 
+        let feature_intro_view = ctx.add_typed_action_view(FeatureIntroModal::new);
+        ctx.subscribe_to_view(&feature_intro_view, |me, _, event, ctx| {
+            me.handle_feature_intro_modal_event(event, ctx);
+        });
+
         let auto_handoff_sleep_view = ctx.add_typed_action_view(AutoHandoffSleepModal::new);
         ctx.subscribe_to_view(&auto_handoff_sleep_view, |me, _, event, ctx| {
             me.handle_auto_handoff_sleep_modal_event(event, ctx);
@@ -3312,6 +3327,8 @@ impl Workspace {
                         me.show_hoa_onboarding_flow(ctx);
                     } else if model_ref.is_build_plan_migration_modal_open() {
                         me.focus_build_plan_migration_modal(ctx);
+                    } else if let Some(id) = model_ref.active_feature_intro() {
+                        me.show_feature_intro_modal(id, ctx);
                     }
                 }
             }
@@ -3447,6 +3464,7 @@ impl Workspace {
             },
             openwarp_launch_modal: openwarp_launch_view,
             orchestration_launch_modal: orchestration_launch_view,
+            feature_intro_modal: feature_intro_view,
             auto_handoff_sleep_modal: auto_handoff_sleep_view,
             enable_auto_reload_modal,
             agent_management_view,
@@ -15852,7 +15870,19 @@ impl Workspace {
             pane_group::Event::Escape => {
                 if self.current_workspace_state.is_resource_center_open {
                     self.current_workspace_state.is_resource_center_open = false;
-                    ctx.notify()
+                    ctx.notify();
+                } else {
+                    let should_dismiss_feature_intro = {
+                        let one_time = OneTimeModalModel::as_ref(ctx);
+                        one_time.target_window_id() == Some(self.window_id)
+                            && one_time.active_feature_intro().is_some()
+                    };
+                    if should_dismiss_feature_intro {
+                        OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.mark_feature_intro_dismissed(ctx);
+                        });
+                        ctx.notify();
+                    }
                 }
             }
             pane_group::Event::Exited { add_to_undo_stack } => {
@@ -18850,6 +18880,34 @@ impl Workspace {
                 ctx.notify();
             }
         }
+    }
+
+    fn handle_feature_intro_modal_event(
+        &mut self,
+        event: &FeatureIntroModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let cta_target = if let FeatureIntroModalEvent::GetStarted(id) = event {
+            feature_intro_by_id(*id).and_then(|intro| intro.cta_target)
+        } else {
+            None
+        };
+        OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+            model.mark_feature_intro_dismissed(ctx);
+        });
+        self.focus_active_tab(ctx);
+
+        if let Some(cta_target) = cta_target {
+            match cta_target {
+                FeatureIntroCtaTarget::SettingsWidget { page, widget_id } => {
+                    self.open_settings_pane(Some(page), None, ctx);
+                    self.settings_pane.update(ctx, |settings, ctx| {
+                        settings.scroll_to_settings_widget(page, widget_id(), ctx);
+                    });
+                }
+            }
+        }
+        ctx.notify();
     }
 
     fn handle_auto_handoff_sleep_modal_event(
@@ -22721,6 +22779,19 @@ impl Workspace {
         }
     }
 
+    /// Offset positioning for the changelog chip while the feature-intro popover is
+    /// open: floats the chip just above the popover's top-right edge instead of
+    /// anchoring it to the input box.
+    fn feature_intro_chip_positioning(&self) -> OffsetPositioning {
+        OffsetPositioning::offset_from_save_position_element(
+            FEATURE_INTRO_MODAL_POSITION_ID,
+            vec2f(0., -8.),
+            PositionedElementOffsetBounds::WindowByPosition,
+            PositionedElementAnchor::TopRight,
+            ChildAnchor::BottomRight,
+        )
+    }
+
     fn add_toggle_setting_context_flags(&self, app: &AppContext, context: &mut Context) {
         let privacy_settings = PrivacySettings::as_ref(app);
         let editor_settings = AppEditorSettings::as_ref(app);
@@ -23009,6 +23080,14 @@ impl Workspace {
             context
                 .set
                 .insert(flags::SESSION_CONFIG_TAB_CONFIG_CHIP_OPEN);
+        }
+        {
+            let one_time = OneTimeModalModel::as_ref(app);
+            if one_time.active_feature_intro().is_some()
+                && one_time.target_window_id() == Some(self.window_id)
+            {
+                context.set.insert(flags::FEATURE_INTRO_MODAL_OPEN);
+            }
         }
 
         if tab_settings
@@ -23426,6 +23505,15 @@ impl Workspace {
         ctx.focus(&self.orchestration_launch_modal);
     }
 
+    fn show_feature_intro_modal(&mut self, id: FeatureIntroId, ctx: &mut ViewContext<Self>) {
+        // Non-blocking popover: set the descriptor but intentionally do NOT focus it,
+        // so the terminal and input stay usable while it is visible.
+        let intro = feature_intro_by_id(id);
+        self.feature_intro_modal.update(ctx, |modal, ctx| {
+            modal.set_feature(intro, ctx);
+        });
+    }
+
     fn focus_auto_handoff_sleep_modal(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.focus(&self.auto_handoff_sleep_modal);
     }
@@ -23800,6 +23888,12 @@ impl TypedActionView for Workspace {
             ShowSessionConfigModal => self.show_session_config_modal(ctx),
             DismissSessionConfigTabConfigChip => {
                 self.dismiss_session_config_tab_config_chip(ctx);
+            }
+            DismissFeatureIntroModal => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.mark_feature_intro_dismissed(ctx);
+                });
+                ctx.notify();
             }
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => self.show_hoa_onboarding_flow(ctx),
@@ -25598,6 +25692,30 @@ impl TypedActionView for Workspace {
                 log::info!("Free AI removal modal seen state has been reset");
             }
             #[cfg(debug_assertions)]
+            OpenFeatureIntroModal => {
+                if let Some(id) = crate::workspace::view::feature_intro_modal::FEATURE_INTROS
+                    .first()
+                    .map(|intro| intro.id)
+                {
+                    OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.force_open_feature_intro(id, ctx);
+                    });
+                    ctx.notify();
+                }
+            }
+            #[cfg(debug_assertions)]
+            ResetFeatureIntroModalState => {
+                AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
+                    if let Err(e) = ai_settings
+                        .seen_feature_intro_ids
+                        .set_value(Default::default(), ctx)
+                    {
+                        log::warn!("Failed to reset feature intro seen state: {e}");
+                    }
+                });
+                log::info!("Feature intro seen state has been reset");
+            }
+            #[cfg(debug_assertions)]
             InstallOpenCodeWarpPlugin => {
                 let message = set_opencode_warp_plugin("github:warpdotdev/opencode-warp-internal");
                 self.toast_stack.update(ctx, |view, ctx| {
@@ -27352,11 +27470,48 @@ impl View for Workspace {
             );
         }
 
+        // Feature-intro popover: a non-blocking bottom-right card anchored just above
+        // the input box (or the window corner when there is no input). Added before the
+        // changelog chip below so the chip renders above it.
+        let show_feature_intro = {
+            let one_time = OneTimeModalModel::as_ref(app);
+            one_time.target_window_id() == Some(self.window_id)
+                && one_time.active_feature_intro().is_some()
+        };
+        if show_feature_intro {
+            let positioning = match &input_position_id {
+                Some(input_position_id) => {
+                    self.update_toast_positioning(input_position_id.clone(), app)
+                }
+                None => OffsetPositioning::offset_from_parent(
+                    vec2f(-16., -16.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomRight,
+                    ChildAnchor::BottomRight,
+                ),
+            };
+            stack.add_positioned_overlay_child(
+                SavePosition::new(
+                    ChildView::new(&self.feature_intro_modal).finish(),
+                    FEATURE_INTRO_MODAL_POSITION_ID,
+                )
+                .finish(),
+                positioning,
+            );
+        }
+
         if let Some(input_position_id) = input_position_id {
             if FeatureFlag::AvatarInTabBar.is_enabled() && self.is_input_box_visible(app) {
+                // When the feature-intro popover is visible, float the changelog chip
+                // just above it instead of anchoring it to the input box.
+                let positioning = if show_feature_intro {
+                    self.feature_intro_chip_positioning()
+                } else {
+                    self.update_toast_positioning(input_position_id, app)
+                };
                 stack.add_positioned_overlay_child(
                     ChildView::new(&self.update_toast_stack).finish(),
-                    self.update_toast_positioning(input_position_id, app),
+                    positioning,
                 );
             }
         }
