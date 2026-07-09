@@ -4,21 +4,10 @@ use super::*;
 // `app/src/ai/blocklist/orchestration_topology_tests.rs`. These tests stay
 // focused on the pill bar's own dispatch behavior.
 
-/// Regression test for the orchestration-pill-bar infinite-width panic
-/// (`!rect.size().x().is_infinite()` / `is_nan()` in `Scene::validate_rect`).
-///
-/// During a pane drag the pane is rendered as a floating preview laid out with
-/// unbounded constraints (`PaneView::render`). The pane header hosts the pill
-/// bar in a `CrossAxisAlignment::Stretch` column, so an unbounded width would
-/// force the pill bar's clipped horizontal scrollable to an infinite viewport
-/// and panic. The fix caps the drag-preview header width
-/// (`DRAG_PREVIEW_HEADER_MAX_WIDTH`) so the width stays finite.
-///
-/// This reproduces that exact layout — a `MainAxisSize::Min` drag-preview
-/// column, a width-capped header, the `Stretch` header column, and a clipped
-/// horizontal scrollable whose content overflows — laid out by an outer row that
-/// hands the preview an unbounded max width, and asserts the scrollable lays out
-/// to a finite width. Without the cap, building the scene panics.
+/// Regression test for the orchestration-pill-bar infinite-width panic on pane
+/// drag (see `DRAG_PREVIEW_HEADER_MAX_WIDTH` in `pane_group::pane::view`).
+/// Reproduces the drag-preview layout under an unbounded max width and asserts
+/// every painted rect is finite; without the cap, building the scene panics.
 #[test]
 fn pill_bar_scrollable_finite_under_capped_drag_preview() {
     use pathfinder_geometry::vector::vec2f;

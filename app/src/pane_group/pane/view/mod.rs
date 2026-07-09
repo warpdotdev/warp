@@ -32,15 +32,13 @@ use crate::util::bindings::CustomAction;
 
 const HAS_SHARED_OBJECT_CONTEXT_KEY: &str = "PaneView_HasSharedObject";
 
-/// Max width applied to the pane header while the pane renders as a floating
-/// drag preview. During a pane drag the pane is laid out with unbounded
-/// constraints; `MainAxisSize::Min` avoids the infinite *vertical*-constraint
-/// panic, but the header's *width* would still be unbounded. Header content
-/// that stretches to fill the available width — notably the orchestration pill
-/// bar's clipped horizontal scrollable — cannot be laid out with an infinite
-/// width without reporting an infinite/NaN viewport and panicking in
-/// `Scene::validate_rect`. Capping the preview keeps that width finite while
-/// still producing a representative header ghost.
+/// Max width applied to the pane header while the pane renders as a floating drag preview.
+/// During a pane drag the pane is laid out with unbounded constraints; `MainAxisSize::Min`
+/// avoids the infinite *vertical*-constraint panic, but the header's *width* would still be
+/// unbounded. Content that stretches to fill the width — the orchestration pill bar's clipped
+/// horizontal scrollable — cannot be laid out with an infinite width without reporting an
+/// infinite/NaN viewport and panicking in `Scene::validate_rect`. Capping the preview keeps
+/// the width finite while still producing a representative header ghost.
 const DRAG_PREVIEW_HEADER_MAX_WIDTH: f32 = 400.;
 
 pub fn init(app: &mut AppContext) {
@@ -380,13 +378,7 @@ impl<P: BackingView> View for PaneView<P> {
 
         // Check if pane is visible before deciding on flex sizing
         if !self.header.as_ref(app).is_visible_in_pane_group() {
-            // When the header is not visible (e.g. during a drag operation) the
-            // pane is laid out with unbounded constraints for the floating drag
-            // preview. `MainAxisSize::Min` avoids the infinite vertical-
-            // constraint panic, and capping the header width keeps the cross
-            // axis finite so width-filling header content (the orchestration
-            // pill bar's clipped horizontal scrollable) is never measured with
-            // an infinite width — which would panic in `Scene::validate_rect`.
+            // When header is not visible (e.g. during drag operation), use Min sizing to avoid infinite constraint panic.
             let column = Flex::column()
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_child(
