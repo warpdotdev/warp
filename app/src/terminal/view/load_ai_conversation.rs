@@ -9,6 +9,7 @@ use prost::Message;
 use vec1::Vec1;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui::units::IntoPixels;
 use warpui::{EntityId, ModelHandle, SingletonEntity, ViewContext};
@@ -52,7 +53,6 @@ use crate::terminal::view::{
 };
 use crate::terminal::TerminalModel;
 use crate::util::bindings::keybinding_name_to_keystroke;
-use warp_errors::report_error;
 
 /// Describes restore-context setup state for directory reconciliation and hinting.
 #[derive(Clone, Debug, PartialEq, Eq)]

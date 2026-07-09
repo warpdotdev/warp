@@ -10,6 +10,7 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::r#async::debounce;
 use warp_core::settings::ChangeEventReason;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_if_error;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
@@ -32,7 +33,6 @@ use crate::settings::cloud_preferences::{
 };
 use crate::settings::manager::SettingsManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_errors::report_if_error;
 
 /// Provides client ids for creating cloud preferences.
 /// We define this as a trait so tests can track what client ids are created and use

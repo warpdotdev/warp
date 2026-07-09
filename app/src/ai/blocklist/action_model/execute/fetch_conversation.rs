@@ -1,6 +1,7 @@
 use ai::agent::action_result::FetchConversationResult;
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -9,7 +10,6 @@ use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{conversation_yaml, AIAgentActionResultType, AIAgentActionType};
 use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::BlocklistAIHistoryModel;
-use warp_errors::report_error;
 
 pub struct FetchConversationExecutor;
 

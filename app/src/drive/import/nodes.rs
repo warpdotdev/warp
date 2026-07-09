@@ -7,6 +7,7 @@ use anyhow::Result;
 use async_recursion::async_recursion;
 use futures_lite::StreamExt;
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
     MouseStateHandle, ParentElement, Radius, Shrinkable,
@@ -26,7 +27,6 @@ use crate::ui_components::icons::Icon;
 use crate::workflows::export_workflow::export_deserialize;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::workflow_enum::WorkflowEnum;
-use warp_errors::report_error;
 
 #[cfg(test)]
 #[path = "node_tests.rs"]

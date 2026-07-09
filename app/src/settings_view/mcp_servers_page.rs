@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::elements::{ChildView, Container};
 use warpui::ui_components::components::{Coords, UiComponentStyles};
 use warpui::{
@@ -31,7 +32,6 @@ use crate::settings_view::settings_page::{MatchData, PageType, SettingsPageMeta,
 use crate::settings_view::SettingsSection;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use warp_errors::report_error;
 
 /// Describes where an MCP install request originated.
 ///

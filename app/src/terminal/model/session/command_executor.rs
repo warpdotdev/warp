@@ -31,14 +31,14 @@ pub use noop_command_executor::NoOpCommandExecutor;
 pub use remote_command_executor::RemoteCommandExecutor;
 pub use shared::{shell_escape_single_quotes, shell_quote_arg, ExecutorCommandEvent};
 use warp_completer::completer::CommandOutput;
+#[cfg(feature = "local_tty")]
+use warp_errors::report_error;
 use warpui::ModelContext;
 
 use super::SessionInfo;
 use crate::terminal::event::ExecutedExecutorCommandEvent;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::shell::Shell;
-#[cfg(feature = "local_tty")]
-use warp_errors::report_error;
 
 #[derive(Copy, Clone, Debug)]
 pub struct ExecuteCommandOptions {

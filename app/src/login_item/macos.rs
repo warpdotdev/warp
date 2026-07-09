@@ -5,10 +5,10 @@
 //! updates, but we don't try to register against a class that isn't there.
 
 use ::settings::Setting;
+use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::terminal::general_settings::GeneralSettings;
-use warp_errors::report_if_error;
 
 pub(super) fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
     GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {

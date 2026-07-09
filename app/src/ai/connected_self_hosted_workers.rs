@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
@@ -6,7 +7,6 @@ use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::server_api::ai::ConnectedSelfHostedWorker;
 use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use warp_errors::report_error;
 pub const WARP_WORKER_HOST: &str = "warp";
 
 pub enum ConnectedSelfHostedWorkersEvent {

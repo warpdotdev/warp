@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
+use warp_errors::report_error;
 use warpui::elements::{
     ConstrainedBox, Container, Flex, Highlight, Icon, MainAxisAlignment, MainAxisSize,
     ParentElement, Text,
@@ -15,7 +16,6 @@ use crate::search::item::SearchItem;
 use crate::search::notebooks::fuzzy_match::render_notebook_matched_content_with_highlight;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::server::ids::SyncId;
-use warp_errors::report_error;
 
 const CONTENT_WEIGHT: f64 = 0.4;
 const NAME_WEIGHT: f64 = 0.6;

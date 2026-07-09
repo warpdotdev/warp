@@ -10,6 +10,7 @@ use warp_completer::parsers::classify_command;
 use warp_completer::parsers::hir::{Command, Expression};
 use warp_completer::parsers::simple::all_parsed_commands;
 use warp_completer::signatures::CommandRegistry;
+use warp_errors::report_if_error;
 use warp_util::path::EscapeChar;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::{SingletonEntity, ViewContext};
@@ -24,7 +25,6 @@ use crate::terminal::view::inline_banner::{OpenInWarpBannerAction, OpenInWarpBan
 use crate::util::openable_file_type::{
     is_file_openable_in_warp, renders_in_warp_notebook_viewer, OpenableFileType,
 };
-use warp_errors::report_if_error;
 
 #[cfg(test)]
 #[path = "open_in_warp_tests.rs"]

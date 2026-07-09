@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext};
 
 use crate::ai::agent::api::ServerConversationToken;
@@ -13,7 +14,6 @@ use crate::pane_group::{AmbientAgentViewModelHandleExt, PaneGroup, PaneId};
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
-use warp_errors::report_error;
 
 /// How to hydrate a restored hidden remote-child pane given its
 /// [`AmbientAgentTask`]. See [`decide_remote_child_hydration_action`].

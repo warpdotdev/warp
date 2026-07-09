@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::current_prompt::CurrentPrompt;
@@ -8,7 +9,6 @@ use crate::settings::WarpPromptSeparator;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
 use crate::terminal::view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction};
-use warp_errors::report_error;
 
 /// The type of warp prompt being used
 #[derive(Clone)]

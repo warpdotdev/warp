@@ -7,6 +7,8 @@ use std::sync::mpsc::SyncSender;
 
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
+#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
+use warp_errors::report_error;
 #[cfg(feature = "local_tty")]
 use warpui::geometry::vector::Vector2F;
 #[cfg(not(target_family = "wasm"))]
@@ -55,8 +57,6 @@ use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
 use crate::terminal::shared_session::IsSharedSessionCreator;
 #[cfg(feature = "local_tty")]
 use crate::terminal::TerminalManager;
-#[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
-use warp_errors::report_error;
 
 /// Default base Docker image used for newly created sandbox shells.
 ///

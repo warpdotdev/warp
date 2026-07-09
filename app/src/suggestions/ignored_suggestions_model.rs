@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::ModelEvent;
 use crate::GlobalResourceHandlesProvider;
-use warp_errors::report_error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum SuggestionType {

@@ -1,6 +1,7 @@
 use pathfinder_color::ColorU;
 use settings::Setting as _;
 use warp_editor::editor::NavigationKey;
+use warp_errors::report_if_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::elements::{
     Align, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -43,7 +44,6 @@ use crate::user_config::{load_theme_configs, themes_dir, WarpConfig, WarpConfigU
 use crate::util::traffic_lights::{traffic_light_data, TrafficLightData, TrafficLightSide};
 use crate::window_settings::WindowSettings;
 use crate::workspace::PANEL_HEADER_HEIGHT;
-use warp_errors::report_if_error;
 
 // All units in px
 const THEME_CHOOSER_TITLE: &str = "Themes";

@@ -1,4 +1,5 @@
 use settings::Setting as _;
+use warp_errors::report_if_error;
 use warpui::{App, SingletonEntity as _};
 
 use super::SlashCommandEntryState;
@@ -7,7 +8,6 @@ use crate::ai::blocklist::{QueuedQuery, QueuedQueryModel, QueuedQueryOrigin};
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::settings::AISettings;
 use crate::terminal::input::tests::{add_window_with_bootstrapped_terminal, initialize_app};
-use warp_errors::report_if_error;
 
 #[test]
 fn test_parse_slash_command_handles_argument_rules() {

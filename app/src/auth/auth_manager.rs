@@ -9,6 +9,7 @@ use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::{report_error, report_if_error};
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
@@ -47,7 +48,6 @@ use crate::{
     persistence, send_telemetry_from_ctx, send_telemetry_sync_from_ctx,
     GlobalResourceHandlesProvider, TelemetryEvent,
 };
-use warp_errors::{report_error, report_if_error};
 
 #[derive(Debug)]
 pub enum AuthManagerEvent {

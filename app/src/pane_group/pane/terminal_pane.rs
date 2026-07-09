@@ -10,6 +10,7 @@ use session_sharing_protocol::sharer::SessionSourceType;
 use url::Url;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_errors::report_error;
 use warp_multi_agent_api as multi_agent_api;
 use warpui::{
     AppContext, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
@@ -72,7 +73,6 @@ use crate::{
     },
     terminal::shared_session::IsSharedSessionCreator,
 };
-use warp_errors::report_error;
 
 pub type TerminalPaneView = PaneView<TerminalView>;
 

@@ -2,6 +2,7 @@ use std::fmt::Write;
 
 use itertools::Itertools;
 use settings::ToggleableSetting as _;
+use warp_errors::report_if_error;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
 use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
@@ -12,7 +13,6 @@ use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::workspace::Workspace;
 use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
-use warp_errors::report_if_error;
 
 /// Scope of what's being quit/closed.
 #[derive(Clone)]

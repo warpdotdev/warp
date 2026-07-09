@@ -3,6 +3,7 @@ use std::path::Path;
 use settings::{Setting as _, SettingsManager};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
+use warp_errors::report_if_error;
 use warpui::rendering::GPUPowerPreference;
 use warpui::{AppContext, SingletonEntity};
 use warpui_extras::user_preferences;
@@ -40,7 +41,6 @@ use crate::undo_close::UndoCloseSettings;
 use crate::window_settings::WindowSettings;
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workspace::tab_settings::TabSettings;
-use warp_errors::report_if_error;
 
 pub struct UserDefaultsOnStartup {
     pub should_restore_session: bool,

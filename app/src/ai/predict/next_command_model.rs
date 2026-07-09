@@ -16,6 +16,7 @@ use warp_completer::meta::Spanned;
 use warp_completer::parsers::hir::{Command, Expression, FlagType};
 use warp_completer::parsers::ParsedExpression;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -36,7 +37,6 @@ use crate::terminal::input::{CompleterData, IntelligentAutosuggestionResult};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::{History, HistoryEntry, TerminalModel};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_errors::report_error;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {

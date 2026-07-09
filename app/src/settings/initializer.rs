@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
+use warp_errors::report_if_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::auth::auth_state::AuthState;
@@ -11,7 +12,6 @@ use crate::settings::{
 };
 use crate::terminal::session_settings::SessionSettings;
 use crate::themes::theme::ThemeKind;
-use warp_errors::report_if_error;
 
 pub struct SettingsInitializer;
 

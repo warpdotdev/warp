@@ -5,12 +5,12 @@ use std::sync::OnceLock;
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use warp_errors::report_error;
 #[cfg(target_family = "wasm")]
 use warpui::platform::wasm;
 
 use super::rudder_message::Message as RudderMessage;
 use crate::server::OperatingSystemInfo;
-use warp_errors::report_error;
 
 static TELEMETRY_CONTEXT: OnceLock<TelemetryContext> = OnceLock::new();
 

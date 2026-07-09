@@ -15,6 +15,7 @@ use conpty_api::ConptyApiError;
 use environment::get_shell_environment_variables;
 pub use environment::get_user_and_system_env_variable;
 use thiserror::Error;
+use warp_errors::report_error;
 use warpui::{AppContext, SingletonEntity};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
@@ -32,7 +33,6 @@ use super::{mio_channel, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
 use crate::terminal::local_tty::spawner::{PtySpawnInfo, PtySpawner};
 use crate::terminal::local_tty::windows::proc_thread_attribute_list::ProcThreadAttributeList;
 use crate::terminal::writeable_pty;
-use warp_errors::report_error;
 
 trait ToCoord {
     fn to_coord(&self) -> COORD;

@@ -1,9 +1,9 @@
 mod v1;
 
 use serde::Deserialize;
+use warp_errors::report_error;
 
 use crate::terminal::CLIAgent;
-use warp_errors::report_error;
 
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
 type EventParser = fn(&str) -> Option<CLIAgentEvent>;

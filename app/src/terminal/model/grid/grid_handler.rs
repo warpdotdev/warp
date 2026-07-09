@@ -30,6 +30,7 @@ use urlocator::{UrlLocation, UrlLocator};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
 use warp_core::{safe_assert, safe_assert_eq};
+use warp_errors::report_error;
 use warp_terminal::model::grid::{CellType, FlatStorage};
 pub use warp_terminal::model::TermMode;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
@@ -53,7 +54,6 @@ use crate::terminal::model::terminal_model::RangeInModel;
 use crate::terminal::model::{Secret, SecretHandle};
 use crate::terminal::SizeInfo;
 use crate::util::extensions::TrimStringExt;
-use warp_errors::report_error;
 
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];

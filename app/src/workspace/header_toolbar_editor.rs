@@ -1,4 +1,5 @@
 use settings::Setting as _;
+use warp_errors::report_if_error;
 use warpui::keymap::FixedBinding;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
@@ -12,7 +13,6 @@ use crate::workspace::tab_settings::{
     HeaderToolbarChipSelection, TabSettings, TabSettingsChangedEvent,
 };
 use crate::Appearance;
-use warp_errors::report_if_error;
 
 const MODAL_TITLE: &str = "Edit toolbar";
 

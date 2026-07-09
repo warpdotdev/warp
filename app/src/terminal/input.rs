@@ -74,6 +74,7 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
+use warp_errors::{report_error, report_if_error};
 use warp_util::path::ShellFamily;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::clipboard::{ClipboardContent, ImageData};
@@ -344,8 +345,6 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::ASSETS;
 #[allow(unused_imports)]
 use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx, AgentModeEntrypoint, ServerApiProvider};
-use warp_errors::report_error;
-use warp_errors::report_if_error;
 
 /// Drop target data for dropping content on the [`Input`].
 #[derive(Debug, Clone)]

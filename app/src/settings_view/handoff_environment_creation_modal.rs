@@ -1,4 +1,5 @@
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, CrossAxisAlignment, Dismiss,
     Element, Flex, MouseStateHandle, ParentElement, ScrollbarWidth,
@@ -21,7 +22,6 @@ use crate::settings_view::update_environment_form::{
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::ui_components::icons::Icon;
-use warp_errors::report_error;
 
 const DIALOG_WIDTH: f32 = 600.;
 

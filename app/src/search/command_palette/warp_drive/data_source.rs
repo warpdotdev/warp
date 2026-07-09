@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::env_var_collection_search_item::EnvVarCollectionSearchItem;
@@ -22,7 +23,6 @@ use crate::search::QueryFilter;
 use crate::server::ids::{ObjectUid, SyncId};
 use crate::settings::AISettings;
 use crate::workflows::CloudWorkflow;
-use warp_errors::report_error;
 
 /// Datasource that searches against all Warp Drive objects
 pub struct DataSource {

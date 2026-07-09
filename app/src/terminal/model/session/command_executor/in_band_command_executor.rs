@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use parking_lot::{Mutex, MutexGuard};
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
+use warp_errors::report_error;
 use warp_terminal::model::Point;
 use warp_util::on_cancel::OnCancelFutureExt;
 use warpui::r#async::block_on;
@@ -22,7 +23,6 @@ use crate::terminal::model::session::command_executor::{
 };
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::SizeInfo;
-use warp_errors::report_error;
 
 #[derive(Clone, Debug)]
 pub struct InBandCommand {

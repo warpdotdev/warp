@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use pathfinder_color::ColorU;
 use vec1::Vec1;
 use warp_core::semantic_selection::SemanticSelection;
+use warp_errors::report_error;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::text::SelectionType;
 use warpui::units::Lines;
@@ -37,7 +38,6 @@ use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::selection::{Selection, SelectionRange};
 use crate::terminal::{SizeInfo, SizeUpdate};
-use warp_errors::report_error;
 
 pub struct AltScreen {
     grid_handler: GridHandler,

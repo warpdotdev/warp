@@ -8,6 +8,7 @@ use itertools::Itertools;
 use warp_completer::completer::CommandExitStatus;
 use warp_core::r#async::debounce;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
@@ -37,7 +38,6 @@ use crate::terminal::session_settings::{
     SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
 };
 use crate::terminal::view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction};
-use warp_errors::report_error;
 
 #[cfg(test)]
 #[path = "current_prompt_tests.rs"]

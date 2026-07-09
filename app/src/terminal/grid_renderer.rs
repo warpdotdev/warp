@@ -10,6 +10,7 @@ use lazy_static::lazy_static;
 use num_traits::Float as _;
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui::color::ColorU;
 use warpui::elements::{Border, CornerRadius, Fill, Radius, DEFAULT_UI_LINE_HEIGHT_RATIO};
@@ -42,7 +43,6 @@ use crate::terminal::model::{ObfuscateSecrets, SecretHandle};
 use crate::terminal::{color, SizeInfo};
 use crate::themes::theme::WarpTheme;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
-use warp_errors::report_error;
 
 // The scale factor of the cursor relative to the cursor width.
 const CURSOR_THICKNESS_SCALE_FACTOR: f32 = 0.15;

@@ -137,6 +137,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::r#async::debounce;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
@@ -544,7 +545,6 @@ use crate::{
     send_telemetry_sync_from_ctx, AIAgentActionResultType, AIRequestUsageModel,
     ActiveSession as WindowActiveSession,
 };
-use warp_errors::{report_error, report_if_error};
 
 lazy_static! {
     // A set of commands that perform minimal work that we use as a baseline to measure the latency of blocks.

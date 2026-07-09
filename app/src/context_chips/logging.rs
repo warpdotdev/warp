@@ -14,11 +14,11 @@ use chrono::{Local, SecondsFormat};
 #[cfg(test)]
 use parking_lot::Mutex;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 
 use super::ContextChipKind;
 use crate::terminal::shell::ShellType;
-#[cfg(not(target_family = "wasm"))]
-use warp_errors::report_error;
 
 const EMPTY_VALUE: &str = "<empty>";
 const MISSING_VALUE: &str = "<none>";

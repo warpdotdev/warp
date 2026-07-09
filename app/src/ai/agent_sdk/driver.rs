@@ -28,7 +28,7 @@ use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info};
-use warp_errors::{register_error, ErrorExt};
+use warp_errors::{register_error, report_error, report_if_error, ErrorExt};
 use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -94,7 +94,6 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
-use warp_errors::{report_error, report_if_error};
 
 pub(crate) mod attachments;
 pub(crate) mod cloud_provider;

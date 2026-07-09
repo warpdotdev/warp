@@ -3,6 +3,7 @@ use std::mem;
 
 use pathfinder_color::ColorU;
 use string_offset::CharOffset;
+use warp_errors::report_error;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 use super::ansi;
@@ -17,7 +18,6 @@ use crate::safe_debug;
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::view::CONTROL_MASTER_ERROR_REGEX;
-use warp_errors::report_error;
 
 #[cfg(test)]
 #[path = "early_output_tests.rs"]

@@ -7,6 +7,7 @@ use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_if_error;
 use warp_managed_secrets::client::SecretOwner;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
@@ -34,7 +35,6 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize};
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use warp_errors::report_if_error;
 
 const HEADER_FONT_SIZE: f32 = 12.;
 

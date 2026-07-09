@@ -13,6 +13,7 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use rayon::prelude::*;
 use string_offset::ByteOffset;
 use warp_completer::completer::Description;
+use warp_errors::report_error;
 use warpui::fonts::{Cache as FontCache, FamilyId, Properties};
 use warpui::platform::LineStyle;
 use warpui::text::point::Point;
@@ -32,7 +33,6 @@ use crate::editor::soft_wrap::FrameLayouts;
 #[cfg(feature = "voice_input")]
 use crate::editor::view::voice::VoiceInputState;
 use crate::terminal::grid_size_util::grid_compute_baseline_position_fn;
-use warp_errors::report_error;
 
 /// Ratio to calculate font size of cursor avatar.
 /// Found experimentally to scale the best proportionally with

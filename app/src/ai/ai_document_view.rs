@@ -81,6 +81,7 @@ pub fn init(app: &mut AppContext) {
 
 #[cfg(feature = "local_fs")]
 use anyhow::Context as _;
+use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 
@@ -93,7 +94,6 @@ use crate::notebooks::file::MarkdownDisplayMode;
 use crate::util::file::external_editor::settings::EditorLayout;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
-use warp_errors::report_error;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AIDocumentAction {

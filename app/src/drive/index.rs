@@ -10,6 +10,7 @@ use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::settings::Setting;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::{report_error, report_if_error};
 use warp_util::sync::Condition;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
@@ -96,7 +97,6 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::WorkspaceUid;
 use crate::{send_telemetry_from_ctx, ObjectActions};
-use warp_errors::{report_error, report_if_error};
 
 const WARP_DRIVE_TITLE: &str = "Warp Drive";
 

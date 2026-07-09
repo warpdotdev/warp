@@ -27,7 +27,6 @@ mod non_mac {
 #[allow(unused_imports)]
 #[cfg(not(target_os = "macos"))]
 use non_mac::*;
-
 use warp_errors::report_error;
 
 pub struct DefaultTerminal {

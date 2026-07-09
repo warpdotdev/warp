@@ -4,6 +4,7 @@
 //! drag/drop chips between left, right, and unused banks.
 
 use settings::Setting as _;
+use warp_errors::report_if_error;
 use warpui::keymap::FixedBinding;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
@@ -19,7 +20,6 @@ use crate::terminal::session_settings::{
     SessionSettingsChangedEvent, ToolbarChipSelection,
 };
 use crate::Appearance;
-use warp_errors::report_if_error;
 
 const AGENT_MODAL_TITLE: &str = "Edit agent toolbelt";
 const CLI_MODAL_TITLE: &str = "Edit CLI agent toolbelt";

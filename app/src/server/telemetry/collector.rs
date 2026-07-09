@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use chrono::{LocalResult, TimeZone, Utc};
 use warp_core::execution_mode::AppExecutionMode;
+use warp_errors::{report_error, report_if_error};
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, Entity, ModelContext, SingletonEntity};
 
@@ -14,7 +15,6 @@ use crate::channel::ChannelState;
 use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApi;
 use crate::settings::{PrivacySettings, PrivacySettingsChangedEvent};
-use warp_errors::{report_error, report_if_error};
 
 // How often we send Active Usage signals.
 const ACTIVE_USAGE_DURATION: Duration = Duration::from_secs(60);

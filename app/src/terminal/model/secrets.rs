@@ -10,6 +10,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use rangemap::{RangeInclusiveMap, StepLite};
+use warp_errors::report_error;
 use warpui::elements::SecretRange;
 use warpui::EntityId;
 
@@ -19,7 +20,6 @@ use super::terminal_model::RangeInModel;
 use crate::ai::blocklist::TextLocation;
 use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::index::Point;
-use warp_errors::report_error;
 
 /// A regex pattern that can be used to detect secrets in text.
 pub struct SecretsRegex {

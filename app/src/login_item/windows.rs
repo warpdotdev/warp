@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 
 use ::settings::Setting;
 use warp_core::channel::ChannelState;
+use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity};
 use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
 use winreg::RegKey;
 
 use crate::terminal::general_settings::GeneralSettings;
-use warp_errors::report_if_error;
 
 /// The registry subkey Windows scans on sign-in to launch per-user startup apps.
 const RUN_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";

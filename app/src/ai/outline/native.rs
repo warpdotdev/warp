@@ -13,6 +13,7 @@ use repo_metadata::repository::{
 };
 use repo_metadata::{CanonicalizedPath, DirectoryWatcher, Repository, RepositoryUpdate};
 use settings::Setting as _;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::OutlineStatus;
@@ -23,7 +24,6 @@ use crate::settings::{
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{safe_info, safe_warn, send_telemetry_from_ctx, TelemetryEvent};
-use warp_errors::report_error;
 
 /// State for a repository outline, containing both the repository handle and the outline status.
 #[derive(Debug)]

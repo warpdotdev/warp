@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use settings::Setting as _;
 #[cfg(target_os = "macos")]
 use warp_core::channel::ChannelState;
+use warp_errors::report_if_error;
 use warpui::elements::{ChildView, Element, MouseStateHandle};
 #[cfg(target_os = "macos")]
 use warpui::ui_components::button::ButtonVariant;
@@ -25,7 +26,6 @@ use crate::view_components::DismissibleToast;
 use crate::view_components::{Dropdown, DropdownItem};
 #[cfg(target_os = "macos")]
 use crate::workspace::{cli_install, ToastStack};
-use warp_errors::report_if_error;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScriptingSettingsPageAction {

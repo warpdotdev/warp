@@ -19,6 +19,7 @@ use nix::errno::Errno;
 use nix::unistd::{fchown, getgid, getuid};
 use warp_core::macos::get_bundle_path;
 use warp_core::safe_error;
+use warp_errors::report_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{release_assets_directory_url, DownloadReady};
@@ -26,7 +27,6 @@ use crate::appearance::AppearanceManager;
 use crate::autoupdate::{AutoupdateStage, AutoupdateState};
 use crate::channel::{Channel, ChannelState};
 use crate::safe_info;
-use warp_errors::report_error;
 
 // Relative path to the directory containing old executables from before an autoupdate.
 //

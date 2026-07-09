@@ -3,6 +3,7 @@ use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use settings::ToggleableSetting;
 use unindent::Unindent;
+use warp_errors::report_if_error;
 use warpui::color::ColorU;
 use warpui::platform::WindowStyle;
 use warpui::text_layout::TextFrame;
@@ -21,7 +22,6 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_errors::report_if_error;
 
 impl EditorView {
     fn selected_ranges(&self, app: &AppContext) -> Vec<Range<DisplayPoint>> {

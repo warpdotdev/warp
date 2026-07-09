@@ -5,6 +5,7 @@ use async_channel::Receiver;
 use futures_util::SinkExt;
 use parking_lot::FairMutex;
 use serde::Serialize;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 
@@ -15,7 +16,6 @@ use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::shell::ShellType;
 use crate::terminal::writeable_pty::Message as EventLoopMessage;
 use crate::terminal::{SizeInfo, TerminalModel};
-use warp_errors::report_error;
 
 const CREATE_SESSION_ENDPOINT: &str = "ws://127.0.0.1:3030/create";
 

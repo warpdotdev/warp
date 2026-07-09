@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use settings::{Setting, ToggleableSetting};
+use warp_errors::report_if_error;
 use warpui::elements::{
     Container, CrossAxisAlignment, Flex, MainAxisAlignment, MouseStateHandle, ParentElement, Text,
 };
@@ -18,7 +19,6 @@ use crate::settings_view::features_page::render_group;
 use crate::settings_view::settings_page::{render_body_item, LocalOnlyIconState, ToggleState};
 use crate::undo_close::settings::UndoCloseEnabled;
 use crate::undo_close::UndoCloseSettings;
-use warp_errors::report_if_error;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Action {

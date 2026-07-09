@@ -6,7 +6,7 @@ use pathfinder_geometry::vector::vec2f;
 use url::Url;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_anyhow, safe_error};
-use warp_errors::ErrorExt;
+use warp_errors::{report_error, ErrorExt};
 use warpui::actions::StandardAction;
 use warpui::elements::{
     ChildAnchor, ChildView, Container, Fill, HighlightedHyperlink, MouseStateHandle,
@@ -30,7 +30,6 @@ use crate::modal::Modal;
 use crate::root_view::unthemed_window_border;
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::util::bindings::CustomAction;
-use warp_errors::report_error;
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;

@@ -10,6 +10,7 @@ use mime_guess::from_path;
 use tokio::fs;
 use tokio_util::io::StreamReader;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::task::{AttachmentInput, TaskAttachment};
@@ -19,7 +20,6 @@ use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::server_api::ServerApi;
 use crate::util::image::MIN_IMAGE_HEADER_SIZE;
-use warp_errors::report_error;
 
 /// Maximum number of file attachments for a cloud agent task.
 pub const MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY: usize = 25;

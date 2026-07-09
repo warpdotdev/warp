@@ -1,3 +1,4 @@
+use warp_errors::report_if_error;
 use warpui::elements::{CrossAxisAlignment, Fill, Flex, ParentElement, Shrinkable};
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -12,7 +13,6 @@ use crate::terminal::local_tty::shell::is_valid_path_or_command_for_supported_sh
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::view_components::dropdown::TOP_MENU_BAR_HEIGHT;
 use crate::view_components::{Dropdown, DropdownItem};
-use warp_errors::report_if_error;
 
 /// A view for configuring the initial shell for new sessions. This can be the
 /// user's login shell, the default installed version of zsh, bash, or fish,

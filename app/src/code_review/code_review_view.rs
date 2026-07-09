@@ -7699,7 +7699,6 @@ mod code_review_view_integration;
 
 #[cfg(feature = "integration_tests")]
 pub use code_review_view_integration::CodeReviewVisibleAnchorForTest;
-
 use warp_errors::report_error;
 
 #[cfg(test)]

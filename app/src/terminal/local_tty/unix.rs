@@ -24,6 +24,7 @@ use signal_hook_mio::v1_0::Signals;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
+use warp_errors::{report_error, report_if_error};
 use warpui::{AppContext, SingletonEntity};
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
@@ -40,7 +41,6 @@ use crate::terminal::local_tty::shell::{
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 use crate::ASSETS;
-use warp_errors::{report_error, report_if_error};
 
 const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 
