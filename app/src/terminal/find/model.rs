@@ -75,7 +75,9 @@ impl<'a> BlockFindRenderData<'a> {
         command_grid: Option<&GridHandler>,
         output_grid: Option<&GridHandler>,
     ) -> Self {
-        // Convert command grid matches.
+        // Convert command grid matches. Highlights are rendered in *original*
+        // grid coordinates (the renderer maps them to displayed positions
+        // itself), matching the sync path.
         let command_matches = command_grid
             .and_then(|grid| {
                 controller
@@ -83,14 +85,15 @@ impl<'a> BlockFindRenderData<'a> {
                     .map(|matches| {
                         matches
                             .iter()
-                            .filter_map(|m| m.to_range(grid))
+                            .filter_map(|m| m.to_original_range(grid))
                             .collect::<Vec<_>>()
                     })
             })
             .unwrap_or_default();
 
         // Convert output grid matches, skipping any hidden by an active block
-        // filter so highlights match the (filtered) visible content.
+        // filter so highlights match the (filtered) visible content. Uses
+        // original coordinates (see command_matches above).
         let output_matches = output_grid
             .and_then(|grid| {
                 controller
@@ -99,22 +102,22 @@ impl<'a> BlockFindRenderData<'a> {
                         matches
                             .iter()
                             .filter(|m| !m.is_filtered)
-                            .filter_map(|m| m.to_range(grid))
+                            .filter_map(|m| m.to_original_range(grid))
                             .collect::<Vec<_>>()
                     })
             })
             .unwrap_or_default();
 
-        // Get focused match ranges.
+        // Get focused match ranges (also in original coordinates).
         let focused_match = controller.focused_terminal_match();
         let focused_command_range = focused_match
             .as_ref()
             .filter(|m| m.block_index == block_index && m.grid_type == GridType::PromptAndCommand)
-            .and_then(|m| command_grid.and_then(|grid| m.range.to_range(grid)));
+            .and_then(|m| command_grid.and_then(|grid| m.range.to_original_range(grid)));
         let focused_output_range = focused_match
             .as_ref()
             .filter(|m| m.block_index == block_index && m.grid_type == GridType::Output)
-            .and_then(|m| output_grid.and_then(|grid| m.range.to_range(grid)));
+            .and_then(|m| output_grid.and_then(|grid| m.range.to_original_range(grid)));
 
         Self::Async {
             command_matches,

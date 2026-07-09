@@ -169,9 +169,51 @@ impl AbsoluteMatch {
     /// Converts back to a relative Point range.
     ///
     /// Returns `None` if either point has been truncated from scrollback.
+    ///
+    /// NOTE: `AbsolutePoint::to_point` applies a displayed↔original filter
+    /// translation when a block filter is active. For rendering find highlights
+    /// use [`to_original_range`](Self::to_original_range) instead — the grid
+    /// renderer expects original coordinates and performs the displayed mapping
+    /// itself (see that method's docs).
     pub fn to_range(&self, grid: &GridHandler) -> Option<RangeInclusive<Point>> {
         let start = self.start.to_point(grid)?;
         let end = self.end.to_point(grid)?;
+        Some(start..=end)
+    }
+
+    /// Converts back to a relative Point range in the grid's **original**
+    /// (unfiltered) coordinate space: it only undoes scrollback truncation and
+    /// does NOT apply the displayed↔original filter translation that
+    /// [`to_range`](Self::to_range) performs.
+    ///
+    /// This is the coordinate space the grid renderer expects for find
+    /// highlights — it maps original rows to on-screen (displayed) positions
+    /// itself, exactly as it does for the synchronous find path, whose match
+    /// ranges are stored in original coordinates. Passing already-displayed
+    /// coordinates would be double-translated by the renderer and land on the
+    /// wrong rows (or off-screen) when a block filter is active.
+    ///
+    /// Returns `None` if either point has been truncated from scrollback.
+    pub fn to_original_range(&self, grid: &GridHandler) -> Option<RangeInclusive<Point>> {
+        let num_lines_truncated = grid.num_lines_truncated();
+        let start = Point {
+            row: self
+                .start
+                .row
+                .checked_sub(num_lines_truncated)?
+                .try_into()
+                .ok()?,
+            col: self.start.col,
+        };
+        let end = Point {
+            row: self
+                .end
+                .row
+                .checked_sub(num_lines_truncated)?
+                .try_into()
+                .ok()?,
+            col: self.end.col,
+        };
         Some(start..=end)
     }
 
