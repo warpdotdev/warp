@@ -8811,13 +8811,13 @@ impl SettingsWidget for ApiKeysWidget {
         let mut column = Flex::column().with_child(render_separator(appearance));
 
         if show_custom_inference_section {
-            // Header row: "Custom inference" + info icon on left, "+ Add custom model" on right
+            // Header row: "Custom Inference" + info icon on left, "+ Add custom model" on right
             let header_left = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
                     build_sub_header(
                         appearance,
-                        "Custom inference",
+                        "Custom Inference",
                         Some(styles::header_font_color(
                             custom_inference_section_enabled,
                             app,
