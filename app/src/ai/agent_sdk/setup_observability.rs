@@ -11,14 +11,12 @@ use crate::server::server_api::ai::{
     AIClient, AgentRunClientCacheInvocationPayload, AgentRunClientEventRequest,
 };
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NamespaceCacheMountReport {
     setup_is_error: bool,
     cache_invocations: Vec<AgentRunClientCacheInvocationPayload>,
 }
 
-#[allow(dead_code)]
 impl NamespaceCacheMountReport {
     pub(crate) fn new(
         setup_is_error: bool,
@@ -116,7 +114,6 @@ impl SetupClientEventReporter {
         value
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn record_namespace_cache_mount(
         &self,
         future: impl Future<Output = NamespaceCacheMountReport>,
@@ -274,7 +271,6 @@ pub(crate) enum SetupStep {
     GlobalSkillResolution,
     GlobalSkillRepoClone,
     EnvironmentRepoClone,
-    #[allow(dead_code)]
     NamespaceCacheMount,
     EnvironmentSetupCommands,
     EnvironmentCodebaseIndexing,

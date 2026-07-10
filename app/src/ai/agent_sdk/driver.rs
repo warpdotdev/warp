@@ -101,6 +101,8 @@ mod error_classification;
 pub(crate) mod git_credentials;
 pub(crate) mod harness;
 mod harness_output_monitor;
+#[cfg(not(target_family = "wasm"))]
+mod namespace_cache;
 pub(super) mod output;
 mod snapshot;
 pub(crate) mod terminal;

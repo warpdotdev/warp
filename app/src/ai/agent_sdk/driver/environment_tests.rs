@@ -74,3 +74,21 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("cat \"$log_file_1\""));
     assert!(command.contains("exit \"$failed\""));
 }
+
+#[test]
+fn namespace_cache_setup_is_after_clone_and_before_setup_commands() {
+    let source = include_str!("environment.rs");
+    let clone = source
+        .find("SetupStep::EnvironmentRepoClone")
+        .expect("clone setup step should exist");
+    let cache = source
+        .find("record_namespace_cache_mount")
+        .expect("Namespace cache setup step should exist");
+    let setup_commands = source
+        .find("SetupStep::EnvironmentSetupCommands")
+        .expect("environment setup command step should exist");
+
+    assert!(clone < cache);
+    assert!(cache < setup_commands);
+    assert_eq!(source.matches("record_namespace_cache_mount").count(), 1);
+}
