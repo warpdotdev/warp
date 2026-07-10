@@ -189,8 +189,9 @@ impl ShellStarter {
             if #[cfg(unix)] {
                 let pw_shell_path = super::unix::resolve_current_user().map(|user| user.shell);
                 if pw_shell_path.is_none() {
-                    log::error!(
-                        "could not resolve the current user (getpwuid, getent, and /etc/passwd all failed)"
+                    report_error!(
+                        "could not resolve the current user (getpwuid, getent, and /etc/passwd all failed)",
+                        extra: { "uid" => %nix::unistd::getuid().as_raw() }
                     );
                 }
                 if let Some((resolved_pw_shell_path, shell_type)) =
