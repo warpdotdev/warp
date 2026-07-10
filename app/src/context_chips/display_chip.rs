@@ -637,6 +637,8 @@ pub enum DisplayChipKind {
     },
     GitBranchStatus {
         tracking_status: Option<GitBranchTrackingStatus>,
+        menu_open: bool,
+        menu: ViewHandle<DisplayChipMenu>,
     },
     GithubPullRequest,
     GitDiffStats {
@@ -649,9 +651,9 @@ impl DisplayChipKind {
         match self {
             DisplayChipKind::WorkingDirectory { menu_open, .. } => *menu_open,
             DisplayChipKind::NodeVersion { popup_open, .. } => *popup_open,
-            DisplayChipKind::GitBranch { menu_open, .. } => *menu_open,
+            DisplayChipKind::GitBranch { menu_open, .. }
+            | DisplayChipKind::GitBranchStatus { menu_open, .. } => *menu_open,
             DisplayChipKind::GithubPullRequest
-            | DisplayChipKind::GitBranchStatus { .. }
             | DisplayChipKind::GitDiffStats { .. }
             | DisplayChipKind::Text
             | DisplayChipKind::Ssh
@@ -819,6 +821,63 @@ impl DisplayChip {
         Self::new_internal(chip_result, next_chip_kind, config, true, ctx)
     }
 
+    /// Builds the branch-switcher menu shared by the `GitBranch` and
+    /// `GitBranchStatus` chips: the chip's on-click values (one encoded entry
+    /// per branch) become menu items, and selecting one checks the branch out.
+    fn git_branch_menu(
+        on_click_values: &[String],
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<DisplayChipMenu> {
+        let git_branch_items: Vec<GitBranch> = on_click_values
+            .iter()
+            .map(|branch_name| GitBranch(branch_name.clone()))
+            .collect();
+
+        let menu_view = ctx.add_typed_action_view(move |ctx| {
+            DisplayChipMenu::new(
+                git_branch_items,
+                None, // No fixed footer for git branches
+                ChipMenuType::Branches,
+                ctx,
+            )
+            .with_create_item_from_query(Arc::new(|query: &str| {
+                if !is_plausible_new_branch_name(query) {
+                    return None;
+                }
+                let create_branch = CreateGitBranch::new(query.to_string());
+                let arc: Arc<dyn GenericMenuItem> = Arc::new(create_branch);
+                Some(arc)
+            }))
+        });
+        ctx.subscribe_to_view(&menu_view, |me, _, event, ctx| match event {
+            PromptDisplayMenuEvent::MenuAction(generic_event) => {
+                let action_item = generic_event.action_item.as_any();
+                let command = if let Some(git_branch) = action_item.downcast_ref::<GitBranch>() {
+                    git_branch.prompt_chip_command()
+                } else if let Some(create_branch) = action_item.downcast_ref::<CreateGitBranch>() {
+                    create_branch.prompt_chip_command()
+                } else {
+                    log::warn!(
+                        "MenuAction event should contain a GitBranch or CreateGitBranch \
+                         action item"
+                    );
+                    return;
+                };
+
+                ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(command));
+                me.close_git_branch_menu(ctx);
+                ctx.notify();
+            }
+            PromptDisplayMenuEvent::CloseMenu => {
+                me.close_git_branch_menu(ctx);
+                ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: false });
+                ctx.notify();
+            }
+        });
+
+        menu_view
+    }
+
     fn new_internal(
         chip_result: ChipResult,
         next_chip_kind: Option<ContextChipKind>,
@@ -860,64 +919,10 @@ impl DisplayChip {
 
                 DisplayChipKind::AgentPlanAndTodoList { plan_and_todo_list }
             }
-            ContextChipKind::ShellGitBranch => {
-                // Convert git branch strings to GitBranch items
-                let git_branch_items: Vec<GitBranch> = chip_result
-                    .on_click_values
-                    .iter()
-                    .map(|branch_name| GitBranch(branch_name.clone()))
-                    .collect();
-
-                let menu_view = ctx.add_typed_action_view(move |ctx| {
-                    DisplayChipMenu::new(
-                        git_branch_items,
-                        None, // No fixed footer for git branches
-                        ChipMenuType::Branches,
-                        ctx,
-                    )
-                    .with_create_item_from_query(Arc::new(|query: &str| {
-                        if !is_plausible_new_branch_name(query) {
-                            return None;
-                        }
-                        let create_branch = CreateGitBranch::new(query.to_string());
-                        let arc: Arc<dyn GenericMenuItem> = Arc::new(create_branch);
-                        Some(arc)
-                    }))
-                });
-                ctx.subscribe_to_view(&menu_view, |me, _, event, ctx| match event {
-                    PromptDisplayMenuEvent::MenuAction(generic_event) => {
-                        let action_item = generic_event.action_item.as_any();
-                        let command =
-                            if let Some(git_branch) = action_item.downcast_ref::<GitBranch>() {
-                                git_branch.prompt_chip_command()
-                            } else if let Some(create_branch) =
-                                action_item.downcast_ref::<CreateGitBranch>()
-                            {
-                                create_branch.prompt_chip_command()
-                            } else {
-                                log::warn!(
-                                "MenuAction event should contain a GitBranch or CreateGitBranch \
-                                 action item"
-                            );
-                                return;
-                            };
-
-                        ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(command));
-                        me.close_git_branch_menu(ctx);
-                        ctx.notify();
-                    }
-                    PromptDisplayMenuEvent::CloseMenu => {
-                        me.close_git_branch_menu(ctx);
-                        ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: false });
-                        ctx.notify();
-                    }
-                });
-
-                DisplayChipKind::GitBranch {
-                    menu_open: false,
-                    menu: menu_view,
-                }
-            }
+            ContextChipKind::ShellGitBranch => DisplayChipKind::GitBranch {
+                menu_open: false,
+                menu: Self::git_branch_menu(&chip_result.on_click_values, ctx),
+            },
             ContextChipKind::GitDiffStats => DisplayChipKind::GitDiffStats {
                 line_changes_info: None,
             },
@@ -927,6 +932,8 @@ impl DisplayChip {
                     .as_ref()
                     .and_then(|value| value.as_git_branch_tracking_status())
                     .cloned(),
+                menu_open: false,
+                menu: Self::git_branch_menu(&chip_result.on_click_values, ctx),
             },
             ContextChipKind::GithubPullRequest => DisplayChipKind::GithubPullRequest,
             ContextChipKind::WorkingDirectory => {
@@ -1206,7 +1213,11 @@ impl DisplayChip {
     }
 
     pub fn close_git_branch_menu(&mut self, ctx: &mut ViewContext<Self>) {
-        if let DisplayChipKind::GitBranch { menu_open, menu } = &mut self.display_chip_kind {
+        if let DisplayChipKind::GitBranch { menu_open, menu }
+        | DisplayChipKind::GitBranchStatus {
+            menu_open, menu, ..
+        } = &mut self.display_chip_kind
+        {
             *menu_open = false;
             menu.update(ctx, |menu, _| {
                 menu.reset_selected_index();
@@ -1238,14 +1249,16 @@ impl DisplayChip {
                     return true;
                 }
             }
-            DisplayChipKind::GitBranch { menu_open, menu } => {
+            DisplayChipKind::GitBranch { menu_open, menu }
+            | DisplayChipKind::GitBranchStatus {
+                menu_open, menu, ..
+            } => {
                 if *menu_open {
                     ctx.focus(menu);
                     return true;
                 }
             }
             DisplayChipKind::GitDiffStats { .. }
-            | DisplayChipKind::GitBranchStatus { .. }
             | DisplayChipKind::Text
             | DisplayChipKind::Ssh
             | DisplayChipKind::Subshell
@@ -1479,17 +1492,26 @@ impl DisplayChip {
     fn git_branch_status_chip(
         &self,
         tracking_status: &Option<GitBranchTrackingStatus>,
+        menu_open: bool,
+        menu: &ViewHandle<DisplayChipMenu>,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let font_color = internal_colors::neutral_6(theme);
+        // Same color as the plain git branch chip (see `git_branch_chip`).
+        let font_color = if self.is_in_agent_view {
+            agent_view_chip_color(appearance)
+        } else {
+            theme.ansi_fg_green()
+        };
         let font_family = if self.is_in_agent_view || !FeatureFlag::AgentView.is_enabled() {
             appearance.ui_font_family()
         } else {
             appearance.monospace_font_family()
         };
         let font_size = udi_font_size(appearance);
+        let is_interactive =
+            !self.is_shared_session_viewer && !self.is_cli_agent_session_active(app);
         let fallback_branch = self.text.clone();
         let tracking_status = tracking_status
             .clone()
@@ -1498,7 +1520,7 @@ impl DisplayChip {
             .as_ref()
             .map(GitBranchTrackingStatus::tooltip_text);
 
-        Hoverable::new(self.mouse_state.clone(), move |state| {
+        let hover = Hoverable::new(self.mouse_state.clone(), move |state| {
             let branch = tracking_status
                 .as_ref()
                 .map(|status| status.branch.clone())
@@ -1573,12 +1595,12 @@ impl DisplayChip {
             // Shared container so padding, border, and corner radius stay
             // consistent with the other UDI chips.
             let mut chip_element = chip_container(content.finish(), None, appearance);
-            if state.is_hovered() {
+            if state.is_hovered() && is_interactive {
                 chip_element = chip_element.with_background(theme.surface_2());
             }
 
             let mut stack = Stack::new().with_child(chip_element.finish());
-            if state.is_hovered() {
+            if state.is_hovered() && !menu_open {
                 if let Some(tooltip_text) = tooltip_text.clone() {
                     let tool_tip = appearance
                         .ui_builder()
@@ -1589,8 +1611,42 @@ impl DisplayChip {
                 }
             }
             stack.finish()
-        })
-        .finish()
+        });
+
+        // Same click behavior as the plain git branch chip: open the branch
+        // switcher menu.
+        let hover = if !is_interactive {
+            hover.finish()
+        } else {
+            hover
+                .on_click(|ctx, _app, _position| {
+                    ctx.dispatch_typed_action(DisplayChipAction::OpenBranchSelector);
+                })
+                .with_cursor(Cursor::PointingHand)
+                .finish()
+        };
+
+        let mut stack = Stack::new().with_child(hover);
+
+        if menu_open {
+            let positioning = self.menu_positioning_provider.menu_position(app);
+            let (parent_anchor, child_anchor) = Self::positioning_to_anchors(positioning);
+            let offset = match positioning {
+                MenuPositioning::BelowInputBox => vec2f(0., 4.),
+                MenuPositioning::AboveInputBox => vec2f(0., -4.),
+            };
+            stack.add_positioned_overlay_child(
+                ChildView::new(menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    offset,
+                    ParentOffsetBounds::WindowByPosition,
+                    parent_anchor,
+                    child_anchor,
+                ),
+            );
+        }
+
+        stack.finish()
     }
 
     fn git_diff_stats_chip(
@@ -1977,9 +2033,11 @@ impl DisplayChip {
             DisplayChipKind::GitBranch { menu_open, menu } => {
                 Some(self.git_branch_chip(*menu_open, menu, app))
             }
-            DisplayChipKind::GitBranchStatus { tracking_status } => {
-                Some(self.git_branch_status_chip(tracking_status, app))
-            }
+            DisplayChipKind::GitBranchStatus {
+                tracking_status,
+                menu_open,
+                menu,
+            } => Some(self.git_branch_status_chip(tracking_status, *menu_open, menu, app)),
             DisplayChipKind::GithubPullRequest => Some(self.github_pull_request_chip(app)),
             DisplayChipKind::GitDiffStats { line_changes_info } => {
                 self.git_diff_stats_chip(line_changes_info, app)
@@ -2075,7 +2133,10 @@ impl TypedActionView for DisplayChip {
     fn handle_action(&mut self, action: &DisplayChipAction, ctx: &mut ViewContext<Self>) {
         match action {
             DisplayChipAction::CloseMenu => match &mut self.display_chip_kind {
-                DisplayChipKind::GitBranch { menu_open, menu } => {
+                DisplayChipKind::GitBranch { menu_open, menu }
+                | DisplayChipKind::GitBranchStatus {
+                    menu_open, menu, ..
+                } => {
                     *menu_open = false;
                     menu.update(ctx, |menu, _| {
                         menu.reset_selected_index();
@@ -2098,7 +2159,6 @@ impl TypedActionView for DisplayChip {
                 | DisplayChipKind::AgentPlanAndTodoList { .. }
                 | DisplayChipKind::Text
                 | DisplayChipKind::GithubPullRequest
-                | DisplayChipKind::GitBranchStatus { .. }
                 | DisplayChipKind::GitDiffStats { .. } => {}
                 DisplayChipKind::NodeVersion { popup_open, .. } => {
                     *popup_open = false;
@@ -2106,14 +2166,18 @@ impl TypedActionView for DisplayChip {
                 }
             },
             DisplayChipAction::ToggleMenu => {
-                // All ToggleMenu consumers (WorkingDirectory, GitBranch, NodeVersion)
-                // route through shell commands (cd, git checkout, nvm use) that don't
-                // work in CLI agent context, so we suppress all of them.
+                // All ToggleMenu consumers (WorkingDirectory, GitBranch,
+                // GitBranchStatus, NodeVersion) route through shell commands
+                // (cd, git checkout, nvm use) that don't work in CLI agent
+                // context, so we suppress all of them.
                 if self.is_cli_agent_session_active(ctx) {
                     return;
                 }
                 match &mut self.display_chip_kind {
-                    DisplayChipKind::GitBranch { menu, menu_open } => {
+                    DisplayChipKind::GitBranch { menu, menu_open }
+                    | DisplayChipKind::GitBranchStatus {
+                        menu, menu_open, ..
+                    } => {
                         *menu_open = !*menu_open;
                         let is_menu_open = *menu_open;
                         if is_menu_open {
@@ -2127,10 +2191,16 @@ impl TypedActionView for DisplayChip {
                         if is_menu_open {
                             let is_udi_enabled = InputSettings::as_ref(ctx)
                                 .is_universal_developer_input_enabled(ctx);
+                            let chip_type =
+                                if matches!(self.chip_kind, ContextChipKind::GitBranchStatus) {
+                                    "git_branch_status"
+                                } else {
+                                    "git_branch"
+                                };
 
                             send_telemetry_from_ctx!(
                                 TelemetryEvent::ContextChipInteracted {
-                                    chip_type: "git_branch".to_string(),
+                                    chip_type: chip_type.to_string(),
                                     action: "opened".to_string(),
                                     is_udi_enabled,
                                 },

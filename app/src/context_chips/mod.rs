@@ -313,7 +313,9 @@ impl ContextChipKind {
             Self::GitBranchStatus => Some(ContextChip::shell_builtin(
                 "Git Branch Status",
                 builtins::shell_git_branch_status(),
-                None,
+                // Same branch list as ShellGitBranch, so clicking the chip
+                // opens the same branch-switcher menu.
+                Some(builtins::shell_other_git_branches()),
                 GIT_REFRESH_CONFIG,
             )),
             Self::GitDiffStats => Some(
