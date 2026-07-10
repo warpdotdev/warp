@@ -1,11 +1,11 @@
 ---
-name: onboarding-verification-skill
+name: gui-onboarding-verification-skill
 description: GUI desktop app only. Launch two parallel Oz cloud agents with computer use to download and install the latest stable Linux Warp build, capture screenshots while walking through first-time onboarding in both logged-out and logged-in states, then selectively fan out follow-up cloud agents for distinct onboarding branches proposed by those initial explorers. Use this whenever the user asks to test, document, screenshot, or walk through the Warp first-time install/onboarding experience in a cloud Linux environment.
 ---
 
 # Onboarding verification skill
 
-**Scope — GUI desktop app only.** This skill applies to Warp's **GUI** desktop front-end (the `app/` crate on the WarpUI pixel/GPU framework). It does **not** apply to the headless **TUI** front-end (`crates/warp_tui`; cell-grid `TuiElement` library under `crates/warpui_core/src/elements/tui`), which has its own components, tests, and change-verification workflow. For TUI work, see the `warp-tui-guidelines`, `warp-tui-testing`, and `verify-tui-change` skills instead.
+**Scope — GUI desktop app only.** This skill applies to Warp's **GUI** desktop front-end (the `app/` crate on the WarpUI pixel/GPU framework). It does **not** apply to the headless **TUI** front-end (`crates/warp_tui`; cell-grid `TuiElement` library under `crates/warpui_core/src/elements/tui`), which has its own components, tests, and change-verification workflow. For TUI work, see the `tui-ui-guidelines`, `tui-testing`, and `tui-verify-change` skills instead.
 
 Use this skill to verify the first-time Warp install and onboarding flow on Linux with broader branch coverage than a single linear walkthrough.
 

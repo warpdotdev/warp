@@ -61,7 +61,7 @@ fn example() {
 ```
 
 ## TUI element tests
-Tests for the headless TUI render an element tree to text lines rather than drawing pixels. Use `warpui_core::elements::tui::test_support::render_to_lines` and `TuiBuffer::to_lines`, and keep them in `*_tests.rs` files next to the source in `crates/warp_tui` and `crates/warpui_core/src/elements/tui`. They are plain unit tests and do NOT use the GUI integration / real-display / `computer_use` framework. See the `warp-tui-testing` skill for details. The `warpui::App::test` harness above still applies to shared model logic that both front-ends use.
+Tests for the headless TUI render an element tree to text lines rather than drawing pixels. Use `warpui_core::elements::tui::test_support::render_to_lines` and `TuiBuffer::to_lines`, and keep them in `*_tests.rs` files next to the source in `crates/warp_tui` and `crates/warpui_core/src/elements/tui`. They are plain unit tests and do NOT use the GUI integration / real-display / `computer_use` framework. See the `tui-testing` skill for details. The `warpui::App::test` harness above still applies to shared model logic that both front-ends use.
 
 ## Common helpers to use
 - Terminal model shortcuts: `TerminalModel::mock(..)`, `.simulate_block(..)`, `.finish_block()`, `.simulate_cmd(..)`.

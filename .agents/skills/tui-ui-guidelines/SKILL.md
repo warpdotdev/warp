@@ -1,11 +1,11 @@
 ---
-name: warp-tui-guidelines
+name: tui-ui-guidelines
 description: Guidelines for writing Warp headless TUI (crates/warp_tui) UI code with the cell-grid TuiElement library. Read before any TUI UI work.
 ---
 
-# warp-tui-guidelines
+# tui-ui-guidelines
 
-Guidelines for writing UI code in Warp's **headless TUI** front-end. This is the TUI counterpart to `warp-ui-guidelines` (which covers the pixel-based GUI desktop app). Read this once at the start of any TUI UI task, then keep it in mind while implementing.
+Guidelines for writing UI code in Warp's **headless TUI** front-end. This is the TUI counterpart to `gui-ui-guidelines` (which covers the pixel-based GUI desktop app). Read this once at the start of any TUI UI task, then keep it in mind while implementing.
 
 The TUI is a distinct front-end from the GUI desktop app. Do **not** carry over GUI assumptions (pixels, mouse-pixel hit-testing, GPU/WGSL, `.app` bundles, design-system button *pixel* themes, launch modals). If a GUI guideline is about pixel layout or GPU rendering, it does not apply here.
 
@@ -79,5 +79,5 @@ Verify API names against the element library (`crates/warpui_core/src/elements/t
 ## Reference
 
 - Run/observe the TUI with `./script/run-tui`.
-- Verify a TUI change by building and running it (`./script/run-tui`) and observing the output in an interactive terminal; the `verify-tui-change` skill covers this end to end.
-- Write and run TUI tests with the `warp-tui-testing` skill.
+- Verify a TUI change by building and running it (`./script/run-tui`) and observing the output in an interactive terminal; the `tui-verify-change` skill covers this end to end.
+- Write and run TUI tests with the `tui-testing` skill.

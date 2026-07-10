@@ -1,11 +1,11 @@
 ---
-name: integration-test-video
+name: gui-integration-test-video
 description: GUI desktop app only. Run Warp integration tests with screenshot and video capture, including event overlay annotations for mouse and keyboard input. Use this whenever the user wants to record an integration test, collect screenshots from a test, review generated recording artifacts, or author a test that captures video for debugging or demos.
 ---
 
 # Integration Test Video Recording
 
-**Scope — GUI desktop app only.** This skill applies to Warp's **GUI** desktop front-end (the `app/` crate on the WarpUI pixel/GPU framework). It does **not** apply to the headless **TUI** front-end (`crates/warp_tui`; cell-grid `TuiElement` library under `crates/warpui_core/src/elements/tui`), which has its own components, tests, and change-verification workflow. For TUI work, see the `warp-tui-guidelines`, `warp-tui-testing`, and `verify-tui-change` skills instead.
+**Scope — GUI desktop app only.** This skill applies to Warp's **GUI** desktop front-end (the `app/` crate on the WarpUI pixel/GPU framework). It does **not** apply to the headless **TUI** front-end (`crates/warp_tui`; cell-grid `TuiElement` library under `crates/warpui_core/src/elements/tui`), which has its own components, tests, and change-verification workflow. For TUI work, see the `tui-ui-guidelines`, `tui-testing`, and `tui-verify-change` skills instead.
 
 Use this skill when working with Warp's integration test recording pipeline on this branch.
 
