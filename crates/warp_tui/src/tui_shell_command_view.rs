@@ -15,22 +15,19 @@ use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType, BlockId,
     BlocklistAIActionModel, RequestCommandOutputResult, TerminalModel,
 };
-use warpui_core::elements::tui::{tui_collapsible_with_header, Modifier, TuiElement, TuiText};
+use warpui_core::elements::tui::{tui_collapsible, Modifier, TuiElement};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView};
 
 use crate::agent_block_sections::{
     render_fallback_tool_call_section, tool_call_glyph_style, tool_call_label_style,
 };
-use crate::terminal_block::TerminalBlockContentElement;
+use crate::terminal_block::TerminalBlockElement;
 use crate::tool_call_labels::{
     tool_call_display_state, tool_call_glyph, tool_call_label, CommandBlockState,
     ResolvedCommandBlock,
 };
 use crate::tui_builder::TuiUiBuilder;
-
-const CHEVRON_COLLAPSED: &str = "▸";
-const CHEVRON_EXPANDED: &str = "▾";
 
 #[derive(Clone)]
 struct ShellCommandViewState {
@@ -167,25 +164,19 @@ impl TuiView for TuiShellCommandView {
             label_style = label_style.add_modifier(Modifier::BOLD);
         }
         let collapsed = self.state.is_collapsed();
-        let chevron = if collapsed {
-            CHEVRON_COLLAPSED
-        } else {
-            CHEVRON_EXPANDED
-        };
         let label = tool_call_label(&self.action, status.as_ref(), false, Some(&block.details));
-        let header = TuiText::from_spans(vec![
+        let header_spans = vec![
             (format!("{} ", tool_call_glyph(display_state)), glyph_style),
-            (format!("{label}  {chevron}"), label_style),
-        ])
-        .truncate()
-        .finish();
+            (format!("{label} "), label_style),
+        ];
 
         let state = self.state.clone();
-        tui_collapsible_with_header(
+        tui_collapsible(
             collapsed,
+            header_spans,
+            label_style,
             self.header_mouse_state.clone(),
-            header,
-            TerminalBlockContentElement::new(self.terminal_model.clone(), block.block_id).finish(),
+            || TerminalBlockElement::content(self.terminal_model.clone(), block.block_id).finish(),
             move |event_ctx, _app| {
                 state.toggle();
                 event_ctx.notify();

@@ -15,8 +15,8 @@ use itertools::Itertools;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentOutputMessageType,
-    AIAgentTextSection, AIBlockModel, AIConversationId, BlocklistAIActionModel, MessageId,
-    TerminalModel,
+    AIAgentTextSection, AIBlockModel, AIConversationId, BlockId, BlocklistAIActionEvent,
+    BlocklistAIActionModel, MessageId, ModelEvent, ModelEventDispatcher, TerminalModel,
 };
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
@@ -47,6 +47,12 @@ enum TuiAIBlockSection {
         finished_duration: Option<Duration>,
         body: String,
     },
+}
+
+/// Events emitted to the transcript that owns this rich-content block.
+pub(super) enum TuiAIBlockEvent {
+    /// The block's cached canonical height must be remeasured.
+    LayoutInvalidated,
 }
 
 /// Per-message UI state for thinking blocks, keyed by reasoning message.
@@ -167,6 +173,7 @@ impl TuiAIBlock {
         exchange_id: AIAgentExchangeId,
         block_model: Rc<dyn AIBlockModel<View = Self>>,
         action_model: ModelHandle<BlocklistAIActionModel>,
+        model_events: &ModelHandle<ModelEventDispatcher>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -182,6 +189,28 @@ impl TuiAIBlock {
         };
         block.sync_action_views(&action_model, ctx);
 
+        ctx.subscribe_to_model(
+            &action_model,
+            |me, _, event: &BlocklistAIActionEvent, ctx| {
+                if me.renders_action(event.action_id()) {
+                    me.invalidate_action(event.action_id(), ctx);
+                }
+            },
+        );
+
+        ctx.subscribe_to_model(model_events, |me, _, event, ctx| {
+            let block_id = match event {
+                ModelEvent::AfterBlockStarted { block_id, .. } => block_id,
+                ModelEvent::BlockCompleted(completed) => &completed.block_id,
+                _ => return,
+            };
+            let Some(action_id) = me.requested_command_action_id(block_id) else {
+                return;
+            };
+            if me.renders_action(&action_id) {
+                me.invalidate_action(&action_id, ctx);
+            }
+        });
         block.block_model.on_updated_output(
             Box::new(move |me, ctx| {
                 me.sync_action_views(&action_model, ctx);
@@ -278,21 +307,32 @@ impl TuiAIBlock {
     /// Returns whether this block's output contains the tool call with the
     /// given action id. A set lookup over ids recorded by
     /// [`Self::sync_action_views`], so per-action-event checks stay cheap.
-    pub(super) fn renders_action(&self, action_id: &AIAgentActionId) -> bool {
+    fn renders_action(&self, action_id: &AIAgentActionId) -> bool {
         self.action_ids.contains(action_id)
     }
 
-    /// Invalidates this block and its stateful command child after an action
-    /// status or backing terminal block changes.
-    pub(super) fn notify_action_changed(
-        &mut self,
-        action_id: &AIAgentActionId,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    /// Invalidates this block and its stateful command child after an owned
+    /// action status or backing terminal block changes.
+    fn invalidate_action(&mut self, action_id: &AIAgentActionId, ctx: &mut ViewContext<Self>) {
         if let Some(TuiToolCallView::ShellCommand(view)) = self.action_views.get(action_id) {
             view.update(ctx, |_, ctx| ctx.notify());
         }
+        self.invalidate_layout(ctx);
+    }
+
+    /// Requests canonical height remeasurement and redraws this block.
+    fn invalidate_layout(&self, ctx: &mut ViewContext<Self>) {
+        ctx.emit(TuiAIBlockEvent::LayoutInvalidated);
         ctx.notify();
+    }
+
+    /// Returns the requested-command action associated with a terminal block.
+    fn requested_command_action_id(&self, block_id: &BlockId) -> Option<AIAgentActionId> {
+        self.terminal_model
+            .lock()
+            .block_list()
+            .block_with_id(block_id)
+            .and_then(|block| block.requested_command_action_id().cloned())
     }
 
     /// Returns this block's wrapped height using the live layout context.
@@ -450,7 +490,7 @@ impl TuiAIBlock {
 
 /// Registers the view with the TUI runtime.
 impl Entity for TuiAIBlock {
-    type Event = ();
+    type Event = TuiAIBlockEvent;
 }
 
 /// Renders the model-backed block as a TUI element.

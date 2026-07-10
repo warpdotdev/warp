@@ -19,7 +19,7 @@ use warpui_core::elements::tui::{
 use warpui_core::{AppContext, TuiView};
 
 use super::agent_block::TuiAIBlock;
-use super::terminal_block::{should_render_terminal_block, TerminalBlockVisibleRowsElement};
+use super::terminal_block::{should_render_terminal_block, TerminalBlockElement};
 
 pub(super) type AgentBlockRegistry = Rc<RefCell<HashMap<EntityId, ViewHandle<TuiAIBlock>>>>;
 
@@ -336,7 +336,7 @@ impl TuiBlockListVisibleItem {
         match self.kind {
             TuiBlockListVisibleItemKind::TerminalBlock(block_id) => {
                 debug_assert!(visible_rows.end <= self.height);
-                TerminalBlockVisibleRowsElement::new(model.clone(), block_id, visible_rows, width)
+                TerminalBlockElement::visible_rows(model.clone(), block_id, visible_rows, width)
                     .finish()
             }
             TuiBlockListVisibleItemKind::AgentBlock(view) => view.as_ref(app).render(app),

@@ -14,23 +14,33 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::AppContext;
 
-/// Paints a pre-clipped row window from one terminal block.
+/// Selects which rows of a terminal block an element paints.
+enum TerminalBlockRows {
+    /// A viewport-preclipped transcript window with its source width.
+    Visible { rows: Range<usize>, width: u16 },
+    /// Every currently displayed command/output row, derived live.
+    Content,
+}
+
+/// Paints terminal cells from one block using either a pre-clipped transcript
+/// window or the block's complete displayed command/output content.
 ///
 /// This is a bespoke [`TuiElement`], unlike agent blocks which compose generic
 /// `TuiText`/`TuiContainer`: terminal cells each carry their own fg/bg/flags,
 /// which no generic single-style text element can express, and a block can be
 /// thousands of rows — painting only the visible slice into the buffer avoids
-/// materializing a huge element tree per frame.
-pub(super) struct TerminalBlockVisibleRowsElement {
+/// materializing a huge element tree per frame. Inline shell-command bodies
+/// use the same element and cell renderer, but derive their full content range
+/// live so growing output is reflected without rebuilding the agent block.
+pub(super) struct TerminalBlockElement {
     model: Arc<FairMutex<TerminalModel>>,
     block_id: BlockId,
-    visible_rows: Range<usize>,
-    width: u16,
+    rows: TerminalBlockRows,
 }
 
-impl TerminalBlockVisibleRowsElement {
-    /// Creates a terminal block element for a visible row window.
-    pub(super) fn new(
+impl TerminalBlockElement {
+    /// Creates an element for a viewport-preclipped terminal block window.
+    pub(super) fn visible_rows(
         model: Arc<FairMutex<TerminalModel>>,
         block_id: BlockId,
         visible_rows: Range<usize>,
@@ -39,78 +49,39 @@ impl TerminalBlockVisibleRowsElement {
         Self {
             model,
             block_id,
-            visible_rows,
-            width,
+            rows: TerminalBlockRows::Visible {
+                rows: visible_rows,
+                width,
+            },
+        }
+    }
+    /// Creates an element for all currently displayed command/output rows.
+    pub(super) fn content(model: Arc<FairMutex<TerminalModel>>, block_id: BlockId) -> Self {
+        Self {
+            model,
+            block_id,
+            rows: TerminalBlockRows::Content,
         }
     }
 }
 
-impl TuiElement for TerminalBlockVisibleRowsElement {
+impl TuiElement for TerminalBlockElement {
     fn layout(
         &mut self,
         constraint: TuiConstraint,
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        constraint.clamp(TuiSize::new(
-            constraint.max.width,
-            self.visible_rows
-                .end
-                .saturating_sub(self.visible_rows.start)
-                .min(usize::from(u16::MAX)) as u16,
-        ))
-    }
-
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
-        let model = self.model.lock();
-        let colors = model.colors();
-        let Some(block) = model.block_list().block_with_id(&self.block_id) else {
-            return;
-        };
-        render_block_rows(
-            block,
-            self.visible_rows.clone(),
-            self.width.min(area.width),
-            area,
-            buffer,
-            &colors,
-        );
-    }
-}
-
-/// Paints all currently displayed command/output rows for one terminal block.
-///
-/// Unlike [`TerminalBlockVisibleRowsElement`], this element derives its row
-/// range from the live block during every layout and paint pass. That makes it
-/// suitable for an expanded shell-command tool call: output can grow without
-/// rebuilding the surrounding agent-block element, while the same terminal
-/// cell renderer remains the single source of truth for both transcript
-/// surfaces.
-pub(super) struct TerminalBlockContentElement {
-    model: Arc<FairMutex<TerminalModel>>,
-    block_id: BlockId,
-}
-
-impl TerminalBlockContentElement {
-    pub(super) fn new(model: Arc<FairMutex<TerminalModel>>, block_id: BlockId) -> Self {
-        Self { model, block_id }
-    }
-}
-
-impl TuiElement for TerminalBlockContentElement {
-    fn layout(
-        &mut self,
-        constraint: TuiConstraint,
-        _ctx: &mut TuiLayoutContext,
-        _app: &AppContext,
-    ) -> TuiSize {
-        let rows = {
-            let model = self.model.lock();
-            model
-                .block_list()
-                .block_with_id(&self.block_id)
-                .map(block_content_rows)
-                .unwrap_or_default()
+        let rows = match &self.rows {
+            TerminalBlockRows::Visible { rows, .. } => rows.clone(),
+            TerminalBlockRows::Content => {
+                let model = self.model.lock();
+                model
+                    .block_list()
+                    .block_with_id(&self.block_id)
+                    .map(block_content_rows)
+                    .unwrap_or_default()
+            }
         };
         constraint.clamp(TuiSize::new(
             constraint.max.width,
@@ -126,14 +97,11 @@ impl TuiElement for TerminalBlockContentElement {
         let Some(block) = model.block_list().block_with_id(&self.block_id) else {
             return;
         };
-        render_block_rows(
-            block,
-            block_content_rows(block),
-            area.width,
-            area,
-            buffer,
-            &colors,
-        );
+        let (rows, width) = match &self.rows {
+            TerminalBlockRows::Visible { rows, width } => (rows.clone(), (*width).min(area.width)),
+            TerminalBlockRows::Content => (block_content_rows(block), area.width),
+        };
+        render_block_rows(block, rows, width, area, buffer, &colors);
     }
 }
 

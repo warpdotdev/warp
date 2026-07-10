@@ -18,11 +18,10 @@ fn only_a_header_click_invokes_on_toggle() {
             let counter = hits.clone();
             let mut collapsible = tui_collapsible(
                 false,
-                "Thinking...",
-                TuiStyle::default(),
+                [("Thinking...".to_owned(), TuiStyle::default())],
                 TuiStyle::default(),
                 MouseStateHandle::default(),
-                TuiText::new("reasoning").finish(),
+                || TuiText::new("reasoning").finish(),
                 move |_, _| counter.set(counter.get() + 1),
             );
             let mut rendered_views = EntityIdMap::default();

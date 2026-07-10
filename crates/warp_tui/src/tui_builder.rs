@@ -183,13 +183,17 @@ impl TuiUiBuilder {
         body: Box<dyn TuiElement>,
         on_toggle: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
     ) -> Box<dyn TuiElement> {
+        let style = if mouse_state.lock().unwrap().is_hovered() {
+            self.hovered_header_style()
+        } else {
+            self.muted_text_style()
+        };
         tui_collapsible(
             collapsed,
-            label,
-            self.muted_text_style(),
-            self.hovered_header_style(),
+            [(label.into(), style)],
+            style,
             mouse_state,
-            body,
+            move || body,
             on_toggle,
         )
     }
