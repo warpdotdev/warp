@@ -20,7 +20,6 @@
 //! (transient I/O, network, etc.) auto-demote it to a warning instead of a
 //! Sentry capture.
 //!
-//! Use the operation tag [`super::DiffOperation`] alongside this error in telemetry to distinguish where a given failure originated.
 
 use warp_core::sync_queue::IsTransientError;
 use warp_errors::{AnyhowErrorExt, ErrorExt};
