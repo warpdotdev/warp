@@ -1,9 +1,9 @@
 ---
-name: verify-tui-change
+name: tui-verify-change
 description: Verify a change to Warp's headless TUI front-end (crates/warp_tui) by building and running it in a real interactive terminal and observing the rendered output — no computer_use required. Use whenever you change TUI UI, rendering, input, or behavior and need to confirm the real on-screen result.
 ---
 
-# verify-tui-change
+# tui-verify-change
 
 Verify a change to Warp's **headless TUI** front-end (`crates/warp_tui`, and the
 cell-grid element library in `crates/warpui_core/src/elements/tui`) by actually
@@ -12,12 +12,12 @@ running the TUI and looking at what it renders.
 The whole point: **the TUI is a console program, so you can run it directly and
 watch it in a terminal — you do NOT need `computer_use`, a real display, or a
 cloud screenshot agent** the way GUI verification does (contrast the GUI-only
-`onboarding-verification-skill`, `warp-integration-test`, `integration-test-video`,
+`gui-onboarding-verification-skill`, `gui-integration-test`, `gui-integration-test-video`,
 and the `computer_use`/`verify-ui-change-in-cloud` flow). This is the fast path,
 and it's the preferred way to confirm a TUI change end-to-end.
 
 This skill covers the **manual live-run** verification. For a durable regression
-that runs in CI, also add a render-to-lines unit test per `warp-tui-testing` —
+that runs in CI, also add a render-to-lines unit test per `tui-testing` —
 the two are complementary: the live run confirms real behavior; the snapshot
 test locks it in.
 
@@ -156,7 +156,7 @@ terminal in a weird state. If that happens, run `reset`.
 A live run proves the change works now; it is not a regression guard. For any
 non-trivial TUI rendering/behavior change, add or update a render-to-lines unit
 test (`warpui_core::elements::tui::test_support::render_to_lines` /
-`TuiBuffer::to_lines`) per `warp-tui-testing`, and run:
+`TuiBuffer::to_lines`) per `tui-testing`, and run:
 
 ```bash
 cargo nextest run -p warp_tui
@@ -172,10 +172,10 @@ diff — as the verification evidence. This is the TUI equivalent of the GUI's
 
 ## Related skills
 
-`warp-tui-guidelines` (the `TuiElement` cell-grid library) and `warp-tui-testing`
+`tui-ui-guidelines` (the `TuiElement` cell-grid library) and `tui-testing`
 (render-to-lines unit tests) are companion TUI skills added alongside this one;
 land them together. This skill's build/run/observe workflow stands on its own —
 those cover authoring TUI UI and writing durable tests.
 
-GUI-only counterparts (do **not** use for TUI work): `warp-integration-test`,
-`integration-test-video`, `onboarding-verification-skill`.
+GUI-only counterparts (do **not** use for TUI work): `gui-integration-test`,
+`gui-integration-test-video`, `gui-onboarding-verification-skill`.
