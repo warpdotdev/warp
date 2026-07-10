@@ -41,7 +41,7 @@ use crate::workspaces::workspace::{
 
 const HEADER_FONT_SIZE: f32 = 16.;
 const LEGEND_DOT_SIZE: f32 = 8.;
-const PERIOD_MENU_WIDTH: f32 = 240.;
+const PERIOD_MENU_WIDTH: f32 = 220.;
 
 pub struct BillingCycleUsageSectionView {
     selected_period_end: Option<DateTime<Utc>>,
