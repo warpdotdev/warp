@@ -10,6 +10,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::action_model::recording_finalize::spawn_recording_exit_watcher;
 
 pub struct StartRecordingExecutor;
@@ -88,8 +89,12 @@ impl StartRecordingExecutor {
                     let started_at = SystemTime::now();
                     let width_px = handle.width() as i32;
                     let height_px = handle.height() as i32;
-                    RecordingController::handle(ctx).update(ctx, |controller, ctx| {
+                    let controller = RecordingController::handle(ctx);
+                    controller.update(ctx, |controller, _| {
                         controller.finish_start(recording_id.clone(), conversation_id, handle);
+                    });
+                    #[cfg(not(target_family = "wasm"))]
+                    controller.update(ctx, |_controller, ctx| {
                         spawn_recording_exit_watcher(recording_id.clone(), ctx);
                     });
                     AIAgentActionResultType::StartRecording(StartRecordingResult::Success(

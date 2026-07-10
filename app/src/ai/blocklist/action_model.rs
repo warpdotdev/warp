@@ -15,6 +15,7 @@
 mod execute;
 mod preprocess;
 pub(crate) mod recording_controller;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod recording_finalize;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -47,6 +48,7 @@ use self::execute::{
     BlocklistAIActionExecutor, BlocklistAIActionExecutorEvent, NotExecutedReason,
     RunningActionPhase, TryExecuteResult,
 };
+#[cfg(not(target_family = "wasm"))]
 use self::recording_finalize::{finalize_recording_for_conversation, FinalizeReason};
 use super::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -1099,17 +1101,20 @@ impl BlocklistAIActionModel {
         self.executor.update(ctx, |executor, ctx| {
             executor.cancel_all_running_async_actions_for_conversation(conversation_id, reason, ctx)
         });
-        if let Some(finalization) =
-            finalize_recording_for_conversation(conversation_id, FinalizeReason::Cancelled, ctx)
+        #[cfg(not(target_family = "wasm"))]
         {
-            ctx.spawn(
-                async move { finalization.resolve().await },
-                |_model, result, _ctx| {
-                    log::info!(
-                        "Recording finalization after conversation cancellation completed: {result:?}"
-                    );
-                },
-            );
+            if let Some(finalization) =
+                finalize_recording_for_conversation(conversation_id, FinalizeReason::Cancelled, ctx)
+            {
+                ctx.spawn(
+                    async move { finalization.resolve().await },
+                    |_model, result, _ctx| {
+                        log::info!(
+                            "Recording finalization after conversation cancellation completed: {result:?}"
+                        );
+                    },
+                );
+            }
         }
 
         let Some(actions_to_cancel) = self.pending_actions.get_mut(&conversation_id) else {

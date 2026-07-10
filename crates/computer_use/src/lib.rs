@@ -300,19 +300,19 @@ impl RecordingHandle {
         }
 
         #[cfg(linux)]
-        if let Some(process) = self.process.as_mut() {
-            if let Ok(Some(status)) = process.try_wait() {
-                let kind = if status.success() {
-                    RecordingExitKind::LimitReached
-                } else {
-                    RecordingExitKind::Crashed
-                };
-                *self
-                    .exit_state
-                    .lock()
-                    .expect("recording exit state poisoned") = Some(kind);
-                return Some(kind);
-            }
+        if let Some(process) = self.process.as_mut()
+            && let Ok(Some(status)) = process.try_wait()
+        {
+            let kind = if status.success() {
+                RecordingExitKind::LimitReached
+            } else {
+                RecordingExitKind::Crashed
+            };
+            *self
+                .exit_state
+                .lock()
+                .expect("recording exit state poisoned") = Some(kind);
+            return Some(kind);
         }
 
         None
