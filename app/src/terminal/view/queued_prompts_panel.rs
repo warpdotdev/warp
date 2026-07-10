@@ -27,7 +27,6 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::Keystroke;
 use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, BlurContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
@@ -51,12 +50,9 @@ use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::terminal::input::suggestions_mode_model::InputSuggestionsModeModel;
 use crate::ui_components::icons::Icon as TerminalIcon;
-use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 
 const MAX_PROMPT_LINES: f32 = 5.;
-/// Max characters shown in a row's single-line preview before truncation.
-const PROMPT_PREVIEW_MAX_CHARS: usize = 500;
 const INITIAL_CLOUD_MODE_PROMPT_TOOLTIP: &str = "The first cloud-mode prompt cannot be changed.";
 const SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP: &str =
     "Prompts cannot be sent until environment setup is complete.";
@@ -129,10 +125,7 @@ fn build_row_state(
     }
 
     QueuedPromptRowState {
-        preview_text: truncate_from_end(
-            &text.lines().collect::<Vec<_>>().join(" "),
-            PROMPT_PREVIEW_MAX_CHARS,
-        ),
+        original_text: text.to_owned(),
         mouse_state: MouseStateHandle::default(),
         drag_handle_tooltip_state: MouseStateHandle::default(),
         send_now_button,
@@ -146,18 +139,17 @@ fn build_row_state(
 
 #[derive(Clone)]
 struct QueuedPromptRowState {
-    /// Cached single-line preview; refreshed only when the row's text changes.
-    preview_text: String,
+    /// The row's prompt text, rendered in full (wrapping, newlines preserved) so a selection can
+    /// capture the entire queued prompt.
+    original_text: String,
     mouse_state: MouseStateHandle,
     drag_handle_tooltip_state: MouseStateHandle,
     send_now_button: ViewHandle<ActionButton>,
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
     draggable_state: DraggableState,
-    /// Handle backing this row's text selection (shared with the rendered `SelectableArea`).
     selection_handle: SelectionHandle,
-    /// The row's currently selected text, updated by the `SelectableArea` on selection and read
-    /// by [`crate::terminal::view::TerminalView`]'s copy handler for Cmd/Ctrl-C.
+    /// Holds the row's full `original_text` while a selection is active; read by the copy path.
     selected_text: Arc<RwLock<Option<String>>>,
 }
 
@@ -565,16 +557,13 @@ impl QueuedPromptsPanelView {
                     editor.clear_buffer(ctx);
                 });
 
-                // The row's text changed, so refresh its cached preview.
+                // The row's text changed, so refresh its cached display/copy text.
                 let row = QueuedQueryModel::as_ref(ctx)
                     .queue(active_conv_id)
                     .iter()
                     .find(|row| row.id() == *query_id);
                 if let (Some(row), Some(state)) = (row, self.row_states.get_mut(query_id)) {
-                    state.preview_text = truncate_from_end(
-                        &row.text().lines().collect::<Vec<_>>().join(" "),
-                        PROMPT_PREVIEW_MAX_CHARS,
-                    );
+                    state.original_text = row.text().to_owned();
                 }
             }
             QueuedQueryEvent::EditCancelled { .. } => {
@@ -705,9 +694,7 @@ impl QueuedPromptsPanelView {
         QueuedQueryModel::as_ref(ctx).has_queue(conv_id)
     }
 
-    /// Returns the currently selected queued-prompt text, if any row has a non-empty selection.
-    /// Read by [`crate::terminal::view::TerminalView`]'s copy handler so Cmd/Ctrl-C copies the
-    /// highlighted queued prompt.
+    /// Returns the original queued prompt text for the row with an active selection.
     pub fn selected_text(&self, _ctx: &AppContext) -> Option<String> {
         self.row_states
             .values()
@@ -1175,7 +1162,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
     let editor_scroll_state = edit_editor_scroll_state.clone();
 
     let QueuedPromptRowState {
-        preview_text,
+        original_text,
         mouse_state,
         drag_handle_tooltip_state,
         send_now_button,
@@ -1219,28 +1206,25 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             )
             .finish()
         } else {
-            // Single-line preview that truncates by width with a trailing ellipsis. Wrapped in a
-            // `SelectableArea` so the queued prompt text can be highlighted and copied (e.g. to
-            // recover a queued prompt if cloud-mode environment setup fails); the terminal view's
-            // copy handler reads the selection back via `selected_text`.
-            let preview_label = Text::new(
-                preview_text.clone(),
+            // Render the full prompt (wrapped) so a selection captures the whole prompt content;
+            // a clipped single line would only copy the visible portion.
+            let prompt_label = Text::new(
+                original_text.clone(),
                 appearance.ui_font_family(),
                 queued_input_font_size,
             )
             .with_color(theme.foreground().into())
             .with_selectable(true)
-            .soft_wrap(false)
-            .with_clip(ClipConfig::ellipsis())
             .finish();
             let semantic_selection = SemanticSelection::as_ref(app);
             let selected_text_for_handler = selected_text.clone();
             let preview = SelectableArea::new(
                 selection_handle.clone(),
                 move |args, _, _| {
-                    *selected_text_for_handler.write() = args.selection;
+                    *selected_text_for_handler.write() =
+                        args.selection.filter(|selection| !selection.is_empty());
                 },
-                preview_label,
+                prompt_label,
             )
             .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
             .with_smart_select_fn(semantic_selection.smart_select_fn())
@@ -1330,14 +1314,33 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             })
             .finish()
         } else {
-            ConstrainedBox::new(
+            // A normal, draggable handle. Drag is initiated only from this handle — not the whole
+            // row — so dragging across the prompt text selects it instead of starting a reorder.
+            let handle_icon = ConstrainedBox::new(
                 TerminalIcon::DragIndicatorVertical
                     .to_warpui_icon(theme.sub_text_color(theme.surface_1()))
                     .finish(),
             )
             .with_height(20.)
             .with_width(20.)
-            .finish()
+            .finish();
+            if is_in_edit_mode {
+                // No reordering while a row is being edited inline.
+                handle_icon
+            } else {
+                Draggable::new(draggable_state.clone(), handle_icon)
+                    .with_drag_axis(DragAxis::VerticalOnly)
+                    .on_drag_start(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(QueuedPromptsPanelAction::StartDrag(query_id));
+                    })
+                    .on_drag(|ctx, _, rect, _| {
+                        ctx.dispatch_typed_action(QueuedPromptsPanelAction::DragMoved { rect });
+                    })
+                    .on_drop(|ctx, _, _, _| {
+                        ctx.dispatch_typed_action(QueuedPromptsPanelAction::DropEnd);
+                    })
+                    .finish()
+            }
         };
 
         let mut row = Flex::row()
@@ -1382,26 +1385,10 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
     })
     .finish();
 
+    // The whole row is saved for drag-position lookups, but drag is initiated only from the handle
+    // (built above), so dragging over the prompt text selects it instead of reordering the row.
     let position_id = queue_row_position_id(panel_view_id, index);
-
-    if is_in_edit_mode || origin == QueuedQueryOrigin::InitialCloudMode || !show_drag_handle {
-        return SavePosition::new(row_inner, &position_id).finish();
-    }
-
-    let draggable = Draggable::new(draggable_state, row_inner)
-        .with_drag_axis(DragAxis::VerticalOnly)
-        .on_drag_start(move |ctx, _, _| {
-            ctx.dispatch_typed_action(QueuedPromptsPanelAction::StartDrag(query_id));
-        })
-        .on_drag(|ctx, _, rect, _| {
-            ctx.dispatch_typed_action(QueuedPromptsPanelAction::DragMoved { rect });
-        })
-        .on_drop(|ctx, _, _, _| {
-            ctx.dispatch_typed_action(QueuedPromptsPanelAction::DropEnd);
-        })
-        .finish();
-
-    SavePosition::new(draggable, &position_id).finish()
+    SavePosition::new(row_inner, &position_id).finish()
 }
 
 /// Returns the user-visible header label for `count` queued prompts.
