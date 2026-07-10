@@ -8,7 +8,7 @@ use super::{
 use crate::elements::tui::{
     Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
     TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiScrollable, TuiScrollableElement,
-    TuiSelectable, TuiSelectionConfig, TuiSelectionSpan, TuiSize, TuiText,
+    TuiSelectable, TuiSelectionConfig, TuiSelectionHandle, TuiSelectionSpan, TuiSize, TuiText,
 };
 use crate::event::ModifiersState;
 use crate::{App, AppContext, EntityId, EntityIdMap};
@@ -353,7 +353,8 @@ fn selectable_viewport_highlights_and_copies_linear_rows() {
             viewport_with_state(state.clone(), content).with_selection(selection_config());
         let copies = Rc::new(RefCell::new(Vec::new()));
         let copies_for_callback = copies.clone();
-        let selectable = TuiSelectable::new(viewport)
+        let selection = TuiSelectionHandle::default();
+        let selectable = TuiSelectable::new(selection.clone(), viewport)
             .on_copy(move |text, _, _| copies_for_callback.borrow_mut().push(text));
         let mut element = TuiScrollable::new(selectable.finish_scrollable());
         let size = TuiSize::new(8, 3);
@@ -377,9 +378,9 @@ fn selectable_viewport_highlights_and_copies_linear_rows() {
         assert!(buffer[(2, 1)].modifier.contains(Modifier::REVERSED));
         assert!(mouse(&app, &mut element, size, left_up(2, 1)));
         assert_eq!(copies.borrow().as_slice(), ["1:0\n1:1"]);
-        assert!(state.selection_handle().range().is_some());
-        assert!(state.clear_selection());
-        assert!(state.selection_handle().range().is_none());
+        assert!(selection.range().is_some());
+        assert!(selection.clear());
+        assert!(selection.range().is_none());
     });
 }
 
@@ -392,7 +393,7 @@ fn selectable_viewport_extends_into_post_scroll_rows() {
         let viewport = viewport_with_state(state, content).with_selection(selection_config());
         let copies = Rc::new(RefCell::new(Vec::new()));
         let copies_for_callback = copies.clone();
-        let mut element = TuiSelectable::new(viewport)
+        let mut element = TuiSelectable::new(TuiSelectionHandle::default(), viewport)
             .on_copy(move |text, _, _| copies_for_callback.borrow_mut().push(text));
         let size = TuiSize::new(8, 2);
 
@@ -425,7 +426,8 @@ fn selectable_viewport_preserves_selection_while_scrolling() {
         let state = TuiViewportedListState::new_at_end();
         let viewport =
             viewport_with_state(state.clone(), content).with_selection(selection_config());
-        let selectable = TuiSelectable::new(viewport);
+        let selection = TuiSelectionHandle::default();
+        let selectable = TuiSelectable::new(selection.clone(), viewport);
         let mut element = TuiScrollable::new(selectable.finish_scrollable());
         let size = TuiSize::new(8, 4);
 
@@ -433,10 +435,10 @@ fn selectable_viewport_preserves_selection_while_scrolling() {
         mouse(&app, &mut element, size, left_down(0, 0, 1, false));
         mouse(&app, &mut element, size, left_drag(2, 1));
         mouse(&app, &mut element, size, left_up(2, 1));
-        assert!(state.selection_handle().range().is_some());
+        assert!(selection.range().is_some());
 
         assert!(wheel(&app, &mut element, size, 1.0));
-        assert!(state.selection_handle().range().is_some());
+        assert!(selection.range().is_some());
         assert!(!state.is_at_end());
     });
 }
@@ -449,12 +451,13 @@ fn selectable_viewport_ignores_first_mouse_press() {
         let state = TuiViewportedListState::new_at_end();
         let viewport =
             viewport_with_state(state.clone(), content).with_selection(selection_config());
-        let mut element = TuiSelectable::new(viewport);
+        let selection = TuiSelectionHandle::default();
+        let mut element = TuiSelectable::new(selection.clone(), viewport);
         let size = TuiSize::new(8, 1);
 
         render_viewport(&app, &mut element, size);
         assert!(!mouse(&app, &mut element, size, left_down(0, 0, 1, true)));
-        assert!(!state.selection_handle().is_selecting());
+        assert!(!selection.is_selecting());
     });
 }
 

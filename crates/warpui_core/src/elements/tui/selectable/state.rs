@@ -36,11 +36,11 @@ pub(crate) struct TuiSelectionInteraction {
 
 /// Persistent state shared across selectable element rebuilds.
 #[derive(Clone, Default)]
-pub(crate) struct TuiSelectionHandle(Rc<RefCell<Option<TuiSelectionState>>>);
+pub struct TuiSelectionHandle(Rc<RefCell<Option<TuiSelectionState>>>);
 
 impl TuiSelectionHandle {
     /// Clears the selection, returning whether state existed.
-    pub(crate) fn clear(&self) -> bool {
+    pub fn clear(&self) -> bool {
         self.0.borrow_mut().take().is_some()
     }
 
@@ -137,7 +137,7 @@ impl TuiSelectionHandle {
     }
 
     /// Rebases selection rows around one resized content range.
-    pub(crate) fn rebase_for_row_resize(&self, old_rows: Range<usize>, new_height: usize) -> bool {
+    pub fn rebase_for_row_resize(&self, old_rows: Range<usize>, new_height: usize) -> bool {
         let old_height = old_rows.len();
         if old_height == new_height {
             return false;

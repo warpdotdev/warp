@@ -12,12 +12,11 @@ use std::rc::Rc;
 
 use super::selectable::{
     cell_span, point_after_col, row_glyphs, row_text, TuiContentPoint, TuiSelectionHandle,
-    TuiWordSelectionResolver,
 };
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiScrollableElement,
-    TuiSelectableElement, TuiSelectionConfig, TuiSelectionEventResult, TuiSelectionSpan, TuiSize,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSelectableElement,
+    TuiSelectionConfig, TuiSelectionSpan, TuiSize,
 };
 use crate::text::SelectionType;
 use crate::AppContext;
@@ -50,10 +49,9 @@ pub(crate) struct TuiResolvedViewport {
 struct TuiViewportedListStateInner {
     position: TuiViewportPosition,
     resolved: Option<TuiResolvedViewport>,
-    selection: TuiSelectionHandle,
 }
 
-/// Shared storage for caller-owned viewport position, geometry, and selection.
+/// Shared storage for caller-owned viewport position and geometry.
 #[derive(Clone)]
 pub struct TuiViewportedListState(Rc<RefCell<TuiViewportedListStateInner>>);
 
@@ -63,7 +61,6 @@ impl TuiViewportedListState {
         Self(Rc::new(RefCell::new(TuiViewportedListStateInner {
             position: TuiViewportPosition::End,
             resolved: None,
-            selection: TuiSelectionHandle::default(),
         })))
     }
 
@@ -91,28 +88,10 @@ impl TuiViewportedListState {
     pub fn is_at_end(&self) -> bool {
         matches!(self.0.borrow().position, TuiViewportPosition::End)
     }
-    /// Clears the viewport selection, returning whether state existed.
-    pub fn clear_selection(&self) -> bool {
-        self.selection_handle().clear()
-    }
-
-    /// Rebases the viewport selection around one resized content range.
-    pub fn rebase_selection_for_row_resize(
-        &self,
-        old_rows: Range<usize>,
-        new_height: usize,
-    ) -> bool {
-        self.selection_handle()
-            .rebase_for_row_resize(old_rows, new_height)
-    }
 
     /// Returns the geometry produced by the most recent viewport layout.
     pub(crate) fn resolved_viewport(&self) -> Option<TuiResolvedViewport> {
         self.0.borrow().resolved
-    }
-    /// Returns the selection state shared across viewport rebuilds.
-    fn selection_handle(&self) -> TuiSelectionHandle {
-        self.0.borrow().selection.clone()
     }
 
     /// Records geometry resolved by the viewport's layout pass.
@@ -125,99 +104,51 @@ impl<Content> TuiSelectableElement for TuiViewportedList<Content>
 where
     Content: TuiViewportedElement,
 {
-    fn selection_gesture_active(&self) -> bool {
-        self.selection()
-            .is_some_and(|selection| selection.handle.is_selecting())
+    fn selection_span_at(
+        &mut self,
+        position: super::TuiPoint,
+        selection_type: SelectionType,
+        area: TuiRect,
+        clamp_outside: bool,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> Option<TuiSelectionSpan> {
+        self.selection()?;
+        if clamp_outside {
+            let delta = if position.y < area.y {
+                -1
+            } else if position.y >= area.bottom() {
+                1
+            } else {
+                0
+            };
+            self.scroll_by(delta, usize::from(area.height));
+        }
+        let point = self.selection_point_at(position, area, clamp_outside)?;
+        Some(self.selection_unit_span(selection_type, point, area.width, ctx, app))
     }
 
-    fn dispatch_selection_event(
-        &mut self,
-        event: &TuiEvent,
+    fn selected_text(
+        &self,
+        selection: TuiSelectionSpan,
         area: TuiRect,
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
-    ) -> TuiSelectionEventResult {
-        let Some(selection) = self.selection().cloned() else {
-            return TuiSelectionEventResult::Unhandled;
-        };
-        match event {
-            TuiEvent::LeftMouseDown {
-                position,
-                click_count,
-                is_first_mouse,
-                ..
-            } if !*is_first_mouse && area.contains_point(*position) => {
-                let Some(point) = self.selection_point_at(*position, area, false) else {
-                    return TuiSelectionEventResult::Unhandled;
-                };
-                let selection_type = SelectionType::from_click_count(*click_count);
-                let anchor_span =
-                    self.selection_unit_span(selection_type, point, area.width, ctx, app);
-                let focus_span = match selection_type {
-                    SelectionType::Simple | SelectionType::Rect => None,
-                    SelectionType::Semantic | SelectionType::Lines => Some(anchor_span),
-                };
-                selection
-                    .handle
-                    .start(anchor_span, focus_span, selection_type, area.width);
-                TuiSelectionEventResult::Started
-            }
-            TuiEvent::LeftMouseDragged { position, .. } if selection.handle.is_selecting() => {
-                let delta = if position.y < area.y {
-                    -1
-                } else if position.y >= area.bottom() {
-                    1
-                } else {
-                    0
-                };
-                self.scroll_by(delta, usize::from(area.height));
-                let Some(point) = self.selection_point_at(*position, area, true) else {
-                    return TuiSelectionEventResult::Changed;
-                };
-                let Some(interaction) = selection.handle.interaction() else {
-                    return TuiSelectionEventResult::Unhandled;
-                };
-                if matches!(
-                    interaction.selection_type,
-                    SelectionType::Simple | SelectionType::Rect
-                ) && !interaction.has_focus
-                    && point == interaction.anchor_span.start
-                {
-                    return TuiSelectionEventResult::Changed;
-                }
-                let focus_span = self.selection_unit_span(
-                    interaction.selection_type,
-                    point,
-                    area.width,
-                    ctx,
-                    app,
-                );
-                selection.handle.update_focus(focus_span);
-                TuiSelectionEventResult::Changed
-            }
-            TuiEvent::LeftMouseUp { .. } if selection.handle.is_selecting() => {
-                selection.handle.finish();
-                let text = self.selected_text(area, ctx, app);
-                if text.is_none() {
-                    selection.handle.clear();
-                }
-                TuiSelectionEventResult::Completed(text)
-            }
-            TuiEvent::LeftMouseDown { .. }
-            | TuiEvent::LeftMouseDragged { .. }
-            | TuiEvent::LeftMouseUp { .. }
-            | TuiEvent::ScrollWheel { .. }
-            | TuiEvent::KeyDown { .. }
-            | TuiEvent::MiddleMouseDown { .. }
-            | TuiEvent::RightMouseDown { .. }
-            | TuiEvent::MouseMoved { .. } => TuiSelectionEventResult::Unhandled,
-        }
+    ) -> Option<String> {
+        self.selection()?;
+        self.selection_text(selection, area, ctx, app)
     }
 
-    fn render_selection(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
-        let Some(selection) = self.selection() else {
+    fn render_selection(
+        &self,
+        selection: &TuiSelectionHandle,
+        area: TuiRect,
+        buffer: &mut TuiBuffer,
+        _ctx: &mut TuiPaintContext,
+    ) {
+        if self.selection().is_none() {
             return;
-        };
+        }
         let Some(resolved) = self.state.resolved_viewport() else {
             return;
         };
@@ -241,10 +172,10 @@ where
         }
         *self.selection_snapshot.borrow_mut() = Some((resolved, snapshot));
 
-        if !selection.handle.validate_width(area.width) {
+        if !selection.validate_width(area.width) {
             return;
         }
-        let Some(range) = selection.handle.range() else {
+        let Some(range) = selection.range() else {
             return;
         };
         let viewport_bottom = resolved.window.scroll_top.saturating_add(usize::from(
@@ -289,12 +220,16 @@ where
                 ));
             }
         }
-        if !selection.handle.validate_and_snapshot(visible_cells) {
+        if !selection.validate_and_snapshot(visible_cells) {
             return;
         }
         for rect in selection_rects {
             toggle_selection_reverse(buffer, rect);
         }
+    }
+
+    fn take_selection_row_resizes(&self) -> Vec<(Range<usize>, usize)> {
+        self.content.take_selection_row_resizes()
     }
 }
 
@@ -468,13 +403,8 @@ where
     content_height: usize,
     size: TuiSize,
     vertical_alignment: TuiViewportVerticalAlignment,
-    selection: Option<TuiViewportSelection>,
+    selection: Option<TuiSelectionConfig>,
     selection_snapshot: RefCell<Option<(TuiResolvedViewport, TuiBuffer)>>,
-}
-#[derive(Clone)]
-struct TuiViewportSelection {
-    handle: TuiSelectionHandle,
-    word_resolver: TuiWordSelectionResolver,
 }
 
 impl<Content> TuiViewportedList<Content>
@@ -503,12 +433,9 @@ where
         self
     }
 
-    /// Enables selection using the viewport's persistent state and custom word semantics.
+    /// Enables selection resolution with custom word semantics.
     pub fn with_selection(mut self, selection: TuiSelectionConfig) -> Self {
-        self.selection = Some(TuiViewportSelection {
-            handle: self.state.selection_handle(),
-            word_resolver: selection.word_resolver,
-        });
+        self.selection = Some(selection);
         self
     }
 
@@ -597,11 +524,6 @@ where
             ctx,
             app,
         );
-        if let Some(selection) = self.selection.as_ref() {
-            selection
-                .handle
-                .rebase_for_row_resizes(self.content.take_selection_row_resizes());
-        }
     }
 
     fn layout_viewport_content(
@@ -670,8 +592,8 @@ where
         true
     }
 
-    /// Returns configured selection state.
-    fn selection(&self) -> Option<&TuiViewportSelection> {
+    /// Returns configured selection resolution behavior.
+    fn selection(&self) -> Option<&TuiSelectionConfig> {
         self.selection.as_ref()
     }
 
@@ -803,13 +725,13 @@ where
     }
 
     /// Extracts selected text from current read-only content rows.
-    fn selected_text(
+    fn selection_text(
         &self,
+        selection: TuiSelectionSpan,
         area: TuiRect,
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> Option<String> {
-        let selection = self.selection()?.handle.range()?;
         let end_row_exclusive = if selection.end.col == 0 {
             selection.end.row
         } else {

@@ -152,9 +152,9 @@ impl TuiBlockListViewportSource {
     /// Collects one `(old row range, new height)` pair per re-measured
     /// rich-content item, in canonical block-list order, computed against the
     /// cached heights *before* the new ones are written back. The viewport
-    /// drains these pairs via `take_selection_row_resizes` and rebases any
-    /// active selection around them, so selected rows stay anchored to the
-    /// same content when blocks grow or shrink above or inside the selection.
+    /// reports these pairs via `take_selection_row_resizes`, and the selectable
+    /// wrapper rebases its state so selected rows stay anchored to the same
+    /// content when blocks grow or shrink above or inside the selection.
     fn rich_content_row_resizes(
         &self,
         line_heights: &HashMap<EntityId, BlockHeight>,

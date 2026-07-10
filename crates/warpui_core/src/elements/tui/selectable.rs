@@ -1,25 +1,22 @@
-//! Thin interaction plumbing for TUI elements that own selection behavior.
+//! Selection interaction plumbing for selectable TUI elements.
 //!
 //! [`TuiSelectable`] wraps a child implementing [`TuiSelectableElement`] and
-//! sequences the mouse-driven selection gesture: it lets the child handle
-//! events first (except while a drag is in flight), delegates
-//! selection-related events to the child's
-//! [`dispatch_selection_event`](TuiSelectableElement::dispatch_selection_event),
-//! and fires the external callbacks — `on_selection_start` when a gesture
-//! begins and `on_copy` when one completes with text. The child owns all
-//! selection state and highlight rendering; this wrapper owns only the
-//! callbacks and repaint notification.
+//! owns the mouse-driven selection gesture and its persistent state. The child
+//! resolves viewport-specific geometry and text and renders the selection state
+//! supplied by the wrapper.
 //!
 //! Submodules provide the shared building blocks: [`cells`] for cell/glyph
 //! geometry and row-text extraction, and [`state`] for the drag-state handle
 //! shared across element rebuilds.
 
+use std::ops::Range;
 use std::rc::Rc;
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
+    TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
 };
+use crate::text::SelectionType;
 use crate::AppContext;
 
 mod cells;
@@ -27,7 +24,7 @@ mod state;
 
 pub(crate) use cells::{cell_span, row_glyphs, row_text};
 pub use cells::{point_after_col, TuiContentPoint, TuiRowGlyph, TuiSelectionSpan};
-pub(crate) use state::TuiSelectionHandle;
+pub use state::TuiSelectionHandle;
 
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
 type CopyCallback = Box<dyn FnMut(String, &mut TuiEventContext, &AppContext)>;
@@ -49,34 +46,46 @@ impl TuiSelectionConfig {
     }
 }
 
-/// Result of delegating one selection-related event to a child element.
-pub enum TuiSelectionEventResult {
-    Unhandled,
-    Started,
-    Changed,
-    Completed(Option<String>),
-}
-
-/// Semantic selection behavior implemented by the child element.
+/// Geometry, content, and rendering behavior implemented by a selectable child.
 pub trait TuiSelectableElement: TuiElement {
-    /// Returns whether the child owns an active drag gesture.
-    fn selection_gesture_active(&self) -> bool;
-
-    /// Handles one selection-related mouse event.
-    fn dispatch_selection_event(
+    /// Resolves one screen position into a content-space selection span.
+    fn selection_span_at(
         &mut self,
-        event: &TuiEvent,
+        position: TuiPoint,
+        selection_type: SelectionType,
+        area: TuiRect,
+        clamp_outside: bool,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> Option<TuiSelectionSpan>;
+
+    /// Materializes text for one resolved content-space selection.
+    fn selected_text(
+        &self,
+        selection: TuiSelectionSpan,
         area: TuiRect,
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
-    ) -> TuiSelectionEventResult;
+    ) -> Option<String>;
 
-    /// Paints persistent selection state over normal child rendering.
-    fn render_selection(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext);
+    /// Paints the supplied selection state over normal child rendering.
+    fn render_selection(
+        &self,
+        selection: &TuiSelectionHandle,
+        area: TuiRect,
+        buffer: &mut TuiBuffer,
+        ctx: &mut TuiPaintContext,
+    );
+
+    /// Drains content-row resizes resolved during the latest child layout.
+    fn take_selection_row_resizes(&self) -> Vec<(Range<usize>, usize)> {
+        Vec::new()
+    }
 }
 
-/// Delegates selection interaction to a child and owns only external callbacks.
+/// Owns selection interaction and delegates content resolution to its child.
 pub struct TuiSelectable<Child> {
+    selection: TuiSelectionHandle,
     child: Child,
     on_selection_start: Option<SelectionCallback>,
     on_copy: Option<CopyCallback>,
@@ -86,9 +95,10 @@ impl<Child> TuiSelectable<Child>
 where
     Child: TuiSelectableElement,
 {
-    /// Wraps a child that owns its selection behavior.
-    pub fn new(child: Child) -> Self {
+    /// Wraps a selectable child with persistent selection state.
+    pub fn new(selection: TuiSelectionHandle, child: Child) -> Self {
         Self {
+            selection,
             child,
             on_selection_start: None,
             on_copy: None,
@@ -124,12 +134,16 @@ where
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiSize {
-        self.child.layout(constraint, ctx, app)
+        let size = self.child.layout(constraint, ctx, app);
+        self.selection
+            .rebase_for_row_resizes(self.child.take_selection_row_resizes());
+        size
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         self.child.render(area, buffer, ctx);
-        self.child.render_selection(area, buffer, ctx);
+        self.child
+            .render_selection(&self.selection, area, buffer, ctx);
     }
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         self.child.cursor_position(area, ctx)
@@ -147,7 +161,7 @@ where
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> bool {
-        let captures_drag = self.child.selection_gesture_active()
+        let captures_drag = self.selection.is_selecting()
             && matches!(
                 event,
                 TuiEvent::LeftMouseDragged { .. } | TuiEvent::LeftMouseUp { .. }
@@ -156,26 +170,82 @@ where
             return true;
         }
 
-        match self.child.dispatch_selection_event(event, area, ctx, app) {
-            TuiSelectionEventResult::Unhandled => false,
-            TuiSelectionEventResult::Started => {
+        match event {
+            TuiEvent::LeftMouseDown {
+                position,
+                click_count,
+                is_first_mouse,
+                ..
+            } if !*is_first_mouse => {
+                let selection_type = SelectionType::from_click_count(*click_count);
+                let Some(anchor_span) =
+                    self.child
+                        .selection_span_at(*position, selection_type, area, false, ctx, app)
+                else {
+                    return false;
+                };
+                let focus_span = match selection_type {
+                    SelectionType::Simple | SelectionType::Rect => None,
+                    SelectionType::Semantic | SelectionType::Lines => Some(anchor_span),
+                };
+                self.selection
+                    .start(anchor_span, focus_span, selection_type, area.width);
                 if let Some(callback) = self.on_selection_start.as_mut() {
                     callback(event_ctx, app);
                 }
                 event_ctx.notify();
                 true
             }
-            TuiSelectionEventResult::Changed => {
+            TuiEvent::LeftMouseDragged { position, .. } if self.selection.is_selecting() => {
+                let Some(interaction) = self.selection.interaction() else {
+                    return false;
+                };
+                let Some(focus_span) = self.child.selection_span_at(
+                    *position,
+                    interaction.selection_type,
+                    area,
+                    true,
+                    ctx,
+                    app,
+                ) else {
+                    return true;
+                };
+                if matches!(
+                    interaction.selection_type,
+                    SelectionType::Simple | SelectionType::Rect
+                ) && !interaction.has_focus
+                    && focus_span.start == interaction.anchor_span.start
+                {
+                    event_ctx.notify();
+                    return true;
+                }
+                self.selection.update_focus(focus_span);
                 event_ctx.notify();
                 true
             }
-            TuiSelectionEventResult::Completed(text) => {
+            TuiEvent::LeftMouseUp { .. } if self.selection.is_selecting() => {
+                self.selection.finish();
+                let text = self
+                    .selection
+                    .range()
+                    .and_then(|selection| self.child.selected_text(selection, area, ctx, app));
+                if text.is_none() {
+                    self.selection.clear();
+                }
                 if let (Some(text), Some(callback)) = (text, self.on_copy.as_mut()) {
                     callback(text, event_ctx, app);
                 }
                 event_ctx.notify();
                 true
             }
+            TuiEvent::LeftMouseDown { .. }
+            | TuiEvent::LeftMouseDragged { .. }
+            | TuiEvent::LeftMouseUp { .. }
+            | TuiEvent::ScrollWheel { .. }
+            | TuiEvent::KeyDown { .. }
+            | TuiEvent::MiddleMouseDown { .. }
+            | TuiEvent::RightMouseDown { .. }
+            | TuiEvent::MouseMoved { .. } => false,
         }
     }
 }

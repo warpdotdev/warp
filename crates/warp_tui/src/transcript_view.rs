@@ -14,7 +14,7 @@ use warp::tui_export::{
 };
 use warpui_core::elements::tui::{
     TuiElement, TuiScrollable, TuiScrollableElement, TuiSelectable, TuiSelectionConfig,
-    TuiViewportVerticalAlignment, TuiViewportedList, TuiViewportedListState,
+    TuiSelectionHandle, TuiViewportVerticalAlignment, TuiViewportedList, TuiViewportedListState,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TuiView, TypedActionView,
@@ -58,6 +58,7 @@ pub(super) struct TuiTranscriptView {
     model_events: ModelHandle<ModelEventDispatcher>,
     agent_blocks: AgentBlockRegistry,
     viewport: TuiViewportedListState,
+    selection: TuiSelectionHandle,
 }
 
 impl TuiTranscriptView {
@@ -81,6 +82,7 @@ impl TuiTranscriptView {
             model_events: model_events.clone(),
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             viewport: TuiViewportedListState::new_at_end(),
+            selection: TuiSelectionHandle::default(),
         }
     }
 
@@ -302,7 +304,7 @@ impl TuiTranscriptView {
             .collect::<Vec<_>>();
         for view_id in view_ids {
             if let Some(rows) = self.block_rows(view_id) {
-                self.viewport.rebase_selection_for_row_resize(rows, 0);
+                self.selection.rebase_for_row_resize(rows, 0);
             }
             self.agent_blocks.borrow_mut().remove(&view_id);
             self.model
@@ -313,9 +315,9 @@ impl TuiTranscriptView {
         ctx.notify();
     }
 
-    /// Clears persistent selection owned by the transcript viewport.
+    /// Clears persistent selection owned by the transcript.
     pub(super) fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.viewport.clear_selection() {
+        if self.selection.clear() {
             ctx.notify();
         }
     }
@@ -328,7 +330,7 @@ impl TuiTranscriptView {
             .copied()
             .collect::<Vec<_>>();
         self.agent_blocks.borrow_mut().clear();
-        self.viewport.clear_selection();
+        self.selection.clear();
         let mut model = self.model.lock();
         for view_id in view_ids {
             model.block_list_mut().remove_rich_content(view_id);
@@ -355,7 +357,7 @@ impl TuiView for TuiTranscriptView {
         let viewport = TuiViewportedList::new(self.viewport.clone(), source)
             .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom)
             .with_selection(TuiSelectionConfig::new(Rc::new(word_span)));
-        let selectable = TuiSelectable::new(viewport)
+        let selectable = TuiSelectable::new(self.selection.clone(), viewport)
             .on_selection_start(|event_ctx, _| {
                 event_ctx
                     .dispatch_typed_action(TuiTerminalSessionAction::TranscriptSelectionStarted);

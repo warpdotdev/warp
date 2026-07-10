@@ -15,25 +15,26 @@ Selection is visual/grid-based rather than model-offset-based:
 
 ## Architecture
 
-### Thin generic wrapper
+### Generic selection wrapper
 
-`TuiSelectable<Child>` in `crates/warpui_core/src/elements/tui/selectable.rs` owns no selection geometry or content model. It:
+`TuiSelectable<Child>` in `crates/warpui_core/src/elements/tui/selectable.rs` owns the persistent `TuiSelectionHandle` and mouse gesture state machine. It:
 
 - gives normal child interactions first refusal on mouse-down;
-- captures drag/up while the child reports an active selection gesture;
-- delegates selection events through `TuiSelectableElement`;
+- captures drag/up while its selection handle reports an active gesture;
+- stores child-resolved selection spans in absolute content coordinates;
+- applies child-reported row-resize mappings after layout;
 - dispatches selection-start and copy callbacks;
-- asks the child to paint selection after normal rendering.
+- asks the child to paint the wrapper-owned selection state after normal rendering.
 
-`TuiSelectionEventResult` communicates `Unhandled`, `Started`, `Changed`, or `Completed(Option<String>)`. The wrapper translates results into notifications and callbacks.
+`TuiSelectableElement` is the child adapter contract. It resolves screen positions into content spans, materializes text for a supplied span, reports content-row resizes, and renders supplied selection state.
 
 `TuiSelectable<Child>` implements `TuiScrollableElement` when its child does, so normal `TuiScrollable` wheel handling remains unchanged.
 
-### Viewport-owned selection
+### Viewport selection adapter
 
 `TuiViewportedList` optionally accepts `TuiSelectionConfig` and implements `TuiSelectableElement` (`crates/warpui_core/src/elements/tui/viewported_list.rs`).
 
-Because the viewport owns resolved layout and scrolling, it performs all selection-specific work:
+Because the viewport owns resolved layout and scrolling, it performs the content-specific work:
 
 - screen-to-content hit-testing using its resolved clamped window;
 - character, semantic-word, and line unit resolution;
@@ -41,13 +42,15 @@ Because the viewport owns resolved layout and scrolling, it performs all selecti
 - visible-cell snapshots and glyph validation;
 - reverse-video highlight painting;
 - off-screen selected-row extraction;
-- ordered row-resize rebasing after layout.
+- ordered row-resize mapping after layout.
+
+The viewport does not create or retain selection state. It returns resolved spans and resize mappings to `TuiSelectable` and renders from the handle passed down by the wrapper.
 
 Mouse-wheel and page scrolling preserve absolute selection anchors. Selected rows stop highlighting while off-screen and highlight again when they return.
 
 ### Selection state
 
-`TuiSelectionHandle` persists across per-frame element reconstruction (`crates/warpui_core/src/elements/tui/selectable/state.rs`). It stores:
+`TuiSelectionHandle` persists across per-frame element reconstruction (`crates/warpui_core/src/elements/tui/selectable/state.rs`). The transcript retains the handle and supplies a clone to each rebuilt `TuiSelectable`. It stores:
 
 - anchor and focus spans;
 - character/word/line mode;
@@ -72,7 +75,7 @@ Defaults disable off-screen extraction and return no resizes. No extension trait
 
 - normal `visible_items` drains dirty rich content, measures heights, updates the canonical block list, and records resize entries;
 - `selection_content` uses the existing block-list traversal without measurement or mutation;
-- resize entries are collected in canonical block-list order and drained by the viewport after child layout.
+- resize entries are collected in canonical block-list order, reported by the viewport, and applied by `TuiSelectable` after child layout.
 
 ### Transcript composition
 
@@ -80,7 +83,7 @@ Defaults disable off-screen extraction and return no resizes. No extension trait
 
 1. `TuiBlockListViewportSource`;
 2. `TuiViewportedList` with `GrowFromBottom` alignment and `TuiSelectionConfig`;
-3. `TuiSelectable` callbacks for cross-surface clearing and copy;
+3. `TuiSelectable` with the transcript's persistent handle and callbacks for cross-surface clearing and copy;
 4. the existing `TuiScrollable` wheel driver.
 
 The transcript view owns the selectable region. `TuiTerminalSessionView` owns cross-surface policy and clipboard side effects (`crates/warp_tui/src/terminal_session_view.rs`).
@@ -90,29 +93,29 @@ The transcript view owns the selectable region. `TuiTerminalSessionView` owns cr
 ### Mouse down
 
 1. `TuiSelectable` dispatches to interactive descendants first.
-2. If unhandled, it delegates to `TuiViewportedList::dispatch_selection_event`.
-3. The viewport maps the pointer through its resolved window and starts character, word, or line selection.
-4. `Started` causes the session to clear input-editor selection.
+2. If unhandled, the wrapper asks the viewport to resolve the pointer through its current window.
+3. The wrapper starts character, word, or line selection with the returned content span.
+4. The selection-start callback causes the session to clear input-editor selection.
 
 ### Drag and scrolling
 
-1. The wrapper captures drag/up for the active selection.
-2. The viewport scrolls through its own `scroll_by` implementation when the pointer leaves the top or bottom.
-3. Focus updates in absolute content coordinates.
+1. The wrapper captures drag/up for its active selection.
+2. It asks the viewport to resolve each new pointer position; the viewport scrolls through its own `scroll_by` implementation when the pointer leaves the top or bottom.
+3. The wrapper stores the returned focus span in absolute content coordinates.
 4. Normal wheel/page scrolling passes through `TuiScrollable` and preserves selection.
 
 ### Render
 
 1. The viewport renders visible children normally.
-2. The selectable wrapper calls the viewport's selection paint method.
-3. The viewport snapshots unstyled visible cells, validates selected glyphs, and applies reverse-video rectangles.
+2. The selectable wrapper passes its selection handle to the viewport's selection paint method.
+3. The viewport snapshots unstyled visible cells, validates selected glyphs against the supplied state, and applies reverse-video rectangles.
 
 ### Mouse up and copy
 
-1. The viewport ends the gesture and orders anchor/focus.
-2. It requests selected row windows through `TuiViewportedElement::selection_content`.
+1. The wrapper ends the gesture and orders anchor/focus.
+2. It asks the viewport to materialize the resolved span; the viewport requests selected row windows through `TuiViewportedElement::selection_content`.
 3. Rows are rendered with the viewport's canonical clipping helper, scraped by cell width, trimmed, and joined with newlines.
-4. `Completed(Some(text))` dispatches `TranscriptSelectionEnded`.
+4. The wrapper's copy callback dispatches `TranscriptSelectionEnded`.
 5. The session writes OSC 52 clipboard and PRIMARY targets and shows the success hint (`crates/warp_tui/src/clipboard.rs`, `crates/warp_tui/src/transient_hint.rs`).
 
 ## Content updates and invalidation
