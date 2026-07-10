@@ -241,6 +241,13 @@ pub(crate) fn finalize_recording_for_conversation<T: Entity>(
     should_upload: bool,
     ctx: &mut ModelContext<T>,
 ) -> Option<RecordingFinalization> {
+    // The recording controller is always registered in production
+    // (`app/src/lib.rs`). Guard here so the conversation-cancellation and
+    // driver-teardown paths never panic in test harnesses that don't register
+    // the singleton — there is simply nothing to finalize in that case.
+    if !ctx.has_singleton_model::<RecordingController>() {
+        return None;
+    }
     let claim = RecordingController::handle(ctx).update(ctx, |controller, _| {
         controller.claim_finalization_for_conversation(conversation_id)
     })?;
