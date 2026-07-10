@@ -72,10 +72,43 @@ asserting on placeholder text.)
 
 So: if your change is on the **login placeholder** or a pure element/layout, the
 logged-out OSS build is enough. If your change is in the **live terminal /
-transcript / input** surface, you must reach the authenticated state — run a
-build/session that is already logged in rather than the plain OSS binary, or your
-change will sit behind the login gate and you'll only ever see `Sign in to
-continue`.
+transcript / input** surface, you must reach the authenticated state (see the
+next section), or your change will sit behind the login gate and you'll only ever
+see `Sign in to continue`.
+
+### Logging in non-interactively (`WARP_API_KEY`)
+
+You can reach the authenticated (`LoggedIn`) state headlessly — no browser, no
+device-auth flow — by launching a **dogfood-channel** TUI binary with a
+`WARP_API_KEY` in the environment. This is the fast way to verify live
+terminal/transcript/input changes.
+
+Key constraints:
+
+- **Dogfood channels only.** API-key login is gated to dogfood channels (`dev`,
+  `local`) behind the `APIKeyAuthentication` flag, so it works with
+  `warp-tui-dev` (or the internal `local` binary) — **not** `warp-tui-oss`,
+  which is not a dogfood channel and will stay logged out.
+- **The key must already be in the environment.** In a sandbox where
+  `WARP_API_KEY` is set, a freshly started `tmux` server inherits it. Never echo,
+  print, or inline the secret value in a command — just rely on the inherited
+  environment variable. (`--api-key <key>` on the command line also works but
+  would expose the secret, so prefer the env var.)
+
+```bash
+cd <warp-repo-root>
+CARGO_BUILD_JOBS=2 cargo build -p warp_tui --bin warp-tui-dev
+tmux kill-session -t tuicheck 2>/dev/null
+# WARP_API_KEY is inherited from the environment by the new tmux server.
+tmux new-session -d -s tuicheck -x 120 -y 40 './target/debug/warp-tui-dev'
+sleep 20                                      # login + session start
+tmux capture-pane -t tuicheck -p              # expect the logged-in zero state
+```
+
+When it works you'll see the **zero state** (`Warp Agent` + input view + model
+selector) instead of `Sign in to continue`, and you can `send-keys` a real prompt
+and read the agent's reply back with `capture-pane`. (This login path was added
+in warpdotdev/warp#13583.)
 
 ## Step 2 — Run under tmux and read the frame back
 
