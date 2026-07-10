@@ -276,7 +276,7 @@ impl Input {
         }
 
         match self.slash_command_model.as_ref(ctx).state().clone() {
-            SlashCommandEntryState::None | SlashCommandEntryState::DisabledUntilEmptyBuffer => {
+            SlashCommandEntryState::None => {
                 if self.suggestions_mode_model.as_ref(ctx).is_slash_commands() {
                     self.close_slash_commands_menu(ctx);
                 }
@@ -1341,9 +1341,7 @@ impl Input {
                 let user_query = detected_skill.argument.clone();
                 self.execute_skill_command(reference, user_query, None, None, ctx)
             }
-            SlashCommandEntryState::None
-            | SlashCommandEntryState::Composing { .. }
-            | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
+            SlashCommandEntryState::None | SlashCommandEntryState::Composing { .. } => false,
         }
     }
 
@@ -1442,9 +1440,7 @@ impl Input {
                 let user_query = detected_skill.argument.clone();
                 self.execute_skill_command(reference, user_query, None, None, ctx)
             }
-            SlashCommandEntryState::None
-            | SlashCommandEntryState::Composing { .. }
-            | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
+            SlashCommandEntryState::None | SlashCommandEntryState::Composing { .. } => false,
         }
     }
 

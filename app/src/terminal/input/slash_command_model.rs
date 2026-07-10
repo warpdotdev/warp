@@ -2,6 +2,7 @@ use ai::skills::SkillReference;
 use input_classifier::InputType;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
+use warp_search_core::inline_menu::InputDrivenInlineMenuLifecycle;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::ai::blocklist::{
@@ -74,10 +75,6 @@ pub enum SlashCommandEntryState {
     SlashCommand(DetectedCommand),
     /// A valid skill command is entered in the input.
     SkillCommand(DetectedSkillCommand),
-    /// Slash commands are disabled until the buffer is cleared.
-    ///
-    /// In this state, buffer content is not parsed for slash commands.
-    DisabledUntilEmptyBuffer,
 }
 
 impl SlashCommandEntryState {
@@ -115,14 +112,8 @@ impl SlashCommandEntryState {
                     .is_some_and(|p| p.starts_with('/') && p[1..] == *detected.name)
                     .then_some(prefix_len)
             }
-            SlashCommandEntryState::None
-            | SlashCommandEntryState::Composing { .. }
-            | SlashCommandEntryState::DisabledUntilEmptyBuffer => None,
+            SlashCommandEntryState::None | SlashCommandEntryState::Composing { .. } => None,
         }
-    }
-
-    fn is_disabled(&self) -> bool {
-        matches!(self, Self::DisabledUntilEmptyBuffer)
     }
 
     fn pending_command(&self) -> Option<&String> {
@@ -149,6 +140,7 @@ pub struct SlashCommandModel {
     input_buffer_model: ModelHandle<InputBufferModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     state: SlashCommandEntryState,
+    lifecycle: InputDrivenInlineMenuLifecycle,
     data_source: ModelHandle<GuiSlashCommandDataSource>,
 }
 
@@ -172,15 +164,14 @@ impl SlashCommandModel {
                 BlocklistAIInputEvent::InputTypeChanged { config }
                 | BlocklistAIInputEvent::LockChanged { config } => {
                     if config.is_locked {
-                        if config.is_shell() && !me.state.is_disabled() {
-                            let old_state = std::mem::replace(
-                                &mut me.state,
-                                SlashCommandEntryState::DisabledUntilEmptyBuffer,
-                            );
-                            ctx.emit(UpdatedSlashCommandModel { old_state });
+                        if config.is_shell() && !me.is_disabled() {
+                            let input_is_empty =
+                                me.input_buffer_model.as_ref(ctx).current_value().is_empty();
+                            me.disable_until_empty_buffer(input_is_empty, ctx);
                         } else if !config.is_shell()
                             && me.input_buffer_model.as_ref(ctx).current_value().is_empty()
                         {
+                            me.lifecycle.input_changed(true, false);
                             let old_state =
                                 std::mem::replace(&mut me.state, SlashCommandEntryState::None);
                             ctx.emit(UpdatedSlashCommandModel { old_state });
@@ -195,18 +186,22 @@ impl SlashCommandModel {
             ai_input_model: ai_input_model.clone(),
             data_source,
             state: SlashCommandEntryState::None,
+            lifecycle: InputDrivenInlineMenuLifecycle::default(),
         }
     }
 
     /// Called by SlashCommandsMenu when menu is dismissed.
     /// Only `UserEscape` blocks future execution; `NoResults` allows it.
     pub fn disable(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.state.is_disabled() {
+        if self.is_disabled() {
             return;
         }
-
-        let current_input = self.input_buffer_model.as_ref(ctx).current_value();
-        if current_input.is_empty() {
+        let input_is_empty = self
+            .input_buffer_model
+            .as_ref(ctx)
+            .current_value()
+            .is_empty();
+        if input_is_empty {
             return;
         }
 
@@ -228,20 +223,28 @@ impl SlashCommandModel {
             });
         }
 
-        let old_state = std::mem::replace(
-            &mut self.state,
-            SlashCommandEntryState::DisabledUntilEmptyBuffer,
-        );
-        ctx.emit(UpdatedSlashCommandModel { old_state });
+        self.disable_until_empty_buffer(input_is_empty, ctx);
     }
 
     /// Returns whether slash command execution should be allowed.
     pub fn is_disabled(&self) -> bool {
-        self.state.is_disabled()
+        !self.lifecycle.is_enabled()
     }
 
     pub fn state(&self) -> &SlashCommandEntryState {
         &self.state
+    }
+
+    fn disable_until_empty_buffer(&mut self, input_is_empty: bool, ctx: &mut ModelContext<Self>) {
+        if self.is_disabled() {
+            return;
+        }
+        self.lifecycle.disable_until_empty_buffer(input_is_empty);
+        if self.lifecycle.is_enabled() {
+            return;
+        }
+        let old_state = std::mem::replace(&mut self.state, SlashCommandEntryState::None);
+        ctx.emit(UpdatedSlashCommandModel { old_state });
     }
 
     /// Parses `text` into a `SlashCommandEntryState` without mutating the
@@ -267,19 +270,18 @@ impl SlashCommandModel {
         event: &InputBufferUpdateEvent,
         ctx: &mut ModelContext<Self>,
     ) {
+        let InputBufferUpdateEvent {
+            new_content: new, ..
+        } = event;
+        self.lifecycle
+            .input_changed(new.is_empty(), new.starts_with('/'));
         // AI-off is no longer a blanket disable: AI-dependent commands are filtered out
         // of `active_commands` via `Availability::AI_ENABLED`, so parsing still works for
         // non-AI commands like `/open-file`.
         if !FeatureFlag::AgentView.is_enabled() {
             let ai_input_model = self.ai_input_model.as_ref(ctx);
             if ai_input_model.is_input_type_locked() && !ai_input_model.is_ai_input_enabled() {
-                if !self.state.is_disabled() {
-                    let old_state = std::mem::replace(
-                        &mut self.state,
-                        SlashCommandEntryState::DisabledUntilEmptyBuffer,
-                    );
-                    ctx.emit(UpdatedSlashCommandModel { old_state });
-                }
+                self.disable_until_empty_buffer(new.is_empty(), ctx);
                 return;
             }
         } else if !self.data_source.as_ref(ctx).is_agent_view_active(ctx)
@@ -287,20 +289,11 @@ impl SlashCommandModel {
             && !*InputSettings::as_ref(ctx)
                 .enable_slash_commands_in_terminal
                 .value()
-            && !self.state.is_disabled()
+            && !self.is_disabled()
         {
-            let old_state = std::mem::replace(
-                &mut self.state,
-                SlashCommandEntryState::DisabledUntilEmptyBuffer,
-            );
-            ctx.emit(UpdatedSlashCommandModel { old_state });
+            self.disable_until_empty_buffer(new.is_empty(), ctx);
             return;
         }
-
-        let InputBufferUpdateEvent {
-            new_content: new,
-            old_content: old,
-        } = &event;
 
         if new.is_empty() {
             // The buffer was cleared, so reset state.
@@ -308,12 +301,7 @@ impl SlashCommandModel {
             ctx.emit(UpdatedSlashCommandModel { old_state });
             return;
         }
-
-        // If the state is disabled but the buffer now starts with '/', re-evaluate.
-        // This handles the case where the user types a query with '/' (disabling slash commands),
-        // then edits the buffer to insert '/plan ' at the beginning.
-        let did_add_slash = new.starts_with('/') && !old.starts_with('/');
-        if self.state.is_disabled() && !did_add_slash {
+        if self.is_disabled() {
             return;
         }
 
@@ -335,7 +323,7 @@ impl SlashCommandModel {
                     //
                     // The fact that we've even detected a command implies that the input mode is in AI
                     // mode, either locked or unlocked; if the input were locked to shell mode then the
-                    // state would be `DisabledUntilEmptyBuffer` and we would have shortcircuited above.
+                    // shared lifecycle would have short-circuited above.
                     self.ai_input_model.update(ctx, |input_model, ctx| {
                         input_model.set_input_type(
                             InputType::AI,

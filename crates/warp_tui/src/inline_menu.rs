@@ -100,11 +100,9 @@ impl TuiInlineMenu {
         ctx: &mut (impl ModelAsRef + UpdateModel),
     ) -> Option<TuiInlineMenuAccepted> {
         match self {
-            Self::SlashCommands(model) => {
-                let action = model.as_ref(ctx).selected_action();
-                model.update(ctx, |model, ctx| model.dismiss(ctx));
-                action.map(TuiInlineMenuAccepted::SlashCommand)
-            }
+            Self::SlashCommands(model) => model
+                .update(ctx, |model, ctx| model.accept_selected(ctx))
+                .map(TuiInlineMenuAccepted::SlashCommand),
         }
     }
 

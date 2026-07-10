@@ -14,7 +14,9 @@ use warp::tui_export::{
     SlashCommandSelectionBehavior, TuiSlashCommandDataSource, UpdatedActiveCommands,
 };
 use warp_editor::model::CoreEditorModel;
-use warp_search_core::inline_menu::{InitialSelection, InlineMenuSelection};
+use warp_search_core::inline_menu::{
+    InlineMenuResultsUpdate, InlineMenuSelection, InputDrivenInlineMenuLifecycle,
+};
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
@@ -41,7 +43,6 @@ pub(crate) enum TuiSlashCommandState {
         rows: Vec<TuiSlashCommandRow>,
         selection: InlineMenuSelection,
         scroll_offset: usize,
-        select_last_result_on_refresh: bool,
         is_loading: bool,
     },
 }
@@ -54,6 +55,7 @@ pub(crate) struct TuiSlashCommandModel {
     slash_commands_source: Option<ModelHandle<TuiSlashCommandDataSource>>,
     mixer: ModelHandle<SlashCommandMixer>,
     state: TuiSlashCommandState,
+    lifecycle: InputDrivenInlineMenuLifecycle,
 }
 
 impl TuiSlashCommandModel {
@@ -87,6 +89,7 @@ impl TuiSlashCommandModel {
             slash_commands_source: Some(slash_commands_source),
             mixer,
             state: TuiSlashCommandState::Closed,
+            lifecycle: InputDrivenInlineMenuLifecycle::default(),
         };
         model.update_from_input(ctx);
         model
@@ -110,9 +113,9 @@ impl TuiSlashCommandModel {
                 rows,
                 selection,
                 scroll_offset: 0,
-                select_last_result_on_refresh: false,
                 is_loading: false,
             },
+            lifecycle: InputDrivenInlineMenuLifecycle::default(),
         }
     }
 
@@ -173,7 +176,21 @@ impl TuiSlashCommandModel {
     }
 
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.is_open() {
+            return;
+        }
+        let input_is_empty = input_text(&self.input_editor, ctx).is_empty();
+        self.lifecycle.disable_until_empty_buffer(input_is_empty);
         self.close(ctx);
+    }
+
+    pub(crate) fn accept_selected(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AcceptSlashCommandOrSavedPrompt> {
+        let action = self.selected_action();
+        self.close(ctx);
+        action
     }
 
     pub(crate) fn snapshot(&self) -> Option<TuiInlineMenuSnapshot> {
@@ -215,6 +232,13 @@ impl TuiSlashCommandModel {
 
     fn update_from_input(&mut self, ctx: &mut ModelContext<Self>) {
         let input = input_text(&self.input_editor, ctx);
+        if !self
+            .lifecycle
+            .input_changed(input.is_empty(), input.starts_with('/'))
+        {
+            self.close(ctx);
+            return;
+        }
         let Some(slash_commands_source) = &self.slash_commands_source else {
             return;
         };
@@ -227,36 +251,20 @@ impl TuiSlashCommandModel {
     }
 
     fn run_query(&mut self, query: String, force: bool, ctx: &mut ModelContext<Self>) {
-        let (previous_query_matches, previous_rows, previous_selection, previous_scroll_offset) =
-            match &self.state {
-                TuiSlashCommandState::Closed => {
-                    (false, Vec::new(), InlineMenuSelection::default(), 0)
-                }
-                TuiSlashCommandState::Open {
-                    query: previous_query,
-                    rows,
-                    selection,
-                    scroll_offset,
-                    ..
-                } => (
-                    previous_query == &query,
-                    rows.clone(),
-                    *selection,
-                    *scroll_offset,
-                ),
-            };
-        let select_last_result_on_refresh = query.is_empty() && !previous_query_matches;
-        let scroll_offset = if select_last_result_on_refresh {
-            0
-        } else {
-            previous_scroll_offset
+        let (previous_rows, previous_selection, previous_scroll_offset) = match &self.state {
+            TuiSlashCommandState::Closed => (Vec::new(), InlineMenuSelection::default(), 0),
+            TuiSlashCommandState::Open {
+                rows,
+                selection,
+                scroll_offset,
+                ..
+            } => (rows.clone(), *selection, *scroll_offset),
         };
         self.state = TuiSlashCommandState::Open {
             query: query.clone(),
             rows: previous_rows,
             selection: previous_selection,
-            scroll_offset,
-            select_last_result_on_refresh,
+            scroll_offset: previous_scroll_offset,
             is_loading: true,
         };
         self.mixer.update(ctx, |mixer, ctx| {
@@ -269,48 +277,45 @@ impl TuiSlashCommandModel {
     }
 
     fn refresh_rows(&mut self, ctx: &mut ModelContext<Self>) {
+        let (mixer_is_loading, new_rows): (bool, Vec<TuiSlashCommandRow>) = {
+            let mixer = self.mixer.as_ref(ctx);
+            (
+                mixer.is_loading(),
+                mixer.results().iter().filter_map(row_from_result).collect(),
+            )
+        };
+        let results_update = {
+            let TuiSlashCommandState::Open {
+                selection,
+                is_loading,
+                ..
+            } = &mut self.state
+            else {
+                return;
+            };
+            *is_loading = mixer_is_loading;
+            selection.reconcile_results(mixer_is_loading, new_rows.len(), |_| true)
+        };
+        let selected_index = match results_update {
+            InlineMenuResultsUpdate::Loading => return,
+            InlineMenuResultsUpdate::Empty => {
+                self.close(ctx);
+                return;
+            }
+            InlineMenuResultsUpdate::Ready { selected_index } => selected_index,
+        };
+
         let TuiSlashCommandState::Open {
-            selection,
             scroll_offset,
             rows,
-            select_last_result_on_refresh,
-            is_loading,
             ..
         } = &mut self.state
         else {
             return;
         };
-
-        let mixer = self.mixer.as_ref(ctx);
-        *is_loading = mixer.is_loading();
-        if *is_loading {
-            return;
-        }
-
-        let previously_selected_action = selection
-            .selected_index()
-            .and_then(|index| rows.get(index))
-            .map(|row| row.action.clone());
-        *rows = mixer.results().iter().filter_map(row_from_result).collect();
-        if rows.is_empty() {
-            selection.clear();
-            *scroll_offset = 0;
-        } else {
-            if *select_last_result_on_refresh {
-                selection.reset(rows.len(), InitialSelection::Last, |_| true);
-                *select_last_result_on_refresh = false;
-            } else if let Some(selected_index) = previously_selected_action
-                .and_then(|action| rows.iter().position(|row| row.action == action))
-            {
-                selection.select(selected_index, rows.len(), |_| true);
-            } else if let Some(selected_index) = selection.selected_index() {
-                selection.select(selected_index.min(rows.len() - 1), rows.len(), |_| true);
-            } else {
-                selection.reset(rows.len(), InitialSelection::First, |_| true);
-            }
-            if let Some(selected_index) = selection.selected_index() {
-                keep_selected_visible(rows.len(), selected_index, MAX_VISIBLE_ROWS, scroll_offset);
-            }
+        *rows = new_rows;
+        if let Some(selected_index) = selected_index {
+            keep_selected_visible(rows.len(), selected_index, MAX_VISIBLE_ROWS, scroll_offset);
         }
         ctx.emit(TuiSlashCommandModelEvent);
     }

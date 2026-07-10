@@ -8,7 +8,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
-use warp_search_core::inline_menu::{InitialSelection, InlineMenuSelection};
+use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InlineMenuSelection};
 use warpui::color::ColorU;
 use warpui::elements::drag_resize::drag_resize_handle;
 use warpui::elements::{
@@ -416,27 +416,33 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
 
         ctx.subscribe_to_model(&mixer, |me, _, event, ctx| match event {
             SearchMixerEvent::ResultsChanged => {
-                if me.mixer.as_ref(ctx).is_loading() {
-                    // Keep stale results visible while async sources are pending to avoid flicker.
-                    return;
-                }
-
-                if me.mixer.as_ref(ctx).are_results_empty() {
-                    me.result_renderers.clear();
-                    me.selection.clear();
-                    me.hovered_idx = None;
-                    me.details_pane_target = DetailsPaneTarget::default();
-                    me.model.update(ctx, |model, ctx| {
-                        model.clear_selected_item(ctx);
-                    });
-
-                    if !me.mixer.as_ref(ctx).is_loading() {
-                        ctx.emit(InlineMenuEvent::NoResults);
+                let results_update = {
+                    let mixer = me.mixer.as_ref(ctx);
+                    me.selection.reconcile_results(
+                        mixer.is_loading(),
+                        mixer.results().len(),
+                        |idx| !mixer.results()[idx].is_disabled(),
+                    )
+                };
+                let selected_idx = match results_update {
+                    InlineMenuResultsUpdate::Loading => {
+                        // Keep stale results visible while async sources are pending to avoid
+                        // flicker.
+                        return;
                     }
-
-                    ctx.notify();
-                    return;
-                }
+                    InlineMenuResultsUpdate::Empty => {
+                        me.result_renderers.clear();
+                        me.hovered_idx = None;
+                        me.details_pane_target = DetailsPaneTarget::default();
+                        me.model.update(ctx, |model, ctx| {
+                            model.clear_selected_item(ctx);
+                        });
+                        ctx.emit(InlineMenuEvent::NoResults);
+                        ctx.notify();
+                        return;
+                    }
+                    InlineMenuResultsUpdate::Ready { selected_index } => selected_index,
+                };
 
                 let results = me.mixer.as_ref(ctx).results();
 
@@ -473,12 +479,6 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
 
                 me.hovered_idx = None;
                 me.details_pane_target = DetailsPaneTarget::default();
-                let result_renderers = &me.result_renderers;
-                let selected_idx =
-                    me.selection
-                        .reset(result_renderers.len(), InitialSelection::Last, |idx| {
-                            !result_renderers[idx].search_result.is_disabled()
-                        });
                 let selected_item = selected_idx
                     .and_then(|idx| me.result_renderers.get(idx))
                     .map(|renderer| renderer.search_result.accept_result());

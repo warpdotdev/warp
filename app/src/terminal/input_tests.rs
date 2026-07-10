@@ -82,7 +82,6 @@ use crate::terminal::event::{
     UserBlockCompleted,
 };
 use crate::terminal::general_settings::UserDefaultShellUnsupportedBannerState;
-use crate::terminal::input::slash_command_model::SlashCommandEntryState;
 use crate::terminal::input::slash_commands::SlashCommandsEvent;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_shell::LocalShellState;
@@ -3844,10 +3843,7 @@ fn test_plan_slash_command_argument_with_slash_does_not_disable_slash_command_pa
 
         input.read(&app, |input, ctx| {
             assert!(
-                !matches!(
-                    input.slash_command_model.as_ref(ctx).state(),
-                    SlashCommandEntryState::DisabledUntilEmptyBuffer
-                ),
+                !input.slash_command_model.as_ref(ctx).is_disabled(),
                 "slash command parsing should not be disabled when the argument contains '/'"
             );
         });

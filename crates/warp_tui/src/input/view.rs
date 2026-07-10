@@ -663,7 +663,7 @@ impl TuiInputView {
             m.clear_buffer(ctx);
             m.user_insert(text, ctx);
         });
-        self.scroll_offset = 0;
+        self.follow_cursor(ctx);
         ctx.notify();
     }
 
