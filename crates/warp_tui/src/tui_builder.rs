@@ -175,10 +175,12 @@ impl TuiUiBuilder {
         self.warping_base_fill().into_solid()
     }
 
-    /// The peak color the "Warping" shimmer band lerps toward: the terminal
-    /// palette's normal white, matching the design's white token.
+    /// The peak color the "Warping" shimmer band lerps toward: a theme text
+    /// color selected for contrast against the resolved terminal background.
     pub(crate) fn warping_shimmer_color(&self) -> ColorU {
-        ThemeFill::from(self.warp_theme.terminal_colors().normal.white).into_solid()
+        self.warp_theme
+            .font_color(self.base_background())
+            .into_solid()
     }
 
     /// Style for the warping indicator's spinner glyph.
