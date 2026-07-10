@@ -129,27 +129,41 @@ if the expected text isn't in the capture, the change isn't rendering.
 
 ## Pitfalls (learned hands-on)
 
-- **It needs a live PTY.** Run it *inside* tmux (or another real terminal). If
-  you run it with redirected/piped/closed stdin (`./warp-tui-oss </dev/null`,
-  `... | tail`), it draws one frame and exits with code **101** — that's the input
-  stream ending, not a crash.
-- **In a constrained/headless environment** (e.g. a cloud runner without a fully
-  interactive terminal) the TUI may still exit ~1s after the first frame even
-  under tmux. Work around it by **polling `capture-pane` right after launch** to
-  catch the frame before it exits:
+- **Run it in a real terminal / tmux pane** (a PTY), and drive + capture it via
+  tmux as above.
+- **If it renders one frame then exits (code 101) a second later:** that is
+  almost always a **debug-build binding-validation panic**, *not* a terminal or
+  stdin problem. The debug-only validator in
+  `crates/warpui_core/src/keymap/matcher.rs` (`validate_bindings`, gated on
+  `#[cfg(debug_assertions)]`) panics when a keybinding leaks across surfaces —
+  e.g. a GUI binding whose context predicate matches a TUI keymap context without
+  being TUI-owned. Confirm it by checking the TUI log for
+  `panicked at 'Bindings failed validation'`:
 
   ```bash
-  tmux new-session -d -s tuicheck -x 120 -y 40 './target/debug/warp-tui-oss'
-  for i in $(seq 1 15); do
-    frame=$(tmux capture-pane -t tuicheck -p | sed 's/[[:space:]]*$//' | grep .)
-    [ -n "$frame" ] && { echo "$frame"; break; }
-    sleep 0.2
-  done
-  tmux kill-session -t tuicheck 2>/dev/null
+  tail -40 ~/.local/state/warp-terminal-tui/oz/warp-tui.log
   ```
 
-  In a normal interactive terminal the session persists and you can
-  `send-keys`/`capture-pane` repeatedly without racing.
+  Two ways to still verify a change when you hit this:
+  - **Build `--release`** — the validator is compiled out, so the TUI stays up
+    and you can `send-keys`/`capture-pane` freely:
+    `cargo build --release -p warp_tui --bin warp-tui-oss` then run
+    `./target/release/warp-tui-oss`.
+  - **Or poll `capture-pane` right after launch** on the debug build to grab the
+    first frame before the panic:
+
+    ```bash
+    tmux new-session -d -s tuicheck -x 120 -y 40 './target/debug/warp-tui-oss'
+    for i in $(seq 1 15); do
+      frame=$(tmux capture-pane -t tuicheck -p | sed 's/[[:space:]]*$//' | grep .)
+      [ -n "$frame" ] && { echo "$frame"; break; }
+      sleep 0.2
+    done
+    tmux kill-session -t tuicheck 2>/dev/null
+    ```
+
+  If the debug build stays up on your machine, you can `send-keys`/`capture-pane`
+  repeatedly without racing.
 - **Alt screen is handled for you.** `capture-pane` reads the alternate screen,
   so you don't need to fight escape-sequence soup the way piping stdout would.
 - **Startup probe.** On launch the TUI emits terminal probes (OSC `10`/`11` +
