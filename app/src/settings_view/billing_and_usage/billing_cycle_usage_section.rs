@@ -791,9 +791,6 @@ fn format_period_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
     }
 }
 
-/// Builds the period-picker menu items, marking the selected period with a
-/// check (defaulting to the most recent cycle, like `current_summary`) and
-/// indenting the rest so labels stay aligned.
 fn build_period_menu_items(
     summaries: &[BillingCycleUsageSummary],
     selected_period_end: Option<DateTime<Utc>>,
