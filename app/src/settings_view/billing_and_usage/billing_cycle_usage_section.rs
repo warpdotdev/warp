@@ -227,9 +227,6 @@ impl BillingCycleUsageSectionView {
         self.period_menu
             .update(ctx, |menu: &mut Menu<BillingCycleUsageAction>, ctx| {
                 menu.set_items(items, ctx);
-                // Highlight the active period. `set_items` clears any prior
-                // selection, so this must run after it; the selected row then
-                // renders with the same highlight background as a hovered row.
                 if let Some(index) = selected_index {
                     menu.set_selected_by_index(index, ctx);
                 }
@@ -798,11 +795,6 @@ fn format_period_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
     }
 }
 
-/// Builds the period-picker menu items, one per billing cycle. The active
-/// period is not marked per-item here; it's highlighted via the menu's
-/// selection state (see `selected_period_index` +
-/// `Menu::set_selected_by_index`), so it reuses the standard hover/selected
-/// highlight rather than a checkmark.
 fn build_period_menu_items(
     summaries: &[BillingCycleUsageSummary],
 ) -> Vec<MenuItem<BillingCycleUsageAction>> {
@@ -817,11 +809,6 @@ fn build_period_menu_items(
         .collect()
 }
 
-/// Index of the currently-active period in `summaries`: the explicitly-picked
-/// `selected_period_end`, or the most recent cycle (index 0) when nothing has
-/// been picked yet, mirroring how `current_summary` resolves the shown summary.
-/// Returns `None` when there are no summaries, or when the selected period is
-/// no longer present, so no row is highlighted in that case.
 fn selected_period_index(
     summaries: &[BillingCycleUsageSummary],
     selected_period_end: Option<DateTime<Utc>>,

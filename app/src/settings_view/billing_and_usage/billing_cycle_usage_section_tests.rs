@@ -15,7 +15,6 @@ fn summary(start: DateTime<Utc>, end: DateTime<Utc>) -> BillingCycleUsageSummary
 }
 
 fn sample_summaries() -> Vec<BillingCycleUsageSummary> {
-    // Newest cycle first, matching the server ordering the UI relies on.
     vec![
         summary(utc(2026, 6, 27), utc(2026, 7, 27)),
         summary(utc(2026, 5, 27), utc(2026, 6, 27)),
@@ -23,9 +22,6 @@ fn sample_summaries() -> Vec<BillingCycleUsageSummary> {
     ]
 }
 
-/// One item per cycle, each carrying its `SelectPeriod` action, and no per-item
-/// marker icon — the active period is highlighted via the menu's selection
-/// state instead.
 #[test]
 fn builds_one_plain_item_per_period() {
     let summaries = sample_summaries();
@@ -48,15 +44,12 @@ fn builds_one_plain_item_per_period() {
     }
 }
 
-/// With no explicit selection, the most recent cycle (index 0, shown in the
-/// header by default) is the highlighted row.
 #[test]
 fn selects_most_recent_period_when_none_selected() {
     let summaries = sample_summaries();
     assert_eq!(selected_period_index(&summaries, None), Some(0));
 }
 
-/// An explicit selection highlights that period's row.
 #[test]
 fn selects_explicitly_selected_period() {
     let summaries = sample_summaries();
@@ -70,8 +63,6 @@ fn selects_explicitly_selected_period() {
     );
 }
 
-/// A selection that's no longer present highlights nothing rather than an
-/// unrelated row.
 #[test]
 fn selects_nothing_when_selection_absent() {
     let summaries = sample_summaries();
@@ -81,7 +72,6 @@ fn selects_nothing_when_selection_absent() {
     );
 }
 
-/// No summaries → nothing to highlight (and no panic on the empty slice).
 #[test]
 fn selects_nothing_when_no_summaries() {
     assert_eq!(selected_period_index(&[], None), None);
