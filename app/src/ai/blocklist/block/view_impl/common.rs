@@ -3188,8 +3188,8 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
 /// enterprise spend-limit variant of this message fall back to plain text.
 fn should_show_subscribe_cta(app: &AppContext) -> bool {
     UserWorkspaces::as_ref(app)
-        .current_team()
-        .is_none_or(|team| !team.billing_metadata.is_user_on_paid_plan())
+        .current_workspace()
+        .is_none_or(|workspace| !workspace.billing_metadata.is_user_on_paid_plan())
 }
 
 /// Builds an out-of-credits CTA button, styled like the invalid-API-key error's button.
