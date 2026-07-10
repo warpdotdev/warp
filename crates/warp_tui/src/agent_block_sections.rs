@@ -25,7 +25,8 @@ const INPUT_PREFIX: &str = "≫ ";
 /// background with a `≫` prompt marker.
 pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    let style = builder.input_text_style();
+    let text_style = builder.input_text_style();
+    let prefix_style = builder.input_prefix_style();
 
     // Only the first line carries the `≫` prompt marker; continuation
     // lines are indented to the marker's width so they align beneath it.
@@ -33,12 +34,30 @@ pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiE
     // background spans the whole row, not just the text.
     let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     for (index, line) in text.split('\n').enumerate() {
-        let line_text = if index == 0 {
-            format!("{INPUT_PREFIX}{line}")
+        let row = if index == 0 {
+            TuiFlex::row()
+                .child(TuiText::new(INPUT_PREFIX).with_style(prefix_style).finish())
+                .child(
+                    TuiText::new(line.to_owned())
+                        .with_style(text_style)
+                        .finish(),
+                )
+                .finish()
         } else {
-            format!("{}{line}", " ".repeat(INPUT_PREFIX.chars().count()))
+            TuiFlex::row()
+                .child(
+                    TuiText::new(" ".repeat(INPUT_PREFIX.chars().count()))
+                        .with_style(text_style)
+                        .finish(),
+                )
+                .child(
+                    TuiText::new(line.to_owned())
+                        .with_style(text_style)
+                        .finish(),
+                )
+                .finish()
         };
-        column = column.child(TuiText::new(line_text).with_style(style).finish());
+        column = column.child(row);
     }
     TuiContainer::new(column.finish())
         .with_background(builder.input_background())

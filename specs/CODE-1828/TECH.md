@@ -9,7 +9,7 @@ Per the [Figma mocks](https://www.figma.com/design/yg5nbPZuGoAszHS3Rhvehu/TUI?no
 - The footer's right side shows a token entry between the branch and diff stats: `… ↬ main • 4 tok • +31 -12`. Clicking it toggles tokens ⇄ dollar cost (`$0.03`); no third state exists in the mocks.
 - A completed agent response ends with a dim (`bright.black`) summary row: `∷ 1s • 4 tokens`. While streaming, the token count accompanies the `⋮ Warping (Ns)` indicator added by PR #13442 (unmerged; also adds the TUI animation machinery).
 
-Current state (verified live on master and in source):
+State before the proposed changes (historical):
 
 - `crates/warp_tui/src/terminal_session_view.rs:317-364` — `render_footer` shows only the ctrl-c hint (left) and model name + cwd (right). No mouse handling, no tokens/cost.
 - `crates/warp_tui/src/agent_block.rs`, `agent_block_sections.rs` — agent block sections are Input / PlainText / ToolCall / Thinking only; no per-exchange usage or duration row.
@@ -40,12 +40,12 @@ The reusable piece both sub-issues consume:
 - `UsageToggle` — the hover/click wrapper around the footer entry (`TuiHoverable` from `crates/warpui_core/src/elements/tui/`), owned by `TuiTerminalSessionView`. The credits⇄cost display mode itself is the file-backed, TUI-only `agents.usage_display_mode` setting (`TuiUsageDisplayMode` in `AISettings`, `surface: Tui`, never cloud-synced — the `TuiAgentModel` pattern), so the choice persists across TUI sessions and hot-reloads with the settings file. The `MouseStateHandle` must be owned by the view, not created inline during render.
 - **Deliberate mock deviation**: the Figma footer entry reads `4 tok`, but no token semantic survives contact with reality (see section 1), so the entry shows GUI-consistent credits instead — flagged for design review on CODE-1831.
 - Styles come from `TuiUiBuilder` (`dim_text_style`/`muted_text_style`), matching the mock's `#8e8e8e`.
-- Hover affordance is the DIM-removal brighten only. A pointing-hand mouse pointer (the mock's hover cursor) is **explicitly out of scope for this PR** and tracked as a fast follow in [CODE-1837](https://linear.app/warpdotdev/issue/CODE-1837/tui-pointing-hand-cursor-on-hover-over-the-footer-usage-entry-osc-22): it needs OSC 22 pointer-shape plumbing in the TUI core (a working, PTY-verified implementation is preserved in this branch's history at commit `348484d57`) plus host-terminal support that Warp's own terminal lacks today (in progress on `ian/warp-terminal-osc22-pointer-shape`).
+- Hover affordance brightens from `muted_text_style` to `primary_text_style`. A pointing-hand mouse pointer (the mock's hover cursor) is **explicitly out of scope for this PR** and tracked as a fast follow in [CODE-1837](https://linear.app/warpdotdev/issue/CODE-1837/tui-pointing-hand-cursor-on-hover-over-the-footer-usage-entry-osc-22): it needs OSC 22 pointer-shape plumbing in the TUI core (a working, PTY-verified implementation is preserved in this branch's history at commit `348484d57`) plus host-terminal support that Warp's own terminal lacks today (in progress on `ian/warp-terminal-osc22-pointer-shape`).
 
 ### 3. Footer entry (CODE-1831, `terminal_session_view.rs`)
 
 - In `new`: subscribe to `BlocklistAIHistoryModel`; on `ConversationUsageMetadataUpdated` for this surface's selected conversation (`conversation_selection.selected_conversation_id`), `ctx.notify()`. Add the new event arm explicitly — no wildcard matches (repo convention).
-- In `render_footer`: after the cwd, render `• ` + the toggle component using the selected conversation's totals; hide the entry until the first usage event (mock shows it only with data). A click dispatches a typed action (`ToggleUsageDisplay`) whose handler flips the persisted display-mode setting — the element pass only holds an immutable `AppContext`, so settings writes go through the view's action handler. Branch (`↬ main`) and `+31 -12` diff stats remain out of scope.
+- In `render_footer`: after the cwd and watcher-backed branch, render `• ` + the toggle component using the selected conversation's totals, followed by colored diff stats; hide the usage entry until the first usage event (mock shows it only with data). A click dispatches a typed action (`ToggleUsageDisplay`) whose handler flips the persisted display-mode setting — the element pass only holds an immutable `AppContext`, so settings writes go through the view's action handler.
 
 ### 4. Last-response summary in the indicator slot (CODE-1832, stacked PR)
 

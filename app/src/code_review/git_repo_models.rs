@@ -156,6 +156,11 @@ impl GitRepoModels {
     }
 }
 
+impl Default for GitRepoModels {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl Entity for GitRepoModels {
     type Event = ();
 }

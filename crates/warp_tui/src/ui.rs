@@ -15,6 +15,36 @@ pub(crate) fn abbreviate_home_prefix(path: &str) -> String {
     path.to_owned()
 }
 
+/// Compacts a path for the one-line session footer while preserving its root
+/// (or first relative component) and basename.
+pub(crate) fn compact_footer_path(path: &str) -> String {
+    let path = abbreviate_home_prefix(path);
+    let separator = if path.contains('\\') && !path.contains('/') {
+        '\\'
+    } else {
+        '/'
+    };
+    let components: Vec<_> = path
+        .split(separator)
+        .filter(|component| !component.is_empty())
+        .collect();
+    if components.len() <= 2 {
+        return path;
+    }
+
+    let last = components
+        .last()
+        .expect("path has more than two components");
+    if path.starts_with(separator) {
+        format!("{separator}…{separator}{last}")
+    } else {
+        format!(
+            "{}{separator}…{separator}{last}",
+            components.first().expect("path has components")
+        )
+    }
+}
+
 /// Vertically centers `content` by padding above and below with flex spacers.
 pub(crate) fn centered(content: TuiFlex) -> Box<dyn TuiElement> {
     TuiFlex::column()
@@ -98,4 +128,24 @@ pub(crate) fn login_failed(message: &str) -> Box<dyn TuiElement> {
                 .finish(),
         );
     centered(content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compact_footer_path;
+
+    #[test]
+    fn compact_footer_path_preserves_short_paths() {
+        assert_eq!(compact_footer_path("/erica/project"), "/erica/project");
+    }
+
+    #[test]
+    fn compact_footer_path_elides_middle_components() {
+        assert_eq!(compact_footer_path("~/Documents/GitHub/warp"), "~/…/warp");
+        assert_eq!(compact_footer_path("/long/path/to/project"), "/…/project");
+        assert_eq!(
+            compact_footer_path(r"C:\Users\erica\project"),
+            r"C:\…\project"
+        );
+    }
 }

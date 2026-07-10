@@ -38,7 +38,7 @@ pub(crate) fn render_zero_state(cwd: Option<&str>, app: &AppContext) -> Box<dyn 
 
 /// The left text column: title, version, "What's new", and project context.
 fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
-    let title_style = builder.accent_border_style().add_modifier(Modifier::BOLD);
+    let title_style = builder.accent_text_style().add_modifier(Modifier::BOLD);
     let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
     let muted = builder.muted_text_style();
 

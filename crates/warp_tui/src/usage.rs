@@ -9,11 +9,11 @@
 
 use warp::settings::TuiUsageDisplayMode;
 use warp::tui_export::{format_credits, ConversationUsageTotals};
-use warpui_core::elements::tui::{
-    Modifier, TuiElement, TuiEventContext, TuiHoverable, TuiStyle, TuiText,
-};
+use warpui_core::elements::tui::{TuiElement, TuiEventContext, TuiHoverable, TuiText};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::AppContext;
+
+use crate::tui_builder::TuiUiBuilder;
 
 /// The clickable usage entry (`2.5 credits` ⇄ `$0.03`). Owned by the
 /// composing view (created once, cloned into render closures) so the hover
@@ -36,16 +36,19 @@ impl UsageToggle {
         &self,
         mode: TuiUsageDisplayMode,
         totals: ConversationUsageTotals,
+        app: &AppContext,
         on_click: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
     ) -> Box<dyn TuiElement> {
         let is_hovered = self
             .hover_state
             .lock()
             .is_ok_and(|state| state.is_hovered());
-        let mut style = TuiStyle::default();
-        if !is_hovered {
-            style = style.add_modifier(Modifier::DIM);
-        }
+        let builder = TuiUiBuilder::from_app(app);
+        let style = if is_hovered {
+            builder.primary_text_style()
+        } else {
+            builder.muted_text_style()
+        };
         TuiHoverable::new(
             self.hover_state.clone(),
             TuiText::new(entry_text(mode, totals))

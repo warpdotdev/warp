@@ -59,7 +59,10 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .collect::<Vec<_>>(),
                 vec!["", "≫ hello", "", "one", "two", "three"],
             );
-            assert_eq!(frame.buffer[(0, 1)].fg, expected_prompt_text_color(app_ctx));
+            assert_eq!(
+                frame.buffer[(0, 1)].fg,
+                expected_prompt_prefix_color(app_ctx)
+            );
             assert_eq!(frame.buffer[(0, 1)].bg, expected_input_background(app_ctx));
             assert!(frame.buffer[(0, 1)].modifier.contains(Modifier::BOLD));
             assert_eq!(frame.buffer[(2, 1)].fg, expected_prompt_text_color(app_ctx));
@@ -99,33 +102,31 @@ fn expected_prompt_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
     CoreFill::from(theme.foreground()).into()
 }
+fn expected_prompt_prefix_color(app: &AppContext) -> Color {
+    let theme = Appearance::as_ref(app).theme();
+    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into()
+}
 
 fn expected_input_background(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
     let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-    CoreFill::from(theme.background().blend(&accent.with_opacity(20))).into()
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&accent.with_opacity(10))
+            .blend(&accent.with_opacity(10)),
+    )
+    .into()
 }
 
 fn expected_output_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    let opacity = theme.details().main_text_opacity;
-    CoreFill::from(
-        theme
-            .background()
-            .blend(&theme.foreground().with_opacity(opacity)),
-    )
-    .into()
+    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()
 }
 
 fn expected_tool_call_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    let opacity = theme.details().sub_text_opacity;
-    CoreFill::from(
-        theme
-            .background()
-            .blend(&theme.foreground().with_opacity(opacity)),
-    )
-    .into()
+    CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into()
 }
 
 #[test]

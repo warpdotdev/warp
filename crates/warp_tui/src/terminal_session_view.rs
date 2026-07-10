@@ -16,18 +16,20 @@ use warp::tui_export::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
     CancellationReason, ChangelogModel, ChangelogModelEvent, ChangelogRequestType,
     CommandExecutionSource, ConversationSelection, ConversationSelectionHandle,
-    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences,
-    LLMPreferencesEvent, ModelEvent, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
-    RepoDetectionSource, ShellCommandExecutorEvent, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
-    TuiZeroStateDataSource, WAKEUP_THROTTLE_PERIOD,
+    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
+    GitRepoStatusModel, GitStatusMetadata, LLMPreferences, LLMPreferencesEvent, ModelEvent,
+    PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
+    ShellCommandExecutorEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
+    WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    Modifier, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiStyle, TuiText,
+    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::FixedBinding;
@@ -47,7 +49,7 @@ use crate::slash_commands::TuiSlashCommandModel;
 use crate::transcript_view::TuiTranscriptView;
 use crate::transient_hint::TransientHint;
 use crate::tui_builder::TuiUiBuilder;
-use crate::ui::abbreviate_home_prefix;
+use crate::ui::compact_footer_path;
 use crate::usage::UsageToggle;
 use crate::warping_indicator::{render_response_summary, render_warping_indicator};
 use crate::zero_state::render_zero_state;
@@ -108,6 +110,10 @@ pub(crate) struct TuiTerminalSessionView {
     ai_controller: ModelHandle<BlocklistAIController>,
     /// Read by the footer for the active session's working directory.
     active_session: ModelHandle<ActiveSession>,
+    /// Repository currently containing the active session's working directory.
+    current_repo_path: Option<LocalOrRemotePath>,
+    /// Watcher-backed branch and uncommitted diff metadata for the footer.
+    git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
     /// This view's surface id, used to resolve the active model for the footer
     /// the same way the request path does.
     terminal_surface_id: EntityId,
@@ -355,20 +361,21 @@ impl TuiTerminalSessionView {
                 // `TerminalView::apply_block_metadata_update`). The first
                 // post-bootstrap precmd metadata transitions the cwd from
                 // `None` to `Some`, so this also covers the launch directory.
-                // Only the `DetectedGitRepo` event side effect is needed
-                // here, so the detection-result future is dropped.
                 if let Some(cwd) = view
                     .active_session
                     .as_ref(ctx)
                     .current_working_directory()
                     .cloned()
                 {
-                    std::mem::drop(detect_possible_git_repo(
+                    let detect_repo = detect_possible_git_repo(
                         RepoDetectionSessionType::Local,
                         &cwd,
                         RepoDetectionSource::TerminalNavigation,
                         ctx,
-                    ));
+                    );
+                    ctx.spawn(detect_repo, |view, repo_path, ctx| {
+                        view.update_git_status_subscription(repo_path, ctx);
+                    });
                 }
                 ctx.notify();
             }
@@ -429,6 +436,8 @@ impl TuiTerminalSessionView {
             conversation_selection,
             ai_controller,
             active_session,
+            current_repo_path: None,
+            git_repo_status: None,
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
             usage_toggle: UsageToggle::default(),
@@ -528,14 +537,15 @@ impl TuiTerminalSessionView {
     /// working directory are pushed to the right edge behind a flex spacer.
     /// Every child truncates to a single row, so the row lays out one row tall.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
-        let dim = TuiStyle::default().add_modifier(Modifier::DIM);
-        let mut footer = TuiFlex::row();
+        let builder = TuiUiBuilder::from_app(ctx);
+        let muted = builder.muted_text_style();
+        let mut left = TuiFlex::row();
         // Left slot, highest priority first: while armed, the ctrl-c hint
         // replaces the other hints in place.
         let hint = if self.exit_confirmation.is_armed() {
-            Some((CTRL_C_EXIT_HINT.to_owned(), dim))
+            Some((CTRL_C_EXIT_HINT.to_owned(), muted))
         } else if let Some(transient) = self.transient_hint.current() {
-            Some((transient.to_owned(), dim))
+            Some((transient.to_owned(), muted))
         } else if self.is_shell_mode(ctx) {
             Some((
                 SHELL_MODE_HINT.to_owned(),
@@ -546,23 +556,38 @@ impl TuiTerminalSessionView {
         };
 
         if let Some((text, style)) = hint {
-            footer = footer.child(TuiText::new(text).with_style(style).truncate().finish());
+            left = left.child(TuiText::new(text).with_style(style).truncate().finish());
         }
+        let mut footer = TuiFlex::row().flex_child(left.finish());
         let model_name = LLMPreferences::as_ref(ctx)
             .get_active_base_model(ctx, Some(self.terminal_surface_id))
             .display_name
             .clone();
-        footer = footer
-            .flex_child(TuiFlex::row().finish())
-            .child(TuiText::new(model_name).truncate().finish());
+        footer = footer.child(TuiText::new(" ").truncate().finish()).child(
+            TuiText::new(model_name)
+                .with_style(builder.primary_text_style())
+                .truncate()
+                .finish(),
+        );
         if let Some(cwd) = self.current_working_directory(ctx) {
             footer = footer.child(
-                TuiText::new(format!(" {}", abbreviate_home_prefix(&cwd)))
-                    .with_style(dim)
+                TuiText::new(format!(" {}", compact_footer_path(&cwd)))
+                    .with_style(muted)
                     .truncate()
                     .finish(),
             );
         }
+        let git_stats = if let Some(metadata) = self.git_status_metadata(ctx) {
+            footer = footer.child(
+                TuiText::new(format!(" ↬ {}", metadata.current_branch_name))
+                    .with_style(muted)
+                    .truncate()
+                    .finish(),
+            );
+            Some(metadata.stats_against_head)
+        } else {
+            None
+        };
         // Usage entry: the selected conversation's credits/cost totals,
         // hidden until any usage has been reported. The displayed unit is the
         // persisted `agents.usage_display_mode` setting; a click dispatches
@@ -571,17 +596,76 @@ impl TuiTerminalSessionView {
         if let Some(totals) = self.selected_conversation_usage_totals(ctx) {
             let mode = AISettings::as_ref(ctx).usage_display_mode;
             footer = footer
-                .child(TuiText::new(" • ").with_style(dim).truncate().finish())
+                .child(TuiText::new(" • ").with_style(muted).truncate().finish())
                 .child(
                     self.usage_toggle
-                        .render_entry(mode, totals, |event_ctx, _| {
+                        .render_entry(mode, totals, ctx, |event_ctx, _| {
                             event_ctx.dispatch_typed_action(
                                 TuiTerminalSessionAction::ToggleUsageDisplay,
                             );
                         }),
                 );
         }
+        if let Some(stats) = git_stats {
+            if stats.total_additions > 0 || stats.total_deletions > 0 {
+                footer = footer.child(TuiText::new(" • ").with_style(muted).truncate().finish());
+                if stats.total_additions > 0 {
+                    footer = footer.child(
+                        TuiText::new(format!("+{}", stats.total_additions))
+                            .with_style(builder.diff_added_style())
+                            .truncate()
+                            .finish(),
+                    );
+                }
+                if stats.total_deletions > 0 {
+                    if stats.total_additions > 0 {
+                        footer = footer.child(TuiText::new(" ").truncate().finish());
+                    }
+                    footer = footer.child(
+                        TuiText::new(format!("-{}", stats.total_deletions))
+                            .with_style(builder.diff_removed_style())
+                            .truncate()
+                            .finish(),
+                    );
+                }
+            }
+        }
         footer
+    }
+
+    /// Updates the watcher-backed git-status subscription after repository
+    /// detection completes for the active working directory.
+    fn update_git_status_subscription(
+        &mut self,
+        repo_path: Option<LocalOrRemotePath>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.current_repo_path == repo_path {
+            return;
+        }
+        self.current_repo_path = repo_path.clone();
+        self.git_repo_status = None;
+
+        let Some(repo_path) = repo_path else {
+            ctx.notify();
+            return;
+        };
+        match GitRepoModels::handle(ctx)
+            .update(ctx, |models, ctx| models.subscribe(&repo_path, ctx))
+        {
+            Ok(handle) => {
+                ctx.subscribe_to_model(&handle, |_, _, _, ctx| ctx.notify());
+                self.git_repo_status = Some(handle);
+            }
+            Err(error) => {
+                log::warn!("Unable to subscribe TUI footer to git status: {error}");
+            }
+        }
+        ctx.notify();
+    }
+
+    fn git_status_metadata<'a>(&self, ctx: &'a AppContext) -> Option<&'a GitStatusMetadata> {
+        self.git_repo_status.as_ref()?.as_ref(ctx).metadata(ctx)
     }
 
     /// Flips the footer usage entry's persisted credits⇄cost display mode.
@@ -822,6 +906,7 @@ impl TuiView for TuiTerminalSessionView {
         };
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view).finish())
+                .with_padding_x(1)
                 .with_border_style(border_style)
                 .finish(),
         )
@@ -899,7 +984,8 @@ impl TuiView for TuiTerminalSessionView {
                 .child(self.render_footer(ctx).finish())
                 .finish(),
         )
-        .with_padding(2)
+        .with_padding_x(2)
+        .with_padding_top(2)
         .finish()
     }
 }
