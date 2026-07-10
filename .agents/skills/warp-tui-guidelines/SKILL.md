@@ -27,7 +27,7 @@ Defined in `crates/warpui_core/src/elements/tui/mod.rs`. An element measures its
 - `cursor_position(&self, area, ctx) -> Option<(u16, u16)>` — where the terminal cursor should sit within `area`, if this element owns it (default: `None`).
 - `present(&mut self, ctx)` — participate in the child-view recursion so the presenter records parent/child view relationships (default: nothing; only container/child-view elements override it).
 - `dispatch_event(&mut self, event, area, event_ctx, ctx, app) -> bool` — offer an event to this element, returning whether it was handled (default: `false`).
-- `.finish()` — boxing convenience that returns `Box<dyn TuiElement>`, mirroring the GUI `Element::finish` so trees can be terminated with `.finish()` instead of an explicit `Box::new`.
+- `.finish()` — boxing convenience that returns `Box<dyn TuiElement>`, mirroring the GUI `Element::finish`. **Always terminate an element with `.finish()`; never hand-wrap an element in `Box::new`.** It's what the child-taking APIs (`TuiFlex::child`/`with_child`, `TuiChildView`, etc.) expect, and it keeps element trees consistent and readable.
 
 ## Composition vocabulary
 
@@ -53,7 +53,7 @@ Keybindings follow the GUI convention: each TUI view module exposes a top-level 
 
 ## Example: composing a small element tree
 
-From `crates/warp_tui/src/zero_state.rs` — a `TuiFlex::column()` of styled `TuiText` children, wrapped in a width cap:
+A `TuiFlex::column()` of styled `TuiText` children, wrapped in a width cap (illustrative):
 
 ```rust path=null start=null
 let builder = TuiUiBuilder::from_app(app);
@@ -74,7 +74,7 @@ TuiConstrainedBox::new(column.finish())
     .finish()
 ```
 
-Keep examples faithful to the real APIs — read the actual source (`crates/warpui_core/src/elements/tui/mod.rs`, `zero_state.rs`, `tui_builder.rs`) before writing, and do not invent methods.
+Verify API names against the element library (`crates/warpui_core/src/elements/tui/mod.rs`) and `TuiUiBuilder` (`crates/warp_tui/src/tui_builder.rs`); don't invent methods. Don't treat existing `crates/warp_tui` view code as canonical examples — much of it is early prototyping and isn't the pattern to copy going forward.
 
 ## Reference
 

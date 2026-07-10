@@ -1,6 +1,6 @@
 ---
 name: add-feature-flag
-description: Add a new feature flag to gate code changes in the Warp codebase (GUI app and headless TUI).
+description: Add a new feature flag to gate code changes in the Warp codebase.
 ---
 
 # add-feature-flag

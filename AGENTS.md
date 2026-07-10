@@ -82,6 +82,14 @@ This is a Rust-based terminal emulator with a custom UI framework called **WarpU
 - `crates/ipc/` - Inter-process communication
 - `crates/graphql/` - GraphQL client and schema
 
+### Front-ends: GUI and TUI
+
+Warp has two front-ends that share the `warp_core`/`warpui` Entity/model core but differ in UI framework, rendering, input, and verification:
+- **GUI desktop app** — the `app/` crate on the WarpUI pixel/GPU framework (`warpui`, `crates/warpui_core`): `Element`/`View`, GPU/WGSL, mouse, `.app` bundles. Run with `./script/run`; verify visually with `computer_use` or the real-display integration framework (`crates/integration`).
+- **Headless TUI** — the `crates/warp_tui` crate: a console app (run with `./script/run-tui`; no `.app`/GPU) rendered with the parallel cell-grid element library at `crates/warpui_core/src/elements/tui` (the `TuiElement` trait), behind the `tui` cargo feature. Verify by running it in a real terminal and observing output; test with render-to-lines unit tests.
+
+**Skill convention:** a skill specific to one front-end says so in its name and/or description (e.g. `warp-ui-guidelines` is GUI-only; `warp-tui-guidelines`, `warp-tui-testing`, and `verify-tui-change` are TUI-specific). Skills with no front-end call-out are surface-agnostic and apply to both. When doing TUI work, prefer the `warp-tui-*` / `verify-tui-change` skills and ignore GUI-only ones — and vice versa.
+
 ### Key Architectural Patterns
 
 1. **Entity-Handle System**: Views reference other views via handles, not direct ownership
