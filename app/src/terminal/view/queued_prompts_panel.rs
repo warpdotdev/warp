@@ -265,7 +265,7 @@ impl QueuedPromptsPanelView {
             me.handle_cli_subagent_event(event, ctx);
         });
 
-        ctx.subscribe_to_model(&suggestions_mode_model, |_, model, _, ctx| {
+        ctx.subscribe_to_model(&suggestions_mode_model, |_, _, _, ctx| {
             ctx.notify();
         });
 
