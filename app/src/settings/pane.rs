@@ -12,6 +12,16 @@ define_settings_group!(PaneSettings, settings: [
         toml_path: "appearance.panes.should_dim_inactive_panes",
         description: "Whether inactive panes are visually dimmed.",
     },
+    inactive_pane_dimming_percentage: InactivePaneDimmingPercentage {
+        type: u8,
+        default: 10,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "appearance.panes.inactive_pane_dimming_percentage",
+        description: "How strongly inactive panes are dimmed, from 0 to 100 percent. \
+            Only applies when inactive panes are dimmed.",
+    },
     focus_panes_on_hover: FocusPaneOnHover {
         type: bool,
         default: false,
@@ -23,3 +33,12 @@ define_settings_group!(PaneSettings, settings: [
         description: "Whether panes are focused when hovered over.",
     }
 ]);
+
+impl InactivePaneDimmingPercentage {
+    pub const MIN: u8 = 0;
+    pub const MAX: u8 = 100;
+
+    fn validate(&self, new_value: u8) -> u8 {
+        new_value.clamp(Self::MIN, Self::MAX)
+    }
+}

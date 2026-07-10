@@ -122,6 +122,7 @@ impl<P: BackingView> PaneView<P> {
             if matches!(
                 event,
                 PaneSettingsChangedEvent::ShouldDimInactivePanes { .. }
+                    | PaneSettingsChangedEvent::InactivePaneDimmingPercentage { .. }
             ) {
                 ctx.notify();
             }
@@ -417,17 +418,20 @@ impl<P: BackingView> View for PaneView<P> {
         }
 
         // Dim inactive panes.
-        let should_dim_inactive_panes = *PaneSettings::as_ref(app).should_dim_inactive_panes;
+        let pane_settings = PaneSettings::as_ref(app);
+        let should_dim_inactive_panes = *pane_settings.should_dim_inactive_panes;
+        let dimming_opacity = *pane_settings.inactive_pane_dimming_percentage;
         let dim_even_if_focused = pane_configuration.dim_even_if_focused();
         if should_dim_inactive_panes {
+            let dimming_overlay = appearance
+                .theme()
+                .inactive_pane_overlay_with_opacity(dimming_opacity);
             if dim_even_if_focused {
                 // Focus is in a side panel: dim this pane regardless of split state or focus.
-                container =
-                    container.with_foreground_overlay(appearance.theme().inactive_pane_overlay());
+                container = container.with_foreground_overlay(dimming_overlay);
             } else if split_pane_state.is_in_split_pane() && !split_pane_state.is_focused() {
                 // Normal behavior: in a split, dim only unfocused panes.
-                container =
-                    container.with_foreground_overlay(appearance.theme().inactive_pane_overlay());
+                container = container.with_foreground_overlay(dimming_overlay);
             }
         }
 
