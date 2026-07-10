@@ -9,7 +9,8 @@ use parking_lot::FairMutex;
 use warp::tui_export::{
     should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
     BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, ModelEventDispatcher, RichContentItem, RichContentType, TerminalModel,
+    BlocklistAIHistoryModel, ConversationBlockRestorationPlan, ModelEventDispatcher,
+    RichContentItem, RichContentType, TerminalModel,
 };
 use warp_core::semantic_selection::SemanticSelection;
 use warpui_core::elements::tui::{
@@ -216,6 +217,16 @@ impl TuiTranscriptView {
         exchange_id: AIAgentExchangeId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.insert_agent_block_at(conversation_id, exchange_id, None, ctx);
+    }
+
+    fn insert_agent_block_at(
+        &mut self,
+        conversation_id: AIConversationId,
+        exchange_id: AIAgentExchangeId,
+        command_block_index: Option<warp::tui_export::BlockIndex>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if self.view_id_for_exchange(exchange_id, ctx).is_some() {
             return;
         }
@@ -256,11 +267,36 @@ impl TuiTranscriptView {
             }
         });
         self.agent_blocks.borrow_mut().insert(view_id, view);
-        self.model.lock().block_list_mut().append_rich_content(
-            RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
-            false,
-        );
+        let item = RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false);
+        let mut model = self.model.lock();
+        match command_block_index {
+            Some(command_block_index) => model
+                .block_list_mut()
+                .insert_rich_content_before_block_index(item, command_block_index),
+            None => model.block_list_mut().append_rich_content(item, false),
+        }
         ctx.notify();
+    }
+
+    /// Materializes a shared restoration plan as TUI agent-block views.
+    pub(super) fn restore_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        restoration_plan: ConversationBlockRestorationPlan,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for restored_exchange in restoration_plan.into_exchanges() {
+            let (exchange, command_block_index) = restored_exchange.into_parts();
+            self.insert_agent_block_at(conversation_id, exchange.id, command_block_index, ctx);
+        }
+        self.viewport.scroll_to_end();
+        ctx.notify();
+    }
+
+    /// Clears agent rich content before replacing the sole conversation.
+    pub(super) fn clear_for_replacement(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_agent_blocks(ctx);
+        self.viewport.scroll_to_end();
     }
 
     fn mark_exchange_dirty(&mut self, exchange_id: AIAgentExchangeId, ctx: &mut ViewContext<Self>) {

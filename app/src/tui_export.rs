@@ -4,7 +4,8 @@ pub use repo_metadata::repositories::RepoDetectionSource;
 
 pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
-    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, ConversationUsageTotals,
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
+    ConversationUsageTotals,
 };
 pub use crate::ai::agent::task::TaskId;
 pub use crate::ai::agent::{
@@ -35,7 +36,7 @@ pub use crate::ai::blocklist::diff_storage::{
 pub use crate::ai::blocklist::diff_types::{changed_lines_from_op, DiffSessionType, FileDiff};
 pub use crate::ai::blocklist::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
-    ConversationStatusUpdate,
+    ConversationStatusUpdate, LoadOzConversationError,
 };
 pub use crate::ai::blocklist::view_util::format_credits;
 pub use crate::ai::blocklist::{
@@ -62,6 +63,10 @@ pub use crate::search::slash_command_menu::static_commands::commands::{
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
+pub use crate::terminal::conversation_restoration::{
+    prepare_conversation_block_restoration, ConversationBlockRestorationPlan,
+    RestoredConversationExchange,
+};
 pub use crate::terminal::event::AfterBlockCompletedEvent;
 pub use crate::terminal::input::slash_command_model::{
     slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,

@@ -38,6 +38,7 @@ anyhow.workspace = true
 async-fs.workspace = true
 base64.workspace = true
 channel_versions.workspace = true
+clap.workspace = true
 command.workspace = true
 dirs.workspace = true
 futures.workspace = true
@@ -68,6 +69,7 @@ warp_terminal.workspace = true
 warp_util.workspace = true
 warpui.workspace = true
 warpui_core = { workspace = true, features = ["tui"] }
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

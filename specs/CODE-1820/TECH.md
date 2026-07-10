@@ -9,7 +9,7 @@ The TUI already boots the main `app` crate and reuses the same agent conversatio
 The relevant existing paths are:
 
 - [`crates/warp_tui/src/session.rs (42-157)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/crates/warp_tui/src/session.rs#L42-L157) — dispatches TUI worker re-execs, starts `warp::run_tui`, gates terminal-session creation on login, and exposes the `post_wire` callback after the surface is connected.
-- [`app/src/ai/blocklist/history_model/conversation_loader.rs (233-366)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/app/src/ai/blocklist/history_model/conversation_loader.rs#L233-L366) — loads conversations from memory, local SQLite, or the server. `load_conversation_by_server_token` first resolves a canonical local ID and reuses local data when present, then falls back to the server.
+- [`app/src/ai/blocklist/history_model/conversation_loader.rs (233-366)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/app/src/ai/blocklist/history_model/conversation_loader.rs#L233-L366) — loads conversations from memory, local SQLite, or the server. `load_conversation_by_server_token` first resolves a canonical local ID and reuses local data when present, then falls back to the server; this change adds a typed Oz-only wrapper over that behavior for TUI errors.
 - [`app/src/ai/blocklist/history_model.rs (1058-1169)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/app/src/ai/blocklist/history_model.rs#L1058-L1169) — `restore_conversations` registers a loaded conversation on a terminal surface and rebuilds the server-token and parent/child indexes; `set_active_conversation_id` establishes active-surface state.
 - [`app/src/terminal/view/load_ai_conversation.rs (439-637)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/app/src/terminal/view/load_ai_conversation.rs#L439-L637) — GUI historical restoration: restore action results and documents, register conversations, reconstruct command blocks, compute AI-block placement, and create GUI views.
 - [`app/src/terminal/view/load_ai_conversation.rs (1196-1272)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/app/src/terminal/view/load_ai_conversation.rs#L1196-L1272) — computes where restored agent exchanges belong relative to command blocks.
@@ -33,7 +33,7 @@ sequenceDiagram
   participant Transcript as TuiTranscriptView
 
   CLI->>Surface: restore_conversation(server token, origin)
-  Surface->>History: load_conversation_by_server_token
+  Surface->>History: load_oz_conversation_by_server_token
   alt token maps to local metadata
     History-->>Surface: local Oz AIConversation
   else no local data
@@ -75,8 +75,8 @@ restore_conversation(
 The operation owns the TUI state transition:
 
 1. Enter a loading state that suppresses the interactive zero state.
-2. Call `BlocklistAIHistoryModel::load_conversation_by_server_token`.
-3. Require `CloudConversationData::Oz`; map `CLIAgent` to a permanent unsupported-harness error.
+2. Call `BlocklistAIHistoryModel::load_oz_conversation_by_server_token`, which preserves the existing local-first/server-fallback semantics while returning typed Oz restoration errors.
+3. Let the typed loader reject non-Oz data with a permanent unsupported-harness error.
 4. Verify that the returned `AIConversation` contains the requested server token before registration.
 5. Prepare the shared block restoration plan and historical action state.
 6. Atomically replace the sole TUI conversation surface.

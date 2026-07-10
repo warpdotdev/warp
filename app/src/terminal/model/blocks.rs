@@ -3416,7 +3416,7 @@ impl BlockList {
         }
     }
 
-    pub(in crate::terminal) fn insert_rich_content_before_block_index(
+    pub fn insert_rich_content_before_block_index(
         &mut self,
         item: RichContentItem,
         block_index: BlockIndex,
