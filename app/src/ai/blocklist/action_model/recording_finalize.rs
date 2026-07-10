@@ -92,9 +92,17 @@ fn format_upload_error(err: &anyhow::Error) -> String {
 async fn finalize_recording(
     recording: ActiveRecording,
     reason: FinalizeReason,
+    should_upload: bool,
     uploader: FileArtifactUploader,
     server_conversation_token: Option<crate::ai::agent::api::ServerConversationToken>,
 ) -> StopRecordingResult {
+    // Conversation cancellation discards the recording instead of publishing
+    // it. Dropping the handle kill-on-drops the ffmpeg process and removes the
+    // partial output, so there is nothing to finalize or upload.
+    if !should_upload {
+        drop(recording);
+        return StopRecordingResult::Cancelled;
+    }
     let recorder = computer_use::create_recorder();
     let output = match recorder.stop(recording.handle).await {
         Ok(output) => output,
@@ -137,6 +145,7 @@ async fn finalize_recording(
 fn build_finalize_future(
     recording: ActiveRecording,
     reason: FinalizeReason,
+    should_upload: bool,
     ctx: &AppContext,
 ) -> (
     String,
@@ -153,7 +162,13 @@ fn build_finalize_future(
     let id = recording.id.clone();
     (
         id,
-        finalize_recording(recording, reason, uploader, server_conversation_token),
+        finalize_recording(
+            recording,
+            reason,
+            should_upload,
+            uploader,
+            server_conversation_token,
+        ),
     )
 }
 
@@ -162,9 +177,10 @@ fn build_finalize_future(
 fn spawn_finalize(
     recording: ActiveRecording,
     reason: FinalizeReason,
+    should_upload: bool,
     ctx: &mut ModelContext<RecordingController>,
 ) {
-    let (recording_id, future) = build_finalize_future(recording, reason, ctx);
+    let (recording_id, future) = build_finalize_future(recording, reason, should_upload, ctx);
     ctx.spawn(future, move |controller, result, _ctx| {
         controller.complete_finalization(&recording_id, result);
     });
@@ -176,6 +192,7 @@ fn spawn_finalize(
 fn start_or_join_finalization<T: Entity>(
     claim: FinalizationClaim,
     reason: FinalizeReason,
+    should_upload: bool,
     ctx: &mut ModelContext<T>,
 ) -> Option<RecordingFinalization> {
     match claim {
@@ -184,7 +201,7 @@ fn start_or_join_finalization<T: Entity>(
             result_receiver,
         } => {
             RecordingController::handle(ctx).update(ctx, |_controller, ctx| {
-                spawn_finalize(recording, reason, ctx);
+                spawn_finalize(recording, reason, should_upload, ctx);
             });
             Some(RecordingFinalization::Pending(result_receiver))
         }
@@ -206,7 +223,7 @@ pub(crate) fn finalize_recording_by_id<T: Entity>(
     let claim = RecordingController::handle(ctx).update(ctx, |controller, _| {
         controller.claim_finalization_by_id(recording_id)
     });
-    start_or_join_finalization(claim, reason, ctx).ok_or_else(|| {
+    start_or_join_finalization(claim, reason, true, ctx).ok_or_else(|| {
         StopRecordingControllerError::RecordingNotFound {
             recording_id: recording_id.to_string(),
         }
@@ -221,12 +238,13 @@ pub(crate) fn finalize_recording_by_id<T: Entity>(
 pub(crate) fn finalize_recording_for_conversation<T: Entity>(
     conversation_id: AIConversationId,
     reason: FinalizeReason,
+    should_upload: bool,
     ctx: &mut ModelContext<T>,
 ) -> Option<RecordingFinalization> {
     let claim = RecordingController::handle(ctx).update(ctx, |controller, _| {
         controller.claim_finalization_for_conversation(conversation_id)
     })?;
-    start_or_join_finalization(claim, reason, ctx)
+    start_or_join_finalization(claim, reason, should_upload, ctx)
 }
 
 /// Polls the active ffmpeg process until it exits or another path claims it.
@@ -253,7 +271,7 @@ pub(crate) fn spawn_recording_exit_watcher(
                         }
                         computer_use::RecordingExitKind::Crashed => FinalizeReason::FfmpegExited,
                     };
-                    spawn_finalize(recording, reason, ctx);
+                    spawn_finalize(recording, reason, true, ctx);
                 }
             }
             None if controller.active_recording_id() == Some(recording_id.as_str()) => {
@@ -263,3 +281,7 @@ pub(crate) fn spawn_recording_exit_watcher(
         },
     );
 }
+
+#[cfg(test)]
+#[path = "recording_finalize_tests.rs"]
+mod tests;

@@ -1103,9 +1103,15 @@ impl BlocklistAIActionModel {
         });
         #[cfg(not(target_family = "wasm"))]
         {
-            if let Some(finalization) =
-                finalize_recording_for_conversation(conversation_id, FinalizeReason::Cancelled, ctx)
-            {
+            // Cancelling a conversation kills the running ffmpeg process
+            // without uploading the partial recording, so pass
+            // `should_upload = false`.
+            if let Some(finalization) = finalize_recording_for_conversation(
+                conversation_id,
+                FinalizeReason::Cancelled,
+                false,
+                ctx,
+            ) {
                 ctx.spawn(
                     async move { finalization.resolve().await },
                     |_model, result, _ctx| {

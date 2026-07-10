@@ -908,6 +908,7 @@ impl AgentDriver {
                             finalize_recording_for_conversation(
                                 conversation_id,
                                 FinalizeReason::AgentFinished,
+                                true,
                                 ctx,
                             )
                         })

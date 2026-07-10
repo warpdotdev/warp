@@ -21,7 +21,8 @@ use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, BlocklistAIPermissions, QueuedQueryModel, SerializedBlockListItem,
+    BlocklistAIHistoryModel, BlocklistAIPermissions, QueuedQueryModel, RecordingController,
+    SerializedBlockListItem,
 };
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -116,6 +117,11 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(OrchestrationEventStreamer::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(BlocklistAIPermissions::new);
+    // Mirror production (see `app/src/lib.rs`), which always registers the
+    // recording controller. The conversation-cancellation path claims it, so
+    // tests that cancel a conversation would otherwise panic on the missing
+    // singleton.
+    app.add_singleton_model(|_| RecordingController::new());
     app.add_singleton_model(AgentNotificationsModel::new);
     app.add_singleton_model(UndoCloseStack::new);
 
