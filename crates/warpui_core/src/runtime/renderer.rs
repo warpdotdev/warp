@@ -21,6 +21,7 @@
 use std::io::{self, Write};
 
 use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::buffer::CellWidth;
 use ratatui::crossterm::queue;
 use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::Position;
@@ -82,7 +83,27 @@ impl TuiFrameRenderer {
                 .expect("previous buffer present when not repainting")
         };
 
-        backend.draw(baseline.diff(buffer).into_iter())?;
+        // Emit the per-cell diff in runs that never span a wide grapheme.
+        //
+        // `CrosstermBackend::draw` suppresses the cursor `MoveTo` for a cell
+        // whose column is exactly one past the previously written cell, assuming
+        // every printed cell advances the cursor by a single column. A width-2
+        // grapheme advances it by two, so the cell the diff emits at
+        // `wide_x + 1` (the trailing-clear cell it writes after an emoji that
+        // carries a VS16 variation selector, e.g. `⚠️`) would be printed one
+        // column too far right — shifting it and the rest of the run and leaving
+        // stray glyphs behind that later partial diffs never repair. Ending the
+        // current `draw` batch after each wide grapheme resets the backend's
+        // cursor tracking, so the following cell gets a fresh, correct `MoveTo`.
+        let diff = baseline.diff(buffer);
+        let mut batch_start = 0;
+        for index in 0..diff.len() {
+            let is_wide = diff[index].2.cell_width() > 1;
+            if is_wide || index + 1 == diff.len() {
+                backend.draw(diff[batch_start..=index].iter().copied())?;
+                batch_start = index + 1;
+            }
+        }
 
         match cursor_position {
             Some((x, y)) => {

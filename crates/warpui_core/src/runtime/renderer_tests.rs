@@ -1,7 +1,7 @@
 use ratatui::style::Color;
 
 use super::TuiFrameRenderer;
-use crate::elements::tui::{TuiBuffer, TuiRect, TuiStyle};
+use crate::elements::tui::{TuiBuffer, TuiBufferExt, TuiRect, TuiStyle};
 
 /// Builds a single-row buffer from `line`, sized to the line's column width.
 fn line_buffer(line: &str) -> TuiBuffer {
@@ -115,6 +115,105 @@ fn styled_run_changes_byte_stream() {
     assert_ne!(
         styled, plain,
         "a foreground color should change the byte stream"
+    );
+}
+
+/// Replays the CSI byte stream `output` onto a fresh single-row screen buffer so
+/// a test can assert what a terminal would actually display. Only the sequences
+/// `TuiFrameRenderer` emits that affect glyph placement are interpreted — cursor
+/// `MoveTo` (`ESC [ y ; x H`) and full-screen clear (`ESC [ 2 J`); styling and
+/// synchronized-update sequences are skipped. Printed runs are written with
+/// `set_stringn`, which applies ratatui's own grapheme/width handling, so a wide
+/// grapheme occupies the correct number of columns.
+fn render_to_screen(output: &str, width: u16) -> TuiBuffer {
+    let mut screen = TuiBuffer::empty(TuiRect::new(0, 0, width, 1));
+    let (mut cx, mut cy) = (0u16, 0u16);
+    let chars: Vec<char> = output.chars().collect();
+    let mut run = String::new();
+    let mut i = 0;
+    let flush = |screen: &mut TuiBuffer, run: &mut String, cx: u16, cy: u16| {
+        if !run.is_empty() {
+            let max_width = usize::from(width.saturating_sub(cx));
+            screen.set_stringn(cx, cy, run.as_str(), max_width, TuiStyle::default());
+            run.clear();
+        }
+    };
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch != '\u{1b}' {
+            run.push(ch);
+            i += 1;
+            continue;
+        }
+        flush(&mut screen, &mut run, cx, cy);
+        // Parse a CSI sequence: ESC '[' params final-byte.
+        i += 1;
+        if i >= chars.len() || chars[i] != '[' {
+            continue;
+        }
+        i += 1;
+        let mut params = String::new();
+        while i < chars.len() && !('@'..='~').contains(&chars[i]) {
+            params.push(chars[i]);
+            i += 1;
+        }
+        let final_byte = chars.get(i).copied().unwrap_or('\0');
+        i += 1;
+        match final_byte {
+            'H' => {
+                let mut parts = params.split(';');
+                let y = parts.next().and_then(|s| s.parse().ok()).unwrap_or(1u16);
+                let x = parts.next().and_then(|s| s.parse().ok()).unwrap_or(1u16);
+                cy = y.saturating_sub(1);
+                cx = x.saturating_sub(1);
+            }
+            'J' if params.contains('2') => {
+                screen = TuiBuffer::empty(TuiRect::new(0, 0, width, 1));
+                cx = 0;
+                cy = 0;
+            }
+            _ => {}
+        }
+    }
+    flush(&mut screen, &mut run, cx, cy);
+    screen
+}
+
+/// The column of the first cell in the single-row `screen` whose symbol equals
+/// `glyph`, if any.
+fn column_of(screen: &TuiBuffer, glyph: &str) -> Option<u16> {
+    let area = screen.area;
+    (0..area.width).find(|&col| screen[(area.x + col, area.y)].symbol() == glyph)
+}
+
+#[test]
+fn wide_grapheme_does_not_shift_following_cells() {
+    // Regression test for stray/stale characters in a scrolled TUI transcript.
+    //
+    // A VS16 emoji (⌨️ = U+2328 U+FE0F, display width 2) makes the buffer diff
+    // emit an explicit trailing-clear cell at `wide_x + 1`. The crossterm
+    // backend's "the cursor already advanced by one column" optimization would
+    // then suppress the needed cursor move and print that cell — and everything
+    // after it on the line — one column too far right, so the `g` following the
+    // emoji lands on column 3 instead of 2. Because scrolling only redraws the
+    // per-frame diff (no full repaint), the misplaced glyph is never repaired
+    // and sticks around. The renderer must keep the following cells on their
+    // intended columns.
+    let mut renderer = TuiFrameRenderer::new();
+    let _ = draw_to_string(&mut renderer, &line_buffer("ABCDE"));
+
+    // Same size as the previous frame, so this is an incremental diff, not a
+    // full repaint: emoji at column 0 (spans 0..=1), then `g`, `Y`, `Z`.
+    let mut next = TuiBuffer::empty(TuiRect::new(0, 0, 5, 1));
+    next.set_stringn(0, 0, "\u{2328}\u{fe0f}gYZ", 5, TuiStyle::default());
+    let output = draw_to_string(&mut renderer, &next);
+
+    let screen = render_to_screen(&output, 5);
+    assert_eq!(
+        column_of(&screen, "g"),
+        Some(2),
+        "the glyph after a wide VS16 emoji must stay on column 2, not shift right; rendered screen: {:?}",
+        screen.to_lines(),
     );
 }
 
