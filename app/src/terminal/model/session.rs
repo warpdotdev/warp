@@ -48,9 +48,13 @@ use crate::terminal::warpify::SubshellSource;
 use crate::terminal::{History, ShellHost, ShellLaunchData};
 
 #[derive(thiserror::Error, Debug)]
-// Each variant names a distinct read failure, so the shared `Error` suffix is intentional.
-#[allow(clippy::enum_variant_names)]
+#[allow(
+    clippy::enum_variant_names,
+    reason = "Each variant names a distinct read failure, so the shared `Error` suffix is intentional."
+)]
 enum ReadHistoryContentsError {
+    /// Intentionally omit this source anyhow error as it may contain stderr contents which can be
+    /// lengthy.
     #[cfg(windows)]
     #[error("Error running PowerShell commands to read history file")]
     PowerShellError(anyhow::Error),
@@ -1433,7 +1437,7 @@ impl Session {
                 Ok(result) => return Ok(result),
                 Err(e) => e,
             };
-        log::error!("{powershell_error:#}");
+        log::error!("{powershell_error:?}");
         report_error!(&powershell_error);
 
         // If Kaspersky is running, early return since we can't use [`async_fs`] to read the history
@@ -1443,41 +1447,12 @@ impl Session {
         }
 
         // Otherwise, fall back to using [`async_fs`] to read the history file.
-        match async_fs::read(history_file).await {
-            Ok(contents) => {
-                // Report this error so we have some data on whether this method of running
-                // PowerShell commands is reliable. If this turns out to be noisy, we can remove
-                // this log line.
-                log::warn!(
-                    "Failed to read history using PowerShell commands: {powershell_error:?}"
-                );
-                #[cfg(feature = "crash_reporting")]
-                sentry::with_scope(
-                    |scope| {
-                        let mut context = std::collections::BTreeMap::new();
-                        context.insert(
-                            "powershell_error".to_string(),
-                            format!("{powershell_error:?}").into(),
-                        );
-                        scope.set_context(
-                            "powershell_history",
-                            sentry::protocol::Context::Other(context),
-                        );
-                    },
-                    || {
-                        sentry::capture_message(
-                            "Failed to read history using PowerShell commands",
-                            sentry::Level::Error,
-                        )
-                    },
-                );
-                Ok(contents)
-            }
-            Err(e) => Err(ReadHistoryContentsError::PowerShellAndAsyncFsError {
+        async_fs::read(history_file).await.map_err(|e| {
+            ReadHistoryContentsError::PowerShellAndAsyncFsError {
                 powershell_error,
                 async_fs_error: e,
-            }),
-        }
+            }
+        })
     }
 
     #[cfg(windows)]
