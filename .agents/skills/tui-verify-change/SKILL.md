@@ -131,20 +131,18 @@ if the expected text isn't in the capture, the change isn't rendering.
 
 - **Run it in a real terminal / tmux pane** (a PTY), and drive + capture it via
   tmux as above.
-- **If it renders one frame then exits (code 101) a second later:** that is
-  almost always a **debug-build binding-validation panic**, *not* a terminal or
-  stdin problem. The debug-only validator in
-  `crates/warpui_core/src/keymap/matcher.rs` (`validate_bindings`, gated on
-  `#[cfg(debug_assertions)]`) panics when a keybinding leaks across surfaces —
-  e.g. a GUI binding whose context predicate matches a TUI keymap context without
-  being TUI-owned. Confirm it by checking the TUI log for
-  `panicked at 'Bindings failed validation'`:
-
-  ```bash
-  tail -40 ~/.local/state/warp-terminal-tui/oz/warp-tui.log
-  ```
-
-  Two ways to still verify a change when you hit this:
+- **If it exits (code 101) right after the first frame instead of staying up:**
+  don't assume it's a terminal/stdin problem — **check the TUI log first**:
+  `tail -40 ~/.local/state/warp-terminal-tui/oz/warp-tui.log`. One cause seen in
+  the headless OSS/logged-out sandbox build is a debug-only binding-validation
+  panic: `crates/warpui_core/src/keymap/matcher.rs` (`validate_bindings`, gated on
+  `#[cfg(debug_assertions)]`) panics with `Bindings failed validation` when a
+  *keystroke* binding matches a TUI keymap context without being TUI-owned (it was
+  `app:reopen_closed_session`, Ctrl+Alt+T). It does **not** reproduce in every
+  setup — it depends on which keystroke bindings the running config loads, and the
+  validator exempts non-keystroke (palette/custom) triggers — so treat this as one
+  thing to check, not a guarantee. If you hit it, two ways to still verify a
+  change:
   - **Build `--release`** — the validator is compiled out, so the TUI stays up
     and you can `send-keys`/`capture-pane` freely:
     `cargo build --release -p warp_tui --bin warp-tui-oss` then run
