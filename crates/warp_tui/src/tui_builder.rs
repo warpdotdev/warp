@@ -163,11 +163,10 @@ impl TuiUiBuilder {
         TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
     }
 
-    /// The warping indicator's base fill (spinner glyph and "Warping" text):
-    /// the terminal palette's normal cyan, matching the design's lilac accent
-    /// while remaining derived from the active theme.
+    /// The warping indicator's base fill: the terminal palette's bright
+    /// magenta, corresponding to the design's Lilac-200.
     fn warping_base_fill(&self) -> ThemeFill {
-        ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan)
+        ThemeFill::from(self.warp_theme.terminal_colors().bright.magenta)
     }
 
     /// The warping indicator's base color as a solid color, for per-glyph
@@ -176,11 +175,12 @@ impl TuiUiBuilder {
         self.warping_base_fill().into_solid()
     }
 
-    /// The peak color the "Warping" shimmer band lerps toward: the theme
-    /// foreground, the highest-contrast color over the theme's background
-    /// (the palette's bright white would vanish on light backgrounds).
+    /// The peak color the "Warping" shimmer band lerps toward: a theme text
+    /// color selected for contrast against the resolved terminal background.
     pub(crate) fn warping_shimmer_color(&self) -> ColorU {
-        self.warp_theme.foreground().into_solid()
+        self.warp_theme
+            .font_color(self.base_background())
+            .into_solid()
     }
 
     /// Style for the warping indicator's spinner glyph.

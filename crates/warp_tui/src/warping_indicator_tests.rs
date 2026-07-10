@@ -1,11 +1,13 @@
 use std::time::Duration;
 
 use warp::appearance::Appearance;
-use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::elements::shimmer_math::ShimmerConfig;
+use warpui_core::elements::tui::{Color, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::App;
 
 use super::{render_warping_indicator, SPINNER_TIMELINE};
+use crate::tui_builder::TuiUiBuilder;
 
 #[test]
 fn spinner_follows_the_prototype_choreography() {
@@ -23,18 +25,15 @@ fn spinner_follows_the_prototype_choreography() {
     // ...then a rest at vertical before the fast spins...
     assert_eq!(frame_at(1600), "⋮");
     assert_eq!(frame_at(1799), "⋮");
-    // ...then fast spins right (540°, three glyph cycles) at 50ms per 45°
-    // step.
+    // ...then fast spins right at 80ms per 45° step.
     assert_eq!(frame_at(1800), "⋰");
-    assert_eq!(frame_at(1850), "⋯");
-    assert_eq!(frame_at(1900), "⋱");
-    assert_eq!(frame_at(1950), "⋮");
-    assert_eq!(frame_at(2200), "⋰");
-    assert_eq!(frame_at(2300), "⋱");
-    // The choreography loops from its full period
-    // (8*200 + 200 + 11*50 = 2350ms), the restarting `⋮` completing the
-    // final spin.
-    assert_eq!(frame_at(2350), "⋮");
+    assert_eq!(frame_at(1880), "⋯");
+    assert_eq!(frame_at(1960), "⋱");
+    assert_eq!(frame_at(2040), "⋮");
+    assert_eq!(frame_at(2200), "⋯");
+    assert_eq!(frame_at(2600), "⋱");
+    // The restarting `⋮` completes the final spin at the loop boundary.
+    assert_eq!(frame_at(2680), "⋮");
     // Each frame holds for its full duration.
     assert_eq!(frame_at(199), "⋮");
 }
@@ -63,12 +62,32 @@ fn renders_the_indicator_row_and_requests_a_repaint() {
                 "unexpected spinner glyph in row: {line:?}"
             );
             assert!(
-                line.contains(" Warping (0s)"),
+                line.contains(" Warping... (0s)"),
                 "unexpected indicator row: {line:?}"
             );
 
             // The animated row must schedule the next repaint.
             assert!(frame.repaint_at.is_some());
+        });
+    });
+}
+
+#[test]
+fn shimmer_only_applies_to_the_warping_label() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        app.read(|app_ctx| {
+            let config = ShimmerConfig::default();
+            let element = render_warping_indicator(config.period / 2, app_ctx);
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(element, TuiRect::new(0, 0, 20, 1), app_ctx);
+
+            let base = TuiUiBuilder::from_app(app_ctx).warping_base_color();
+            let base = Color::Rgb(base.r, base.g, base.b);
+            assert_eq!(frame.buffer[(0, 0)].fg, base);
+            assert_ne!(frame.buffer[(5, 0)].fg, base);
         });
     });
 }
