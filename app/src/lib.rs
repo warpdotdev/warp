@@ -422,8 +422,10 @@ pub(crate) enum LaunchMode {
         /// this mode.
         mount: TuiMountFn,
         /// API key for server authentication, if provided via `--api-key` or
-        /// `WARP_API_KEY`. Only used on dogfood channels (mirrors `App`); lets
-        /// the TUI log in non-interactively instead of the device-auth flow.
+        /// `WARP_API_KEY`. Populated by `run_internal` (after feature flags are
+        /// initialized), not by `run_tui`. Only used on dogfood channels
+        /// (mirrors `App`); lets the TUI log in non-interactively instead of the
+        /// device-auth flow.
         api_key: Option<String>,
     },
 }
@@ -853,17 +855,14 @@ pub fn run_integration_test(driver: TestDriver) -> Result<()> {
 /// `warp_tui`.
 #[cfg(feature = "tui")]
 pub fn run_tui(mount: TuiMountFn) -> Result<()> {
-    // Feature flags must be initialized before parsing args, because
-    // `Args::from_env` checks feature flags (e.g. `CloudEnvironments`) while
-    // building its clap command. `run_internal` also initializes them, but that
-    // runs after this parse. `init_feature_flags` is idempotent.
-    features::init_feature_flags();
-    // Parse `--api-key` / `WARP_API_KEY` so the TUI can authenticate
-    // non-interactively on dogfood channels, mirroring the GUI (`run`). Worker
-    // invocations are dispatched earlier (see `run_tui_worker_if_requested`), so
-    // by here the argv is a normal TUI launch.
-    let api_key = warp_cli::Args::from_env().api_key().cloned();
-    run_internal(LaunchMode::Tui { mount, api_key })
+    // The `--api-key` / `WARP_API_KEY` value is parsed later in `run_internal`,
+    // after feature flags are initialized (`Args::from_env` checks feature flags
+    // while building its clap command). Parsing there rather than here avoids a
+    // redundant feature-flag init.
+    run_internal(LaunchMode::Tui {
+        mount,
+        api_key: None,
+    })
 }
 
 /// Dispatches a worker command when the current executable was re-invoked for one.
@@ -913,6 +912,16 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // The `run` function already initializes feature flags, but ensure they're initialized here
     // for other entrypoints.
     features::init_feature_flags();
+
+    // Now that feature flags are initialized, parse the TUI's `--api-key` /
+    // `WARP_API_KEY` (`Args::from_env` checks feature flags while building its
+    // clap command). Done here rather than in `run_tui` so we don't re-init
+    // feature flags just to parse args. Worker invocations are dispatched before
+    // `run_tui`, so the argv here is a normal TUI launch.
+    #[cfg(feature = "tui")]
+    if let LaunchMode::Tui { api_key, .. } = &mut launch_mode {
+        *api_key = warp_cli::Args::from_env().api_key().cloned();
+    }
 
     #[cfg(feature = "crash_reporting")]
     if launch_mode.needs_crash_reporting() {
