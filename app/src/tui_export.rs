@@ -36,7 +36,7 @@ pub use crate::ai::blocklist::diff_storage::{
 pub use crate::ai::blocklist::diff_types::{changed_lines_from_op, DiffSessionType, FileDiff};
 pub use crate::ai::blocklist::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
-    ConversationStatusUpdate, LoadOzConversationError,
+    ConversationStatusUpdate,
 };
 pub use crate::ai::blocklist::view_util::format_credits;
 pub use crate::ai::blocklist::{

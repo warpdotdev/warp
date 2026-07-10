@@ -76,13 +76,7 @@ Figma: none provided.
 
 ### Errors and cancellation
 
-21. Restoration failures are visible and actionable. The TUI distinguishes at least:
-    - A malformed token.
-    - A conversation that cannot be found locally or on the server.
-    - Offline or network failure when no local copy is available.
-    - Authentication or authorization failure.
-    - Corrupt or unsupported conversation data.
-    - A conversation created by a non-Oz harness.
+21. Restoration failures are visible and do not expose an interactive empty conversation. Malformed tokens are rejected before launch, non-Oz conversations receive an explicit unsupported-harness message, and other loading failures use the same generic failure semantics as the GUI conversation loader.
 
 22. A restoration error never silently falls back to a new conversation and never sends a prompt.
 

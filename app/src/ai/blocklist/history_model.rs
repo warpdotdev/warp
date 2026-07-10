@@ -50,10 +50,9 @@ use crate::ui_components::icons::Icon;
 use crate::GlobalResourceHandlesProvider;
 
 mod conversation_loader;
-#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use conversation_loader::{
     convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,
-    CLIAgentConversation, CloudConversationData, LoadOzConversationError,
+    CLIAgentConversation, CloudConversationData,
 };
 use warp_errors::report_error;
 

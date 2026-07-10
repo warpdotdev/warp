@@ -18,11 +18,11 @@ use warp::tui_export::{
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CLISubagentEvent,
     CancellationReason, ChangelogModel, ChangelogModelEvent, ChangelogRequestType,
-    CommandExecutionSource, ConversationSelection, ConversationSelectionHandle,
-    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
-    GitRepoStatusModel, GitStatusMetadata, LLMPreferences, LLMPreferencesEvent, ModelEvent,
-    LoadOzConversationError, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent,
-    RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
+    CloudConversationData, CommandExecutionSource, ConversationSelection,
+    ConversationSelectionHandle, ConversationUsageTotals, ExecuteCommandEvent,
+    GetRelevantFilesController, GitRepoModels, GitRepoStatusModel, GitStatusMetadata,
+    LLMPreferences, LLMPreferencesEvent, ModelEvent, ParsedSlashCommandInput, PtyIntent,
+    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
     ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
     SlashCommandSelectionBehavior, StaticCommand, TerminalModel, TerminalSurface,
     TerminalSurfaceInit, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
@@ -146,40 +146,6 @@ enum ConversationRestoreState {
     Idle,
     Loading,
     Failed(String),
-}
-
-fn conversation_restore_error_message(error: &LoadOzConversationError) -> String {
-    match error {
-        LoadOzConversationError::CloudConversationsDisabled => {
-            "Cloud conversation loading is disabled and no local copy was found.".to_owned()
-        }
-        LoadOzConversationError::LocalConversationUnavailable { .. } => {
-            "The local conversation data could not be loaded.".to_owned()
-        }
-        LoadOzConversationError::ServerRequest(error) => {
-            let message = error.to_string().to_lowercase();
-            if message.contains("not found") {
-                "The conversation could not be found.".to_owned()
-            } else if message.contains("unauthorized")
-                || message.contains("forbidden")
-                || message.contains("permission")
-                || message.contains("access")
-            {
-                "You do not have permission to open this conversation.".to_owned()
-            } else {
-                "The conversation could not be loaded from the server.".to_owned()
-            }
-        }
-        LoadOzConversationError::ConversionFailed => {
-            "The conversation data could not be restored.".to_owned()
-        }
-        LoadOzConversationError::UnsupportedHarness(_) => {
-            "The Warp TUI only supports Oz/Warp conversations.".to_owned()
-        }
-        LoadOzConversationError::UnknownHarness => {
-            "The conversation uses an unknown agent harness.".to_owned()
-        }
-    }
 }
 
 /// Typed actions handled by [`TuiTerminalSessionView`].
@@ -626,10 +592,10 @@ impl TuiTerminalSessionView {
 
         let requested_token = server_token.clone();
         let future = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            history.load_oz_conversation_by_server_token(&server_token, ctx)
+            history.load_conversation_by_server_token(&server_token, ctx)
         });
         ctx.spawn(future, move |view, result, ctx| match result {
-            Ok(conversation) => {
+            Some(CloudConversationData::Oz(conversation)) => {
                 if conversation.server_conversation_token() != Some(&requested_token) {
                     view.fail_conversation_restore(
                         "The restored conversation did not match the requested token.".to_owned(),
@@ -639,8 +605,17 @@ impl TuiTerminalSessionView {
                 }
                 view.finish_conversation_restore(*conversation, origin, ctx);
             }
-            Err(error) => {
-                view.fail_conversation_restore(conversation_restore_error_message(&error), ctx);
+            Some(CloudConversationData::CLIAgent(_)) => {
+                view.fail_conversation_restore(
+                    "The Warp TUI only supports Oz/Warp conversations.".to_owned(),
+                    ctx,
+                );
+            }
+            None => {
+                view.fail_conversation_restore(
+                    "The conversation could not be loaded.".to_owned(),
+                    ctx,
+                );
             }
         });
     }

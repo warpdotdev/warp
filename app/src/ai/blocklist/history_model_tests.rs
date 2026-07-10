@@ -257,36 +257,6 @@ fn begin_conversation_rename_updates_title_and_cached_metadata() {
 }
 
 #[test]
-fn test_load_oz_conversation_by_server_token_prefers_loaded_conversation() {
-    App::test((), |mut app| async move {
-        let history_model =
-            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-        let terminal_view_id = EntityId::new();
-        let token = ServerConversationToken::new(Uuid::new_v4().to_string());
-
-        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
-            let conversation_id =
-                history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
-            history_model.set_server_conversation_token_for_conversation(
-                conversation_id,
-                token.as_str().to_owned(),
-            );
-            conversation_id
-        });
-
-        let future = history_model.update(&mut app, |history_model, ctx| {
-            history_model.load_oz_conversation_by_server_token(&token, ctx)
-        });
-        let loaded = future
-            .await
-            .expect("loaded conversation should be returned without a server fetch");
-
-        assert_eq!(loaded.id(), conversation_id);
-        assert_eq!(loaded.server_conversation_token(), Some(&token));
-    });
-}
-
-#[test]
 fn begin_conversation_rename_rejects_conversation_without_server_token() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);

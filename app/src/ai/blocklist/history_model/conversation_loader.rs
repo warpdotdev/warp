@@ -51,23 +51,6 @@ pub enum CloudConversationData {
     CLIAgent(Box<CLIAgentConversation>),
 }
 
-/// Errors surfaced while loading an Oz conversation by server token.
-#[derive(Debug, thiserror::Error)]
-pub enum LoadOzConversationError {
-    #[error("cloud conversation loading is disabled")]
-    CloudConversationsDisabled,
-    #[error("conversation {conversation_id} was unavailable in local persistence")]
-    LocalConversationUnavailable { conversation_id: AIConversationId },
-    #[error("failed to fetch the conversation from the server: {0:#}")]
-    ServerRequest(#[source] anyhow::Error),
-    #[error("failed to convert the server conversation into a local conversation")]
-    ConversionFailed,
-    #[error("the conversation uses the unsupported {0:?} harness")]
-    UnsupportedHarness(AIAgentHarness),
-    #[error("the server returned an unknown conversation harness")]
-    UnknownHarness,
-}
-
 /// Converts an `AgentConversation` from the database to an `AIConversation`.
 /// This utility function extracts the conversion logic that was originally embedded
 /// in the terminal view restoration process.
@@ -115,22 +98,6 @@ pub fn convert_persisted_conversation_to_ai_conversation_with_metadata(
         Err(e) => {
             log::warn!("Failed to convert persisted conversation to AIConversation: {e:?}");
             None
-        }
-    }
-}
-
-fn box_oz_future<F>(
-    f: F,
-) -> warpui::r#async::BoxFuture<'static, Result<Box<AIConversation>, LoadOzConversationError>>
-where
-    F: Future<Output = Result<Box<AIConversation>, LoadOzConversationError>>
-        + warpui::r#async::Spawnable,
-{
-    cfg_if::cfg_if! {
-        if #[cfg(target_family = "wasm")] {
-            f.boxed_local()
-        } else {
-            f.boxed()
         }
     }
 }
@@ -253,62 +220,6 @@ impl AIConversationMetadata {
 }
 
 impl BlocklistAIHistoryModel {
-    /// Loads an Oz conversation by server token, preferring local data.
-    pub fn load_oz_conversation_by_server_token(
-        &mut self,
-        server_token: &ServerConversationToken,
-        ctx: &AppContext,
-    ) -> warpui::r#async::BoxFuture<'static, Result<Box<AIConversation>, LoadOzConversationError>>
-    {
-        let conversation_id =
-            self.get_or_set_canonical_conversation_id_for_server_token(server_token);
-        if let Some(conversation) = self.conversations_by_id.get(&conversation_id) {
-            return box_oz_future(futures::future::ready(Ok(Box::new(conversation.clone()))));
-        }
-
-        if self
-            .all_conversations_metadata
-            .get(&conversation_id)
-            .is_some_and(|metadata| metadata.has_local_data)
-        {
-            let result = self
-                .load_conversation_from_db(&conversation_id)
-                .map(Box::new)
-                .ok_or(LoadOzConversationError::LocalConversationUnavailable { conversation_id });
-            return box_oz_future(futures::future::ready(result));
-        }
-
-        if !FeatureFlag::CloudConversations.is_enabled() {
-            return box_oz_future(futures::future::ready(Err(
-                LoadOzConversationError::CloudConversationsDisabled,
-            )));
-        }
-
-        let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let server_token = server_token.clone();
-        box_oz_future(async move {
-            let (conversation_data, server_metadata) = server_api
-                .get_ai_conversation(server_token)
-                .await
-                .map_err(LoadOzConversationError::ServerRequest)?;
-            match server_metadata.harness {
-                AIAgentHarness::Oz => convert_conversation_data_to_ai_conversation(
-                    conversation_id,
-                    &conversation_data,
-                    server_metadata,
-                    RestorationMode::Continue,
-                )
-                .map(Box::new)
-                .ok_or(LoadOzConversationError::ConversionFailed),
-                harness @ (AIAgentHarness::ClaudeCode
-                | AIAgentHarness::Gemini
-                | AIAgentHarness::Codex) => {
-                    Err(LoadOzConversationError::UnsupportedHarness(harness))
-                }
-                AIAgentHarness::Unknown => Err(LoadOzConversationError::UnknownHarness),
-            }
-        })
-    }
     /// Loads conversation data from the appropriate source (DB or server).
     ///
     /// This method automatically determines whether to load from the local database or
