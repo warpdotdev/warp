@@ -836,7 +836,7 @@ fn task_list_renders_header_and_status_glyph_rows() {
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
                 vec![
-                    "☰ Tasks 4 ▾",
+                    "≡ Tasks 4 ▾",
                     "  ✓ Compile list",
                     "  • Determine duplications",
                     "  ◌ Create suggestions",
@@ -885,7 +885,7 @@ fn task_list_collapse_override_hides_rows() {
                 app_ctx,
             );
             let lines = frame.buffer.to_lines();
-            assert_eq!(lines[0].trim_end(), "☰ Tasks 1 ▸");
+            assert_eq!(lines[0].trim_end(), "≡ Tasks 1 ▸");
             assert!(lines.iter().all(|line| !line.contains("Compile list")));
         });
     });
@@ -923,8 +923,8 @@ fn task_list_header_hover_underlines_only_the_label() {
                 app_ctx,
             );
 
-            // Re-render hovered: `☰ Tasks 1 ▾` underlines exactly the label's
-            // cells — not the ☰ glyph, the chevron, or trailing cells. The
+            // Re-render hovered: `≡ Tasks 1 ▾` underlines exactly the label's
+            // cells — not the ≡ glyph, the chevron, or trailing cells. The
             // label's start column is located from the buffer since the
             // glyph's cell width varies by rendering backend.
             let mut presenter = TuiPresenter::new();
@@ -933,7 +933,7 @@ fn task_list_header_hover_underlines_only_the_label() {
                 area,
                 app_ctx,
             );
-            assert_eq!(frame.buffer.to_lines()[0].trim_end(), "☰ Tasks 1 ▾");
+            assert_eq!(frame.buffer.to_lines()[0].trim_end(), "≡ Tasks 1 ▾");
             let label_start = (0..40u16)
                 .find(|&x| frame.buffer[(x, 0)].symbol() == "T")
                 .expect("the header row contains the label");
@@ -994,7 +994,7 @@ fn task_list_without_conversation_state_falls_back_to_cancelled() {
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
             let rendered = render_block_lines(block, 40, app_ctx);
-            assert_eq!(rendered[0], "☰ Tasks 1 ▾");
+            assert_eq!(rendered[0], "≡ Tasks 1 ▾");
             assert_eq!(rendered[1], "  ■ orphaned task");
         });
     });

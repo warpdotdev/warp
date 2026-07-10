@@ -26,8 +26,9 @@ use crate::tui_builder::TuiUiBuilder;
 
 const INPUT_PREFIX: &str = "≫ ";
 
-/// Leading glyph on the task-list header, per the TUI Figma design.
-const TASK_LIST_HEADER_GLYPH: &str = "☰";
+/// Task-list header glyph. Visually interchangeable with the design's `☰`,
+/// whose inconsistent cell width across terminals leaves ghost cells behind.
+const TASK_LIST_HEADER_GLYPH: &str = "≡";
 
 /// Renders the input section: the user's submitted query on a highlighted
 /// background with a `≫` prompt marker.
@@ -226,7 +227,7 @@ fn render_collapsible_message_section(
 }
 
 /// Renders the agent's task list as a collapsible block: a bold
-/// `☰ Tasks N` header (prominent, unlike the muted thinking header, per the
+/// `≡ Tasks N` header (prominent, unlike the muted thinking header, per the
 /// TUI Figma design) over one status row per task. Statuses are resolved by
 /// the caller from the conversation's todo history; like tool-call rows,
 /// state lives in each row's glyph.
