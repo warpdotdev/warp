@@ -112,7 +112,7 @@ The transcript view owns the selectable region. `TuiTerminalSessionView` owns cr
 1. The viewport ends the gesture and orders anchor/focus.
 2. It requests selected row windows through `TuiViewportedElement::selection_content`.
 3. Rows are rendered with the viewport's canonical clipping helper, scraped by cell width, trimmed, and joined with newlines.
-4. `Completed(Some(text))` dispatches `CopyTranscriptSelection`.
+4. `Completed(Some(text))` dispatches `TranscriptSelectionEnded`.
 5. The session writes OSC 52 clipboard and PRIMARY targets and shows the success hint (`crates/warp_tui/src/clipboard.rs`, `crates/warp_tui/src/transient_hint.rs`).
 
 ## Content updates and invalidation
@@ -141,10 +141,11 @@ Conversation removal obtains the rich-content row range before deletion and appl
 Focused viewport tests in `crates/warpui_core/src/elements/tui/viewported_list_tests.rs` cover:
 
 - linear highlight and copy;
+- edge-drag selection into newly scrolled rows;
 - first-mouse suppression;
 - selection persistence through wheel scrolling;
-- canonical viewport clamping and bottom alignment;
-- child interaction dispatch.
+- reverse-video modifier toggling;
+- canonical viewport clamping, bottom alignment, and resolved geometry.
 
 Selection-state tests in `crates/warpui_core/src/elements/tui/selectable/state_tests.rs` cover cumulative resize rebasing.
 
@@ -152,7 +153,6 @@ Warp TUI tests cover:
 
 - read-only transcript row extraction and explicit resize reporting (`tui_block_list_viewport_source_tests.rs`);
 - input selection clearing (`input/view_tests.rs`);
-- transcript rendering and lifecycle behavior (`transcript_view_tests.rs`);
 - OSC 52 and tmux encoding (`clipboard_tests.rs`);
 - transient success hints (`transient_hint_tests.rs`).
 
@@ -160,7 +160,7 @@ Before submission run:
 
 - `./script/format`
 - `cargo test -p warpui_core --lib --features tui viewported_list`
-- `cargo test -p warpui_core --lib --features tui selectable::tests`
+- `cargo test -p warpui_core --lib --features tui selectable::state::tests`
 - `cargo nextest run -p warp_tui`
 - focused Clippy for `warpui_core` and `warp_tui` with warnings denied
 

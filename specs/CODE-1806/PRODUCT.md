@@ -22,7 +22,7 @@ Figma: none provided. Selection highlight uses the terminal-native treatment (re
 
 4. A triple-click selects the full visual row under the pointer. Dragging after a triple-click extends the selection by whole rows.
 
-5. Dragging beyond the transcript's top or bottom edge auto-scrolls the transcript in that direction and continues extending the selection while the button is held. Dragging left/right of the transcript clamps to the first/last column of the row under the pointer.
+5. Continuing to drag beyond the transcript's top or bottom edge auto-scrolls the transcript in that direction and extends the selection. Dragging left/right of the transcript clamps to the first/last column of the row under the pointer.
 
 6. A selection can span more rows than fit on screen: content that scrolls out of view during the drag remains part of the selection and is included in the copy.
 
@@ -30,15 +30,15 @@ Figma: none provided. Selection highlight uses the terminal-native treatment (re
 
 8. The very first click that gives the TUI's host terminal window focus does not start a selection (matching the input editor).
 
-9. After the mouse is released, the selection highlight remains visible (until cleared per invariants 13–16). Auto-follow, mouse-wheel scrolling, page navigation, and drag-to-select autoscrolling preserve the absolute selection anchors, even if selected rows move or leave the visible viewport. The highlight disappears while selected rows are off-screen and reappears when they return.
+9. After the mouse is released, the selection highlight remains visible (until cleared per invariants 13–16). Auto-follow, mouse-wheel scrolling, and drag-to-select autoscrolling preserve the absolute selection anchors, even if selected rows move or leave the visible viewport. The highlight disappears while selected rows are off-screen and reappears when they return.
 
 ### Copying
 
-10. Releasing the mouse button at the end of a non-empty drag immediately copies the selected text to the system clipboard (copy-on-select). No separate copy action is required. The footer's transient-hint slot shows `copied to clipboard` in the success color, then returns to its prior persistent content after the normal transient-hint duration. The ctrl-c exit hint retains higher display priority.
+10. Releasing the mouse button at the end of a non-empty selection gesture — a drag, double-click, or triple-click — immediately copies the selected text to the system clipboard (copy-on-select). No separate copy action is required. The footer's transient-hint slot shows `copied to clipboard` in the success color, then returns to its prior persistent content after the normal transient-hint duration. The ctrl-c exit hint retains higher display priority.
 
 11. Copied text reproduces what is visually selected: one line per selected row, with each row's trailing whitespace removed, rows joined with newlines. Blank rows inside the selection (e.g. spacing between blocks) appear as empty lines. Wide (CJK, emoji) glyphs are copied as their characters, not per-cell fragments.
 
-12. Copy works over SSH and inside tmux: the clipboard write lands on the user's local machine (the terminal they are physically using), not the remote host.
+12. Copy is sent through OSC 52 to the user's terminal, with tmux passthrough when needed, so supported terminals apply the write on the user's local machine even when the TUI runs over SSH. Terminals that disable OSC 52 may ignore the write, and the TUI cannot confirm whether it was accepted.
 
 ### Clearing and invalidation
 
