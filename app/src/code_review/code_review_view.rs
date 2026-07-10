@@ -3557,11 +3557,21 @@ impl CodeReviewView {
                     return comment;
                 };
 
+                // Imported comments store the raw provider diff line, including its
+                // one-char unified-diff marker (`+`/`-`/space); strip it to recover
+                // the file line for matching. Native comments store raw text where a
+                // leading space would be significant indentation, so keep it as-is.
+                let match_text = if comment.origin.is_imported_from_github() {
+                    content.imported_original_text()
+                } else {
+                    content.original_text()
+                };
+
                 let (new_location, new_content, used_fallback) =
                     editor_view.update(ctx, |local_editor, ctx| {
                         local_editor.editor().update(ctx, |editor, ctx| {
                             editor.model.update(ctx, |model, ctx| {
-                                model.get_new_line_location(line, content.original_text(), ctx)
+                                model.get_new_line_location(line, match_text, ctx)
                             })
                         })
                     });
