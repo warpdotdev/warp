@@ -21,13 +21,7 @@ pub fn init(ctx: &mut AppContext) {
         WorkspaceAction::ReopenClosedSession,
     )
     .with_custom_action(CustomAction::ReopenClosedSession)
-    // Scope to the GUI `Workspace` context. This action only applies to the GUI
-    // desktop app, and the shared app init registers it in the headless TUI
-    // process too. Without a predicate it defaults to `Just(true)` (matches every
-    // context), so its default keystroke (`ctrl-alt-t` / `cmd-shift-t`) leaks
-    // into TUI keymap contexts and trips the TUI's debug-only cross-surface
-    // binding validator, panicking the debug TUI at startup. TUI views never
-    // carry the "Workspace" context, so this keeps GUI behavior identical while
-    // excluding the TUI (mirrors the sibling `workspace:*` bindings).
+    // Scope to the GUI `Workspace` context so this binding doesn't leak into the
+    // headless TUI's keymap contexts (mirrors the sibling `workspace:*` bindings).
     .with_context_predicate(id!("Workspace"))]);
 }
