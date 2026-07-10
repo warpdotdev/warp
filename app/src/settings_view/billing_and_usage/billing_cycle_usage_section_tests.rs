@@ -14,26 +14,8 @@ fn summary(start: DateTime<Utc>, end: DateTime<Utc>) -> BillingCycleUsageSummary
     }
 }
 
-fn item_icon(item: &MenuItem<BillingCycleUsageAction>) -> Option<Icon> {
-    match item {
-        MenuItem::Item(fields) => fields.icon(),
-        _ => None,
-    }
-}
-
-fn selected_period_ends(items: &[MenuItem<BillingCycleUsageAction>]) -> Vec<DateTime<Utc>> {
-    items
-        .iter()
-        .filter(|item| item_icon(item) == Some(Icon::Check))
-        .filter_map(|item| match item.item_on_select_action() {
-            Some(BillingCycleUsageAction::SelectPeriod(end)) => *end,
-            _ => None,
-        })
-        .collect()
-}
-
 fn sample_summaries() -> Vec<BillingCycleUsageSummary> {
-    // Newest cycle first, matching server ordering.
+    // Newest cycle first, matching the server ordering the UI relies on.
     vec![
         summary(utc(2026, 6, 27), utc(2026, 7, 27)),
         summary(utc(2026, 5, 27), utc(2026, 6, 27)),
@@ -41,49 +23,67 @@ fn sample_summaries() -> Vec<BillingCycleUsageSummary> {
     ]
 }
 
+/// One item per cycle, each carrying its `SelectPeriod` action, and no per-item
+/// marker icon — the active period is highlighted via the menu's selection
+/// state instead.
 #[test]
-fn checks_most_recent_period_when_none_selected() {
+fn builds_one_plain_item_per_period() {
     let summaries = sample_summaries();
-    let items = build_period_menu_items(&summaries, None);
+    let items = build_period_menu_items(&summaries);
 
     assert_eq!(items.len(), summaries.len());
-    assert_eq!(selected_period_ends(&items), vec![utc(2026, 7, 27)]);
-    assert_eq!(item_icon(&items[0]), Some(Icon::Check));
-    assert_eq!(item_icon(&items[1]), None);
-    assert_eq!(item_icon(&items[2]), None);
-}
-
-#[test]
-fn checks_explicitly_selected_period() {
-    let summaries = sample_summaries();
-    let items = build_period_menu_items(&summaries, Some(utc(2026, 6, 27)));
-
-    assert_eq!(selected_period_ends(&items), vec![utc(2026, 6, 27)]);
-    assert_eq!(item_icon(&items[0]), None);
-    assert_eq!(item_icon(&items[1]), Some(Icon::Check));
-    assert_eq!(item_icon(&items[2]), None);
-}
-
-#[test]
-fn checks_nothing_when_selection_absent() {
-    let summaries = sample_summaries();
-    let items = build_period_menu_items(&summaries, Some(utc(1999, 1, 1)));
-
-    assert!(selected_period_ends(&items).is_empty());
-    assert!(items.iter().all(|item| item_icon(item).is_none()));
-}
-
-#[test]
-fn every_item_keeps_its_select_action() {
-    let summaries = sample_summaries();
-    let items = build_period_menu_items(&summaries, None);
-
     for (item, summary) in items.iter().zip(summaries.iter()) {
-        match item.item_on_select_action() {
-            Some(BillingCycleUsageAction::SelectPeriod(Some(end))) => {
-                assert_eq!(*end, summary.period_end);
+        match item {
+            MenuItem::Item(fields) => {
+                assert_eq!(fields.icon(), None, "items should not carry a marker icon");
+                match fields.on_select_action() {
+                    Some(BillingCycleUsageAction::SelectPeriod(Some(end))) => {
+                        assert_eq!(*end, summary.period_end);
+                    }
+                    other => panic!("expected SelectPeriod action, got {other:?}"),
+                }
             }
-            other => panic!("expected SelectPeriod action, got {other:?}"),
+            other => panic!("expected MenuItem::Item, got {other:?}"),
         }
     }
+}
+
+/// With no explicit selection, the most recent cycle (index 0, shown in the
+/// header by default) is the highlighted row.
+#[test]
+fn selects_most_recent_period_when_none_selected() {
+    let summaries = sample_summaries();
+    assert_eq!(selected_period_index(&summaries, None), Some(0));
+}
+
+/// An explicit selection highlights that period's row.
+#[test]
+fn selects_explicitly_selected_period() {
+    let summaries = sample_summaries();
+    assert_eq!(
+        selected_period_index(&summaries, Some(utc(2026, 6, 27))),
+        Some(1),
+    );
+    assert_eq!(
+        selected_period_index(&summaries, Some(utc(2026, 5, 27))),
+        Some(2),
+    );
+}
+
+/// A selection that's no longer present highlights nothing rather than an
+/// unrelated row.
+#[test]
+fn selects_nothing_when_selection_absent() {
+    let summaries = sample_summaries();
+    assert_eq!(
+        selected_period_index(&summaries, Some(utc(1999, 1, 1))),
+        None
+    );
+}
+
+/// No summaries → nothing to highlight (and no panic on the empty slice).
+#[test]
+fn selects_nothing_when_no_summaries() {
+    assert_eq!(selected_period_index(&[], None), None);
+    assert_eq!(selected_period_index(&[], Some(utc(2026, 7, 27))), None);
 }
