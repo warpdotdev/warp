@@ -282,7 +282,7 @@ impl ModelEventDispatcher {
             session_info,
             spawning_command,
             restored_block_commands,
-            rcfiles_duration_seconds,
+            rcfiles_duration_seconds: _,
         } = event;
 
         let (is_ssh_wrapper_session, session_id, shell_type_name, shell_path) = (
@@ -315,7 +315,6 @@ impl ModelEventDispatcher {
                 *session_info,
                 spawning_command,
                 restored_block_commands,
-                rcfiles_duration_seconds,
                 ctx,
             );
         });
