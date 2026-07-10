@@ -161,56 +161,18 @@ impl TuiBlockListViewportSource {
     ) -> Vec<TuiBlockListHeightChange> {
         let model = self.model.lock();
         let block_list = model.block_list();
-        let mut changes = Vec::with_capacity(line_heights.len());
-        let mut cursor = block_list
-            .block_heights()
-            .cursor::<BlockHeight, BlockHeightSummary>();
-        cursor.seek_clamped(&BlockHeight::from(0.0), SeekBias::Right);
-        while let Some(item) = cursor.item() {
-            let change = match item {
-                BlockHeightItem::RichContent(item) => {
-                    line_heights.get(&item.view_id).map(|height| {
-                        let start = cursor.start().height.as_f64().floor().max(0.0) as usize;
-                        let old_height =
-                            item.last_laid_out_height.as_f64().ceil().max(0.0) as usize;
-                        let new_height = height.as_f64().ceil().max(0.0) as usize;
-                        (start..start.saturating_add(old_height), new_height)
-                    })
-                }
-                BlockHeightItem::Block(_)
-                | BlockHeightItem::Gap(_)
-                | BlockHeightItem::RestoredBlockSeparator { .. }
-                | BlockHeightItem::InlineBanner { .. }
-                | BlockHeightItem::SubshellSeparator { .. } => None,
-            };
-            if let Some(change) = change {
-                changes.push(change);
-            }
-            cursor.next();
-        }
+        let mut changes = line_heights
+            .iter()
+            .filter_map(|(view_id, height)| {
+                let old_rows = block_list.rich_content_row_range(*view_id)?;
+                let new_height = height.as_f64().ceil().max(0.0) as usize;
+                (old_rows.len() != new_height).then_some((old_rows, new_height))
+            })
+            .collect::<Vec<_>>();
+        changes.sort_by_key(|(rows, _)| rows.start);
         changes
     }
 
-    /// Returns the current absolute row range for one rich-content view.
-    pub(super) fn rich_content_row_range(&self, view_id: EntityId) -> Option<Range<usize>> {
-        let model = self.model.lock();
-        let block_list = model.block_list();
-        let mut cursor = block_list
-            .block_heights()
-            .cursor::<BlockHeight, BlockHeightSummary>();
-        cursor.seek_clamped(&BlockHeight::from(0.0), SeekBias::Right);
-        while let Some(item) = cursor.item() {
-            if let BlockHeightItem::RichContent(item) = item {
-                if item.view_id == view_id {
-                    let start = cursor.start().height.as_f64().floor().max(0.0) as usize;
-                    let height = item.last_laid_out_height.as_f64().ceil().max(0.0) as usize;
-                    return Some(start..start.saturating_add(height));
-                }
-            }
-            cursor.next();
-        }
-        None
-    }
 
     fn visible_items_in_window(
         &self,

@@ -6,8 +6,8 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentExchangeId, AIAgentInput, AIBlockModel, AIBlockOutputStatus, AIConversationId,
-    AIRequestType, Appearance, BlockHeightItem, LLMId, OutputStatusUpdateCallback, RichContentItem,
-    RichContentType, ServerOutputId, TerminalModel, UserQueryMode,
+    AIRequestType, Appearance, BlockHeight, BlockHeightItem, LLMId, OutputStatusUpdateCallback,
+    RichContentItem, RichContentType, ServerOutputId, TerminalModel, UserQueryMode,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityId, EntityIdMap, ViewHandle};
@@ -80,6 +80,26 @@ fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
             );
             assert_eq!(size.height, 1);
         });
+    });
+}
+
+#[test]
+fn viewport_layout_omits_unchanged_agent_block_resize() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+        let expected = measured_height(&app, &agent_block);
+        model
+            .lock()
+            .block_list_mut()
+            .update_rich_content_heights_in_lines(&HashMap::from([(
+                agent_block.id(),
+                BlockHeight::from(expected),
+            )]));
+
+        request_top_window(&app, &source, 10);
+
+        assert!(source.take_selection_row_resizes().is_empty());
     });
 }
 

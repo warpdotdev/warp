@@ -22,7 +22,7 @@ Selection is visual/grid-based rather than model-offset-based:
 - gives normal child interactions first refusal on mouse-down;
 - captures drag/up while its selection handle reports an active gesture;
 - expands child-resolved points and stores selection spans in absolute content coordinates;
-- applies child-reported row-resize mappings after layout;
+- clears width-invalid state before child layout and applies actual child-reported row resizes afterward;
 - dispatches selection-start and copy callbacks;
 - asks the child to paint the wrapper-owned selection state after normal rendering.
 
@@ -44,7 +44,7 @@ Because the viewport owns resolved layout and scrolling, it performs the content
 - visible-cell snapshots and glyph validation;
 - reverse-video highlight painting;
 - off-screen selected-row extraction;
-- ordered row-resize mapping after layout.
+- indexed row-range lookup for rich-content blocks whose measured row height actually changed.
 
 The viewport does not create or retain selection state or word policy. It returns content points, row glyphs, and resize mappings to `TuiSelectable` and renders from the handle passed down by the wrapper.
 
@@ -60,7 +60,7 @@ Mouse-wheel and page scrolling preserve absolute selection anchors. Selected row
 - render width;
 - selected-cell glyph snapshots.
 
-The handle clears on width change, removed selected rows, or visible selected glyph mutation. It rebases points and glyph snapshots through ordered row-resize batches.
+The handle clears on width change before child layout, removed selected rows, or visible selected glyph mutation. It rebases points and glyph snapshots through ordered row-resize batches, skipping batches without selection state and changes entirely below the selected rows.
 
 The transcript configures `TuiSelectable` with `SemanticSelection::word_boundary_policy()` and `SemanticSelection::smart_select_fn()`. Generic glyph-to-word resolution remains in `warpui_core`; Warp-specific settings are converted into the same policy and function used by GUI selection.
 
@@ -77,7 +77,7 @@ Defaults disable off-screen extraction and return no resizes. No extension trait
 
 - normal `visible_items` drains dirty rich content, measures heights, updates the canonical block list, and records resize entries;
 - `selection_content` uses the existing block-list traversal without measurement or mutation;
-- resize entries are collected in canonical block-list order, reported by the viewport, and applied by `TuiSelectable` after child layout.
+- measured heights use the block list's indexed rich-content positions to emit resize entries only when row count actually changes; entries are reported in canonical order and applied by `TuiSelectable` after child layout.
 
 ### Transcript composition
 

@@ -204,6 +204,9 @@ where
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiSize {
+        // Width changes rewrap content and invalidate grid-coordinate selections.
+        // Clear first so child layout cannot rebase already-stale row positions.
+        self.selection.validate_width(constraint.max.width);
         let size = self.child.layout(constraint, ctx, app);
         self.selection
             .rebase_for_row_resizes(self.child.take_selection_row_resizes());

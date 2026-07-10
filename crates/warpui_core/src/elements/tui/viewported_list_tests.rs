@@ -465,6 +465,34 @@ fn selectable_viewport_preserves_selection_while_scrolling() {
     });
 }
 
+/// Verifies width-invalid selection clears during layout rather than rendering.
+#[test]
+fn selectable_viewport_clears_selection_before_width_resize_layout() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 3)]);
+        let viewport = viewport_with_state(TuiViewportedListState::new_at_end(), content);
+        let selection = TuiSelectionHandle::default();
+        let mut element = TuiSelectable::new(selection.clone(), viewport);
+        let original_size = TuiSize::new(8, 3);
+
+        render_viewport(&app, &mut element, original_size);
+        mouse(&app, &mut element, original_size, left_down(0, 0, 1, false));
+        mouse(&app, &mut element, original_size, left_drag(2, 1));
+        mouse(&app, &mut element, original_size, left_up(2, 1));
+        assert!(selection.range().is_some());
+
+        app.read(|app_ctx| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(TuiConstraint::tight(TuiSize::new(9, 3)), &mut ctx, app_ctx);
+        });
+
+        assert!(selection.range().is_none());
+    });
+}
+
 /// Verifies a focus-acquiring first mouse press does not start selection.
 #[test]
 fn selectable_viewport_ignores_first_mouse_press() {

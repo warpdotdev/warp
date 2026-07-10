@@ -25,3 +25,37 @@ fn batch_resize_rebases_selection_by_the_cumulative_delta() {
     assert_eq!(range.start.row, 11);
     assert_eq!(range.end.row, 13);
 }
+
+#[test]
+fn batch_resize_without_selection_is_a_noop() {
+    let handle = TuiSelectionHandle::default();
+
+    assert!(!handle.rebase_for_row_resizes(vec![(1..2, 3)]));
+}
+
+#[test]
+fn resize_below_selection_is_a_noop() {
+    let handle = TuiSelectionHandle::default();
+    handle.start(
+        TuiSelectionSpan {
+            start: TuiContentPoint { row: 2, col: 0 },
+            end: TuiContentPoint { row: 2, col: 1 },
+        },
+        Some(TuiSelectionSpan {
+            start: TuiContentPoint { row: 3, col: 0 },
+            end: TuiContentPoint { row: 4, col: 0 },
+        }),
+        SelectionType::Simple,
+        10,
+    );
+    handle.finish();
+
+    assert!(!handle.rebase_for_row_resize(10..11, 2));
+    assert_eq!(
+        handle.range(),
+        Some(TuiSelectionSpan {
+            start: TuiContentPoint { row: 2, col: 0 },
+            end: TuiContentPoint { row: 4, col: 0 },
+        })
+    );
+}

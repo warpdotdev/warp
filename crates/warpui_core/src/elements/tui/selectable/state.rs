@@ -150,6 +150,12 @@ impl TuiSelectionHandle {
         };
 
         let selected = selected_rows(selection);
+
+        // Content below the selected rows cannot shift or invalidate the selection.
+        if old_rows.start >= selected.end {
+            return false;
+        }
+
         if new_height < old_height {
             let removed = new_end..old_end;
             if ranges_intersect(&selected, &removed) {
@@ -186,6 +192,12 @@ impl TuiSelectionHandle {
 
     /// Applies an ordered batch of content row resizes.
     pub(crate) fn rebase_for_row_resizes(&self, mut changes: Vec<(Range<usize>, usize)>) -> bool {
+        // Viewport layout can report resizes even when no selection exists; avoid
+        // sorting or processing those records when there is nothing to rebase.
+        if self.0.borrow().is_none() {
+            return false;
+        }
+
         changes.sort_by_key(|(rows, _)| rows.start);
         let mut changed = false;
         let mut cumulative_delta = 0isize;

@@ -2,7 +2,6 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -99,10 +98,6 @@ impl TuiTranscriptView {
         }
     }
 
-    fn block_rows(&self, view_id: EntityId) -> Option<Range<usize>> {
-        TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone())
-            .rich_content_row_range(view_id)
-    }
 
     fn mark_agent_block_dirty(&self, view_id: EntityId, ctx: &mut ViewContext<Self>) {
         self.model
@@ -316,7 +311,11 @@ impl TuiTranscriptView {
             })
             .collect::<Vec<_>>();
         for view_id in view_ids {
-            if let Some(rows) = self.block_rows(view_id) {
+            let rows = {
+                let model = self.model.lock();
+                model.block_list().rich_content_row_range(view_id)
+            };
+            if let Some(rows) = rows {
                 self.selection.rebase_for_row_resize(rows, 0);
             }
             self.agent_blocks.borrow_mut().remove(&view_id);

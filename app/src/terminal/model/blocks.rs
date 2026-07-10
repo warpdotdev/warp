@@ -3538,6 +3538,23 @@ impl BlockList {
         self.removable_blocklist_item_positions.get(item)
     }
 
+    /// Returns the current absolute row range for one rich-content view.
+    pub fn rich_content_row_range(&self, view_id: EntityId) -> Option<Range<usize>> {
+        let index = self
+            .removable_blocklist_item_positions
+            .get(&RemovableBlocklistItem::RichContent(view_id))?;
+        let mut cursor = self
+            .block_heights
+            .cursor::<TotalIndex, BlockHeightSummary>();
+        cursor.seek(index, SeekBias::Right);
+        let BlockHeightItem::RichContent(item) = cursor.item()? else {
+            return None;
+        };
+        let start = cursor.start().height.as_f64().floor().max(0.0) as usize;
+        let height = item.last_laid_out_height.as_f64().ceil().max(0.0) as usize;
+        Some(start..start.saturating_add(height))
+    }
+
     pub fn get_previous_block_height_item(
         &self,
         item: RemovableBlocklistItem,
