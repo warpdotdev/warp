@@ -34,6 +34,7 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::conversation_selection::TuiConversationSelection;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::input::{TuiInputView, TuiInputViewEvent};
@@ -249,6 +250,12 @@ impl TuiTerminalSessionView {
             if let ChangelogModelEvent::ChangelogRequestComplete { .. } = event {
                 ctx.notify();
             }
+        });
+        // The zero state's version line shows the background auto-update
+        // status: re-render as the updater progresses.
+        ctx.subscribe_to_model(&TuiAutoupdater::handle(ctx), |_, _, event, ctx| {
+            let TuiAutoupdaterEvent::StatusChanged = event;
+            ctx.notify();
         });
         // The zero state's project section: rules/skills discovery is
         // asynchronous, so re-render as indexed results land. `PathIndexed`

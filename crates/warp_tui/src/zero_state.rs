@@ -17,6 +17,7 @@ use warpui::SingletonEntity;
 use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
 use warpui_core::AppContext;
 
+use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 
@@ -41,7 +42,6 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
     let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
     let muted = builder.muted_text_style();
 
-    let version = ChannelState::app_version().unwrap_or("dev build");
     let mut column = TuiFlex::column()
         .child(
             TuiText::new("Warp Agent")
@@ -49,7 +49,7 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
                 .truncate()
                 .finish(),
         )
-        .child(TuiText::new(version).with_style(muted).truncate().finish());
+        .child(render_version_line(builder, app));
 
     let bullets = changelog_bullets(app);
     if !bullets.is_empty() {
@@ -75,6 +75,51 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
         column = render_project_section(cwd, column, builder, app);
     }
     column
+}
+
+/// The version line: the release version (or "dev build"), with the
+/// background auto-updater's status appended in parentheses. Dev builds
+/// never run the updater (and have no version), so they render plain; the
+/// `Idle` status (updater ineligible, or no stable check result yet) renders
+/// no suffix either.
+fn render_version_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiElement> {
+    let muted = builder.muted_text_style();
+    let Some(version) = ChannelState::app_version() else {
+        return TuiText::new("dev build")
+            .with_style(muted)
+            .truncate()
+            .finish();
+    };
+    let suffix = match TuiAutoupdater::as_ref(app).status() {
+        TuiAutoupdateStatus::Idle => None,
+        TuiAutoupdateStatus::Checking => Some(("checking for updates…", muted)),
+        TuiAutoupdateStatus::Updating => Some(("updating…", muted)),
+        TuiAutoupdateStatus::UpToDate => Some(("up to date", muted)),
+        // The one state worth drawing attention to: an update is staged and
+        // a restart picks it up.
+        TuiAutoupdateStatus::PendingRestart => Some((
+            "update installed, restart to apply",
+            builder.success_glyph_style(),
+        )),
+    };
+    let Some((label, style)) = suffix else {
+        return TuiText::new(version).with_style(muted).truncate().finish();
+    };
+    // Like the bullet rows below: the version reports its natural width and
+    // the suffix wraps against the remaining column width.
+    TuiFlex::row()
+        .child(
+            TuiText::new(format!("{version} "))
+                .with_style(muted)
+                .truncate()
+                .finish(),
+        )
+        .child(
+            TuiText::new(format!("({label})"))
+                .with_style(style)
+                .finish(),
+        )
+        .finish()
 }
 
 /// Appends the project section: the project root (or cwd) as a header, then

@@ -154,6 +154,30 @@ impl UpdateOutcome {
     }
 }
 
+/// User-visible status of the background updater, shown next to the version
+/// in the transcript zero state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TuiAutoupdateStatus {
+    /// Nothing to show: updates are disabled for this process, or no check
+    /// has produced a stable result yet (e.g. the first check failed).
+    Idle,
+    /// Fetching the latest version for this channel.
+    Checking,
+    /// Downloading and staging a newer version.
+    Updating,
+    /// The running build is the channel's latest version.
+    UpToDate,
+    /// A newer version is staged and takes effect on the next launch.
+    PendingRestart,
+}
+
+/// Events emitted by [`TuiAutoupdater`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TuiAutoupdaterEvent {
+    /// [`TuiAutoupdater::status`] changed.
+    StatusChanged,
+}
+
 /// Whether this process runs the background update loop.
 #[derive(Clone, Debug)]
 enum AutoupdateEligibility {
@@ -211,6 +235,8 @@ impl AutoupdateEligibility {
 pub(crate) struct TuiAutoupdater {
     /// Whether (and where) this process runs background updates.
     eligibility: AutoupdateEligibility,
+    /// The user-visible status of the update loop.
+    status: TuiAutoupdateStatus,
     /// The outcome kind last reported to telemetry. Consecutive checks
     /// usually resolve to the same outcome (e.g. `up_to_date` on every
     /// poll), so only transitions are reported.
@@ -218,7 +244,7 @@ pub(crate) struct TuiAutoupdater {
 }
 
 impl Entity for TuiAutoupdater {
-    type Event = ();
+    type Event = TuiAutoupdaterEvent;
 }
 
 impl SingletonEntity for TuiAutoupdater {}
@@ -230,6 +256,7 @@ impl TuiAutoupdater {
         let eligibility = AutoupdateEligibility::determine(ctx);
         ctx.add_singleton_model(move |_| TuiAutoupdater {
             eligibility,
+            status: TuiAutoupdateStatus::Idle,
             last_reported_outcome: None,
         });
         TuiAutoupdater::handle(ctx).update(ctx, |me, ctx| match me.eligibility.clone() {
@@ -240,25 +267,93 @@ impl TuiAutoupdater {
         });
     }
 
+    /// The user-visible status of the update loop, for the zero state.
+    pub(crate) fn status(&self) -> TuiAutoupdateStatus {
+        self.status
+    }
+
+    /// Updates the status, emitting [`TuiAutoupdaterEvent::StatusChanged`]
+    /// only on actual transitions.
+    fn set_status(&mut self, status: TuiAutoupdateStatus, ctx: &mut ModelContext<Self>) {
+        if self.status == status {
+            return;
+        }
+        self.status = status;
+        ctx.emit(TuiAutoupdaterEvent::StatusChanged);
+    }
+
     /// Runs one background update check, then schedules the next one after
-    /// [`CHECK_INTERVAL`].
+    /// [`CHECK_INTERVAL`]. The pass runs in two phases so the zero state can
+    /// show progress: a lightweight version check, then — only when a newer
+    /// version needs staging — the download/install phase.
     fn check_now(&mut self, layout: InstallLayout, ctx: &mut ModelContext<Self>) {
-        let layout_for_next = layout.clone();
+        // Where the status settles when this pass fails or is skipped: the
+        // previous pass's stable status, never the transient `Checking`.
+        let fallback_status = self.status;
+        self.set_status(TuiAutoupdateStatus::Checking, ctx);
+        let check_layout = layout.clone();
         ctx.spawn(
-            async move { update_once(layout).await },
-            move |me, result, ctx| {
-                match &result {
-                    Ok(outcome) => log::info!("TUI autoupdate check finished: {outcome:?}"),
-                    // Fail quietly and let the next poll retry; transient
-                    // network errors (e.g. waking from sleep) are common here.
-                    Err(error) => log::warn!("TUI autoupdate check failed: {error:#}"),
+            async move { check_for_update(check_layout).await },
+            move |me, decision, ctx| match decision {
+                Ok(CheckDecision::Settled(outcome)) => {
+                    me.finish_check(Ok(outcome), fallback_status, layout, ctx);
                 }
-                me.report_outcome(&result, ctx);
-                ctx.spawn(
-                    async { Timer::after(CHECK_INTERVAL).await },
-                    move |me, _, ctx| me.check_now(layout_for_next, ctx),
-                );
+                Ok(CheckDecision::NeedsInstall {
+                    latest_version,
+                    already_staged,
+                }) => {
+                    me.set_status(TuiAutoupdateStatus::Updating, ctx);
+                    let install_layout = layout.clone();
+                    ctx.spawn(
+                        async move {
+                            install_update(install_layout, latest_version, already_staged).await
+                        },
+                        move |me, result, ctx| {
+                            me.finish_check(result, fallback_status, layout, ctx);
+                        },
+                    );
+                }
+                Err(error) => me.finish_check(Err(error), fallback_status, layout, ctx),
             },
+        );
+    }
+
+    /// Logs and reports the final result of an update pass, settles the
+    /// user-visible status, and schedules the next check.
+    fn finish_check(
+        &mut self,
+        result: Result<UpdateOutcome>,
+        fallback_status: TuiAutoupdateStatus,
+        layout: InstallLayout,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match &result {
+            Ok(outcome) => log::info!("TUI autoupdate check finished: {outcome:?}"),
+            // Fail quietly and let the next poll retry; transient
+            // network errors (e.g. waking from sleep) are common here.
+            Err(error) => log::warn!("TUI autoupdate check failed: {error:#}"),
+        }
+        self.report_outcome(&result, ctx);
+        let status = match &result {
+            Ok(UpdateOutcome::UpToDate { .. }) => TuiAutoupdateStatus::UpToDate,
+            Ok(UpdateOutcome::PendingRestart { .. } | UpdateOutcome::Installed { .. }) => {
+                TuiAutoupdateStatus::PendingRestart
+            }
+            // Skipped/failed checks aren't surfaced; settle back on the
+            // previous stable status and let the next poll retry.
+            Ok(UpdateOutcome::Locked) | Err(_) => fallback_status,
+        };
+        // Once an update is staged, only a restart clears it: never downgrade
+        // from `PendingRestart` (e.g. on a server-side version rollback).
+        let status = if fallback_status == TuiAutoupdateStatus::PendingRestart {
+            TuiAutoupdateStatus::PendingRestart
+        } else {
+            status
+        };
+        self.set_status(status, ctx);
+        ctx.spawn(
+            async { Timer::after(CHECK_INTERVAL).await },
+            move |me, _, ctx| me.check_now(layout, ctx),
         );
     }
 
@@ -288,8 +383,24 @@ impl TuiAutoupdater {
     }
 }
 
-/// Performs a single check-and-install pass.
-async fn update_once(layout: InstallLayout) -> Result<UpdateOutcome> {
+/// The result of the lightweight check phase of an update pass.
+#[derive(Debug)]
+enum CheckDecision {
+    /// Nothing to install; the pass is complete with this outcome.
+    Settled(UpdateOutcome),
+    /// A newer version needs the install phase ([`install_update`]).
+    NeedsInstall {
+        latest_version: String,
+        /// A previous check already staged this version's directory; only
+        /// the `current` symlink still needs retargeting.
+        already_staged: bool,
+    },
+}
+
+/// Performs the check phase of an update pass: a single lightweight
+/// `/client_version` request plus local filesystem checks, deciding whether
+/// the (heavier) install phase is needed.
+async fn check_for_update(layout: InstallLayout) -> Result<CheckDecision> {
     let current_version =
         ChannelState::app_version().context("no release version tag baked into this build")?;
 
@@ -310,9 +421,9 @@ async fn update_once(layout: InstallLayout) -> Result<UpdateOutcome> {
     let current_parsed = ParsedVersion::try_from(current_version)
         .with_context(|| format!("invalid current version {current_version:?}"))?;
     if latest_parsed <= current_parsed {
-        return Ok(UpdateOutcome::UpToDate {
+        return Ok(CheckDecision::Settled(UpdateOutcome::UpToDate {
             version: current_version.to_owned(),
-        });
+        }));
     }
 
     let version_dir = layout.versions_dir.join(&latest_version);
@@ -326,17 +437,32 @@ async fn update_once(layout: InstallLayout) -> Result<UpdateOutcome> {
     let already_staged = fs::symlink_metadata(version_dir.join(&layout.binary_name))
         .is_ok_and(|metadata| metadata.file_type().is_file());
     if already_staged && current_points_at(&layout, &latest_version) {
-        return Ok(UpdateOutcome::PendingRestart {
+        return Ok(CheckDecision::Settled(UpdateOutcome::PendingRestart {
             version: latest_version,
-        });
+        }));
     }
 
+    Ok(CheckDecision::NeedsInstall {
+        latest_version,
+        already_staged,
+    })
+}
+
+/// Performs the install phase of an update pass: downloads and stages
+/// `latest_version` (unless already staged) and retargets `current` at it.
+async fn install_update(
+    layout: InstallLayout,
+    latest_version: String,
+    already_staged: bool,
+) -> Result<UpdateOutcome> {
     // Serialize installs across concurrent TUI processes.
     let Some(_lock) = InstallLock::acquire(&layout.root)? else {
         return Ok(UpdateOutcome::Locked);
     };
 
     if !already_staged {
+        let client = http_client::Client::new();
+        let version_dir = layout.versions_dir.join(&latest_version);
         download_and_stage(&layout, &client, &latest_version, &version_dir).await?;
     }
 
