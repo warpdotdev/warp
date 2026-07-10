@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
 };
 use crate::AppContext;
 
@@ -91,11 +91,16 @@ pub trait TuiViewportedElement {
     /// Returns the content height and visible child elements for `window`.
     ///
     /// `available_width` is the layout width for width-dependent height
-    /// measurement, not horizontal viewport state.
+    /// measurement, not horizontal viewport state. `ctx` is the live layout
+    /// context, so height measurement can resolve [`TuiChildView`] elements
+    /// from the presenter's `rendered_views` instead of measuring them as zero.
+    ///
+    /// [`TuiChildView`]: crate::elements::tui::TuiChildView
     fn visible_items(
         &self,
         window: TuiViewportWindow,
         available_width: u16,
+        ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiViewportContent;
 }
@@ -162,6 +167,7 @@ where
         scroll_top: usize,
         viewport_height: u16,
         available_width: u16,
+        ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> (usize, TuiViewportContent) {
         let viewport_height_rows = usize::from(viewport_height);
@@ -171,6 +177,7 @@ where
                 viewport_height,
             },
             available_width,
+            ctx,
             app,
         );
         let max_scroll_top = max_scroll_top(content.content_height, viewport_height_rows);
@@ -186,6 +193,7 @@ where
                     viewport_height,
                 },
                 available_width,
+                ctx,
                 app,
             );
         }
@@ -209,8 +217,13 @@ where
         let viewport_height_rows = usize::from(viewport_height);
         let available_width = constraint.max.width;
         let requested_scroll_top = self.requested_scroll_top(viewport_height_rows);
-        let (scroll_top, content) =
-            self.viewport_content(requested_scroll_top, viewport_height, available_width, app);
+        let (scroll_top, content) = self.viewport_content(
+            requested_scroll_top,
+            viewport_height,
+            available_width,
+            ctx,
+            app,
+        );
 
         self.content_height = content.content_height;
         self.layout_viewport_content(
@@ -325,7 +338,7 @@ where
         self.size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         for visible in &self.visible_elements {
             let slot_y = area.y.saturating_add(visible.viewport_y);
             if slot_y >= area.bottom() {
@@ -337,7 +350,7 @@ where
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         for visible in &self.visible_elements {
             let slot_y = area.y.saturating_add(visible.viewport_y);
             if slot_y >= area.bottom() {

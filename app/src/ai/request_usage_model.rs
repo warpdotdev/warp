@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use ai::api_keys::ApiKeyManager;
+use anyhow::Context as _;
 use chrono::{DateTime, Local, Utc};
 use instant::Instant;
 use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::report_error;
 pub use warp_graphql::billing::BonusGrantType;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -354,7 +356,9 @@ impl AIRequestUsageModel {
                     )
                     .await
             },
-            |_, result, ctx| match result {
+            |_, result, ctx| match result
+                .context("Failed to provide negative feedback response for ai conversation")
+            {
                 Ok(requests_refunded) => {
                     if requests_refunded > 0 {
                         ctx.emit(AIRequestUsageModelEvent::RequestBonusRefunded {
@@ -365,9 +369,7 @@ impl AIRequestUsageModel {
                     }
                 }
                 Err(e) => {
-                    log::error!(
-                        "Failed to provide negative feedback response for ai conversation: {e:?}"
-                    );
+                    report_error!(e);
                 }
             },
         );
@@ -479,15 +481,6 @@ impl AIRequestUsageModel {
                 .request_limit_info
                 .embedding_generation_batch_size,
         }
-    }
-
-    /// Returns whether the user has hit their maximum codebase allowance.
-    /// (If the user is allowed unlimited indices, this is vacuously false.)
-    pub fn hit_codebase_index_limit(&self, current_indices: usize) -> bool {
-        self.codebase_context_limits()
-            .max_indices_allowed
-            .map(|lim| current_indices >= lim)
-            .unwrap_or(false)
     }
 
     pub fn next_refresh_time(&self) -> DateTime<Utc> {

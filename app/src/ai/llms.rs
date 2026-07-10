@@ -3,12 +3,14 @@ use std::sync::{Arc, OnceLock};
 
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
 pub use ai::LLMId;
+use anyhow::Context as _;
 use parking_lot::FairMutex;
 use serde::{de, Deserialize, Serialize};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -17,7 +19,6 @@ use super::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::report_error;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::AISettings;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
@@ -42,6 +43,98 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ByoKeySource {
+    UserProvided,
+    TeamProvided,
+}
+
+impl ByoKeySource {
+    pub fn inference_label(self) -> &'static str {
+        match self {
+            ByoKeySource::UserProvided => "Inference via User-provided API key",
+            ByoKeySource::TeamProvided => "Inference via Team-provided API key",
+        }
+    }
+}
+
+/// Returns the first-party key source that will be used for this provider.
+/// Member-provided keys win when team policy allows them; otherwise a
+/// configured team-managed key is used when available.
+pub fn first_party_key_source_for_provider(
+    provider: &LLMProvider,
+    app: &AppContext,
+) -> Option<ByoKeySource> {
+    let workspaces = UserWorkspaces::as_ref(app);
+    if workspaces.are_member_byo_keys_allowed() && is_using_api_key_for_provider(provider, app) {
+        return Some(ByoKeySource::UserProvided);
+    }
+    if is_using_team_first_party_key_for_provider(provider, app) {
+        return Some(ByoKeySource::TeamProvided);
+    }
+    None
+}
+
+pub fn is_using_first_party_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
+    first_party_key_source_for_provider(provider, app).is_some()
+}
+
+fn is_using_team_first_party_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app)
+        .current_workspace()
+        .is_some_and(|workspace| {
+            workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                && workspace
+                    .settings
+                    .team_byo
+                    .as_ref()
+                    .is_some_and(|team_byo| {
+                        team_byo.first_party_enabled
+                            && team_byo
+                                .first_party_keys
+                                .iter()
+                                .any(|key| key.provider == *provider)
+                    })
+        })
+}
+
+pub fn byo_key_source_for_model(llm: &LLMInfo, app: &AppContext) -> Option<ByoKeySource> {
+    let is_custom_endpoint = LLMPreferences::as_ref(app)
+        .custom_llm_info_for_id(&llm.id)
+        .is_some();
+    if is_custom_endpoint && UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed() {
+        return Some(ByoKeySource::UserProvided);
+    }
+    if is_using_team_byo_endpoint_for_model(llm, app) {
+        return Some(ByoKeySource::TeamProvided);
+    }
+    first_party_key_source_for_provider(&llm.provider, app)
+}
+
+fn is_using_team_byo_endpoint_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app)
+        .current_workspace()
+        .is_some_and(|workspace| {
+            workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                && workspace
+                    .settings
+                    .team_byo
+                    .as_ref()
+                    .is_some_and(|team_byo| {
+                        team_byo.endpoints_enabled
+                            && team_byo.endpoints.iter().any(|endpoint| {
+                                endpoint.enabled
+                                    && endpoint.models.iter().any(|model| {
+                                        model.enabled && model.config_key == llm.id.as_str()
+                                    })
+                            })
+                    })
+        })
+}
+
+pub fn should_show_key_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+    byo_key_source_for_model(llm, app).is_some()
+}
 pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
     UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app)
         && llm
@@ -108,7 +201,7 @@ impl DisableReason {
 /// or disabled for a reason that doesn't block requests (see
 /// [`DisableReason::should_clear_preference`]).
 fn is_usable_llm(info: &LLMInfo, app: &AppContext) -> bool {
-    let has_byok_key = is_using_api_key_for_provider(&info.provider, app);
+    let has_byok_key = is_using_first_party_key_for_provider(&info.provider, app);
     info.disable_reason
         .as_ref()
         .is_none_or(|reason| !reason.should_clear_preference(has_byok_key))
@@ -336,8 +429,8 @@ impl LLMInfo {
         self.reasoning_level.clone()
     }
 
-    #[cfg(feature = "integration_tests")]
-    fn new_for_test(llm_name: &str) -> Self {
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub(crate) fn new_for_test(llm_name: &str) -> Self {
         Self {
             display_name: llm_name.to_string(),
             base_model_name: llm_name.to_string(),
@@ -391,10 +484,12 @@ impl AvailableLLMs {
             let fallback_default = choices
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("Choices should not be empty"))?;
-            log::error!(
-                "Default LLM ID {} not present in choices, falling back to first choice {}",
-                default_id,
-                fallback_default.display_name
+            report_error!(
+                "Default LLM ID not present in choices, falling back to first choice",
+                extra: {
+                    "default_id" => %default_id,
+                    "fallback_choice" => %fallback_default.display_name
+                }
             );
             default_id = fallback_default.id.clone();
         }
@@ -438,10 +533,12 @@ impl AvailableLLMs {
             .choices
             .first()
             .expect("AvailableLLMs must have at least one choice");
-        log::error!(
-            "Default LLM ID {} not present in choices, falling back to first choice {}",
-            self.default_id,
-            fallback.display_name
+        report_error!(
+            "Default LLM ID not present in choices, falling back to first choice",
+            extra: {
+                "default_id" => %self.default_id,
+                "fallback_choice" => %fallback.display_name
+            }
         );
         fallback
     }
@@ -988,6 +1085,38 @@ impl LLMPreferences {
         self.custom_llms.iter().find(|info| info.id == *id)
     }
 
+    /// Returns `true` when `id` identifies a model that can run in a Warp cloud
+    /// (Oz) agent, and is therefore safe to forward as a cloud
+    /// `config.model_id`.
+    ///
+    /// Custom-endpoint (BYOK) models — whose `LLMId` is a bare `config_key`
+    /// UUID — and local (YAML-authored) custom routers depend on the user's
+    /// local credentials / local config and cannot run in the cloud. Their ids
+    /// are not in the server's accepted Oz model-slug namespace, so forwarding
+    /// one makes the cloud `start_agent` reject the spawn.
+    ///
+    /// Cloud/team custom routers (`custom-router:cloud:*`) ARE cloud-runnable:
+    /// the server's spawn-time model_id validation explicitly allows the
+    /// `custom-router:cloud:` prefix, and each cloud AI request re-resolves the
+    /// router entirely server-side (no local config or credentials needed), so
+    /// they are treated as runnable here.
+    pub fn is_cloud_runnable_oz_model_id(&self, id: &LLMId) -> bool {
+        !(self.custom_llm_info_for_id(id).is_some()
+            || custom_model_routers::is_local_custom_router_id(id.as_str()))
+    }
+
+    /// True when the pane's active Agent Mode model can run in a Warp cloud
+    /// (Oz) agent (see [`Self::is_cloud_runnable_oz_model_id`]).
+    pub(crate) fn is_active_base_model_cloud_runnable(
+        &self,
+        terminal_view_id: EntityId,
+        app: &AppContext,
+    ) -> bool {
+        self.is_cloud_runnable_oz_model_id(
+            &self.get_active_base_model(app, Some(terminal_view_id)).id,
+        )
+    }
+
     /// Footer label for custom endpoint usage keyed by the request config_key.
     /// The synthetic custom LLMInfo already owns alias-or-name display semantics.
     pub fn custom_endpoint_usage_display_label(&self, config_key: &str) -> String {
@@ -1016,7 +1145,8 @@ impl LLMPreferences {
     }
 
     fn custom_inference_enabled(app: &AppContext) -> bool {
-        UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
+        let workspaces = UserWorkspaces::as_ref(app);
+        workspaces.is_custom_inference_enabled(app) && workspaces.are_member_byo_endpoints_allowed()
     }
 
     /// Resolves a custom model router by its `config_key`/`LLMId`.
@@ -1340,6 +1470,41 @@ impl LLMPreferences {
         }
     }
 
+    /// Copies the raw per-pane Agent Mode override from `source_terminal_view_id`
+    /// onto `new_terminal_view_id`, removing any existing override when the
+    /// source has none. Combined with copying the source's execution profile,
+    /// this reproduces the source pane's model resolution exactly. Unlike
+    /// [`Self::update_preferred_agent_mode_llm`], the copied override is not
+    /// normalized against the destination's current profile default, so it is
+    /// order-independent with respect to the profile copy.
+    pub(crate) fn copy_agent_mode_selection(
+        &mut self,
+        source_terminal_view_id: EntityId,
+        new_terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let changed = match self
+            .base_llm_for_terminal_view
+            .get(&source_terminal_view_id)
+            .cloned()
+        {
+            Some(id) => {
+                self.base_llm_for_terminal_view
+                    .insert(new_terminal_view_id, id.clone())
+                    != Some(id)
+            }
+            None => self
+                .base_llm_for_terminal_view
+                .remove(&new_terminal_view_id)
+                .is_some(),
+        };
+
+        if changed {
+            self.trigger_snapshot_save(ctx);
+            ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+        }
+    }
+
     /// Triggers a snapshot save to persist LLM override changes.
     fn trigger_snapshot_save(&self, ctx: &mut ModelContext<Self>) {
         ctx.dispatch_global_action("workspace:save_app", ());
@@ -1482,17 +1647,20 @@ impl LLMPreferences {
 
         let old = std::mem::replace(&mut self.models_by_feature, update);
 
-        match serde_json::to_string(&self.models_by_feature) {
+        match serde_json::to_string(&self.models_by_feature)
+            .context("Failed to serialize LLMs for cache")
+        {
             Ok(serialized_update) => {
                 if let Err(e) = ctx
                     .private_user_preferences()
                     .write_value(MODELS_BY_FEATURE_CACHE_KEY, serialized_update)
+                    .context("Failed to cache LLMs")
                 {
-                    log::error!("Failed to cache LLMs: {e}");
+                    report_error!(e);
                 }
             }
             Err(e) => {
-                log::error!("Failed to serialize LLMs for cache: {e}");
+                report_error!(e);
             }
         }
 

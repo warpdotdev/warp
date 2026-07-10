@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use futures_util::stream::AbortHandle;
 use markdown_parser::markdown_parser::parse_markdown_to_raw_text;
+use warp_errors::report_error;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{
     Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle, WindowId,
@@ -118,7 +119,7 @@ impl NotebookManager {
                     manager
                         .raw_text_by_hashed_id
                         .insert(hashed_id, NotebookRawTextStatus::ParseError);
-                    log::error!("Cached Notebook raw text failed to parse: {err}.");
+                    report_error!(err.context("Cached Notebook raw text failed to parse"));
                 }
             },
         )

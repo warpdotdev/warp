@@ -5,8 +5,9 @@ use ai::skills::{parse_bundled_skill, ParsedSkill, SkillPathOrigin, SkillReferen
 use futures::TryStreamExt;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_core::safe_warn;
 use warp_core::ui::icons::Icon;
-use warp_core::{report_error, safe_warn};
+use warp_errors::report_error;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;

@@ -18,6 +18,15 @@ const CHEVRON_COLLAPSED: &str = "▸";
 /// Disclosure glyph shown when the section is expanded.
 const CHEVRON_EXPANDED: &str = "▾";
 
+/// Returns the disclosure glyph for a collapsed or expanded section.
+pub fn tui_disclosure_chevron(collapsed: bool) -> &'static str {
+    if collapsed {
+        CHEVRON_COLLAPSED
+    } else {
+        CHEVRON_EXPANDED
+    }
+}
+
 /// Composes a collapsible section: a clickable `label` header (suffixed with a
 /// state chevron) over `body`, which is included only when `collapsed` is
 /// `false`. `on_toggle` runs when the header is clicked. The header is styled
@@ -33,11 +42,7 @@ pub fn tui_collapsible(
     body: Box<dyn TuiElement>,
     on_toggle: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
 ) -> Box<dyn TuiElement> {
-    let chevron = if collapsed {
-        CHEVRON_COLLAPSED
-    } else {
-        CHEVRON_EXPANDED
-    };
+    let chevron = tui_disclosure_chevron(collapsed);
     let style = if mouse_state.lock().unwrap().is_hovered() {
         header_hover_style
     } else {

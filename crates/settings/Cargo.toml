@@ -6,6 +6,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+warp_errors.workspace = true
 anyhow.workspace = true
 concat-idents.workspace = true
 inventory = "0.3"

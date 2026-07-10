@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use channel_versions::ChannelVersions;
+use warp_errors::report_error;
 
 use crate::channel::{Channel, ChannelState};
-use crate::report_error;
 use crate::server::server_api::{ServerApi, FETCH_CHANNEL_VERSIONS_TIMEOUT};
 
 // Fetches channel versions asynchronously from the Warp server. If the Warp server request fails,

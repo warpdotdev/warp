@@ -5,6 +5,7 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use sharing::SharedPaneContent;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
+use warp_errors::report_error;
 use warpui::elements::{
     AcceptedByDropTarget, Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Flex, Hoverable,
@@ -966,8 +967,9 @@ impl<P: BackingView> TypedActionView for PaneHeader<P> {
                             });
                         }
                     } else {
-                        log::error!(
-                            "Attempting to move to pane that does not exist with id: {target_id:?}"
+                        report_error!(
+                            "Attempting to move to pane that does not exist",
+                            extra: { "target_id" => ?target_id }
                         );
                     }
                 }

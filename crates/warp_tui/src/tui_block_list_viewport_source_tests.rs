@@ -15,12 +15,12 @@ use warpui_core::elements::tui::{
     TuiConstraint, TuiLayoutContext, TuiSize, TuiViewportContent, TuiViewportWindow,
     TuiViewportedElement,
 };
-use warpui_core::{App, AppContext, ViewContext};
+use warpui_core::{App, AppContext, TuiView, ViewContext};
 
 use super::{AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource};
 use crate::agent_block::TuiAIBlock;
 use crate::terminal_block::should_render_terminal_block;
-use crate::test_fixtures::{add_test_action_model, TestHostView};
+use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
 
 #[test]
 fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
@@ -55,12 +55,17 @@ fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
                 AgentBlockRegistry::new(RefCell::new(HashMap::new())),
             );
 
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
             let content = source.visible_items(
                 TuiViewportWindow {
                     scroll_top: 1,
                     viewport_height: 1,
                 },
                 80,
+                &mut layout_ctx,
                 app,
             );
 
@@ -68,10 +73,6 @@ fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
             let mut item = content.items.into_iter().next().unwrap();
             assert_eq!(item.origin_y, 1);
 
-            let mut rendered_views = EntityIdMap::default();
-            let mut layout_ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
             let size = item.element.layout(
                 TuiConstraint::loose(TuiSize::new(80, u16::MAX)),
                 &mut layout_ctx,
@@ -118,7 +119,7 @@ fn tui_agent_overhang_remeasures_visible_non_dirty_height() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let (source, model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
-        let expected = app.read(|app| agent_block.as_ref(app).desired_height(80, app) as f64);
+        let expected = measured_height(&app, &agent_block);
 
         // The visible block is re-measured during `visible_items`, so its height
         // is corrected before windowing without any post-layout pass.
@@ -140,7 +141,7 @@ fn tui_agent_overhang_remeasures_near_offscreen_non_dirty_height() {
         // A short terminal block pushes the agent block below a 1-row viewport
         // but within the overhang band.
         let (source, model, agent_block) = seeded_agent_block_source(&mut app, 3, 99.0);
-        let expected = app.read(|app| agent_block.as_ref(app).desired_height(80, app) as f64);
+        let expected = measured_height(&app, &agent_block);
 
         request_top_window(&app, &source, 1);
 
@@ -213,14 +214,38 @@ fn request_top_window(
     viewport_height: u16,
 ) -> TuiViewportContent {
     app.read(|app| {
+        let mut rendered_views = EntityIdMap::default();
+        let mut ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
         source.visible_items(
             TuiViewportWindow {
                 scroll_top: 0,
                 viewport_height,
             },
             80,
+            &mut ctx,
             app,
         )
+    })
+}
+
+/// Measures the agent block at width 80 by laying out its rendered element.
+fn measured_height(app: &App, agent_block: &ViewHandle<TuiAIBlock>) -> f64 {
+    app.read(|app| {
+        let mut rendered_views = EntityIdMap::default();
+        let mut ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
+        let mut element = agent_block.as_ref(app).render(app);
+        let height = element
+            .layout(
+                TuiConstraint::loose(TuiSize::new(80, u16::MAX)),
+                &mut ctx,
+                app,
+            )
+            .height;
+        f64::from(height)
     })
 }
 
@@ -228,7 +253,8 @@ fn request_top_window(
 /// window and returns its handle.
 fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
     let query = query.to_owned();
-    let action_model = add_test_action_model(app);
+    let (action_model, model_events) = add_test_action_model_and_events(app);
+    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
             AddWindowOptions {
@@ -245,6 +271,8 @@ fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
                     inputs: vec![query_input(&query)],
                 }),
                 action_model,
+                &model_events,
+                terminal_model,
                 ctx,
             )
         })

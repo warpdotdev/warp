@@ -12,6 +12,7 @@ pub use assertions::*;
 pub use step::*;
 pub use user_defaults::*;
 pub use util::*;
+use warp_errors::report_error;
 use warpui::integration::PersistedDataMap;
 pub use warpui::integration::RUNTIME_TAG_FAILURE_REASON;
 use warpui::{App, SingletonEntity as _, WindowId};
@@ -62,7 +63,7 @@ pub fn output_code_diff_with_base_commit(
     use command::blocking::Command;
 
     let Some(mut output_file) = open_debug_file_from_env(CODE_DIFF_OUTPUT_FILE_ENV_VAR) else {
-        log::error!("Could not open debug file from env");
+        report_error!("Could not open debug file from env");
         return;
     };
     // Clear the test files from the diff, because we are not interested in seeing those.
@@ -91,7 +92,7 @@ pub fn output_code_diff_with_base_commit(
 pub fn output_code_diff_debug_info(app: &mut App, window_id: WindowId) {
     let terminal_view = terminal_view(app, window_id, 0, 0);
     let Some(current_dir) = terminal_view.read(app, |terminal_view, _| terminal_view.pwd()) else {
-        log::error!("Could not get current directory");
+        report_error!("Could not get current directory");
         return;
     };
     BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {

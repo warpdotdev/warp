@@ -4,29 +4,15 @@ use std::rc::Rc;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiFlex;
+use crate::elements::tui::test_support::{render_to_lines, with_paint_context};
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiEventHandler, TuiLayoutContext, TuiParentElement, TuiPresentationContext, TuiRect, TuiSize,
-    TuiText,
+    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiEventHandler,
+    TuiLayoutContext, TuiParentElement, TuiPresentationContext, TuiRect, TuiSize, TuiText,
 };
 use crate::elements::CrossAxisAlignment;
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::{App, EntityId, EntityIdMap};
-
-fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
-    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
-    let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    element.render(
-        TuiRect::new(0, 0, size.width, size.height),
-        &mut buffer,
-        &mut ctx,
-    );
-    buffer.to_lines()
-}
 
 /// Lays `element` out at a loose `size` constraint, returning the size it
 /// claimed. Layout must run before render so `child_sizes` is populated.
@@ -304,11 +290,7 @@ fn row_children_keep_their_own_styles() {
             layout_at(&mut row, TuiSize::new(4, 1), app_ctx);
 
             let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 4, 1));
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            row.render(TuiRect::new(0, 0, 4, 1), &mut buffer, &mut ctx);
+            with_paint_context(|ctx| row.render(TuiRect::new(0, 0, 4, 1), &mut buffer, ctx));
 
             let left_cell = &buffer[(0, 0)];
             assert_eq!(left_cell.symbol(), "a");

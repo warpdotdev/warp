@@ -3,6 +3,7 @@ use voice_input::{StartListeningError, VoiceInput, VoiceSessionResult};
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_errors::report_error;
 use warpui::elements::{Container, CornerRadius, Icon, Radius};
 use warpui::platform::Cursor;
 use warpui::r#async::SpawnedFutureHandle;
@@ -79,7 +80,7 @@ impl EditorView {
                 crate::view_components::NewFeaturePopupEvent::Dismissed
             ) {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    warp_core::report_if_error!(settings
+                    warp_errors::report_if_error!(settings
                         .dismissed_voice_input_new_feature_popup
                         .set_value(true, ctx));
                 });
@@ -168,7 +169,7 @@ impl EditorView {
                 if cancel_transcription {
                     voice_input.abort_listening();
                 } else if let Err(e) = voice_input.stop_listening(ctx) {
-                    log::error!("Failed to stop voice input: {e:?}");
+                    report_error!(e.context("Failed to stop voice input"));
                 }
             });
         }
@@ -283,7 +284,8 @@ impl EditorView {
                                     Self::show_microphone_access_toast(ctx);
                                 }
                                 _ => {
-                                    log::error!("Failed to start voice input: {e:?}");
+                                    report_error!(anyhow::Error::new(e)
+                                        .context("Failed to start voice input"));
                                 }
                             }
                             ctx.notify();
@@ -500,7 +502,7 @@ impl EditorView {
                     self.voice_error_toast(super::VOICE_LIMIT_HIT_TOAST_TEXT, ctx)
                 }
                 _ => {
-                    log::error!("Failed to transcribe voice input: {e:?}");
+                    report_error!(anyhow::Error::new(e).context("Failed to transcribe voice input"));
                     self.voice_error_toast(super::VOICE_ERROR_TOAST_TEXT, ctx)
                 }
             },

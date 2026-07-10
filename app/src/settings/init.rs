@@ -3,6 +3,7 @@ use std::path::Path;
 use settings::{Setting as _, SettingsManager};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
+use warp_errors::report_if_error;
 use warpui::rendering::GPUPowerPreference;
 use warpui::{AppContext, SingletonEntity};
 use warpui_extras::user_preferences;
@@ -21,6 +22,7 @@ use super::{
     WarpDrivePrivacySettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::appearance;
 use crate::banner::BannerState;
 use crate::drive::settings::WarpDriveSettings;
 use crate::resource_center::TipsCompleted;
@@ -39,7 +41,6 @@ use crate::undo_close::UndoCloseSettings;
 use crate::window_settings::WindowSettings;
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workspace::tab_settings::TabSettings;
-use crate::{appearance, report_if_error};
 
 pub struct UserDefaultsOnStartup {
     pub should_restore_session: bool,
@@ -285,7 +286,7 @@ fn init_platform_native_preferences() -> user_preferences::Model {
             match user_preferences::file_backed::FileBackedUserPreferences::new(super::user_preferences_file_path()) {
                 Ok(prefs) => Box::new(prefs) as user_preferences::Model,
                 Err(err) => {
-                    crate::report_error!(anyhow::anyhow!(err));
+                    warp_errors::report_error!(anyhow::anyhow!(err));
                     Box::<user_preferences::in_memory::InMemoryPreferences>::default()
                 }
             }

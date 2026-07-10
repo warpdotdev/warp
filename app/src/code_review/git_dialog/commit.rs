@@ -6,6 +6,7 @@ use std::path::Path;
 
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::report_error;
 use warpui::elements::{
     ChildView, ClippedScrollStateHandle, Container, CornerRadius, CrossAxisAlignment, Element,
     Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
@@ -424,7 +425,7 @@ pub(super) fn finish_commit_chain(
             show_toast(msg, ctx);
         }
         Err(err) => {
-            log::error!("Commit failed: {err}");
+            report_error!("Commit failed", extra: { "error" => %err });
             show_toast(user_facing_git_error(err), ctx);
         }
     }

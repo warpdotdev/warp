@@ -31,9 +31,7 @@ use warpui::{
     ViewContext, ViewHandle, WeakViewHandle,
 };
 
-use crate::ai::blocklist::agent_view::{
-    agent_view_bg_color, AgentViewController, AgentViewControllerEvent,
-};
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::search::item::IconLocation;
 use crate::search::mixer::{SearchMixer, SearchMixerEvent};
 use crate::search::result_renderer::{
@@ -1001,15 +999,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
                 appearance.ui_font_family(),
                 inline_styles::font_size(appearance),
             )
-            .with_color(
-                theme
-                    .disabled_text_color(if self.agent_view_controller.as_ref(app).is_active() {
-                        agent_view_bg_color(app).into()
-                    } else {
-                        theme.background()
-                    })
-                    .into_solid(),
-            )
+            .with_color(theme.disabled_text_color(theme.background()).into_solid())
             .finish(),
         )
         .finish()

@@ -428,11 +428,11 @@ impl AmbientAgentRunner {
                 model_id: None,
                 reasoning_level: None,
             });
-            let harness_auth_secrets = args.claude_auth_secret.clone().map(|name| {
-                crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
-                    claude_auth_secret_name: Some(name),
-                    codex_auth_secret_name: None,
-                }
+            let harness_auth_secrets = (args.claude_auth_secret.is_some()
+                || args.codex_auth_secret.is_some())
+            .then(|| crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
+                claude_auth_secret_name: args.claude_auth_secret.clone(),
+                codex_auth_secret_name: args.codex_auth_secret.clone(),
             });
 
             let merged_config = super::config_file::merge_with_precedence(

@@ -302,6 +302,7 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
                 })
                 .expect("child conversation data should serialize"),
                 last_modified_at: now,
+                summary: None,
             },
             tasks: vec![warp_multi_agent_api::Task {
                 id: format!("task-{child_id}"),
@@ -355,6 +356,7 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
                 })
                 .expect("parent conversation data should serialize"),
                 last_modified_at: now - chrono::Duration::seconds(1),
+                summary: None,
             },
             tasks: vec![warp_multi_agent_api::Task {
                 id: format!("task-{parent_id}"),

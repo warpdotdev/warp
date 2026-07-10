@@ -88,6 +88,8 @@ impl From<InputClassifierDecisionSource> for InputTypeAutoDetectionSource {
     }
 }
 
+use warp_errors::report_if_error;
+
 use super::context_model::BlocklistAIContextModel;
 use super::history_model::BlocklistAIHistoryModel;
 use super::input_mode_policy::{InputModePolicyHandle, PolicyConfigUpdate};
@@ -102,7 +104,7 @@ use crate::terminal::input::decorations::ParsedTokensSnapshot;
 use crate::terminal::model::rich_content::RichContentType;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::{History, TerminalModel};
-use crate::{report_if_error, send_telemetry_from_ctx, PrivacySettings, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, PrivacySettings, TelemetryEvent};
 
 /// Cutoff score for deciding an user input matches a history command entry.
 const HISTORY_ENTRY_MATCH_CUTOFF: f32 = 0.9;
@@ -308,6 +310,40 @@ impl BlocklistAIInputModel {
             autodetect_abort_handle: None,
             model,
         }
+    }
+
+    /// Builds a self-contained input model for tests, usable from other crates
+    /// via the `test-util` feature: a mock terminal model, an inert
+    /// conversation selection, and no production subscriptions.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn mock(policy: InputModePolicyHandle, ctx: &mut AppContext) -> ModelHandle<Self> {
+        use super::conversation_selection::{ConversationSelection, MockConversationSelection};
+
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let conversation_selection = ctx
+            .add_model(|_| Box::new(MockConversationSelection) as Box<dyn ConversationSelection>);
+        let context_conversation_selection = conversation_selection.clone();
+        let context_terminal_model = model.clone();
+        let ai_context_model = ctx.add_model(|_| {
+            BlocklistAIContextModel::new_for_test(
+                context_terminal_model,
+                EntityId::new(),
+                context_conversation_selection,
+            )
+        });
+        let input_config = policy.initial_config(ctx);
+        ctx.add_model(|_| Self {
+            input_config,
+            conversation_selection,
+            ai_context_model,
+            policy,
+            last_ai_autodetection_ts: None,
+            last_ai_autodetection_source: None,
+            last_explicit_input_type_set_at: None,
+            was_lock_set_with_empty_buffer: false,
+            autodetect_abort_handle: None,
+            model,
+        })
     }
 
     /// Returns whether the surface presents a selected conversation as active.

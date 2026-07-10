@@ -62,6 +62,7 @@ pub const fn toml_path_hierarchy(path: &str) -> Option<&str> {
 use anyhow::{Context, Result};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use warp_errors::report_error;
 use warp_features::FeatureFlag;
 use warpui_core::{AppContext, Entity, ModelContext};
 use warpui_extras::secure_storage::{self, AppContextExt as _};
@@ -506,13 +507,12 @@ pub trait Setting {
 
         // For the settings file, use the SettingsValue trait.
         if preferences.is_settings_file() {
-            let json_value = match serde_json::from_str::<serde_json::Value>(&value) {
+            let json_value = match serde_json::from_str::<serde_json::Value>(&value)
+                .context("Failed to parse JSON for setting")
+            {
                 Ok(v) => v,
                 Err(err) => {
-                    log::error!(
-                        "Failed to parse JSON for setting {}: {err:?}",
-                        Self::storage_key()
-                    );
+                    report_error!(err, extra: { "setting" => Self::storage_key() });
                     preferences.inhibit_writes_for_key(Self::toml_key(), Self::hierarchy());
                     return None;
                 }
@@ -527,9 +527,9 @@ pub trait Setting {
                     return Some(val);
                 }
                 None => {
-                    log::error!(
-                        "Failed to parse file value for setting {}",
-                        Self::storage_key()
+                    report_error!(
+                        "Failed to parse file value for setting",
+                        extra: { "setting" => Self::storage_key() }
                     );
                     preferences.inhibit_writes_for_key(Self::toml_key(), Self::hierarchy());
                     return None;
@@ -537,7 +537,7 @@ pub trait Setting {
             }
         }
 
-        match serde_json::from_str(&value) {
+        match serde_json::from_str(&value).context("Failed to parse stored value for setting") {
             Ok(val) => {
                 log::debug!(
                     "Loaded {} from user defaults; value: {:?}",
@@ -547,10 +547,7 @@ pub trait Setting {
                 Some(val)
             }
             Err(err) => {
-                log::error!(
-                    "Failed to parse stored value for setting {}: {err:?}",
-                    Self::storage_key()
-                );
+                report_error!(err, extra: { "setting" => Self::storage_key() });
                 None
             }
         }
@@ -667,20 +664,17 @@ pub trait SecureSetting: Setting {
             Ok(value) => value,
             Err(secure_storage::Error::NotFound) => return None,
             Err(err) => {
-                log::error!(
-                    "Failed to read {} from secure storage: {err:#}",
-                    Self::setting_name()
+                report_error!(
+                    anyhow::Error::new(err).context("Failed to read from secure storage"),
+                    extra: { "setting" => Self::setting_name() }
                 );
                 return None;
             }
         };
-        match serde_json::from_str(&value) {
+        match serde_json::from_str(&value).context("Failed to deserialize from secure storage") {
             Ok(value) => Some(value),
             Err(err) => {
-                log::error!(
-                    "Failed to deserialize {} from secure storage: {err:#}",
-                    Self::setting_name()
-                );
+                report_error!(err, extra: { "setting" => Self::setting_name() });
                 None
             }
         }

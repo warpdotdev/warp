@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::FutureExt as AsyncFutureExt;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -372,7 +373,7 @@ async fn run_grep(
     let is_grep_in_git_repo = is_git_repository(&execute_directory, &session)
         .await
         .unwrap_or_else(|e| {
-            log::error!("Failed to run command to check if in git repository: {e:?}");
+            report_error!(e.context("Failed to run command to check if in git repository"));
             false
         });
     let shell_type = session.shell().shell_type();

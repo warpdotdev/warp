@@ -60,12 +60,28 @@ const SHIFT_MODIFIER: u32 = 1 << 1;
 
 /// Builds a character-to-keycode cache for the current keyboard layout.
 ///
-/// The Carbon translation APIs are not thread-safe, so the build is serialized through a
-/// process-wide mutex. The work runs on the calling thread rather than being dispatched to the
-/// main thread: in the headless `agent run` CLI the main thread never services the GCD main
-/// queue, so a synchronous main-queue dispatch would deadlock.
+/// # Threading
+/// This MUST be called on the main thread. `get_keyboard_layout_data` calls Carbon Text Input
+/// Source APIs (`TISCopyCurrentKeyboardInputSource` etc.) that contain an internal
+/// `dispatch_assert_queue(main)` check, so invoking them off the main thread aborts the process
+/// with a libdispatch main-thread assertion (`BUG IN CLIENT OF LIBDISPATCH ... com.apple.main-thread`).
+/// We deliberately do NOT dispatch the work to the main queue ourselves: in the headless
+/// `agent run` CLI the main thread never services the GCD main queue, so a synchronous main-queue
+/// dispatch would deadlock. Instead, callers construct the keyboard/actor on the main thread (both
+/// the GUI app and the headless runtime run the computer-use action-model body on the main thread).
+///
+/// The Carbon translation APIs (`UCKeyTranslate`) are also not thread-safe, so the build is
+/// additionally serialized through a process-wide mutex.
 /// TODO(QUALITY-271): Store the modifier keys as well.
 pub fn build_cache() -> HashMap<char, CGKeyCode> {
+    // Fail loudly in debug if a caller ever invokes this off the main thread, so the regression is
+    // caught here rather than as an opaque libdispatch abort deep inside the Carbon TIS call.
+    // `MainThreadMarker::new()` returns `Some` only on the main thread.
+    debug_assert!(
+        objc2::MainThreadMarker::new().is_some(),
+        "keycode cache must be built on the main thread; Carbon Text Input Source APIs assert \
+         they run on the main thread"
+    );
     static BUILD_LOCK: Mutex<()> = Mutex::new(());
     let _guard = BUILD_LOCK.lock().unwrap();
     build_cache_locked()

@@ -42,7 +42,7 @@ use crate::input_suggestions::HistoryOrder;
 use crate::persistence::model::{AgentConversation, AgentConversationData};
 use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
@@ -54,6 +54,7 @@ pub use conversation_loader::{
     convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,
     CLIAgentConversation, CloudConversationData,
 };
+use warp_errors::report_error;
 
 /// Mirrors [`crate::persistence::agent::MAX_PERSISTED_CONVERSATION_COUNT`].
 /// Moot at steady state because the disk-side prune already keeps the
@@ -307,7 +308,7 @@ impl BlocklistAIHistoryModel {
         multi_agent_conversations: &[AgentConversation],
     ) -> Self {
         #[cfg(feature = "local_fs")]
-        let db_connection = database_file_path_for_scope(&PersistenceScope::App)
+        let db_connection = database_file_path_for_current_scope()
             .to_str()
             .and_then(|db_url| {
                 establish_ro_connection(db_url)
@@ -1129,7 +1130,7 @@ impl BlocklistAIHistoryModel {
             .get(&terminal_surface_id)
             .is_some_and(|conversation_ids| conversation_ids.contains(&conversation_id))
         {
-            log::error!(
+            report_error!(
                 "Attempted to set active conversation ID for a terminal surface that does not contain that conversation."
             );
             return;
@@ -1847,9 +1848,11 @@ impl BlocklistAIHistoryModel {
     ) {
         // Track whether this update changes any state derived by
         // `BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated`
-        // subscribers (e.g. the orchestration credit rollup). We emit the
-        // event only when there's actual data to react to.
-        let emits_usage_event = request_cost.is_some() || usage_metadata.is_some();
+        // subscribers (e.g. the orchestration credit rollup or the TUI
+        // footer's usage entry). We emit the event only when there's actual
+        // data to react to.
+        let emits_usage_event =
+            request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
                 request_cost,
@@ -2067,12 +2070,14 @@ impl BlocklistAIHistoryModel {
                     if let Err(e) = sender.send(ModelEvent::DeleteAIConversation {
                         conversation_id: conversation_id_string.clone(),
                     }) {
-                        log::error!("Error sending DeleteAIConversation event: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error sending DeleteAIConversation event"));
                     }
                     if let Err(e) = sender.send(ModelEvent::DeleteMultiAgentConversations {
                         conversation_ids: vec![conversation_id_string],
                     }) {
-                        log::error!("Error sending DeleteMultiAgentConversations event: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error sending DeleteMultiAgentConversations event"));
                     }
                 }
             },

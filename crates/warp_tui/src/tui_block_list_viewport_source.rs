@@ -13,7 +13,8 @@ use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiElement, TuiViewportContent, TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
+    TuiElement, TuiLayoutContext, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
+    TuiVisibleViewportItem,
 };
 use warpui_core::{AppContext, TuiView};
 
@@ -111,6 +112,7 @@ impl TuiBlockListViewportSource {
         &self,
         view_ids: HashSet<EntityId>,
         width: u16,
+        ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> HashMap<EntityId, BlockHeight> {
         let agent_blocks = self.agent_blocks.borrow();
@@ -120,7 +122,9 @@ impl TuiBlockListViewportSource {
                 let view = agent_blocks.get(&view_id)?;
                 Some((
                     view_id,
-                    BlockHeight::from(view.as_ref(app).desired_height(width, app).max(1) as f64),
+                    BlockHeight::from(
+                        view.as_ref(app).desired_height(width, ctx, app).max(1) as f64
+                    ),
                 ))
             })
             .collect()
@@ -265,12 +269,13 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         &self,
         window: TuiViewportWindow,
         available_width: u16,
+        ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiViewportContent {
         // Refresh cached heights before windowing: the dirty set plus a band of
         // near-off-screen agent blocks (see `agent_heights_to_measure`).
         let view_ids_to_measure = self.agent_heights_to_measure(window);
-        let heights = self.measured_agent_heights(view_ids_to_measure, available_width, app);
+        let heights = self.measured_agent_heights(view_ids_to_measure, available_width, ctx, app);
         self.write_line_heights(&heights);
 
         let (content_height, visible_items) = self.visible_items_in_window(window);

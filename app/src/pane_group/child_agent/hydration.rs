@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext};
 
 use crate::ai::agent::api::ServerConversationToken;
@@ -98,7 +99,10 @@ impl PaneGroup {
             self.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
 
         let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) else {
-            log::error!("Failed to get terminal view for remote child agent pane {child_id:?}");
+            report_error!(
+                "Failed to get terminal view for remote child agent pane",
+                extra: { "child_id" => ?child_id }
+            );
             self.discard_pane(new_pane_id.into(), ctx);
             return;
         };
@@ -126,8 +130,9 @@ impl PaneGroup {
         });
 
         if !restored {
-            log::error!(
-                "Failed to restore remote child agent pane {child_id:?}: missing ambient agent view model"
+            report_error!(
+                "Failed to restore remote child agent pane: missing ambient agent view model",
+                extra: { "child_id" => ?child_id }
             );
             self.discard_pane(new_pane_id.into(), ctx);
             return;

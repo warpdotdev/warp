@@ -3,10 +3,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::{
@@ -284,8 +286,9 @@ impl AIExecutionProfilesModel {
             if let Err(e) = ctx
                 .private_user_preferences()
                 .remove_value("PreferredAgentModeLLMId")
+                .context("Failed to remove old PreferredAgentModeLLMId user pref")
             {
-                log::error!("Failed to remove old PreferredAgentModeLLMId user pref: {e}");
+                report_error!(e);
             }
             self.set_base_model(default_profile_id, Some(base_llm_id.clone()), ctx);
             log::info!("Overwrote default profile with legacy setting for base llm: {base_llm_id}");
@@ -296,7 +299,7 @@ impl AIExecutionProfilesModel {
         let profile_id = ClientProfileId::new();
 
         let Some(owner) = UserWorkspaces::as_ref(ctx).personal_drive(ctx) else {
-            log::error!("Failed to create AI execution profile: personal drive not available");
+            report_error!("Failed to create AI execution profile: personal drive not available");
             return None;
         };
 
@@ -387,7 +390,7 @@ impl AIExecutionProfilesModel {
             },
             DefaultProfileState::Synced { id } => {
                 let Some(sync_id) = self.profile_id_to_sync_id.get(id) else {
-                    log::error!(
+                    report_error!(
                         "Default profile is synced but no sync_id found in profile_id_to_sync_id map."
                     );
                     return AIExecutionProfileInfo {
@@ -1336,7 +1339,10 @@ impl AIExecutionProfilesModel {
 
                 log::info!("Edited execution profile with id: {profile_id:?}");
             } else {
-                log::error!("Profile id is mapped but no object found: {profile_id:?}");
+                report_error!(
+                    "Profile id is mapped but no object found",
+                    extra: { "profile_id" => ?profile_id }
+                );
             }
         }
         ctx.emit(AIExecutionProfilesModelEvent::ProfileUpdated(profile_id));

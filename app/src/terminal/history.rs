@@ -5,6 +5,7 @@ use chrono::{DateTime, Local, TimeZone as _};
 use futures::Future;
 use serde::{Deserialize, Serialize};
 use warp_core::command::ExitCode;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::model::block::{AgentInteractionMetadata, Block, SerializedAIMetadata, SerializedBlock};
@@ -595,7 +596,7 @@ impl History {
             }
             Some(ReadHistoryFileState::Done) => {
                 let Some(history_file_commands) = self.history_file_commands.get(&host) else {
-                    log::error!(
+                    report_error!(
                         "History file commands should exist if history file has been read."
                     );
                     return;

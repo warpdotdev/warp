@@ -26,7 +26,7 @@ use sentry::protocol::{Attachment, AttachmentType};
 use sentry::{Breadcrumb, Level};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use warp_core::report_error;
+use warp_errors::report_error;
 
 use super::ToSentryTags;
 
@@ -217,7 +217,7 @@ pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
         .run(handler, &shutdown, Some(2 * PING_INTERVAL))
         .context("Error running minidump server");
     if let Err(ref err) = result {
-        log::error!("Error running minidump server: {err:#}");
+        report_error!(err);
     }
 
     result

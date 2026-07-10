@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use std::ops::AddAssign;
 
 use pathfinder_geometry::rect::RectF;
+use warp_errors::{register_error, ErrorExt};
 use warp_util::file::FileSaveError;
 use warpui::elements::DropTargetData;
 use warpui::AppContext;
@@ -40,6 +41,17 @@ pub enum ImmediateSaveError {
     #[error("Remote session disconnected")]
     RemoteDisconnected,
 }
+
+impl ErrorExt for ImmediateSaveError {
+    fn is_actionable(&self) -> bool {
+        match self {
+            ImmediateSaveError::NoFileId | ImmediateSaveError::NoActiveFileTab => true,
+            ImmediateSaveError::FailedToSave(err) => err.is_actionable(),
+            ImmediateSaveError::RemoteDisconnected => false,
+        }
+    }
+}
+register_error!(ImmediateSaveError);
 
 /// Trait to determine whether we should show the comment editor based on state held
 /// by the parent of the [`CodeEditorView`].

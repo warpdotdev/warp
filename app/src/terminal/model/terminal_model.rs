@@ -16,8 +16,8 @@ use session_sharing_protocol::common::{
 use session_sharing_protocol::sharer::SessionSourceType;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
 use warp_core::semantic_selection::SemanticSelection;
+use warp_errors::report_error;
 pub use warp_terminal::model::BlockIndex;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::assets::asset_cache::Asset;
@@ -2976,7 +2976,7 @@ impl ansi::Handler for TerminalModel {
                 // Not being able to read the value should not cause a full-app crash. Instead,
                 // bootstrapping should fail in the same way that it would if the DCS message
                 // were otherwise corrupted.
-                log::error!("Received bootstrap message with no pending session info.");
+                report_error!("Received bootstrap message with no pending session info.");
                 return;
             }
         };
@@ -3122,9 +3122,9 @@ impl ansi::Handler for TerminalModel {
                         uname: data.uname,
                     }))
             }
-            None => log::error!(
-                "Received invalid shell name in init_subshell: {}",
-                data.shell
+            None => report_error!(
+                "Received invalid shell name in init_subshell",
+                extra: { "shell" => %data.shell }
             ),
         }
     }
@@ -3146,9 +3146,9 @@ impl ansi::Handler for TerminalModel {
                         ))
                 }
                 None => {
-                    log::error!(
-                        "Received invalid shell name in SourcedRCFileForWarpValue: {}",
-                        data.shell
+                    report_error!(
+                        "Received invalid shell name in SourcedRCFileForWarpValue",
+                        extra: { "shell" => %data.shell }
                     );
                 }
             }

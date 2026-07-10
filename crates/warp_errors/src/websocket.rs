@@ -1,6 +1,6 @@
 use http::StatusCode;
 
-use super::{register_error, ErrorExt};
+use crate::{register_error, ErrorExt};
 
 impl ErrorExt for websocket::tungstenite::Error {
     fn is_actionable(&self) -> bool {
@@ -11,7 +11,8 @@ impl ErrorExt for websocket::tungstenite::Error {
                     return false;
                 }
 
-                // Internal server errors (5xx) are server-side issues that we can't act upon from the client.
+                // Internal server errors (5xx) are server-side issues that we can't act upon from
+                // the client.
                 if res.status().is_server_error() {
                     return false;
                 }

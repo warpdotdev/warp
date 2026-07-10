@@ -33,6 +33,7 @@ use warp_editor::render::model::{
 };
 use warp_editor::search::Searcher;
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
+use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::ListIndentLevel;
@@ -1423,7 +1424,10 @@ impl NotebooksEditorModel {
                 });
             }
             None => {
-                log::error!("Child model at {block_start} has end offset with value None");
+                report_error!(
+                    "Child model has end offset with value None",
+                    extra: { "block_start" => %block_start }
+                );
             }
         };
 

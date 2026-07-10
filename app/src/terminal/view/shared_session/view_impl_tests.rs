@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use chrono::Utc;
 use pathfinder_geometry::vector::vec2f;
@@ -33,7 +35,7 @@ use crate::terminal::view::ambient_agent::{
     HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
 };
 use crate::terminal::view::shared_session::test_utils::terminal_view_for_viewer;
-use crate::terminal::view::TerminalAction;
+use crate::terminal::view::{resolve_ai_query_routing, AIQueryRouting, TerminalAction};
 use crate::terminal::TerminalView;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
@@ -135,6 +137,128 @@ fn test_on_ambient_agent_execution_ended_enables_followup_input_for_editable_non
                     .interaction_state(ctx),
                 InteractionState::Editable
             );
+        });
+    });
+}
+
+#[test]
+fn test_begin_viewing_ambient_session_creates_and_wires_model_for_link_join_viewer() {
+    // REMOTE-2047: a raw shared_session link that turns out to be an ambient run starts as a
+    // plain viewer with no ambient view model. begin_viewing_ambient_session (invoked from the
+    // viewer SessionJoined handler) must create + wire the model, record the task, and mark the
+    // live session so follow-ups route to the sharer while the run is live.
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+        let task_id = "33333333-3333-3333-3333-333333333333"
+            .parse::<AmbientAgentTaskId>()
+            .expect("hardcoded task id parses");
+        let session_id = SessionId::new();
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.ambient_agent_view_model().is_none(),
+                "a generic shared-session viewer starts without an ambient view model"
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.begin_viewing_ambient_session(task_id, session_id, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let model = view
+                .ambient_agent_view_model()
+                .expect("begin_viewing_ambient_session should create the ambient view model")
+                .as_ref(ctx);
+            assert_eq!(model.task_id(), Some(task_id));
+            assert!(
+                !model.is_ready_for_cloud_followup_prompt(),
+                "the recorded live session must gate cloud follow-up while the run is live"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_begin_viewing_ambient_session_emits_view_model_created_event_once() {
+    // REMOTE-2047: `PaneGroup::create_shared_session_viewer` wires the viewer
+    // `TerminalManager` to the lazily-created ambient model by subscribing to
+    // `Event::AmbientAgentViewModelCreated`. That wiring is what routes a post-session-end
+    // follow-up to a new VM, so guard the contract that lazily creating the model emits the
+    // event exactly once (idempotent reuse must not re-emit).
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+        let task_id = "55555555-5555-5555-5555-555555555555"
+            .parse::<AmbientAgentTaskId>()
+            .expect("hardcoded task id parses");
+        let session_id = SessionId::new();
+
+        let created_events = Rc::new(RefCell::new(0usize));
+        let created_events_for_cb = created_events.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_view, event, _ctx| {
+                if matches!(
+                    event,
+                    crate::terminal::view::Event::AmbientAgentViewModelCreated
+                ) {
+                    *created_events_for_cb.borrow_mut() += 1;
+                }
+            });
+        });
+
+        // Lazy create: a link-join viewer has no ambient model until it discovers the run.
+        terminal.update(&mut app, |view, ctx| {
+            view.begin_viewing_ambient_session(task_id, session_id, ctx);
+        });
+        assert_eq!(
+            *created_events.borrow(),
+            1,
+            "lazily creating the ambient view model must emit AmbientAgentViewModelCreated"
+        );
+
+        // Idempotent: a second call reuses the existing model and must not re-emit.
+        terminal.update(&mut app, |view, ctx| {
+            view.begin_viewing_ambient_session(task_id, session_id, ctx);
+        });
+        assert_eq!(
+            *created_events.borrow(),
+            1,
+            "reusing the existing ambient view model must not re-emit the event"
+        );
+    });
+}
+
+#[test]
+fn test_begin_viewing_ambient_session_reuses_existing_model_for_cloud_pane() {
+    // The upfront cloud-mode path already created the ambient view model at construction;
+    // begin_viewing_ambient_session must reuse it (idempotent) rather than replacing it.
+    App::test((), |mut app| async move {
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let task_id = "44444444-4444-4444-4444-444444444444"
+            .parse::<AmbientAgentTaskId>()
+            .expect("hardcoded task id parses");
+        let session_id = SessionId::new();
+
+        let original_model_id = terminal.read(&app, |view, _| {
+            view.ambient_agent_view_model()
+                .expect("cloud mode terminal has an ambient view model")
+                .id()
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.begin_viewing_ambient_session(task_id, session_id, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let model = view
+                .ambient_agent_view_model()
+                .expect("cloud mode terminal still has an ambient view model");
+            assert_eq!(
+                model.id(),
+                original_model_id,
+                "begin_viewing_ambient_session must reuse the existing model, not replace it"
+            );
+            assert_eq!(model.as_ref(ctx).task_id(), Some(task_id));
         });
     });
 }
@@ -1047,6 +1171,86 @@ fn test_restored_ambient_view_resolves_cta_from_view_model_task_id() {
                     cta: Some(TombstoneCta::ContinueInCloud { task_id: resolved_task_id })
                 } if resolved_task_id == task_id
             ));
+        });
+    });
+}
+
+/// Resolves the follow-up routing for `view` using the same source of truth as the submission
+/// path (`Input::ai_query_routing`) and the footer live-VM indicator.
+fn query_routing(view: &TerminalView, ctx: &AppContext) -> AIQueryRouting {
+    let model = view.model.lock();
+    resolve_ai_query_routing(view.id(), view.ambient_agent_view_model(), &model, ctx)
+}
+
+#[test]
+fn test_continue_in_cloud_tombstone_routes_third_party_followup_to_new_cloud_vm() {
+    // REMOTE-2047: a third-party harness (Claude Code, etc.) run that ended surfaces a "Continue"
+    // tombstone instead of an inline follow-up input. While the pane is still a finished (read-only)
+    // viewer the follow-up routing is `UnconnectedReadOnly` (submission blocked with a toast).
+    // Clicking Continue (`start_cloud_followup_from_tombstone`) clears the finished-viewer state and
+    // enables the input, so the routing must flip to `NewCloudVm` and the follow-up starts a new
+    // cloud VM via cloud-to-cloud handoff.
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let task = create_cloud_mode_task_for_user(TEST_USER_UID);
+        let task_id = task.task_id;
+
+        insert_cloud_mode_task_with_server_metadata(
+            &mut app,
+            terminal.id(),
+            task,
+            AIAgentHarness::ClaudeCode,
+            current_user_owner_permissions(),
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            let ambient_agent_view_model = view
+                .ambient_agent_view_model()
+                .expect("cloud mode terminal should have ambient model")
+                .clone();
+            ambient_agent_view_model.update(ctx, |model, ctx| {
+                model.enter_viewing_existing_session(task_id, ctx);
+            });
+            // Simulate the live shared session ending: the pane is now a finished (read-only)
+            // viewer of the ended ambient run.
+            {
+                let mut model = view.model.lock();
+                model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    task_id.to_string(),
+                )));
+                model.set_shared_session_status(SharedSessionStatus::FinishedViewer);
+            }
+
+            // The ended third-party run resolves to the "Continue in cloud" tombstone.
+            assert!(matches!(
+                view.cloud_conversation_continuation_ui_state(ctx),
+                Some(CloudConversationContinuationUiState::Tombstone {
+                    cta: Some(TombstoneCta::ContinueInCloud { task_id: resolved }),
+                }) if resolved == task_id
+            ));
+
+            // Before clicking Continue, the finished viewer is read-only and follow-ups are blocked.
+            assert_eq!(
+                query_routing(view, ctx),
+                AIQueryRouting::UnconnectedReadOnly
+            );
+
+            // Click "Continue" on the tombstone (the real handler for that button).
+            view.start_cloud_followup_from_tombstone(task_id, ctx);
+
+            // Continue cleared the finished-viewer state, so the pane is editable...
+            assert!(matches!(
+                view.model.lock().shared_session_status(),
+                SharedSessionStatus::NotShared
+            ));
+            // ...and the follow-up now starts a new cloud VM instead of being blocked.
+            assert_eq!(
+                query_routing(view, ctx),
+                AIQueryRouting::NewCloudVm { task_id }
+            );
         });
     });
 }

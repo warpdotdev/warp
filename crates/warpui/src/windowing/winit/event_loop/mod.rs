@@ -11,6 +11,7 @@ use futures_util::stream::AbortHandle;
 use instant::{Duration, Instant};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_errors::report_error;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::JsCast;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition};
@@ -617,7 +618,7 @@ impl EventLoop {
                         self.callbacks.for_window(window).window_resized(window);
                     }
                     Err(err) => {
-                        log::error!("Failed to open window: {err:#}");
+                        report_error!(err.context("Failed to open window"));
                         // Tell the app that the window is "closing".
                         self.callbacks.window_will_close(window_id);
                     }
@@ -1636,7 +1637,11 @@ impl EventLoop {
                         // We won't receive MouseInput::Released after drag_window.
                         match winit_window.drag_window() {
                             Ok(_) => window_state.current_mouse_button_pressed = None,
-                            Err(err) => log::error!("error dragging window: {err:?}"),
+                            Err(err) => {
+                                report_error!(
+                                    anyhow::Error::new(err).context("error dragging window")
+                                )
+                            }
                         }
                     }
                 }
@@ -1868,7 +1873,9 @@ impl EventLoop {
         let on_input = Box::new(move |input: SoftKeyboardInput| {
             log::debug!("Soft keyboard callback received input: {:?}", input);
             if let Err(e) = proxy.send_event(CustomEvent::SoftKeyboardInput(input)) {
-                log::error!("Failed to send SoftKeyboardInput event: {:?}", e);
+                report_error!(
+                    anyhow::anyhow!("{e:?}").context("Failed to send SoftKeyboardInput event")
+                );
             }
         });
 
@@ -1878,7 +1885,8 @@ impl EventLoop {
                 self.soft_keyboard_manager = Some(manager);
             }
             Err(err) => {
-                log::error!("Failed to initialize soft keyboard manager: {:?}", err);
+                report_error!(anyhow::anyhow!("{err:?}")
+                    .context("Failed to initialize soft keyboard manager"));
             }
         }
     }

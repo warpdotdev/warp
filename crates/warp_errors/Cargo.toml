@@ -1,0 +1,27 @@
+[package]
+name = "warp_errors"
+edition = "2021"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+
+[features]
+crash_reporting = ["dep:sentry"]
+# Built-in ErrorExt classifications for common third-party error types. Enabled
+# by warp_core so the app registers them; kept optional so leaf crates that only
+# need report_error! don't pull these heavier dependencies.
+reqwest-errors = ["dep:reqwest", "dep:http"]
+tokio-errors = ["dep:tokio"]
+websocket-errors = ["dep:websocket", "dep:http"]
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+inventory = "0.3.20"
+sentry = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { workspace = true, optional = true }
+websocket = { workspace = true, optional = true }

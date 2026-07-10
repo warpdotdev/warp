@@ -1,6 +1,7 @@
 //! A CLI tool for manually testing computer use actions.
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use computer_use::{
@@ -12,14 +13,16 @@ use computer_use::{
 #[command(name = "use_computer")]
 #[command(about = "Manually test computer use actions")]
 struct Cli {
-    /// Experimental (macOS only): target a specific background window/process instead of the
-    /// screen. Deliver events directly to this process ID (and `--window-id`, if given) without
-    /// moving the real cursor or raising the window.
+    /// Experimental (macOS and Linux X11): target a specific background window/process instead
+    /// of the screen, without moving the real cursor. On macOS events are delivered to this
+    /// process ID; on Linux X11 delivery is addressed by `--window-id` and the pid is
+    /// informational.
     #[arg(long, global = true)]
     pid: Option<i32>,
 
-    /// Experimental (macOS only): the CGWindowID of the window to target. Required when `--pid`
-    /// is given. Use the `windows` subcommand to list window ids.
+    /// Experimental (macOS and Linux X11): the platform window id to target (a CGWindowID on
+    /// macOS, an X window id on Linux). Required when `--pid` is given. Use the `windows`
+    /// subcommand to list window ids.
     #[arg(long, global = true)]
     window_id: Option<u32>,
 
@@ -28,16 +31,14 @@ struct Cli {
 }
 
 impl Cli {
-    /// Resolves the per-action / screenshot target from the CLI flags. A `--pid` selects a
-    /// background window target; otherwise the legacy whole-screen target is used. Callers must
-    /// validate that `--window-id` is present whenever `--pid` is given (see `main`), so the
-    /// ambiguous `0` sentinel is never sent to the actor.
+    /// Resolves the per-action / screenshot target from the CLI flags. `--pid` plus
+    /// `--window-id` selects a background window target; otherwise the legacy whole-screen
+    /// target is used. `main` rejects lone flags up front, so a partial combination can never
+    /// silently downgrade to screen targeting or produce a `0`-id window target.
     fn target(&self) -> Target {
         match (self.pid, self.window_id) {
             (Some(pid), Some(window_id)) => Target::Window { window_id, pid },
-            // `--pid` without `--window-id` is rejected up front in `main`; fall back to the
-            // screen target here so a missing id can never become a `0`-id window target.
-            (Some(_), None) | (None, _) => Target::Screen,
+            (Some(_), None) | (None, Some(_)) | (None, None) => Target::Screen,
         }
     }
 }
@@ -73,8 +74,8 @@ enum Command {
         /// The key to press. Can be a single character (e.g., "a") or a keycode (e.g., "0x24" for Return on macOS).
         key: String,
     },
-    /// Experimental (macOS only): list on-screen windows with their window number, owner PID,
-    /// owner name, layer, and bounds, to help identify the right target PID/window.
+    /// Experimental (macOS and Linux X11): list on-screen windows with their window number,
+    /// owner PID, owner name, and bounds, to help identify the right target PID/window.
     Windows,
 }
 
@@ -120,34 +121,50 @@ fn parse_region(s: &str) -> Result<(i32, i32, i32, i32), String> {
     Ok((x1, y1, x2, y2))
 }
 
+// The binary exits by returning an `ExitCode` rather than calling `std::process::exit`, which
+// would skip `Drop` implementations: on Linux X11 the actor owns a server-global input device
+// pair that must be removed when the actor is dropped.
 #[tokio::main(flavor = "current_thread")]
-async fn main() {
+async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     // Window listing does not go through the actor's action model; handle it up front.
     if let Command::Windows = cli.command {
-        match computer_use::experimental_list_windows() {
-            Ok(text) => print!("{text}"),
+        return match computer_use::experimental_list_windows() {
+            Ok(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
             Err(e) => {
                 eprintln!("Error: {e}");
-                std::process::exit(1);
+                ExitCode::FAILURE
             }
-        }
-        return;
+        };
     }
 
-    // A window target needs a concrete window id; require it alongside `--pid` so the ambiguous
-    // `0` sentinel is never sent to the actor.
-    if cli.pid.is_some() && cli.window_id.is_none() {
-        eprintln!(
-            "--window-id is required when --pid is given. Use the `windows` subcommand to list \
-             window ids."
-        );
-        std::process::exit(1);
+    // Window targeting needs both flags: the window id addresses the window, and a lone
+    // `--window-id` must not silently downgrade to screen targeting (nor a lone `--pid`
+    // produce the ambiguous `0` window-id sentinel).
+    match (cli.pid.is_some(), cli.window_id.is_some()) {
+        (true, false) => {
+            eprintln!(
+                "--window-id is required when --pid is given. Use the `windows` subcommand to \
+                 list window ids."
+            );
+            return ExitCode::FAILURE;
+        }
+        (false, true) => {
+            eprintln!(
+                "--pid is required when --window-id is given (on Linux X11 the pid is \
+                 informational, but both flags select window targeting together). Use the \
+                 `windows` subcommand to list window ids and pids."
+            );
+            return ExitCode::FAILURE;
+        }
+        (true, true) | (false, false) => {}
     }
 
     let target = cli.target();
-    let mut actor = computer_use::create_actor();
 
     let (actions, screenshot_params, output_path) = match cli.command {
         Command::Click { x, y, button } => {
@@ -183,24 +200,12 @@ async fn main() {
             )
         }
         Command::Keypress { key } => {
-            // Parse key: if it starts with "0x", treat as keycode; otherwise as character
-            let key = if key.starts_with("0x") || key.starts_with("0X") {
-                let keycode = i32::from_str_radix(&key[2..], 16).unwrap_or_else(|_| {
-                    eprintln!("Invalid keycode: {key}");
-                    std::process::exit(1);
-                });
-                Key::Keycode(keycode)
-            } else {
-                let mut chars = key.chars();
-                let ch = chars.next().unwrap_or_else(|| {
-                    eprintln!("Key cannot be empty");
-                    std::process::exit(1);
-                });
-                if chars.next().is_some() {
-                    eprintln!("Key must be a single character, got: {key}");
-                    std::process::exit(1);
+            let key = match parse_key(&key) {
+                Ok(key) => key,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
                 }
-                Key::Char(ch)
             };
             (
                 vec![Action::KeyDown { key: key.clone() }, Action::KeyUp { key }],
@@ -208,7 +213,7 @@ async fn main() {
                 None,
             )
         }
-        // Handled before the actor is created, above.
+        // Handled up front, above.
         Command::Windows => unreachable!(),
     };
 
@@ -224,6 +229,7 @@ async fn main() {
         background_enabled: true,
     };
 
+    let mut actor = computer_use::create_actor();
     match actor.perform_actions(&actions, options).await {
         Ok(result) => {
             if let Some(pos) = result.cursor_position {
@@ -234,7 +240,7 @@ async fn main() {
             {
                 if let Err(e) = std::fs::write(&path, &screenshot.data) {
                     eprintln!("Failed to write screenshot: {e}");
-                    std::process::exit(1);
+                    return ExitCode::FAILURE;
                 }
                 println!(
                     "Screenshot saved to {} ({}x{})",
@@ -243,10 +249,28 @@ async fn main() {
                     screenshot.height
                 );
             }
+            ExitCode::SUCCESS
         }
         Err(e) => {
             eprintln!("Error: {e}");
-            std::process::exit(1);
+            ExitCode::FAILURE
         }
     }
+}
+
+/// Parses a key argument: a "0x"-prefixed platform keycode, or a single character.
+fn parse_key(key: &str) -> Result<Key, String> {
+    if key.starts_with("0x") || key.starts_with("0X") {
+        let keycode =
+            i32::from_str_radix(&key[2..], 16).map_err(|_| format!("Invalid keycode: {key}"))?;
+        return Ok(Key::Keycode(keycode));
+    }
+    let mut chars = key.chars();
+    let ch = chars
+        .next()
+        .ok_or_else(|| "Key cannot be empty".to_string())?;
+    if chars.next().is_some() {
+        return Err(format!("Key must be a single character, got: {key}"));
+    }
+    Ok(Key::Char(ch))
 }

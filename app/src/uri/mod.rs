@@ -13,6 +13,8 @@ use anyhow::{anyhow, ensure, Result};
 use itertools::Itertools;
 use session_sharing_protocol::common::SessionId;
 use url::Url;
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::notification::UserNotification;
 use warpui::platform::TerminationMode;
@@ -492,7 +494,7 @@ impl UriHost {
                     let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx)
                         .update(ctx, |manager, _ctx| manager.handle_oauth_callback(url));
                     if let Err(e) = result {
-                        log::error!("Failed to handle MCP OAuth callback: {e:?}");
+                        report_error!(e.context("Failed to handle MCP OAuth callback"));
                     }
                 }
             }

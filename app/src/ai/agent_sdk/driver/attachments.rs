@@ -10,6 +10,7 @@ use mime_guess::from_path;
 use tokio::fs;
 use tokio_util::io::StreamReader;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::task::{AttachmentInput, TaskAttachment};
@@ -75,7 +76,7 @@ pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
     attachments_dir: PathBuf,
 ) -> anyhow::Result<Option<String>> {
     if !FeatureFlag::OzHandoff.is_enabled() {
-        log::error!(
+        report_error!(
             "fetch_and_download_handoff_snapshot_attachments called with OzHandoff disabled; \
              call sites should gate on the flag before invoking"
         );

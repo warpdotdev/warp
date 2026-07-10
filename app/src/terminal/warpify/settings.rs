@@ -6,6 +6,7 @@ use settings::{
     ChangeEventReason, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
 use strum_macros::EnumIter;
+use warp_errors::report_error;
 use warp_util::path::ShellFamily;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -366,12 +367,12 @@ impl WarpifySettings {
         handle.update(ctx, |me, ctx| {
             if me.enable_ssh_wrapper.is_value_explicitly_set() && !*me.enable_ssh_wrapper.value() {
                 if let Err(e) = me.enable_ssh_warpification.set_value(false, ctx) {
-                    log::error!(
-                        "Failed to migrate enable_ssh_wrapper → enable_ssh_warpification: {e}"
-                    );
+                    report_error!(e.context(
+                        "Failed to migrate enable_ssh_wrapper → enable_ssh_warpification"
+                    ));
                 }
                 if let Err(e) = me.enable_ssh_wrapper.set_value(true, ctx) {
-                    log::error!("Failed to reset enable_ssh_wrapper after migration: {e}");
+                    report_error!(e.context("Failed to reset enable_ssh_wrapper after migration"));
                 }
             }
         });
@@ -385,10 +386,10 @@ impl WarpifySettings {
             if me.use_ssh_tmux_wrapper.is_value_explicitly_set() && *me.use_ssh_tmux_wrapper.value()
             {
                 if let Err(e) = me.ssh_tmux_deprecation_notice_pending.set_value(true, ctx) {
-                    log::error!("Failed to set ssh_tmux_deprecation_notice_pending: {e}");
+                    report_error!(e.context("Failed to set ssh_tmux_deprecation_notice_pending"));
                 }
                 if let Err(e) = me.use_ssh_tmux_wrapper.set_value(false, ctx) {
-                    log::error!("Failed to reset use_ssh_tmux_wrapper: {e}");
+                    report_error!(e.context("Failed to reset use_ssh_tmux_wrapper"));
                 }
             }
         });
@@ -564,7 +565,7 @@ impl WarpifySettings {
             .ssh_tmux_deprecation_notice_pending
             .set_value(false, ctx)
         {
-            log::error!("Failed to clear ssh_tmux_deprecation_notice_pending: {e}");
+            report_error!(e.context("Failed to clear ssh_tmux_deprecation_notice_pending"));
         }
         ctx.notify();
     }

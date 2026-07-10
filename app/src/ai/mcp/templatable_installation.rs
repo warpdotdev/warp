@@ -6,6 +6,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 
 use crate::ai::mcp::{TemplatableMCPServer, TemplateVariable};
@@ -62,7 +63,8 @@ impl TemplatableMCPServerInstallation {
         let variable_values_json = match serde_json::to_string(&variable_values) {
             Ok(json) => json,
             Err(err) => {
-                log::error!("Failed to serialize variable values for hashing: {err}");
+                report_error!(anyhow::Error::new(err)
+                    .context("Failed to serialize variable values for hashing"));
                 return None;
             }
         };

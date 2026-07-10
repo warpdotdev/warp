@@ -46,7 +46,7 @@ impl ResourceCenterFooterItem {
     pub fn ui_label(&self) -> &'static str {
         match self {
             ResourceCenterFooterItem::Docs => "Docs",
-            ResourceCenterFooterItem::Slack => "Slack",
+            ResourceCenterFooterItem::Slack => "Join our Slack community",
             ResourceCenterFooterItem::Feedback => "Feedback",
         }
     }

@@ -101,7 +101,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/scan-new-specs/SKILL.md",
-      "computedHash": "9d7122b42fb72560a6d64634fe3f7504ac5e2b2c994a72c082124c5e3314d372"
+      "computedHash": "684f0008445e6e68e1fbef759e7a2b85ac90e0c0a1b884dd32f4da49405ebca0"
     },
     "spec-driven-implementation": {
       "source": "warpdotdev/common-skills",
@@ -125,7 +125,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/write-feature-docs/SKILL.md",
-      "computedHash": "298c7356f92c0cfb9b95ed4cc4c0a547ff1a3ac22e2eef3c1ce268efdb1a35c9"
+      "computedHash": "5aeb3b1b5b298deca5774023efd2bfbd1ac7c2b9b0cd4467dc721e336f8fd344"
     },
     "write-product-spec": {
       "source": "warpdotdev/common-skills",

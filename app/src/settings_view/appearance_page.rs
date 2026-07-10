@@ -7,6 +7,7 @@ use std::rc::Rc;
 use ::settings::{Setting, SettingSection, ToggleableSetting};
 use enum_iterator::all;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::{report_error, report_if_error};
 use warp_util::path::user_friendly_path;
 use warpui::elements::{
     Align, Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -97,7 +98,7 @@ use crate::workspace::tab_settings::{
     WorkspaceDecorationVisibility,
 };
 use crate::workspace::WorkspaceAction;
-use crate::{report_error, report_if_error, send_telemetry_from_ctx, themes};
+use crate::{send_telemetry_from_ctx, themes};
 
 const FONT_SIZE_INPUT_BOX_WIDTH: f32 = 80.;
 const NOTEBOOK_FONT_SIZE_INPUT_BOX_WIDTH: f32 = 50.;
@@ -1127,7 +1128,9 @@ impl AppearanceSettingsPageView {
                 .iter()
                 .position(|val| *val == current_value)
                 .unwrap_or_else(|| {
-                    log::error!("Could not find current ThinStrokes value in dropdown option list");
+                    report_error!(
+                        "Could not find current ThinStrokes value in dropdown option list"
+                    );
                     0
                 });
 
@@ -1163,7 +1166,7 @@ impl AppearanceSettingsPageView {
                 .iter()
                 .position(|val| *val == current_value)
                 .unwrap_or_else(|| {
-                    log::error!("Could not find current InputMode value in dropdown option list");
+                    report_error!("Could not find current InputMode value in dropdown option list");
                     0
                 });
 
@@ -1198,7 +1201,7 @@ impl AppearanceSettingsPageView {
                 .iter()
                 .position(|val| *val == current_value)
                 .unwrap_or_else(|| {
-                    log::error!("Could not find current AppIcon value in dropdown option list");
+                    report_error!("Could not find current AppIcon value in dropdown option list");
                     0
                 });
 
@@ -1230,7 +1233,7 @@ impl AppearanceSettingsPageView {
             let current_value = *FontSettings::as_ref(ctx)
                 .enforce_minimum_contrast;
             let selected_index = values.iter().position(|val| *val == current_value).unwrap_or_else(|| {
-                log::error!("Could not find current EnforceMinimumContrast value in dropdown option list");
+                report_error!("Could not find current EnforceMinimumContrast value in dropdown option list");
                 0
             });
 
@@ -2495,7 +2498,7 @@ impl AppearanceSettingsPageView {
 
             let current_value = TabSettings::as_ref(ctx).workspace_decoration_visibility;
             let selected_index = values.iter().position(|val| *val == current_value).unwrap_or_else(|| {
-                log::error!("Could not find current WorkspaceDecorationVisibility value in dropdown option list");
+                report_error!("Could not find current WorkspaceDecorationVisibility value in dropdown option list");
                 0
             });
 
@@ -2521,7 +2524,7 @@ impl AppearanceSettingsPageView {
 
             let current_value = TabSettings::as_ref(ctx).close_button_position;
             let selected_index = values.iter().position(|val| *val == current_value).unwrap_or_else(|| {
-                log::error!("Could not find current TabCloseButtonPosition value in dropdown option list");
+                report_error!("Could not find current TabCloseButtonPosition value in dropdown option list");
                 0
             });
 
@@ -5048,7 +5051,10 @@ impl SettingsWidget for DirectoryTabColorsWidget {
             dirs::home_dir().and_then(|home_dir| home_dir.to_str().map(|s| s.to_owned()));
         for (idx, (dir_path, current_color)) in directory_tab_colors(app).into_iter().enumerate() {
             let Some(dot_mouse_states) = view.color_picker_dot_states.get(idx).cloned() else {
-                log::error!("Missing color picker dot states for directory index {idx}");
+                report_error!(
+                    "Missing color picker dot states for directory",
+                    extra: { "index" => %idx }
+                );
                 continue;
             };
 

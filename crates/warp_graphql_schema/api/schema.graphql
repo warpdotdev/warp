@@ -613,9 +613,33 @@ type BundledActions {
   latestTimestamp: Time!
   oldestTimestamp: Time!
 }
+"""
+A configured first-party provider credential. Presence in the list means a key is
+configured for that provider.
+"""
+type ByoFirstPartyKey {
+  credentialUid: ID!
+  provider: LlmProvider!
+}
 
 type ByoApiKeyPolicy {
   enabled: Boolean!
+}
+type ByoEndpointMetadata {
+  "Credential handle for this endpoint."
+  credentialUid: ID!
+  enabled: Boolean!
+  models: [ByoEndpointModelMetadata!]!
+  name: String!
+  uid: ID!
+}
+
+type ByoEndpointModelMetadata {
+  alias: String
+  configKey: String!
+  displayName: String!
+  enabled: Boolean!
+  slug: String!
 }
 
 type ByoEndpointPolicy {
@@ -2268,6 +2292,9 @@ type ManagedSecretConfig {
   """
   publicKey: String
 }
+type ManagedByokByoePolicy {
+  enabled: Boolean!
+}
 
 """A managed secret value representing an OpenAI API key."""
 type ManagedSecretOpenAiApiKeyValue {
@@ -3593,6 +3620,14 @@ type TeamSizePolicy {
   isUnlimited: Boolean!
   limit: Int!
 }
+type TeamByoSettings {
+  allowUserEndpoints: Boolean!
+  allowUserKeys: Boolean!
+  endpoints: [ByoEndpointMetadata!]!
+  endpointsEnabled: Boolean!
+  firstPartyEnabled: Boolean!
+  firstPartyKeys: [ByoFirstPartyKey!]!
+}
 
 type TelemetryDataCollectionPolicy {
   default: Boolean!
@@ -3629,6 +3664,7 @@ type Tier {
   enterpriseSecretRedactionPolicy: EnterpriseSecretRedactionPolicy
   enterpriseSpendingLimitsPolicy: EnterpriseSpendingLimitsPolicy
   enterpriseUsageThresholdsPolicy: EnterpriseUsageThresholdsPolicy
+  managedByokByoePolicy: ManagedByokByoePolicy
   multiAdminPolicy: MultiAdminPolicy
   name: String!
   pricing: TierPricing
@@ -4434,6 +4470,7 @@ type WorkspaceSettings {
   llmSettings: LlmSettings!
   sandboxedAgentSettings: SandboxedAgentSettings
   secretRedactionSettings: SecretRedactionSettings!
+  teamByo: TeamByoSettings
   telemetrySettings: TelemetrySettings!
   ugcCollectionSettings: UgcCollectionSettings!
   usageBasedPricingSettings: UsageBasedPricingSettings!

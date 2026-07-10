@@ -1,5 +1,6 @@
 mod cloud_mode_v2_view;
 mod data_source;
+mod mixer;
 mod search_item;
 pub(super) mod view;
 
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use ai::skills::SkillReference;
 pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
 pub use data_source::*;
+pub use mixer::{build_slash_command_mixer, slash_command_query, SlashCommandMixer};
 pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
@@ -16,6 +18,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
 use warp_util::path::{CleanPathResult, LineAndColumnArg};
 use warpui::clipboard::ClipboardContent;
@@ -877,7 +880,7 @@ impl Input {
                     .map(|path| path.to_path_buf())
                     .map(|path| path.to_string_lossy().to_string())
                 else {
-                    log::error!("Expected a valid working directory since /pr-comments is only available from the terminal");
+                    report_error!("Expected a valid working directory since /pr-comments is only available from the terminal");
                     return false;
                 };
 
@@ -936,6 +939,9 @@ impl Input {
             move_to_cloud if command.name == commands::MOVE_TO_CLOUD.name => {
                 if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
                     return false;
+                }
+                if self.block_cloud_handoff_if_model_unsupported(ctx) {
+                    return true;
                 }
                 let prompt = argument
                     .map(|argument| argument.trim())
@@ -1089,7 +1095,7 @@ impl Input {
             compact_and if command.name == commands::COMPACT_AND.name => {
                 let conversation_id = if is_queued_prompt {
                     let Some(conversation_id) = queued_conversation_id else {
-                        log::error!("Queued /compact-and missing conversation id");
+                        report_error!("Queued /compact-and missing conversation id");
                         return true;
                     };
                     conversation_id
@@ -1110,7 +1116,7 @@ impl Input {
 
                 if is_queued_prompt {
                     let Some(queued_query_id) = queued_query_id else {
-                        log::error!("Queued /compact-and missing queued query id");
+                        report_error!("Queued /compact-and missing queued query id");
                         return true;
                     };
                     self.execute_queued_compact_and(

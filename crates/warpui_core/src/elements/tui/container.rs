@@ -26,7 +26,7 @@ use ratatui::style::Color;
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiSize, TuiStyle,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize, TuiStyle,
 };
 use crate::AppContext;
 
@@ -202,7 +202,7 @@ impl TuiElement for TuiContainer {
         constraint.clamp(size)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         if area.is_empty() {
             return;
         }
@@ -222,7 +222,7 @@ impl TuiElement for TuiContainer {
         self.child.present(ctx);
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         // `cursor_position` is reported relative to `area`'s origin, but the
         // child reports relative to the child area. Add the child-area offset
         // back so the cursor lands inside the border/padding.

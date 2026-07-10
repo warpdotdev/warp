@@ -5,11 +5,12 @@ use std::collections::HashSet;
 use anyhow::Context;
 #[cfg(test)]
 pub use tests::TestModel;
+use warp_errors::report_if_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::ServerExperiment;
 use crate::persistence::ModelEvent;
-use crate::{report_if_error, GlobalResourceHandlesProvider};
+use crate::GlobalResourceHandlesProvider;
 
 /// A global model for maintaining server-side experiment state.
 pub struct ServerExperiments {

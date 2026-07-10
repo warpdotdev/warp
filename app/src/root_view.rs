@@ -20,6 +20,7 @@ use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::safe_error;
 use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::{report_error, report_if_error};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Border, ChildAnchor, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
@@ -99,8 +100,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::{
-    report_if_error, send_telemetry_from_app_ctx, send_telemetry_from_ctx, ChannelState,
-    GlobalResourceHandles, GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
+    send_telemetry_from_app_ctx, send_telemetry_from_ctx, ChannelState, GlobalResourceHandles,
+    GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
 };
 
 const WINDOW_TITLE: &str = "Warp";
@@ -1885,7 +1886,10 @@ impl RootView {
                 })
             }
         } else {
-            log::error!("Error fetching server time {:?}", server_time.err());
+            report_error!(anyhow::anyhow!(
+                "Error fetching server time {:?}",
+                server_time.err()
+            ));
         }
     }
 
@@ -2626,7 +2630,8 @@ impl RootView {
     ) -> bool {
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
             handle.update(ctx, |workspace, ctx| {
-                workspace.add_tab_for_joining_shared_session(*session_id, ctx);
+                // Generic session link: ambient-ness (if any) is discovered at SessionJoined.
+                workspace.add_tab_for_joining_shared_session(*session_id, false, ctx);
             });
             let window_id = ctx.window_id();
             ctx.windows().show_window_and_focus_app(window_id);
@@ -2796,7 +2801,7 @@ impl RootView {
             );
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open warp drive");
+            report_error!("Auth not complete before trying to open warp drive");
         }
 
         // Use the team tester model to notify relevant subscribers to refresh their data.
@@ -2816,7 +2821,7 @@ impl RootView {
             );
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open team settings page");
+            report_error!("Auth not complete before trying to open team settings page");
         }
         true
     }
@@ -2835,7 +2840,10 @@ impl RootView {
             );
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open settings page {section:?}");
+            report_error!(
+                "Auth not complete before trying to open settings page",
+                extra: { "section" => ?section }
+            );
         }
         true
     }
@@ -2851,7 +2859,7 @@ impl RootView {
             ctx.dispatch_typed_action_for_view(window_id, handle.id(), &action);
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open settings");
+            report_error!("Auth not complete before trying to open settings");
         }
         true
     }
@@ -2878,7 +2886,7 @@ impl RootView {
             let window_id = ctx.window_id();
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open MCP settings page");
+            report_error!("Auth not complete before trying to open MCP settings page");
         }
         true
     }
@@ -2892,7 +2900,7 @@ impl RootView {
             });
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open Codex modal");
+            report_error!("Auth not complete before trying to open Codex modal");
         }
         true
     }
@@ -2911,7 +2919,7 @@ impl RootView {
             });
             ctx.windows().show_window_and_focus_app(window_id);
         } else {
-            log::error!("Auth not complete before trying to open Linear issue work");
+            report_error!("Auth not complete before trying to open Linear issue work");
         }
         true
     }
@@ -3012,8 +3020,8 @@ impl RootView {
                         }
                     }
                 }
-                UserAuthenticationError::Unexpected(err) => {
-                    log::error!("Encountered unexpected error when trying to fetch user: {err:#}");
+                UserAuthenticationError::Unexpected(_) => {
+                    report_error!(err);
                 }
                 UserAuthenticationError::InvalidStateParameter => {}
                 UserAuthenticationError::MissingStateParameter => {}
@@ -3131,7 +3139,7 @@ impl RootView {
                     };
                     ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
                 } else {
-                    log::error!("Received web handoff event in unexpected state");
+                    report_error!("Received web handoff event in unexpected state");
                 }
                 self.focus(ctx);
             }
@@ -3208,7 +3216,9 @@ impl RootView {
                         // Stop listening and proceed to transcription (don't abort).
                         voice_input.update(ctx, |voice_input, ctx| {
                             if let Err(e) = voice_input.stop_listening(ctx) {
-                                log::error!("Failed to stop voice input on key release: {e:?}");
+                                report_error!(
+                                    e.context("Failed to stop voice input on key release")
+                                );
                             }
                         });
                     }
@@ -3555,7 +3565,7 @@ impl AuthOnboardingState {
             AuthOnboardingState::WebImport(_) => {
                 // This case _shouldn't_ be possible - if SSO were required, it should be handled
                 // in the host app.
-                log::error!("SSO link required after web user import");
+                report_error!("SSO link required after web user import");
             }
             AuthOnboardingState::NeedsSsoLink { .. } => (),
             AuthOnboardingState::Onboarding { .. } | AuthOnboardingState::LoginSlide { .. } => {

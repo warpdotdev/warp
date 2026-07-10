@@ -12,6 +12,7 @@ use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigSt
 use ai::skills::SkillReference;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text, Wrap,
@@ -959,9 +960,9 @@ impl View for RunAgentsCardView {
             if let AIAgentActionResultType::RunAgents(orchestrate_result) = &result.result {
                 return render_terminal_state(orchestrate_result, appearance, app);
             }
-            log::error!(
-                "Unexpected action result type for orchestrate: {:?}",
-                result.result
+            report_error!(
+                "Unexpected action result type for orchestrate",
+                extra: { "result_type" => ?result.result }
             );
             return Empty::new().finish();
         }

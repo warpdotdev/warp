@@ -7,6 +7,7 @@ use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use warp_core::ui::theme::Fill;
 use warp_editor::editor::NavigationKey;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
@@ -749,7 +750,7 @@ impl WorkflowModal {
                     );
                 });
             }
-            _ => log::error!("Only one of a workflow ID or space can be specified for saving workflows, but both or neither were specified instead")
+            _ => report_error!("Only one of a workflow ID or space can be specified for saving workflows, but both or neither were specified instead")
         }
 
         self.close(true, ctx);
@@ -796,7 +797,7 @@ impl WorkflowModal {
                 .map(|workflow| workflow.permissions.owner),
             (None, Some(owner)) => Some(owner),
             _ => {
-                log::error!("Only one of a workflow ID or space can be specified");
+                report_error!("Only one of a workflow ID or space can be specified");
                 None
             }
         };

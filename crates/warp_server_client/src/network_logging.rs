@@ -2,6 +2,7 @@ use std::fmt;
 
 use bounded_vec_deque::BoundedVecDeque;
 use chrono::{DateTime, FixedOffset};
+use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext, SingletonEntity};
 
 /// Maximum number of network log items retained in memory. Matches the
@@ -78,7 +79,10 @@ impl NetworkLogModel {
                         chrono::Local::now().fixed_offset(),
                     ))
                 {
-                    log::error!("Error sending request from HTTP client to logging task: {error}");
+                    report_error!(
+                        anyhow::Error::new(error)
+                            .context("Error sending request from HTTP client to logging task")
+                    );
                 }
             }));
 
@@ -90,7 +94,10 @@ impl NetworkLogModel {
                         chrono::Local::now().fixed_offset(),
                     ))
                 {
-                    log::error!("Error sending response from HTTP client to logging task: {error}");
+                    report_error!(
+                        anyhow::Error::new(error)
+                            .context("Error sending response from HTTP client to logging task")
+                    );
                 }
             }));
         }

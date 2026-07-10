@@ -5,8 +5,10 @@
 //! Composition and layout stay with the views and the element library; the
 //! builder only owns styles.
 
+use pathfinder_color::ColorU;
 use warp::tui_export::Appearance;
 use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::Opacity;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -14,6 +16,8 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::AppContext;
+
+use crate::terminal_background::probed_colors;
 
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
 /// `UiBuilder` (minus fonts, which terminal cells don't have). Cheap to
@@ -31,23 +35,74 @@ impl TuiUiBuilder {
         }
     }
 
-    /// Style for primary response/body text.
+    /// Style for primary response/body text: the theme foreground at the
+    /// theme's main-text strength (the GUI's `text_main` recipe). The ANSI
+    /// palette's "white" slot is tuned for dark backgrounds only, so it would
+    /// wash out on light themes.
     pub(crate) fn primary_text_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().normal.white,
-        )))
+        TuiStyle::default()
+            .fg(self.foreground_text_color(self.warp_theme.details().main_text_opacity))
     }
 
-    /// Style for muted secondary text (e.g. thinking headers and bodies).
+    /// Style for muted secondary text (e.g. thinking headers and bodies): the
+    /// theme foreground at the theme's sub-text strength (the GUI's
+    /// `text_sub` recipe). The ANSI palette's "bright black" slot is only a
+    /// muted grey on dark backgrounds.
     pub(crate) fn muted_text_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().bright.black,
-        )))
+        TuiStyle::default()
+            .fg(self.foreground_text_color(self.warp_theme.details().sub_text_opacity))
+    }
+
+    /// The theme foreground over the transcript's base background at
+    /// `opacity` percent. Pre-blended to a solid because terminal cells drop
+    /// the alpha channel that the GUI's text tokens rely on.
+    fn foreground_text_color(&self, opacity: Opacity) -> Color {
+        cell_color(
+            self.base_background()
+                .blend(&self.warp_theme.foreground().with_opacity(opacity)),
+        )
     }
 
     /// Muted and dimmed: de-emphasized status rows (e.g. tool-call stubs).
     pub(crate) fn dim_text_style(&self) -> TuiStyle {
         self.muted_text_style().add_modifier(Modifier::DIM)
+    }
+
+    /// Style for error text (e.g. failed tool-call glyphs).
+    pub(crate) fn error_text_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.red,
+        )))
+    }
+
+    /// Green success glyph (e.g. ✓ on completed tool calls), mirroring the
+    /// GUI's `green_check_icon`.
+    pub(crate) fn success_glyph_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.green,
+        )))
+    }
+
+    /// Yellow attention glyph for executing or approval-blocked tool calls,
+    /// mirroring the GUI's `yellow_running_icon` / `yellow_stop_icon`.
+    pub(crate) fn attention_glyph_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.yellow,
+        )))
+    }
+
+    /// Style for added diff lines and `+n` counts (theme green).
+    pub(crate) fn diff_added_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.green,
+        )))
+    }
+
+    /// Style for removed diff lines and `−n` counts (theme red).
+    pub(crate) fn diff_removed_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.red,
+        )))
     }
 
     /// Bold foreground over the accent-tinted input background; pair with
@@ -62,7 +117,18 @@ impl TuiUiBuilder {
     /// The accent-tinted background behind the user-input section.
     pub(crate) fn input_background(&self) -> Color {
         let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
-        cell_color(self.warp_theme.background().blend(&accent.with_opacity(20)))
+        cell_color(self.base_background().blend(&accent.with_opacity(20)))
+    }
+
+    /// The background the transcript actually renders over: default cells
+    /// stay bg-unset, so it is the terminal's *own* background when the
+    /// startup probe captured it, else the theme background as the closest
+    /// approximation.
+    fn base_background(&self) -> ThemeFill {
+        match probed_colors().bg {
+            Some(bg) => ThemeFill::Solid(ColorU::new(bg.r, bg.g, bg.b, u8::MAX)),
+            None => self.warp_theme.background(),
+        }
     }
 
     /// Accent-colored border style for focused/primary containers.
@@ -70,6 +136,36 @@ impl TuiUiBuilder {
         TuiStyle::default().fg(cell_color(ThemeFill::from(
             self.warp_theme.terminal_colors().normal.cyan,
         )))
+    }
+
+    /// Style in the shell-mode accent color (the same blue the GUI uses for
+    /// `!` shell mode).
+    pub(crate) fn shell_mode_accent_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
+    }
+
+    /// The warping indicator's base fill (spinner glyph and "Warping" text):
+    /// the terminal palette's normal yellow, per the TUI design.
+    fn warping_base_fill(&self) -> ThemeFill {
+        ThemeFill::from(self.warp_theme.terminal_colors().normal.yellow)
+    }
+
+    /// The warping indicator's base color as a solid color, for per-glyph
+    /// shimmer lerping.
+    pub(crate) fn warping_base_color(&self) -> ColorU {
+        self.warping_base_fill().into_solid()
+    }
+
+    /// The peak color the "Warping" shimmer band lerps toward: the theme
+    /// foreground, the highest-contrast color over the theme's background
+    /// (the palette's bright white would vanish on light backgrounds).
+    pub(crate) fn warping_shimmer_color(&self) -> ColorU {
+        self.warp_theme.foreground().into_solid()
+    }
+
+    /// Style for the warping indicator's spinner glyph.
+    pub(crate) fn warping_spinner_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(self.warping_base_fill()))
     }
 
     /// Collapsible-header style while the pointer hovers it.

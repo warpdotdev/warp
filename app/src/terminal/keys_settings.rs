@@ -1,9 +1,9 @@
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+use warp_errors::{report_error, report_if_error};
 use warpui::keymap::Keystroke;
 use warpui::{AppContext, DisplayIdx, ModelContext};
 
-use crate::report_if_error;
 use crate::root_view::{update_quake_window_bounds, QuakeModePinPosition};
 use crate::settings::{
     CtrlTabBehavior, ExtraMetaKeys as ExtraMetaKeysEnum, GlobalHotkeyMode, SizePercentages,
@@ -201,7 +201,7 @@ impl KeysSettings {
         }
 
         if *self.quake_mode_enabled && *self.activation_hotkey_enabled {
-            log::error!("Both quake mode AND activation hotkey enabled. Either one or the other should be active.");
+            report_error!("Both quake mode AND activation hotkey enabled. Either one or the other should be active.");
             // Quake mode takes precedence
             selected = GlobalHotkeyMode::QuakeMode;
         } else if *self.quake_mode_enabled {

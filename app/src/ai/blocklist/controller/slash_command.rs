@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{
@@ -148,7 +149,7 @@ impl SlashCommandRequest {
                 Some(controller.start_new_conversation_for_request(ctx).id())
             }
         }) else {
-            log::error!("Failed to get conversation ID for slash command request");
+            report_error!("Failed to get conversation ID for slash command request");
             return;
         };
 
@@ -211,7 +212,7 @@ impl SlashCommandRequest {
                     });
                 }
             }
-            Err(e) => log::error!("Failed to send agent slash command request: {e:?}"),
+            Err(e) => report_error!(e.context("Failed to send agent slash command request")),
         }
     }
 

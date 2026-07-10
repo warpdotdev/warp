@@ -10,6 +10,7 @@ use derivative::Derivative;
 use http::StatusCode;
 use lazy_static::lazy_static;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::r#async::FutureId;
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
@@ -978,7 +979,9 @@ impl SyncQueue {
                                 if let Some(initial_folder_id) = self.try_server_id(sync_id) {
                                     Some(initial_folder_id)
                                 } else {
-                                    log::error!("Couldn't find corresponding folder id: skipping");
+                                    report_error!(
+                                        "Couldn't find corresponding folder id: skipping"
+                                    );
                                     // Dequeue the next item
                                     self.dequeue(ctx);
                                     return;
@@ -1116,7 +1119,7 @@ impl SyncQueue {
         let server_id = match self.try_server_id(id) {
             Some(id) => id,
             None => {
-                log::error!("Couldn't find corresponding server id: skipping");
+                report_error!("Couldn't find corresponding server id: skipping");
                 // Dequeue the next item.
                 self.dequeue(ctx);
                 return;
@@ -1201,7 +1204,7 @@ impl SyncQueue {
                 if let Some(initial_folder_id) = self.try_server_id(sync_id) {
                     Some(initial_folder_id)
                 } else {
-                    log::error!("Couldn't find corresponding folder id: skipping");
+                    report_error!("Couldn't find corresponding folder id: skipping");
                     // Dequeue the next item
                     self.dequeue(ctx);
                     return;
@@ -1434,7 +1437,7 @@ impl SyncQueue {
         let object_id = match self.try_server_id(sync_id) {
             Some(object_id) => object_id,
             None => {
-                log::error!("Couldn't find corresponding object id: skipping");
+                report_error!("Couldn't find corresponding object id: skipping");
 
                 // Fail the update
                 self.handle_update_failure_response(sync_id, queue_item_id, ctx);

@@ -8,6 +8,7 @@ use itertools::Itertools;
 use warp_completer::completer::CommandExitStatus;
 use warp_core::r#async::debounce;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
@@ -626,7 +627,7 @@ impl CurrentPrompt {
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(chip) = chip_kind.to_chip() else {
-            log::error!("Undefined chip: {chip_kind:?}");
+            report_error!("Undefined chip", extra: { "chip_kind" => ?chip_kind });
             return;
         };
 
@@ -916,7 +917,7 @@ impl CurrentPrompt {
         }
 
         let Some(chip) = chip_kind.to_chip() else {
-            log::error!("Undefined chip: {chip_kind:?}");
+            report_error!("Undefined chip", extra: { "chip_kind" => ?chip_kind });
             return;
         };
         if let RefreshConfig::Periodically { interval } = chip.refresh_config() {
@@ -956,7 +957,7 @@ impl CurrentPrompt {
 
         chips.iter().for_each(|chip_kind| {
             let Some(chip) = chip_kind.to_chip() else {
-                log::error!("Undefined chip: {chip_kind:?}");
+                report_error!("Undefined chip", extra: { "chip_kind" => ?chip_kind });
                 return;
             };
             // Add states of new chips
@@ -1328,7 +1329,7 @@ impl CurrentPrompt {
                                 .into_item(),
                         )
                     } else {
-                        log::error!("Missing definition for chip: {chip_kind:?}");
+                        report_error!("Missing definition for chip", extra: { "chip_kind" => ?chip_kind });
                         None
                     }
                 } else {

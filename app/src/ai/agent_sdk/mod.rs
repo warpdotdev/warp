@@ -33,6 +33,7 @@ use warp_cli::share::ShareRequest;
 use warp_cli::task::{MessageCommand, TaskCommand};
 use warp_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_graphql::object_permissions::OwnerType;
 use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
@@ -313,10 +314,8 @@ fn run_agent(
             if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--harness' found"));
             }
-            if args.claude_auth_secret.is_some() && args.harness != Harness::Claude {
-                return Err(anyhow::anyhow!(
-                    "--claude-auth-secret is only valid with --harness claude."
-                ));
+            if let Err(msg) = args.validate_auth_secrets() {
+                return Err(anyhow::anyhow!(msg));
             }
             if args.runner.is_some() && !FeatureFlag::CloudRunners.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--runner' found"));
@@ -1133,13 +1132,14 @@ impl AgentDriverRunner {
         let task_id = match server_api
             .create_agent_task(prompt, environment, None, task_config)
             .await
+            .context("Failed to create task")
         {
             Ok(id) => {
                 log::info!("Created task: {id}");
                 Some(id)
             }
             Err(e) => {
-                log::error!("Failed to create task: {e}");
+                report_error!(e);
                 // Continue without a task_id rather than failing entirely
                 None
             }
@@ -1181,10 +1181,10 @@ impl AgentDriverRunner {
             })
             .await?;
 
-        let parsed_task_id = match task_id_str.parse() {
+        let parsed_task_id = match task_id_str.parse().context("Failed to parse task ID") {
             Ok(id) => Some(id),
             Err(e) => {
-                log::error!("Failed to parse task ID: {e}");
+                report_error!(e);
                 None
             }
         };
@@ -1426,7 +1426,10 @@ impl AgentDriverRunner {
         let environment = foreground
             .spawn(move |_, ctx| -> Result<_, AgentDriverError> {
                 let server_id = ServerId::try_from(environment_id.as_str()).map_err(|_| {
-                    log::error!("Invalid environment ID: {environment_id}");
+                    report_error!(
+                        "Invalid environment ID",
+                        extra: { "environment_id" => %environment_id }
+                    );
                     AgentDriver::log_valid_environments(ctx);
                     AgentDriverError::EnvironmentNotFound(environment_id.clone())
                 })?;
@@ -1434,7 +1437,10 @@ impl AgentDriverRunner {
 
                 CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx)
                     .ok_or_else(|| {
-                        log::error!("Environment not found with ID: {environment_id}");
+                        report_error!(
+                            "Environment not found with ID",
+                            extra: { "environment_id" => %environment_id }
+                        );
                         AgentDriver::log_valid_environments(ctx);
                         AgentDriverError::EnvironmentNotFound(environment_id)
                     })
