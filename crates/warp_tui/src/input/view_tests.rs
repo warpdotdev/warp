@@ -3,13 +3,15 @@
 //! These drive a real [`CodeEditorModel`] (TUI char-cell mode) behind a real
 //! [`TuiInputView`] so they exercise the exact render/layout/cursor path the
 //! presenter uses, not a reimplementation of it.
-
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use string_offset::CharOffset;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
-use warp::tui_export::BlocklistAIInputModel;
+use warp::tui_export::{
+    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, SlashCommandId, SlashCommandMixer,
+};
 use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
@@ -20,13 +22,31 @@ use warpui_core::elements::tui::{
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::WindowStyle;
-use warpui_core::{AddWindowOptions, App, AppContext, TuiView, TypedActionView, ViewHandle};
+use warpui_core::{
+    AddWindowOptions, App, AppContext, ModelHandle, TuiView, TypedActionView, ViewHandle,
+};
 
-use super::{TuiInputAction, TuiInputView, SHELL_MODE_INPUT_FLAG};
+use super::{
+    input_keymap_context, TuiInputAction, TuiInputView, TuiInputViewEvent,
+    INPUT_HANDLES_ESCAPE_FLAG,
+};
 use crate::editor_element::TuiEditorElement;
+use crate::inline_menu::TuiInlineMenu;
 use crate::input_mode_policy::TuiInputModePolicy;
+use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
 
 const W: u16 = 80;
+
+#[test]
+fn input_escape_context_is_present_only_while_escape_is_handled() {
+    let closed = input_keymap_context(false);
+    assert!(closed.set.contains("TuiInputView"));
+    assert!(!closed.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
+
+    let open = input_keymap_context(true);
+    assert!(open.set.contains("TuiInputView"));
+    assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
+}
 
 fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
     // `CodeEditorModel::new_tui` reads syntax colors from the `Appearance`
@@ -43,10 +63,142 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         },
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            TuiInputView::new(model, input_mode, ctx)
+            TuiInputView::new(model, input_mode, None, ctx)
         },
     );
     view
+}
+
+fn build_view_with_inline_menu(
+    ctx: &mut AppContext,
+) -> (
+    ViewHandle<TuiInputView>,
+    ModelHandle<TuiSlashCommandModel>,
+    [SlashCommandId; 2],
+) {
+    ctx.add_singleton_model(|_| Appearance::mock());
+    ctx.add_singleton_model(|_| SemanticSelection::mock(true, ""));
+    let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let mixer = ctx.add_model(|_| SlashCommandMixer::new());
+    let ids = [SlashCommandId::new(), SlashCommandId::new()];
+    let rows = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| TuiSlashCommandRow {
+            title: format!("Command {index}"),
+            description: None,
+            action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: *id },
+        })
+        .collect();
+    let menu_model =
+        ctx.add_model(|_| TuiSlashCommandModel::new_for_test(input_model.clone(), mixer, rows, 0));
+    let inline_menu = TuiInlineMenu::SlashCommands(menu_model.clone());
+    let (_window_id, view) = ctx.add_tui_window(
+        AddWindowOptions {
+            window_style: WindowStyle::NotStealFocus,
+            ..Default::default()
+        },
+        move |ctx| TuiInputView::new(input_model, input_mode, Some(inline_menu), ctx),
+    );
+    (view, menu_model, ids)
+}
+
+fn selected_slash_command_id(
+    menu_model: &ModelHandle<TuiSlashCommandModel>,
+    ctx: &AppContext,
+) -> Option<SlashCommandId> {
+    match menu_model.as_ref(ctx).selected_action()? {
+        AcceptSlashCommandOrSavedPrompt::SlashCommand { id } => Some(id),
+        AcceptSlashCommandOrSavedPrompt::SavedPrompt { .. }
+        | AcceptSlashCommandOrSavedPrompt::Skill { .. } => None,
+    }
+}
+
+#[test]
+fn inline_menu_navigation_routes_before_editor_navigation() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (view, menu_model, ids) = build_view_with_inline_menu(ctx);
+            assert_eq!(selected_slash_command_id(&menu_model, ctx), Some(ids[0]));
+
+            dispatch(&view, ctx, &[TuiInputAction::MoveDown]);
+            assert_eq!(selected_slash_command_id(&menu_model, ctx), Some(ids[1]));
+
+            dispatch(&view, ctx, &[TuiInputAction::MoveUp]);
+            assert_eq!(selected_slash_command_id(&menu_model, ctx), Some(ids[0]));
+        });
+    });
+}
+
+#[test]
+fn inline_menu_accept_dismisses_before_emitting_unchanged_payload() {
+    App::test((), |mut app| async move {
+        let (view, menu_model, ids, accepted) = app.update(|ctx| {
+            let (view, menu_model, ids) = build_view_with_inline_menu(ctx);
+            let accepted = Rc::new(RefCell::new(Vec::new()));
+            let accepted_for_subscription = accepted.clone();
+            let menu_for_subscription = menu_model.clone();
+            ctx.subscribe_to_view(&view, move |_, event, ctx| {
+                if let TuiInputViewEvent::AcceptedSlashCommand(
+                    AcceptSlashCommandOrSavedPrompt::SlashCommand { id },
+                ) = event
+                {
+                    accepted_for_subscription
+                        .borrow_mut()
+                        .push((*id, !menu_for_subscription.as_ref(ctx).is_open()));
+                }
+            });
+            (view, menu_model, ids, accepted)
+        });
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+        });
+        app.read(|ctx| {
+            assert_eq!(accepted.borrow().as_slice(), &[(ids[0], true)]);
+            assert!(!menu_model.as_ref(ctx).is_open());
+        });
+    });
+}
+
+#[test]
+fn escape_dismisses_menu_and_closed_menu_submit_falls_through() {
+    App::test((), |mut app| async move {
+        let (view, menu_model, submitted) = app.update(|ctx| {
+            let (view, menu_model, _) = build_view_with_inline_menu(ctx);
+            type_str(&view, ctx, "!");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert!(
+                view.as_ref(ctx).is_shell_mode(ctx),
+                "the first escape must dismiss the menu before exiting shell mode"
+            );
+
+            let submitted = Rc::new(RefCell::new(Vec::new()));
+            let submitted_for_subscription = submitted.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiInputViewEvent::Submitted(text) = event {
+                    submitted_for_subscription.borrow_mut().push(text.clone());
+                }
+            });
+            (view, menu_model, submitted)
+        });
+
+        app.update(|ctx| {
+            assert!(!menu_model.as_ref(ctx).is_open());
+            assert!(view
+                .as_ref(ctx)
+                .keymap_context(ctx)
+                .set
+                .contains(INPUT_HANDLES_ESCAPE_FLAG));
+            type_str(&view, ctx, "prompt");
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+        });
+        app.read(|ctx| {
+            assert_eq!(submitted.borrow().as_slice(), &["prompt"]);
+            assert_eq!(text(&view, ctx), "prompt");
+        });
+    });
 }
 
 fn dispatch(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, actions: &[TuiInputAction]) {
@@ -787,9 +939,8 @@ fn submit_keeps_buffer_until_cleared() {
     });
 }
 
-/// Esc is never consumed by the element — the shell-mode exit is the
-/// `tui:input:exit_shell_mode` keymap binding, gated on the shell-mode
-/// keymap-context flag — and `ExitShellMode` is a no-op outside shell mode.
+/// Esc is never consumed by the element; the contextual Escape keymap binding
+/// dispatches `HandleEscape`, which is a no-op outside an inline menu or shell mode.
 #[test]
 fn escape_is_not_consumed_by_the_element() {
     App::test((), |mut app| async move {
@@ -817,14 +968,14 @@ fn escape_is_not_consumed_by_the_element() {
                 "escape must not be consumed by the element"
             );
 
-            dispatch(&view, ctx, &[TuiInputAction::ExitShellMode]);
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
             assert_eq!(text(&view, ctx), "ab", "no-op outside shell mode");
         });
     });
 }
 
-/// The keymap context carries the shell-mode flag exactly while in shell
-/// mode, gating the Esc binding.
+/// The keymap context enables the unified Escape binding exactly while shell
+/// mode or an inline menu needs it.
 #[test]
 fn keymap_context_flags_shell_mode() {
     App::test((), |mut app| async move {
@@ -832,13 +983,14 @@ fn keymap_context_flags_shell_mode() {
             let view = build_view(ctx);
             assert_eq!(
                 view.as_ref(ctx).keymap_context(ctx),
-                TuiInputView::default_keymap_context()
+                input_keymap_context(false)
             );
 
             type_str(&view, ctx, "!");
-            let mut expected = TuiInputView::default_keymap_context();
-            expected.set.insert(SHELL_MODE_INPUT_FLAG);
-            assert_eq!(view.as_ref(ctx).keymap_context(ctx), expected);
+            assert_eq!(
+                view.as_ref(ctx).keymap_context(ctx),
+                input_keymap_context(true)
+            );
         });
     });
 }

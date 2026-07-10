@@ -56,6 +56,7 @@ pub use crate::code::DiffResult;
 pub use crate::code_review::git_repo_model::{
     GitRepoModels, GitRepoStatusModel, GitStatusMetadata,
 };
+pub use crate::search::slash_command_menu::SlashCommandId;
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::event::AfterBlockCompletedEvent;

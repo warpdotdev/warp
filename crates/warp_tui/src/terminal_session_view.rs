@@ -42,6 +42,7 @@ use warpui_core::{
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::conversation_selection::TuiConversationSelection;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
+use crate::inline_menu::TuiInlineMenu;
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
@@ -57,7 +58,7 @@ use crate::zero_state::render_zero_state;
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
-const MAX_SLASH_MENU_ROWS: u16 = 10;
+const MAX_INLINE_MENU_ROWS: u16 = 10;
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
@@ -106,7 +107,7 @@ pub(crate) enum TuiTerminalSessionAction {
 pub(crate) struct TuiTerminalSessionView {
     transcript: ViewHandle<TuiTranscriptView>,
     input_view: ViewHandle<TuiInputView>,
-    slash_commands: ModelHandle<TuiSlashCommandModel>,
+    inline_menu: TuiInlineMenu,
     conversation_selection: ConversationSelectionHandle,
     ai_controller: ModelHandle<BlocklistAIController>,
     /// Read by the footer for the active session's working directory.
@@ -266,12 +267,13 @@ impl TuiTerminalSessionView {
             }
         });
         let input_mode_for_input_view = ai_input_model.clone();
-        let slash_commands_for_input = slash_commands.clone();
+        let inline_menu = TuiInlineMenu::SlashCommands(slash_commands);
+        let inline_menu_for_input = inline_menu.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
-            TuiInputView::new_with_slash_commands(
+            TuiInputView::new(
                 input_editor_model,
                 input_mode_for_input_view,
-                Some(slash_commands_for_input),
+                Some(inline_menu_for_input),
                 ctx,
             )
         });
@@ -442,7 +444,7 @@ impl TuiTerminalSessionView {
         Self {
             transcript,
             input_view,
-            slash_commands,
+            inline_menu,
             conversation_selection,
             ai_controller,
             active_session,
@@ -906,7 +908,7 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let slash_command_menu = self.slash_commands.as_ref(ctx).render_menu(ctx);
+        let inline_menu = self.inline_menu.render(ctx);
         // The border takes the shell-mode accent while in shell mode.
         let builder = TuiUiBuilder::from_app(ctx);
         let border_style = if self.is_shell_mode(ctx) {
@@ -987,10 +989,10 @@ impl TuiView for TuiTerminalSessionView {
                 }
             }
         }
-        if let Some(menu) = slash_command_menu {
+        if let Some(menu) = inline_menu {
             content = content.child(
                 TuiConstrainedBox::new(menu)
-                    .with_max_rows(MAX_SLASH_MENU_ROWS)
+                    .with_max_rows(MAX_INLINE_MENU_ROWS)
                     .finish(),
             );
         }

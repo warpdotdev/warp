@@ -20,6 +20,7 @@ mod ui;
 mod conversation_selection;
 mod editor_element;
 mod exit_confirmation;
+mod inline_menu;
 mod input_mode_policy;
 mod keybindings;
 mod slash_commands;

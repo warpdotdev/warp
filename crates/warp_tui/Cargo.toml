@@ -62,6 +62,7 @@ warp_core.workspace = true
 warp_errors.workspace = true
 warp_editor.workspace = true
 warp_files.workspace = true
+warp_search_core.workspace = true
 warp_terminal.workspace = true
 warp_util.workspace = true
 warpui.workspace = true

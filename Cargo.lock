@@ -15930,6 +15930,7 @@ dependencies = [
  "warp_editor",
  "warp_errors",
  "warp_files",
+ "warp_search_core",
  "warp_terminal",
  "warp_util",
  "warpui",

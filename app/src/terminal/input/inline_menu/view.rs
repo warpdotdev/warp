@@ -8,6 +8,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
+use warp_search_core::inline_menu::{InitialSelection, InlineMenuSelection};
 use warpui::color::ColorU;
 use warpui::elements::drag_resize::drag_resize_handle;
 use warpui::elements::{
@@ -310,7 +311,7 @@ pub struct InlineMenuView<A: InlineMenuAction, T: 'static + Send + Sync = ()> {
     mixer: ModelHandle<SearchMixer<A>>,
     model: ModelHandle<InlineMenuModel<A, T>>,
     state_handles: StateHandles,
-    selected_idx: Option<usize>,
+    selection: InlineMenuSelection,
     hovered_idx: Option<usize>,
     details_pane_target: DetailsPaneTarget,
     // This is ordered by increasing score (the top match is the last item), per the `SearchMixer`
@@ -403,7 +404,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
             |me, suggestions_model, event, ctx| {
                 let InputSuggestionsModeEvent::ModeChanged { .. } = event;
                 if suggestions_model.as_ref(ctx).is_closed() {
-                    me.selected_idx = None;
+                    me.selection.clear();
                     me.hovered_idx = None;
                     me.details_pane_target = DetailsPaneTarget::default();
                     me.model.update(ctx, |model, ctx| {
@@ -422,7 +423,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
 
                 if me.mixer.as_ref(ctx).are_results_empty() {
                     me.result_renderers.clear();
-                    me.selected_idx = None;
+                    me.selection.clear();
                     me.hovered_idx = None;
                     me.details_pane_target = DetailsPaneTarget::default();
                     me.model.update(ctx, |model, ctx| {
@@ -472,23 +473,21 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
 
                 me.hovered_idx = None;
                 me.details_pane_target = DetailsPaneTarget::default();
-                if me.mixer.as_ref(ctx).are_results_empty() {
-                    me.selected_idx = None;
-                } else {
-                    // Select the last non-disabled item by default.
-                    let default_selected_idx = (0..me.result_renderers.len())
-                        .rev()
-                        .find(|&idx| !me.result_renderers[idx].search_result.is_disabled())
-                        .unwrap_or(me.result_renderers.len() - 1);
-                    me.selected_idx = Some(default_selected_idx);
-                    if let Some(result_renderer) = me.result_renderers.get(default_selected_idx) {
-                        let item = result_renderer.search_result.accept_result();
-                        me.model.update(ctx, |model, ctx| {
-                            model.update_selected_item(item.clone(), ctx);
+                let result_renderers = &me.result_renderers;
+                let selected_idx =
+                    me.selection
+                        .reset(result_renderers.len(), InitialSelection::Last, |idx| {
+                            !result_renderers[idx].search_result.is_disabled()
                         });
-                        ctx.emit(InlineMenuEvent::SelectedItem { item });
-                    }
-                };
+                let selected_item = selected_idx
+                    .and_then(|idx| me.result_renderers.get(idx))
+                    .map(|renderer| renderer.search_result.accept_result());
+                me.model.update(ctx, |model, ctx| {
+                    model.update_selected_item(selected_item.clone(), ctx);
+                });
+                if let Some(item) = selected_item {
+                    ctx.emit(InlineMenuEvent::SelectedItem { item });
+                }
                 me.scroll_to_selected_idx(ctx);
                 ctx.notify();
             }
@@ -506,7 +505,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
             positioner,
             message_bar,
             agent_view_controller,
-            selected_idx: None,
+            selection: InlineMenuSelection::default(),
             hovered_idx: None,
             details_pane_target: DetailsPaneTarget::default(),
             result_renderers: vec![],
@@ -552,7 +551,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
     }
 
     pub fn accept_selected_item(&mut self, cmd_or_ctrl_enter: bool, ctx: &mut ViewContext<Self>) {
-        let Some(selected_idx) = self.selected_idx else {
+        let Some(selected_idx) = self.selection.selected_index() else {
             return;
         };
         let Some(selected_result) = self
@@ -600,22 +599,31 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
     }
 
     pub fn selected_idx(&self) -> Option<usize> {
-        self.selected_idx
+        self.selection.selected_index()
     }
 
     pub fn select_idx(&mut self, idx: usize, ctx: &mut ViewContext<Self>) {
-        if idx >= self.result_renderers.len() {
+        let result_renderers = &self.result_renderers;
+        if self
+            .selection
+            .select(idx, result_renderers.len(), |idx| {
+                !result_renderers[idx].search_result.is_disabled()
+            })
+            .is_none()
+        {
             return;
         }
+        self.did_select_idx(idx, ctx);
+    }
 
-        self.selected_idx = Some(idx);
+    fn did_select_idx(&mut self, idx: usize, ctx: &mut ViewContext<Self>) {
         self.hovered_idx = None;
         self.details_pane_target = DetailsPaneTarget::Selection;
         self.scroll_to_selected_idx(ctx);
         if let Some(result_renderer) = self.result_renderers.get(idx) {
             let item = result_renderer.search_result.accept_result();
             self.model.update(ctx, |model, ctx| {
-                model.update_selected_item(item.clone(), ctx);
+                model.update_selected_item(Some(item.clone()), ctx);
             });
             ctx.emit(InlineMenuEvent::SelectedItem { item });
         }
@@ -657,7 +665,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
         if result_count == 0 {
             return;
         }
-        let Some(selected_idx) = self.selected_idx else {
+        let Some(selected_idx) = self.selection.selected_index() else {
             return;
         };
 
@@ -675,47 +683,24 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
     }
 
     fn select_next(&mut self, ctx: &mut ViewContext<Self>) {
-        let result_count = self.result_renderers.len();
-        if result_count == 0 {
-            return;
-        }
-        let start = match self.selected_idx {
-            Some(idx) if idx < result_count.saturating_sub(1) => idx + 1,
-            Some(_) | None => 0,
-        };
-        if let Some(idx) = self.next_enabled_idx(start, ScanDirection::Forward) {
-            self.select_idx(idx, ctx);
+        let result_renderers = &self.result_renderers;
+        if let Some(idx) = self.selection.select_next(result_renderers.len(), |idx| {
+            !result_renderers[idx].search_result.is_disabled()
+        }) {
+            self.did_select_idx(idx, ctx);
         }
     }
 
     fn select_prev(&mut self, ctx: &mut ViewContext<Self>) {
-        let result_count = self.result_renderers.len();
-        if result_count == 0 {
-            return;
+        let result_renderers = &self.result_renderers;
+        if let Some(idx) = self
+            .selection
+            .select_previous(result_renderers.len(), |idx| {
+                !result_renderers[idx].search_result.is_disabled()
+            })
+        {
+            self.did_select_idx(idx, ctx);
         }
-        let start = match self.selected_idx {
-            Some(idx) if idx > 0 => idx - 1,
-            Some(_) | None => result_count - 1,
-        };
-        if let Some(idx) = self.next_enabled_idx(start, ScanDirection::Backward) {
-            self.select_idx(idx, ctx);
-        }
-    }
-
-    /// Starting from `start`, scan for the nearest non-disabled item in the given direction.
-    /// Wraps around at most once. Returns `None` if every item is disabled.
-    fn next_enabled_idx(&self, start: usize, direction: ScanDirection) -> Option<usize> {
-        let count = self.result_renderers.len();
-        for offset in 0..count {
-            let candidate = match direction {
-                ScanDirection::Forward => (start + offset) % count,
-                ScanDirection::Backward => (start + count - offset) % count,
-            };
-            if !self.result_renderers[candidate].search_result.is_disabled() {
-                return Some(candidate);
-            }
-        }
-        None
     }
 
     pub fn set_active_tab(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
@@ -891,7 +876,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
     ) -> Box<dyn Element> {
         let theme = Appearance::as_ref(app).theme();
 
-        let selected_idx = self.selected_idx;
+        let selected_idx = self.selection.selected_index();
         let weak_handle = self.weak_handle.clone();
 
         let scrollable_items = Scrollable::vertical(
@@ -986,7 +971,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
                 return Some(idx);
             }
         }
-        self.selected_idx
+        self.selection.selected_index()
     }
 
     fn render_no_results_state(&self, message: String, app: &AppContext) -> Box<dyn Element> {
@@ -1193,11 +1178,6 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
     }
 }
 
-enum ScanDirection {
-    Forward,
-    Backward,
-}
-
 /// Internal action for handling item selection via click.
 #[derive(Debug, Clone)]
 pub enum InlineMenuRowAction<A: Action + Clone> {
@@ -1224,17 +1204,11 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> TypedActionView for InlineMe
                     cmd_or_ctrl_shift_enter: *cmd_or_ctrl_enter,
                 });
             }
-            InlineMenuRowAction::Select { result_index, item } => {
-                if *result_index >= self.result_renderers.len() {
-                    return;
-                }
-                self.selected_idx = Some(*result_index);
-                self.scroll_to_selected_idx(ctx);
-                self.model.update(ctx, |model, ctx| {
-                    model.update_selected_item(item.clone(), ctx);
-                });
-                ctx.emit(InlineMenuEvent::SelectedItem { item: item.clone() });
-                ctx.notify();
+            InlineMenuRowAction::Select {
+                result_index,
+                item: _,
+            } => {
+                self.select_idx(*result_index, ctx);
             }
             InlineMenuRowAction::HoverItem { result_index } => {
                 let idx = *result_index;
