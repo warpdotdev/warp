@@ -106,35 +106,41 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     }
 
     /// Lays out and paints the root view through the presenter, then flushes the
-    /// frame to the terminal. Draining this window's invalidations keeps the
-    /// manual + autotracking sets from accumulating (the frame is repainted in
-    /// full regardless). After each paint, the last pointer position is replayed
-    /// as a synthetic `MouseMoved`; resulting invalidations rebuild the frame
-    /// within this call, capped at three iterations like the GUI.
+    /// final frame to the terminal. Draining this window's invalidations keeps
+    /// the manual + autotracking sets from accumulating (the frame is repainted
+    /// in full regardless). After each presentation, the last pointer position
+    /// is replayed as a synthetic `MouseMoved`; resulting invalidations rebuild
+    /// the frame within this call, capped at three iterations like the GUI. Only
+    /// the final reconciled frame is flushed, matching the GUI's presentation.
     ///
     /// Returns the final frame's earliest requested repaint deadline so the
     /// caller can schedule a timed redraw.
     fn draw(&mut self, ctx: &mut AppContext) -> io::Result<Option<Instant>> {
         let size = self.terminal.size()?;
         let area = TuiRect::new(0, 0, size.width, size.height);
-        let mut repaint_at = None;
-        for iteration in 1..=3 {
+
+        let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
+        self.presenter
+            .invalidate(&invalidation, ctx, self.window_id);
+        let mut frame = self.presenter.present(ctx, &self.root_view, area);
+        self.replay_mouse_position(ctx);
+
+        for _ in 2..=3 {
             let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
-            // Always paint at least once, even with nothing invalidated.
-            if iteration > 1 && invalidation.updated.is_empty() && !invalidation.redraw_requested {
+            if invalidation.updated.is_empty() && !invalidation.redraw_requested {
                 break;
             }
             self.presenter
                 .invalidate(&invalidation, ctx, self.window_id);
-            let frame = self.presenter.present(ctx, &self.root_view, area);
-            let mut writer = self.terminal.writer();
-            self.renderer
-                .draw(&mut writer, &frame.buffer, frame.cursor)?;
-            repaint_at = frame.repaint_at;
+            frame = self.presenter.present(ctx, &self.root_view, area);
 
             self.replay_mouse_position(ctx);
         }
-        Ok(repaint_at)
+
+        let mut writer = self.terminal.writer();
+        self.renderer
+            .draw(&mut writer, &frame.buffer, frame.cursor)?;
+        Ok(frame.repaint_at)
     }
 
     /// Redispatches the last known pointer position as a synthetic

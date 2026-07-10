@@ -158,6 +158,7 @@ impl TuiElement for TuiHoverable {
                 if *is_synthetic && was_synthetic {
                     return false;
                 }
+
                 state.is_hovered = is_hovered;
                 drop(state);
                 event_ctx.notify();

@@ -4,14 +4,13 @@ use std::io::{self, Write};
 use std::rc::Rc;
 use std::time::Duration;
 
-use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
-};
+use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 
 use super::*;
 use crate::elements::tui::{
     TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiFlex, TuiHoverable,
-    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiText,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiScreenPoint,
+    TuiScreenPosition, TuiText,
 };
 use crate::elements::MouseStateHandle;
 use crate::keymap::macros::*;
@@ -387,42 +386,38 @@ fn synthetic_mouse_move_after_redraw_updates_hover() {
                 shifted: false,
             })
         });
+        let terminal = TestTerminal::new(TuiSize::new(20, 5));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
+        app.update(|ctx| screen.draw(ctx)).unwrap();
 
-        let mut terminal = TestTerminal::new(TuiSize::new(20, 5));
-        // A real move over the target at row 0, then the `s` key, which shifts
-        // the target to row 1 while the pointer stays put.
-        terminal.events.push_back(CrosstermEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::Moved,
-            column: 2,
-            row: 0,
-            modifiers: KeyModifiers::empty(),
-        }));
-        terminal.events.push_back(CrosstermEvent::Key(KeyEvent::new(
-            KeyCode::Char('s'),
-            KeyModifiers::empty(),
-        )));
-        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root, terminal);
+        let mouse_moved = TuiEvent::MouseMoved {
+            position: TuiPoint::new(2, 0),
+            modifiers: ModifiersState::default(),
+            is_synthetic: false,
+        };
+        app.update(|ctx| screen.dispatch_event(ctx, &mouse_moved));
+        assert!(hover.lock().unwrap().is_hovered());
 
-        let hover_by_iteration = Rc::new(RefCell::new(Vec::new()));
-        let recorder = hover_by_iteration.clone();
-        let hover_for_loop = hover.clone();
-        runtime
-            .run_until(&mut app, move |_| {
-                let mut states = recorder.borrow_mut();
-                states.push(hover_for_loop.lock().unwrap().is_hovered());
-                states.len() > 4
-            })
-            .unwrap();
+        root.update(&mut app, |view, ctx| {
+            view.shifted = true;
+            ctx.notify();
+        });
+        screen.terminal.output.clear();
 
-        let states = hover_by_iteration.borrow();
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
         assert!(
-            states.contains(&true),
-            "the real mouse move should hover the target: {states:?}"
+            !hover.lock().unwrap().is_hovered(),
+            "the post-draw synthetic move should unhover the shifted target"
         );
         assert_eq!(
-            states.last(),
-            Some(&false),
-            "the post-draw synthetic move should unhover the shifted target: {states:?}"
+            screen
+                .terminal
+                .output_string()
+                .matches("\u{1b}[?2026h")
+                .count(),
+            1,
+            "multi-pass hover reconciliation should flush one terminal frame"
         );
     });
 }
