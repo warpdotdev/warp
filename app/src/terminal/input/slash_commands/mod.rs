@@ -122,9 +122,6 @@ pub fn slash_command_is_supported_in_tui(command: &StaticCommand) -> bool {
         || command.name == commands::PLAN.name
 }
 
-pub fn slash_command_for_id(id: &SlashCommandId) -> Option<&'static StaticCommand> {
-    COMMAND_REGISTRY.get_command(id)
-}
 pub fn saved_prompt_text_for_id(id: &SyncId, ctx: &AppContext) -> Option<String> {
     let workflow = CloudModel::as_ref(ctx).get_workflow(id)?;
     workflow.model().data.is_agent_mode_workflow().then(|| {

@@ -56,7 +56,9 @@ pub use crate::code::DiffResult;
 pub use crate::code_review::git_repo_model::{
     GitRepoModels, GitRepoStatusModel, GitStatusMetadata,
 };
-pub use crate::search::slash_command_menu::static_commands::commands as slash_commands;
+pub use crate::search::slash_command_menu::static_commands::commands::{
+    self as slash_commands, COMMAND_REGISTRY,
+};
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
@@ -66,12 +68,11 @@ pub use crate::terminal::input::slash_command_model::{
     ParsedSlashCommandInput,
 };
 pub use crate::terminal::input::slash_commands::{
-    build_slash_command_mixer, saved_prompt_text_for_id, slash_command_for_id,
-    slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui, slash_command_query,
-    slash_command_selection_behavior, AcceptSlashCommandOrSavedPrompt, InlineItem,
-    SlashCommandDataSource, SlashCommandMixer, SlashCommandSelectionBehavior,
-    TuiDataSourceArgs as TuiSlashCommandDataSourceArgs, TuiSlashCommandDataSource,
-    TuiZeroStateDataSource, UpdatedActiveCommands,
+    build_slash_command_mixer, saved_prompt_text_for_id, slash_command_is_submitted_as_prompt,
+    slash_command_is_supported_in_tui, slash_command_query, slash_command_selection_behavior,
+    AcceptSlashCommandOrSavedPrompt, InlineItem, SlashCommandDataSource, SlashCommandMixer,
+    SlashCommandSelectionBehavior, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
+    TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
 };
 pub use crate::terminal::input::CommandExecutionSource;
 pub use crate::terminal::local_tty::{

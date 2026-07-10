@@ -11,8 +11,8 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
     build_slash_command_mixer, detect_possible_git_repo, saved_prompt_text_for_id,
-    slash_command_for_id, slash_command_is_submitted_as_prompt, slash_command_selection_behavior,
-    slash_commands, throttle, AIAgentPtyWriteMode, AcceptSlashCommandOrSavedPrompt, ActiveSession,
+    slash_command_is_submitted_as_prompt, slash_command_selection_behavior, slash_commands,
+    throttle, AIAgentPtyWriteMode, AcceptSlashCommandOrSavedPrompt, ActiveSession,
     ActiveSessionEvent, AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CancellationReason,
@@ -23,7 +23,8 @@ use warp::tui_export::{
     RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
     SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
     TerminalSurface, TerminalSurfaceInit, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
-    TuiZeroStateDataSource, WAKEUP_THROTTLE_PERIOD,
+    TuiZeroStateDataSource, COMMAND_REGISTRY,
+    WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
@@ -89,6 +90,8 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
 /// Transient hint shown when a shell command is rejected because the PTY is
 /// already running a command.
 const COMMAND_ALREADY_RUNNING_HINT: &str = "cannot run — command already running";
+const NEW_CONVERSATION_COMMAND_RUNNING_HINT: &str =
+    "cannot start new conversation while terminal command is running";
 
 /// Footer hint shown while the input is in `!` shell mode.
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
@@ -127,6 +130,7 @@ pub(crate) struct TuiTerminalSessionView {
     exit_confirmation: ExitConfirmation,
     /// Credits⇄cost display state for the footer's clickable usage entry.
     usage_toggle: UsageToggle,
+    ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
@@ -198,7 +202,7 @@ impl TuiTerminalSessionView {
         let ai_controller = ctx.add_model(|ctx| {
             BlocklistAIController::new(
                 ai_input_model.clone(),
-                context_model,
+                context_model.clone(),
                 conversation_selection.clone(),
                 action_model.clone(),
                 active_session.clone(),
@@ -457,6 +461,7 @@ impl TuiTerminalSessionView {
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
             usage_toggle: UsageToggle::default(),
+            ai_context_model: context_model,
             ai_input_model,
             terminal_model: model,
             transient_hint: TransientHint::default(),
@@ -869,7 +874,7 @@ impl TuiTerminalSessionView {
     ) {
         match action {
             AcceptSlashCommandOrSavedPrompt::SlashCommand { id } => {
-                let Some(command) = slash_command_for_id(id) else {
+                let Some(command) = COMMAND_REGISTRY.get_command(id) else {
                     log::debug!("TUI slash command selection is not supported yet: {id:?}");
                     ctx.notify();
                     return;
@@ -914,6 +919,14 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         if command.name == slash_commands::AGENT.name || command.name == slash_commands::NEW.name {
+            if !self
+                .ai_context_model
+                .as_ref(ctx)
+                .can_start_new_conversation()
+            {
+                self.show_transient_hint(NEW_CONVERSATION_COMMAND_RUNNING_HINT.to_owned(), ctx);
+                return;
+            }
             self.cancel_active_conversation(ctx);
             let terminal_surface_id = ctx.view_id();
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
