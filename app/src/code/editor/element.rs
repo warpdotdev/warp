@@ -280,9 +280,6 @@ pub struct EditorWrapperState {
     hovered_diff_hunk: Mutex<Option<EditorLineLocation>>,
     /// Whether there is an active click.
     in_click: AtomicBool,
-    /// Whether the cursor is currently over a collapsed hidden-section row, so the
-    /// pointer cursor is only set/reset on transitions.
-    over_hidden_section: AtomicBool,
     /// Mouse state handle for the plus button.
     add_as_context_mouse_state: MouseStateHandle,
     /// Mouse state handle for the revert button.
@@ -1623,26 +1620,13 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                 let broad_hovered_range =
                     self.gutter_element_range_containing_position(*position, only_check_y_axis);
 
-                // The whole collapsed hidden-section row is clickable, so show a pointer
-                // cursor over it (reset on leave). Set on every move so the overlapping
-                // bar's `Hoverable` can't clear it when resetting later in this dispatch.
+                // Hidden-section expand-all is scoped to the "N unmodified lines" label, so
+                // a broad line hit must not light up the gutter chevrons. Use a precise hit
+                // so arrow hover only appears when the mouse is over the gutter control.
                 let over_hidden_section = matches!(
                     &broad_hovered_range,
                     Some(GutterRange::HiddenSection { .. })
                 );
-                let was_over_hidden_section = self
-                    .state_handle
-                    .over_hidden_section
-                    .swap(over_hidden_section, Ordering::Relaxed);
-                if over_hidden_section {
-                    ctx.set_cursor(warpui::platform::Cursor::PointingHand, z_index);
-                } else if was_over_hidden_section {
-                    ctx.reset_cursor();
-                }
-
-                // Hidden-section rows use the full row as the click/cursor target, but the
-                // arrow hover state should only appear when the mouse is actually over the
-                // gutter control itself.
                 let hovered_range = if over_hidden_section {
                     self.gutter_element_range_containing_position(*position, false)
                 } else {

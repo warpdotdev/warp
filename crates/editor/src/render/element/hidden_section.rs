@@ -56,7 +56,9 @@ impl RenderableHiddenSection {
         let hover_color = styles.base_text.text_color;
         let label_position_id = format!("hidden_section_label_{:p}", Arc::as_ptr(&mouse_state));
 
-        let element = Hoverable::new(mouse_state, move |state| {
+        // Scope hover (color/underline + tooltip + click) to the label text only so
+        // scrolling over the rest of the bar/gutter does not flicker styles.
+        let label = Hoverable::new(mouse_state, move |state| {
             // Keep the link immediate while delaying the tooltip.
             let mouse_over = state.is_mouse_over_element();
 
@@ -81,14 +83,8 @@ impl RenderableHiddenSection {
                 );
             }
 
-            let row = Flex::row()
-                .with_child(SavePosition::new(text.finish(), &label_position_id).finish())
-                .with_cross_axis_alignment(CrossAxisAlignment::Center);
-            let bar = Container::new(row.finish())
-                .with_background(base_background)
-                .with_padding_left(LABEL_LEFT_PADDING)
-                .finish();
-            let mut stack = Stack::new().with_child(bar);
+            let mut stack = Stack::new()
+                .with_child(SavePosition::new(text.finish(), &label_position_id).finish());
 
             if state.is_hovered() {
                 let tooltip = appearance
@@ -122,6 +118,14 @@ impl RenderableHiddenSection {
         .with_hover_in_delay(TOOLTIP_HOVER_DELAY)
         .with_cursor(Cursor::PointingHand)
         .finish();
+
+        let row = Flex::row()
+            .with_child(label)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        let element = Container::new(row.finish())
+            .with_background(base_background)
+            .with_padding_left(LABEL_LEFT_PADDING)
+            .finish();
 
         Self {
             viewport_item,
