@@ -421,6 +421,10 @@ pub(crate) enum LaunchMode {
         /// (rather than as a `run_internal` parameter) so it stays scoped to
         /// this mode.
         mount: TuiMountFn,
+        /// API key for server authentication, if provided via `--api-key` or
+        /// `WARP_API_KEY`. Only used on dogfood channels (mirrors `App`); lets
+        /// the TUI log in non-interactively instead of the device-auth flow.
+        api_key: Option<String>,
     },
 }
 
@@ -849,7 +853,17 @@ pub fn run_integration_test(driver: TestDriver) -> Result<()> {
 /// `warp_tui`.
 #[cfg(feature = "tui")]
 pub fn run_tui(mount: TuiMountFn) -> Result<()> {
-    run_internal(LaunchMode::Tui { mount })
+    // Feature flags must be initialized before parsing args, because
+    // `Args::from_env` checks feature flags (e.g. `CloudEnvironments`) while
+    // building its clap command. `run_internal` also initializes them, but that
+    // runs after this parse. `init_feature_flags` is idempotent.
+    features::init_feature_flags();
+    // Parse `--api-key` / `WARP_API_KEY` so the TUI can authenticate
+    // non-interactively on dogfood channels, mirroring the GUI (`run`). Worker
+    // invocations are dispatched earlier (see `run_tui_worker_if_requested`), so
+    // by here the argv is a normal TUI launch.
+    let api_key = warp_cli::Args::from_env().api_key().cloned();
+    run_internal(LaunchMode::Tui { mount, api_key })
 }
 
 /// Dispatches a worker command when the current executable was re-invoked for one.
@@ -1224,7 +1238,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         // GUI/CLI `launch()` path.
         match launch_mode {
             #[cfg(feature = "tui")]
-            LaunchMode::Tui { mount } => crate::tui::init(mount, ctx),
+            LaunchMode::Tui { mount, .. } => crate::tui::init(mount, ctx),
             #[cfg(not(feature = "tui"))]
             LaunchMode::Tui { .. } => {
                 unreachable!("the `tui` launch mode requires the `tui` feature")
@@ -1294,6 +1308,7 @@ pub(crate) fn initialize_app(
     let api_key = match launch_mode {
         LaunchMode::CommandLine { global_options, .. } => global_options.api_key.clone(),
         LaunchMode::App { api_key, .. } if ChannelState::channel().is_dogfood() => api_key.clone(),
+        LaunchMode::Tui { api_key, .. } if ChannelState::channel().is_dogfood() => api_key.clone(),
         _ => None,
     };
     let api_key = if FeatureFlag::APIKeyAuthentication.is_enabled() {
@@ -1308,6 +1323,9 @@ pub(crate) fn initialize_app(
         && matches!(
             launch_mode,
             LaunchMode::App {
+                api_key: Some(_),
+                ..
+            } | LaunchMode::Tui {
                 api_key: Some(_),
                 ..
             }
