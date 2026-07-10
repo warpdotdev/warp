@@ -27,14 +27,15 @@ enum CacheIntegrationError {
     InvalidEnvironmentName,
 }
 
-pub(super) fn build_cache_root(
-    platform: Option<IsolationPlatformType>,
-    value: Option<OsString>,
-) -> Option<PathBuf> {
-    if platform != Some(IsolationPlatformType::Namespace) {
+pub(super) fn build_cache_root() -> Option<PathBuf> {
+    if warp_isolation_platform::detect() != Some(IsolationPlatformType::Namespace) {
         return None;
     }
-    let root = PathBuf::from(value?);
+    validated_build_cache_root(std::env::var_os(BUILD_CACHE_ROOT_ENV)?)
+}
+
+fn validated_build_cache_root(value: OsString) -> Option<PathBuf> {
+    let root = PathBuf::from(value);
     (!root.as_os_str().is_empty() && root.is_absolute()).then_some(root)
 }
 

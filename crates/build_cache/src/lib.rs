@@ -64,24 +64,8 @@ impl PlatformCacheMode {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct NonEmptyCacheModes(Vec1<SpacectlCacheMode>);
-
-impl NonEmptyCacheModes {
-    fn new(modes: impl IntoIterator<Item = SpacectlCacheMode>) -> Result<Self, CacheSetupError> {
-        let modes = modes.into_iter().collect::<BTreeSet<_>>();
-        Vec1::try_from_vec(modes.into_iter().collect())
-            .map(Self)
-            .map_err(|_| CacheSetupError::EmptySharedModes)
-    }
-
-    fn as_slice(&self) -> &[SpacectlCacheMode] {
-        &self.0
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 enum CacheMountScope {
-    Shared { modes: NonEmptyCacheModes },
+    Shared { modes: Vec1<SpacectlCacheMode> },
     Repository { name: String, key: RepoCacheKey },
 }
 
@@ -132,8 +116,6 @@ enum CacheSetupError {
     Operation(String),
     #[error("repository cache key must be a lowercase 64-character SHA-256 digest")]
     InvalidRepoCacheKey,
-    #[error("shared cache mode union must not be empty")]
-    EmptySharedModes,
 }
 
 // This boundary deliberately mirrors the two pinned spacectl operations used by the executor.
@@ -395,7 +377,7 @@ async fn execute_mount_plan(
     }
 
     let mut selected_environment = repository_environment;
-    if let Ok(modes) = NonEmptyCacheModes::new(shared_modes) {
+    if let Ok(modes) = Vec1::try_from_vec(shared_modes.into_iter().collect()) {
         let scope = CacheMountScope::Shared {
             modes: modes.clone(),
         };
@@ -404,7 +386,7 @@ async fn execute_mount_plan(
         match (root_result, scratch_result) {
             (Ok(()), Ok(())) => {
                 match with_timeout(
-                    spacectl.mount_cache(modes.as_slice(), &plan.shared_root, &plan.scratch_cwd),
+                    spacectl.mount_cache(&modes, &plan.shared_root, &plan.scratch_cwd),
                     timeout,
                 )
                 .await
@@ -478,11 +460,11 @@ fn successful_invocation_report(
     scope: CacheMountScope,
     input_modes: Vec<SpacectlCacheMode>,
     mounts: Vec<SpacectlMount>,
-    expected_modes: Option<&NonEmptyCacheModes>,
+    expected_modes: Option<&Vec1<SpacectlCacheMode>>,
 ) -> CacheInvocationReport {
     let mut modes = expected_modes
         .into_iter()
-        .flat_map(|modes| modes.as_slice())
+        .flat_map(|modes| modes.iter())
         .chain(input_modes.iter())
         .map(|mode| (mode.as_str().to_owned(), CacheModeReport::default()))
         .collect::<BTreeMap<_, _>>();
@@ -504,13 +486,12 @@ fn failed_invocation_report(scope: CacheMountScope) -> CacheInvocationReport {
 
 fn failed_shared_invocation_report(
     scope: CacheMountScope,
-    modes: &NonEmptyCacheModes,
+    modes: &Vec1<SpacectlCacheMode>,
 ) -> CacheInvocationReport {
     CacheInvocationReport {
         scope: report_scope(scope),
         is_error: true,
         modes: modes
-            .as_slice()
             .iter()
             .map(|mode| (mode.as_str().to_owned(), CacheModeReport::default()))
             .collect(),

@@ -8,9 +8,9 @@ use futures_lite::future;
 
 use super::spacectl::{SpacectlCacheMode, SpacectlMount, SpacectlMountResponse};
 use super::{
-    CacheFileSystem, CacheInvocationScope, CacheMountScope, CacheSetupError, NonEmptyCacheModes,
-    PlatformCacheMode, RepoCacheKey, Repository, SHARED_SCRATCH_CWD, SpacectlClient,
-    build_mount_plan, run_cache_setup,
+    CacheFileSystem, CacheInvocationScope, CacheMountScope, CacheSetupError, PlatformCacheMode,
+    RepoCacheKey, Repository, SHARED_SCRATCH_CWD, SpacectlClient, build_mount_plan,
+    run_cache_setup,
 };
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -222,8 +222,7 @@ fn map(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
 }
 
 #[test]
-fn typed_scopes_reject_empty_shared_modes_and_validate_repo_keys() {
-    assert!(NonEmptyCacheModes::new(Vec::new()).is_err());
+fn repository_cache_keys_are_validated() {
     assert!(RepoCacheKey::new("a".repeat(64)).is_ok());
     assert!(RepoCacheKey::new("a".repeat(63)).is_err());
     assert!(RepoCacheKey::new("A".repeat(64)).is_err());

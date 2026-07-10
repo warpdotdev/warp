@@ -160,10 +160,7 @@ async fn prepare_environment_impl(
     }
 
     #[cfg(not(target_family = "wasm"))]
-    if let Some(build_root) = namespace_cache::build_cache_root(
-        warp_isolation_platform::detect(),
-        std::env::var_os(namespace_cache::BUILD_CACHE_ROOT_ENV),
-    ) {
+    if let Some(build_root) = namespace_cache::build_cache_root() {
         setup_events
             .record_namespace_cache_mount(namespace_cache::setup_namespace_caches(
                 source_repos,

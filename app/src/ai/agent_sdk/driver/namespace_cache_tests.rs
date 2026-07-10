@@ -5,9 +5,8 @@ use std::path::PathBuf;
 use build_cache::{
     CacheInvocationReport, CacheInvocationScope, CacheModeReport, CacheSetupOutcome,
 };
-use warp_isolation_platform::IsolationPlatformType;
 
-use super::{build_cache_root, build_export_command, into_event_report};
+use super::{build_export_command, into_event_report, validated_build_cache_root};
 use crate::terminal::shell::ShellType;
 
 fn map(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -18,37 +17,14 @@ fn map(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
 }
 
 #[test]
-fn cache_root_requires_namespace_and_nonempty_absolute_path() {
+fn cache_root_requires_nonempty_absolute_path() {
     assert_eq!(
-        build_cache_root(
-            Some(IsolationPlatformType::Namespace),
-            Some(OsString::from("/cache/build"))
-        ),
+        validated_build_cache_root(OsString::from("/cache/build")),
         Some(PathBuf::from("/cache/build"))
     );
+    assert_eq!(validated_build_cache_root(OsString::new()), None);
     assert_eq!(
-        build_cache_root(
-            Some(IsolationPlatformType::Docker),
-            Some(OsString::from("/cache/build"))
-        ),
-        None
-    );
-    assert_eq!(
-        build_cache_root(Some(IsolationPlatformType::Namespace), None),
-        None
-    );
-    assert_eq!(
-        build_cache_root(
-            Some(IsolationPlatformType::Namespace),
-            Some(OsString::new())
-        ),
-        None
-    );
-    assert_eq!(
-        build_cache_root(
-            Some(IsolationPlatformType::Namespace),
-            Some(OsString::from("cache/build"))
-        ),
+        validated_build_cache_root(OsString::from("cache/build")),
         None
     );
 }
