@@ -104,6 +104,49 @@ fn test_materialized_default_worktree_config_renders_full_worktree_path() {
 
 #[cfg(feature = "local_fs")]
 #[test]
+fn test_materialized_worktree_config_shell_quotes_paths_with_spaces() {
+    // Regression (#11144): a repo/workspace name containing spaces must not split the generated
+    // `git worktree add` / `cd` commands into extra shell arguments (which made `git` print its
+    // usage help instead of creating the worktree).
+    let template = include_str!("../../resources/tab_configs/default_worktree.toml");
+    let repo_path = "/tmp/my project";
+    let (_, tab_config) = materialize_default_worktree_config(
+        template,
+        "Worktree: my project",
+        repo_path,
+        "terminal",
+    )
+    .expect("expected template materialization to succeed");
+
+    let (_, pane_template) = render_tab_config(&tab_config, &HashMap::new(), Some("my-feature"));
+
+    let PaneTemplateType::PaneTemplate { commands, .. } = pane_template else {
+        panic!("expected terminal pane template");
+    };
+    let expected_worktree_path = generated_worktree_repo_dir(Path::new(repo_path))
+        .join("my-feature")
+        .display()
+        .to_string();
+
+    // The spaced path must survive shell parsing as exactly one argument in both commands.
+    let add_args = shell_words::split(&commands[0].exec).expect("add command must parse as shell");
+    assert_eq!(
+        add_args,
+        vec![
+            "git".to_string(),
+            "worktree".to_string(),
+            "add".to_string(),
+            "-b".to_string(),
+            "my-feature".to_string(),
+            expected_worktree_path.clone(),
+        ],
+    );
+    let cd_args = shell_words::split(&commands[1].exec).expect("cd command must parse as shell");
+    assert_eq!(cd_args, vec!["cd".to_string(), expected_worktree_path]);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
 fn test_sanitize_toml_base_name_replaces_spaces_and_dots() {
     assert_eq!(sanitize_toml_base_name("My Project.v2"), "my_project_v2");
 }
