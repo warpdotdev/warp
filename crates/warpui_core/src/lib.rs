@@ -6,7 +6,6 @@ pub mod actions;
 mod app_focus_telemetry;
 pub mod assets;
 pub mod r#async;
-pub mod box_drawing;
 pub mod clipboard;
 pub mod clipboard_utils;
 mod core;

@@ -1,3 +1,4 @@
+mod box_drawing;
 mod cell_glyph_cache;
 mod cell_type;
 
@@ -159,8 +160,8 @@ struct NativeGlyph {
 #[derive(Debug)]
 enum NativeGlyphType {
     /// A solid box-drawing line glyph (a supported subset of U+2500..=U+257F),
-    /// rendered as cell-filling, non-overlapping rects via `warpui::box_drawing`
-    /// so adjacent cells tile with no seam.
+    /// rendered as cell-filling, non-overlapping rects so adjacent cells tile
+    /// with no seam.
     BoxDrawing(char),
     UpperHalfBlock,
     PowerlineLeftHardDivider,
@@ -1888,17 +1889,14 @@ fn render_image(
 /// if it should be rendered with a font glyph.
 fn native_glyph_for_cell(cell: &Cell) -> Option<NativeGlyphType> {
     let glyph_type = match cell.c {
-        // Solid box-drawing line glyphs (U+2500..=U+257F) render as cell-filling
-        // rects via `warpui::box_drawing`, so they tile seamlessly like the block
-        // elements below. Block elements (U+2580+) keep their existing handling,
-        // and unsupported line glyphs (double/dashed/rounded/diagonal) fall
-        // through to the font.
-        c if FeatureFlag::BoxDrawingGlyphs.is_enabled()
-            && matches!(c as u32, 0x2500..=0x257F)
-            && warpui::box_drawing::is_supported(c) =>
+        // Supported solid box-drawing lines render as cell-filling rects so
+        // adjacent cells tile seamlessly. Other box-drawing glyphs use the font.
+        c @ '\u{2500}'..='\u{257F}'
+            if FeatureFlag::BoxDrawingGlyphs.is_enabled() && box_drawing::is_supported(c) =>
         {
             NativeGlyphType::BoxDrawing(c)
         }
+
         // Unicode upper half block (U+2580).
         '▀' => NativeGlyphType::UpperHalfBlock,
         // Unicode bottom-aligned fractional block characters (U+2581 - U+2588).
@@ -2036,25 +2034,21 @@ fn render_native_glyph(native_glyph: NativeGlyph, ctx: &mut PaintContext, app: &
             let right = ((cell_bounds.origin().x() + cell_bounds.width()) * scale_factor).round();
             let top = (cell_bounds.origin().y() * scale_factor).round();
             let bottom = ((cell_bounds.origin().y() + cell_bounds.height()) * scale_factor).round();
-            for cell_rect in warpui::box_drawing::cell_rects(c, right - left, bottom - top) {
-                let origin = cell_rect.bounds.origin();
+            for cell_rect in box_drawing::rects(c, right - left, bottom - top) {
+                let origin = cell_rect.origin();
                 let rect = RectF::new(
                     vec2f(
                         (left + origin.x()) / scale_factor,
                         (top + origin.y()) / scale_factor,
                     ),
                     vec2f(
-                        cell_rect.bounds.width() / scale_factor,
-                        cell_rect.bounds.height() / scale_factor,
+                        cell_rect.width() / scale_factor,
+                        cell_rect.height() / scale_factor,
                     ),
                 );
-                let mut color = foreground_color;
-                if cell_rect.alpha_scale < 1.0 {
-                    color.a = (color.a as f32 * cell_rect.alpha_scale).round() as u8;
-                }
                 ctx.scene
                     .draw_rect_without_hit_recording(rect)
-                    .with_background(Fill::Solid(color));
+                    .with_background(Fill::Solid(foreground_color));
             }
             None
         }

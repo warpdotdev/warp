@@ -921,10 +921,9 @@ pub enum FeatureFlag {
     /// a flat pretty-printed blob.
     McpJsonTreeView,
 
-    /// Renders solid box-drawing and block characters (`U+2500..=U+257F`,
-    /// `U+2580..=U+259F`) procedurally as cell-filling rectangles instead of
-    /// from the font, eliminating the thin seams between vertically-adjacent
-    /// box-drawing cells in the terminal.
+    /// Renders supported solid box-drawing characters (`U+2500..=U+257F`)
+    /// procedurally as cell-filling rectangles instead of from the font,
+    /// eliminating seams between adjacent box-drawing cells in the terminal.
     BoxDrawingGlyphs,
 }
 
