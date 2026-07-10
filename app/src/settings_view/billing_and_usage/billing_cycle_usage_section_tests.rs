@@ -33,7 +33,7 @@ fn selected_period_ends(items: &[MenuItem<BillingCycleUsageAction>]) -> Vec<Date
 }
 
 fn sample_summaries() -> Vec<BillingCycleUsageSummary> {
-    // Newest cycle first, matching the server ordering the UI relies on.
+    // Newest cycle first, matching server ordering.
     vec![
         summary(utc(2026, 6, 27), utc(2026, 7, 27)),
         summary(utc(2026, 5, 27), utc(2026, 6, 27)),
@@ -41,8 +41,6 @@ fn sample_summaries() -> Vec<BillingCycleUsageSummary> {
     ]
 }
 
-/// With no explicit selection, the most recent cycle (the one shown in the
-/// header by default) is the one marked with a check.
 #[test]
 fn checks_most_recent_period_when_none_selected() {
     let summaries = sample_summaries();
@@ -50,13 +48,11 @@ fn checks_most_recent_period_when_none_selected() {
 
     assert_eq!(items.len(), summaries.len());
     assert_eq!(selected_period_ends(&items), vec![utc(2026, 7, 27)]);
-    // Exactly one item is checked; the rest are indented (no icon).
     assert_eq!(item_icon(&items[0]), Some(Icon::Check));
     assert_eq!(item_icon(&items[1]), None);
     assert_eq!(item_icon(&items[2]), None);
 }
 
-/// Selecting an older period moves the check to that period only.
 #[test]
 fn checks_explicitly_selected_period() {
     let summaries = sample_summaries();
@@ -68,8 +64,6 @@ fn checks_explicitly_selected_period() {
     assert_eq!(item_icon(&items[2]), None);
 }
 
-/// A `selected_period_end` that no longer exists in the data leaves nothing
-/// checked rather than falsely highlighting an unrelated row.
 #[test]
 fn checks_nothing_when_selection_absent() {
     let summaries = sample_summaries();
@@ -79,8 +73,6 @@ fn checks_nothing_when_selection_absent() {
     assert!(items.iter().all(|item| item_icon(item).is_none()));
 }
 
-/// Every row still carries its `SelectPeriod` action for the matching cycle,
-/// so highlighting doesn't change selection behavior.
 #[test]
 fn every_item_keeps_its_select_action() {
     let summaries = sample_summaries();
