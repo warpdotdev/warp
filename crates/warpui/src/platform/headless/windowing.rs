@@ -1,11 +1,10 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::mpsc;
 
 use anyhow::Result;
 
-use super::event_loop::AppEvent;
+use super::event_loop::{AppEvent, EventSender};
 use crate::WindowId;
 use crate::geometry::rect::RectF;
 use crate::geometry::vector::{Vector2F, vec2f};
@@ -15,11 +14,11 @@ use crate::windowing::WindowCallbacks;
 pub struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
     active_window: RefCell<Option<WindowId>>,
-    event_sender: mpsc::Sender<AppEvent>,
+    event_sender: EventSender,
 }
 
 impl WindowManager {
-    pub(super) fn new(event_sender: mpsc::Sender<AppEvent>) -> Self {
+    pub(super) fn new(event_sender: EventSender) -> Self {
         Self {
             windows: HashMap::new(),
             active_window: RefCell::new(None),

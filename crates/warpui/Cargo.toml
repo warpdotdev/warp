@@ -5,6 +5,10 @@ edition = "2024"
 authors.workspace = true
 publish.workspace = true
 license = "MIT"
+[[test]]
+name = "headless_main_thread"
+path = "tests/headless_main_thread.rs"
+harness = false
 
 [features]
 # Enabling this feature works around a bug in Metal frame capture by loading

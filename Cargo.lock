@@ -3212,6 +3212,7 @@ dependencies = [
  "clap",
  "command",
  "computer_use",
+ "dispatch2",
  "futures",
  "image",
  "instant",
