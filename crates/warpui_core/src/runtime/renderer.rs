@@ -95,7 +95,9 @@ impl TuiFrameRenderer {
         // stray glyphs behind that later partial diffs never repair. Ending the
         // current `draw` batch after each wide grapheme resets the backend's
         // cursor tracking, so the following cell gets a fresh, correct `MoveTo`.
-        let diff = baseline.diff(buffer);
+        // `Buffer::diff` returns a `Vec` (the lazy iterator variant is
+        // `diff_iter`), so it can be indexed and sliced directly below.
+        let diff: Vec<_> = baseline.diff(buffer);
         let mut batch_start = 0;
         for index in 0..diff.len() {
             let is_wide = diff[index].2.cell_width() > 1;
