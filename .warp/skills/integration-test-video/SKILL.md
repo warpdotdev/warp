@@ -1,11 +1,21 @@
 ---
 name: integration-test-video
-description: Run Warp integration tests with screenshot and video capture, including event overlay annotations for mouse and keyboard input. Use this whenever the user wants to record an integration test, collect screenshots from a test, review generated recording artifacts, or author a test that captures video for debugging or demos.
+description: 'Run and author Warp Rust integration tests (the `crates/integration` harness) that capture screenshots and video via `TestStep::with_start_recording()` / `with_take_screenshot()`, including mouse and keyboard event overlays. TRIGGER only for the integration-test recording pipeline: recording or screenshotting a named integration test, authoring a test that captures video/screenshots, or reviewing artifacts a test produced. SKIP for any general request to screenshot or record the running Warp app or a UI flow — capture those with the computer use tool''s built-in screen recording / screenshots, not this skill.'
 ---
 
 # Integration Test Video Recording
 
 Use this skill when working with Warp's integration test recording pipeline on this branch.
+
+## When NOT to use this skill
+
+This skill is **only** for capturing screenshots/video from within the Rust
+integration-test harness (`crates/integration`). It is **not** the way to fulfill
+a general "take a screenshot" or "record a video" request against the running
+Warp app or a live UI flow. For those, use the **computer use** tool, which
+exposes screenshot and screen-recording (start/stop recording) capabilities that
+drive the real app — don't reach for this integration-test tooling just because a
+request mentions "recording" or "screenshot."
 
 The relevant implementation lives in:
 - `integration/src/bin/integration.rs`
