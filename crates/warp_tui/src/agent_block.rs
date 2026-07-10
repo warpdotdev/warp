@@ -395,7 +395,8 @@ impl TuiAIBlock {
                                     AIAgentTextSection::Code { .. }
                                     | AIAgentTextSection::Table { .. }
                                     | AIAgentTextSection::Image { .. }
-                                    | AIAgentTextSection::MermaidDiagram { .. } => None,
+                                    | AIAgentTextSection::MermaidDiagram { .. }
+                                    | AIAgentTextSection::Math { .. } => None,
                                 })
                                 .filter(|line| !line.is_empty())
                                 .map(|line| TuiAIBlockSection::PlainText(line.to_owned())),
@@ -420,7 +421,8 @@ impl TuiAIBlock {
                                     AIAgentTextSection::Code { .. }
                                     | AIAgentTextSection::Table { .. }
                                     | AIAgentTextSection::Image { .. }
-                                    | AIAgentTextSection::MermaidDiagram { .. } => None,
+                                    | AIAgentTextSection::MermaidDiagram { .. }
+                                    | AIAgentTextSection::Math { .. } => None,
                                 })
                                 .join("\n"),
                         });

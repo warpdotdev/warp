@@ -22,6 +22,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
+use warp_editor::content::math_block::math_asset_source;
 use warp_editor::content::mermaid_diagram::mermaid_asset_source;
 use warp_util::path::to_relative_path;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -52,9 +53,10 @@ use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::icons::red_stop_icon;
 use crate::ai::agent::{
     icons, AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
-    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
-    AgentOutputTable, AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
-    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus,
+    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMath,
+    AgentOutputMermaidDiagram, AgentOutputTable, AgentOutputTableRendering, MessageId,
+    ProgrammingLanguage, RenderableAIError, ShellCommandDelay, SummarizationType, UserQueryMode,
+    WebSearchStatus,
 };
 use crate::ai::blocklist::block::find::FindState;
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBarAction;
@@ -1330,6 +1332,14 @@ pub fn render_text_sections<V: View, A: Action>(
                     app,
                 ));
             }
+            AIAgentTextSection::Math { math } => {
+                column.add_child(render_math_section(
+                    math,
+                    props.text_color,
+                    props.copy_code_action_factory,
+                    app,
+                ));
+            }
         }
         indexed_section_offset += 1;
     }
@@ -2200,6 +2210,59 @@ fn render_mermaid_diagram_section<A: Action>(
     )
 }
 
+/// Display-math sections are typeset to a theme-colored SVG and drawn at text
+/// scale, centered on their own line. On typesetting failure the raw
+/// `$$...$$` source is shown unchanged; copy always yields the source.
+fn render_math_section<A: Action>(
+    math: &AgentOutputMath,
+    text_color: ColorU,
+    copy_action_factory: Option<CopyCodeActionFactory<A>>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let color = format!(
+        "#{:02x}{:02x}{:02x}",
+        text_color.r, text_color.g, text_color.b
+    );
+    // Display math reads better slightly larger than the surrounding
+    // monospace text.
+    let font_size = f64::from(Appearance::as_ref(app).monospace_font_size()) * 1.2;
+    let asset_source = math_asset_source(&math.latex, true, &color, font_size);
+    let asset_state = AssetCache::as_ref(app).load_asset::<ImageType>(asset_source.clone());
+    if matches!(asset_state, AssetState::FailedToLoad(_)) {
+        return render_visual_markdown_fallback(&math.markdown_source, text_color, app);
+    }
+    // Render at the SVG's intrinsic (font-scaled) size rather than Mermaid's
+    // fit-to-pane-width, which would upscale an equation to fill the block.
+    // `max_width` = intrinsic width means no upscaling; a wider-than-pane
+    // equation still shrinks to fit because the parent constrains the box.
+    let sizing = match math_intrinsic_size(&asset_state) {
+        Some((width, height)) => VisualMarkdownSizing::FixedHeight {
+            height,
+            width: None,
+            max_width: Some(width),
+        },
+        None => VisualMarkdownSizing::FixedHeight {
+            height: blocklist_base_line_height(app) * 2.,
+            width: None,
+            max_width: None,
+        },
+    };
+    render_visual_markdown_block(
+        asset_source,
+        math.markdown_source.clone(),
+        VisualMarkdownBlockOptions {
+            sizing,
+            copy_action_factory,
+            alignment: VisualMarkdownAlignment::Center,
+            lightbox_trigger: None,
+            // Math blocks don't carry CommonMark image titles.
+            tooltip: None,
+            tooltip_mouse_state: None,
+        },
+        app,
+    )
+}
+
 fn render_visual_markdown_fallback(
     markdown_source: &str,
     text_color: ColorU,
@@ -2367,6 +2430,26 @@ fn render_visual_card(
             VISUAL_CARD_CORNER_RADIUS,
         )))
         .finish()
+}
+
+/// Intrinsic `(width, height)` of a loaded math SVG in logical pixels, used to
+/// draw display math at its natural (font-scaled) size instead of upscaling it.
+fn math_intrinsic_size(asset_state: &AssetState<ImageType>) -> Option<(f32, f32)> {
+    let AssetState::Loaded { data } = asset_state else {
+        return None;
+    };
+    match data.as_ref() {
+        ImageType::Svg { svg } => {
+            let size = svg.size();
+            Some((
+                finite_positive_visual_size(Some(size.width()))?,
+                finite_positive_visual_size(Some(size.height()))?,
+            ))
+        }
+        ImageType::StaticBitmap { .. }
+        | ImageType::AnimatedBitmap { .. }
+        | ImageType::Unrecognized => None,
+    }
 }
 
 fn visual_section_max_width(asset_state: &AssetState<ImageType>, height: f32) -> Option<f32> {

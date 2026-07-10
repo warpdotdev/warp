@@ -20,7 +20,7 @@ use serde_yaml::Value;
 use crate::{
     CodeBlockText, CustomWeight, FormattedImage, FormattedIndentTextInline, FormattedTable,
     FormattedTaskList, FormattedText, FormattedTextFragment, FormattedTextHeader,
-    FormattedTextInline, FormattedTextLine, FormattedTextStyles, Hyperlink,
+    FormattedTextInline, FormattedTextLine, FormattedTextStyles, Hyperlink, MathMode,
     OrderedFormattedIndentTextInline, TableAlignment,
 };
 
@@ -984,6 +984,9 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::CodeSpan(text) => {
                 state.push_closed_node(FormattedTextFragment::inline_code(text));
             }
+            InlineToken::Math { latex, mode } => {
+                state.push_closed_node(FormattedTextFragment::math(latex, mode));
+            }
             InlineToken::Text(text) => {
                 state.push_text(text);
             }
@@ -1532,6 +1535,7 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             backslash_escape,
             html_entity,
             code_span,
+            parse_math_span,
             parse_inline_token_link_start,
             parse_inline_token_link_end,
             parse_inline_token_asterisk,
@@ -1671,6 +1675,84 @@ fn parse_code_span<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     )(input)
 }
 
+/// Parse an inline LaTeX math span: `$...$` (inline) or `$$...$$` (display).
+///
+/// This follows pandoc's `tex_math_dollars` conventions:
+/// * The opening `$` of an inline span must be immediately followed by a non-whitespace
+///   character.
+/// * The closing `$` of an inline span must be immediately preceded by a non-whitespace
+///   character, and must not be immediately followed by a digit (so `$20,000 and $30,000`
+///   parses as plain text).
+/// * Backslash-escaped dollar signs (`\$`) do not close a span.
+///
+/// A `\$` *before* a span never reaches this parser: `parse_escape` has higher precedence in
+/// [`parse_inline_token`]. Similarly, `$` inside code spans is unaffected because code spans
+/// are parsed first. If no valid closing delimiter is found, this parser fails and the `$`
+/// falls through to `unmatched_char`, degrading to literal text.
+fn parse_math_span<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context("math_span", |input: &'a str| {
+        let error = || nom::Err::Error(make_error(input, ErrorKind::Tag));
+        let (delimiter, mode) = if input.starts_with("$$") {
+            ("$$", MathMode::Display)
+        } else if input.starts_with('$') {
+            ("$", MathMode::Inline)
+        } else {
+            return Err(error());
+        };
+        let content = &input[delimiter.len()..];
+
+        if mode == MathMode::Inline
+            && !content
+                .chars()
+                .next()
+                .is_some_and(|c| !c.is_whitespace() && c != '$')
+        {
+            return Err(error());
+        }
+
+        let mut closing = None;
+        let mut escaped = false;
+        for (index, ch) in content.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '$' if content[index..].starts_with(delimiter) => {
+                    if mode == MathMode::Inline {
+                        let preceded_by_non_whitespace = content[..index]
+                            .chars()
+                            .next_back()
+                            .is_some_and(|c| !c.is_whitespace());
+                        let followed_by_digit = content[index + delimiter.len()..]
+                            .starts_with(|c: char| c.is_ascii_digit());
+                        if !preceded_by_non_whitespace || followed_by_digit {
+                            continue;
+                        }
+                    }
+                    closing = Some(index);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(closing) = closing else {
+            return Err(error());
+        };
+
+        let latex = &content[..closing];
+        if latex.trim().is_empty() {
+            return Err(error());
+        }
+
+        let consumed_length = delimiter.len() * 2 + closing;
+        Ok((&input[consumed_length..], InlineToken::Math { latex, mode }))
+    })(input)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InlineToken<'a> {
     /// A run of `count` delimiter characters of `kind`.
@@ -1684,6 +1766,9 @@ enum InlineToken<'a> {
     /// An entire code span. Code spans have higher precedence than all other inline constructs,
     /// so we parse them into discrete tokens.
     CodeSpan(&'a str),
+    /// A LaTeX math span (`$...$` or `$$...$$`). Like code spans, math spans are parsed into
+    /// discrete tokens; the contained LaTeX source is not parsed as Markdown.
+    Math { latex: &'a str, mode: MathMode },
     /// An autolink URL. Owned because backslash escapes are processed (e.g., `\.` → `.`),
     /// so the result may differ from the input slice.
     AutoLink(String),

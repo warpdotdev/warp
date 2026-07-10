@@ -83,6 +83,14 @@ fn compile_metal_shaders() {
     println!("cargo:rerun-if-changed={metal_path}");
     println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
 
+    // Local-fork fallback: the Metal shader compiler is only distributed with
+    // full Xcode. When it's unavailable, reuse a prebuilt library extracted
+    // from an official Warp build rather than failing the whole build.
+    if !metal_toolchain_available() {
+        use_prebuilt_metal_library(metal_path, header_path, lib_path);
+        return;
+    }
+
     // Pin the AIR bytecode target to `MACOSX_DEPLOYMENT_TARGET`. Without an
     // explicit `-mmacosx-version-min`, `xcrun metal` on recent Xcode toolchains
     // emits AIR for the current SDK (e.g. `air64_v27-apple-macosx15.0.0`)
@@ -124,6 +132,45 @@ fn compile_metal_shaders() {
         result.status.success(),
         "error compling metal shaders to .metallib; {}",
         std::str::from_utf8(&result.stderr).unwrap(),
+    );
+}
+
+fn metal_toolchain_available() -> bool {
+    Command::new("xcrun")
+        .args(["-sdk", "macosx", "--find", "metal"])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Copy `prebuilt/shaders.metallib` (extracted from an official Warp build) to
+/// `lib_path`. The `prebuilt/*.orig` files snapshot the shader sources that
+/// library was compiled from; if the current sources differ, the prebuilt
+/// library would silently misrender, so fail the build instead.
+fn use_prebuilt_metal_library(metal_path: &str, header_path: &str, lib_path: &str) {
+    const PREBUILT_LIB: &str = "prebuilt/shaders.metallib";
+    println!("cargo:rerun-if-changed={PREBUILT_LIB}");
+
+    for (current, snapshot) in [
+        (metal_path, "prebuilt/shaders.metal.orig"),
+        (header_path, "prebuilt/shader_types.h.orig"),
+    ] {
+        println!("cargo:rerun-if-changed={snapshot}");
+        let current_bytes =
+            std::fs::read(current).unwrap_or_else(|e| panic!("reading {current}: {e}"));
+        let snapshot_bytes =
+            std::fs::read(snapshot).unwrap_or_else(|e| panic!("reading {snapshot}: {e}"));
+        assert!(
+            current_bytes == snapshot_bytes,
+            "{current} has changed since {PREBUILT_LIB} was built. Install Xcode to \
+             compile the shaders from source, or refresh the prebuilt library and the \
+             {snapshot} snapshot from a Warp build compiled from the current sources.",
+        );
+    }
+
+    std::fs::copy(PREBUILT_LIB, lib_path)
+        .unwrap_or_else(|e| panic!("copying {PREBUILT_LIB} to {lib_path}: {e}"));
+    println!(
+        "cargo:warning=warpui: Metal toolchain (Xcode) not found; using prebuilt shaders.metallib"
     );
 }
 

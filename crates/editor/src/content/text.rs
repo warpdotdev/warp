@@ -1311,6 +1311,9 @@ impl From<TextStylesWithMetadata> for FormattedTextStyles {
             strikethrough: styles.strikethrough,
             hyperlink: styles.link.map(Hyperlink::Url),
             inline_code: styles.inline_code,
+            // The editor buffer has no math styling; math is reintroduced at
+            // higher layers (AI sections / renderable items).
+            math: None,
         }
     }
 }

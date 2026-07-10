@@ -646,7 +646,10 @@ pub(crate) fn collect_output_data_for_link_detection(
                     },
                 ));
             }
-            AIAgentTextSection::Code { .. } | AIAgentTextSection::Table { .. } => {}
+            // Math blocks contain LaTeX source, not links.
+            AIAgentTextSection::Code { .. }
+            | AIAgentTextSection::Table { .. }
+            | AIAgentTextSection::Math { .. } => {}
         }
     }
 
