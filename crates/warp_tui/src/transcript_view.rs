@@ -12,9 +12,10 @@ use warp::tui_export::{
     BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, ModelEventDispatcher, RichContentItem, RichContentType, TerminalModel,
 };
+use warp_core::semantic_selection::SemanticSelection;
 use warpui_core::elements::tui::{
-    TuiElement, TuiScrollable, TuiScrollableElement, TuiSelectable, TuiSelectionConfig,
-    TuiSelectionHandle, TuiViewportVerticalAlignment, TuiViewportedList, TuiViewportedListState,
+    TuiElement, TuiScrollable, TuiScrollableElement, TuiSelectable, TuiSelectionHandle,
+    TuiViewportVerticalAlignment, TuiViewportedList, TuiViewportedListState,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TuiView, TypedActionView,
@@ -24,7 +25,6 @@ use warpui_core::{
 use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
 use super::terminal_block::should_render_terminal_block;
 use super::terminal_session_view::TuiTerminalSessionAction;
-use super::transcript_word_selection::word_span;
 use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
 
 /// Rows of blank space above every transcript block. Terminal blocks get it
@@ -352,12 +352,14 @@ impl TuiView for TuiTranscriptView {
         self.agent_blocks.borrow().keys().copied().collect()
     }
 
-    fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
+    fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let source = TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone());
         let viewport = TuiViewportedList::new(self.viewport.clone(), source)
-            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom)
-            .with_selection(TuiSelectionConfig::new(Rc::new(word_span)));
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
+        let semantic_selection = SemanticSelection::as_ref(app);
         let selectable = TuiSelectable::new(self.selection.clone(), viewport)
+            .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
+            .with_smart_select_fn(semantic_selection.smart_select_fn())
             .on_selection_start(|event_ctx, _| {
                 event_ctx
                     .dispatch_typed_action(TuiTerminalSessionAction::TranscriptSelectionStarted);

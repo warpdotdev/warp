@@ -1,6 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use string_offset::ByteOffset;
+
 use super::{
     TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
@@ -8,9 +10,10 @@ use super::{
 use crate::elements::tui::{
     Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
     TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiScrollable, TuiScrollableElement,
-    TuiSelectable, TuiSelectionConfig, TuiSelectionHandle, TuiSelectionSpan, TuiSize, TuiText,
+    TuiSelectable, TuiSelectionHandle, TuiSize, TuiText,
 };
 use crate::event::ModifiersState;
+use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::{App, AppContext, EntityId, EntityIdMap};
 
 #[derive(Clone)]
@@ -129,34 +132,6 @@ fn mouse(app: &App, element: &mut impl TuiElement, size: TuiSize, event: TuiEven
             app_ctx,
         )
     })
-}
-
-/// Creates deterministic word selection for viewport tests.
-fn selection_config() -> TuiSelectionConfig {
-    TuiSelectionConfig::new(Rc::new(|point, _width, glyphs, _app| {
-        let clicked = glyphs
-            .iter()
-            .position(|glyph| point.col >= glyph.start_col && point.col < glyph.end_col)?;
-        let boundary = |index: usize| glyphs[index].text.trim().is_empty();
-        let mut start = clicked;
-        while start > 0 && !boundary(start - 1) {
-            start -= 1;
-        }
-        let mut end = clicked + 1;
-        while end < glyphs.len() && !boundary(end) {
-            end += 1;
-        }
-        Some(TuiSelectionSpan {
-            start: super::TuiContentPoint {
-                row: point.row,
-                col: glyphs[start].start_col,
-            },
-            end: super::TuiContentPoint {
-                row: point.row,
-                col: glyphs[end.saturating_sub(1)].end_col,
-            },
-        })
-    }))
 }
 
 /// Returns a left-button press for selection tests.
@@ -349,8 +324,7 @@ fn selectable_viewport_highlights_and_copies_linear_rows() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 3)]);
         let state = TuiViewportedListState::new_at_end();
-        let viewport =
-            viewport_with_state(state.clone(), content).with_selection(selection_config());
+        let viewport = viewport_with_state(state.clone(), content);
         let copies = Rc::new(RefCell::new(Vec::new()));
         let copies_for_callback = copies.clone();
         let selection = TuiSelectionHandle::default();
@@ -390,7 +364,7 @@ fn selectable_viewport_extends_into_post_scroll_rows() {
         let content = FakeContent::new(vec![fake_item(1, 4)]);
         let state = TuiViewportedListState::new_at_end();
         state.scroll_to_rows_from_top(0);
-        let viewport = viewport_with_state(state, content).with_selection(selection_config());
+        let viewport = viewport_with_state(state, content);
         let copies = Rc::new(RefCell::new(Vec::new()));
         let copies_for_callback = copies.clone();
         let mut element = TuiSelectable::new(TuiSelectionHandle::default(), viewport)
@@ -403,6 +377,55 @@ fn selectable_viewport_extends_into_post_scroll_rows() {
         mouse(&app, &mut element, size, left_up(2, 2));
 
         assert_eq!(copies.borrow().as_slice(), ["1:0\n1:1\n1:2"]);
+    });
+}
+
+#[test]
+fn selectable_uses_word_boundary_policy() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![FakeItem {
+            lines: vec!["foo-bar baz".to_owned()],
+            height: 1,
+        }]);
+        let viewport = viewport_with_state(TuiViewportedListState::new_at_end(), content);
+        let copies = Rc::new(RefCell::new(Vec::new()));
+        let copies_for_callback = copies.clone();
+        let mut element = TuiSelectable::new(TuiSelectionHandle::default(), viewport)
+            .with_word_boundaries_policy(WordBoundariesPolicy::OnlyWhitespace)
+            .on_copy(move |text, _, _| copies_for_callback.borrow_mut().push(text));
+        let size = TuiSize::new(11, 1);
+
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_down(4, 0, 2, false));
+        mouse(&app, &mut element, size, left_up(4, 0));
+
+        assert_eq!(copies.borrow().as_slice(), ["foo-bar"]);
+    });
+}
+
+#[test]
+fn selectable_prefers_smart_selection_over_word_boundaries() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![FakeItem {
+            lines: vec!["foo-bar baz".to_owned()],
+            height: 1,
+        }]);
+        let viewport = viewport_with_state(TuiViewportedListState::new_at_end(), content);
+        let copies = Rc::new(RefCell::new(Vec::new()));
+        let copies_for_callback = copies.clone();
+        let mut element = TuiSelectable::new(TuiSelectionHandle::default(), viewport)
+            .with_smart_select_fn(Some(|content, click_offset| {
+                (content == "foo-bar baz" && click_offset.as_usize() < 7)
+                    .then_some(ByteOffset::from(0)..ByteOffset::from(7))
+            }))
+            .on_copy(move |text, _, _| copies_for_callback.borrow_mut().push(text));
+        let size = TuiSize::new(11, 1);
+
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_down(4, 0, 2, false));
+        mouse(&app, &mut element, size, left_up(4, 0));
+
+        assert_eq!(copies.borrow().as_slice(), ["foo-bar"]);
     });
 }
 
@@ -424,8 +447,7 @@ fn selectable_viewport_preserves_selection_while_scrolling() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
         let state = TuiViewportedListState::new_at_end();
-        let viewport =
-            viewport_with_state(state.clone(), content).with_selection(selection_config());
+        let viewport = viewport_with_state(state.clone(), content);
         let selection = TuiSelectionHandle::default();
         let selectable = TuiSelectable::new(selection.clone(), viewport);
         let mut element = TuiScrollable::new(selectable.finish_scrollable());
@@ -449,8 +471,7 @@ fn selectable_viewport_ignores_first_mouse_press() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 1)]);
         let state = TuiViewportedListState::new_at_end();
-        let viewport =
-            viewport_with_state(state.clone(), content).with_selection(selection_config());
+        let viewport = viewport_with_state(state.clone(), content);
         let selection = TuiSelectionHandle::default();
         let mut element = TuiSelectable::new(selection.clone(), viewport);
         let size = TuiSize::new(8, 1);

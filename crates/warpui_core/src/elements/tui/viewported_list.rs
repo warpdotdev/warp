@@ -10,15 +10,12 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::selectable::{
-    cell_span, point_after_col, row_glyphs, row_text, TuiContentPoint, TuiSelectionHandle,
-};
+use super::selectable::{row_glyphs, row_text, TuiContentPoint, TuiSelectionHandle};
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPaintContext, TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSelectableElement,
-    TuiSelectionConfig, TuiSelectionSpan, TuiSize,
+    TuiSelectionSpan, TuiSize,
 };
-use crate::text::SelectionType;
 use crate::AppContext;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,16 +101,12 @@ impl<Content> TuiSelectableElement for TuiViewportedList<Content>
 where
     Content: TuiViewportedElement,
 {
-    fn selection_span_at(
+    fn selection_point_at(
         &mut self,
         position: super::TuiPoint,
-        selection_type: SelectionType,
         area: TuiRect,
         clamp_outside: bool,
-        ctx: &mut TuiLayoutContext,
-        app: &AppContext,
-    ) -> Option<TuiSelectionSpan> {
-        self.selection()?;
+    ) -> Option<TuiContentPoint> {
         if clamp_outside {
             let delta = if position.y < area.y {
                 -1
@@ -124,8 +117,17 @@ where
             };
             self.scroll_by(delta, usize::from(area.height));
         }
-        let point = self.selection_point_at(position, area, clamp_outside)?;
-        Some(self.selection_unit_span(selection_type, point, area.width, ctx, app))
+        self.resolve_selection_point(position, area, clamp_outside)
+    }
+
+    fn selection_row_glyphs(
+        &self,
+        row: usize,
+        width: u16,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> Vec<super::TuiRowGlyph> {
+        self.resolve_selection_row_glyphs(row, width, ctx, app)
     }
 
     fn selected_text(
@@ -135,7 +137,6 @@ where
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> Option<String> {
-        self.selection()?;
         self.selection_text(selection, area, ctx, app)
     }
 
@@ -146,9 +147,6 @@ where
         buffer: &mut TuiBuffer,
         _ctx: &mut TuiPaintContext,
     ) {
-        if self.selection().is_none() {
-            return;
-        }
         let Some(resolved) = self.state.resolved_viewport() else {
             return;
         };
@@ -403,7 +401,6 @@ where
     content_height: usize,
     size: TuiSize,
     vertical_alignment: TuiViewportVerticalAlignment,
-    selection: Option<TuiSelectionConfig>,
     selection_snapshot: RefCell<Option<(TuiResolvedViewport, TuiBuffer)>>,
 }
 
@@ -420,7 +417,6 @@ where
             content_height: 0,
             size: TuiSize::ZERO,
             vertical_alignment: TuiViewportVerticalAlignment::Top,
-            selection: None,
             selection_snapshot: RefCell::new(None),
         }
     }
@@ -430,12 +426,6 @@ where
         vertical_alignment: TuiViewportVerticalAlignment,
     ) -> Self {
         self.vertical_alignment = vertical_alignment;
-        self
-    }
-
-    /// Enables selection resolution with custom word semantics.
-    pub fn with_selection(mut self, selection: TuiSelectionConfig) -> Self {
-        self.selection = Some(selection);
         self
     }
 
@@ -592,13 +582,8 @@ where
         true
     }
 
-    /// Returns configured selection resolution behavior.
-    fn selection(&self) -> Option<&TuiSelectionConfig> {
-        self.selection.as_ref()
-    }
-
     /// Maps a screen point into the latest resolved content window.
-    fn selection_point_at(
+    fn resolve_selection_point(
         &self,
         position: super::TuiPoint,
         area: TuiRect,
@@ -664,7 +649,7 @@ where
     }
 
     /// Returns rendered glyphs for one selectable content row.
-    fn selection_row_glyphs(
+    fn resolve_selection_row_glyphs(
         &self,
         row: usize,
         width: u16,
@@ -682,46 +667,6 @@ where
         self.selection_rows(row..row.saturating_add(1), width, ctx, app)
             .map(|buffer| row_glyphs(&buffer, 0, width))
             .unwrap_or_default()
-    }
-
-    /// Resolves a character, word, or line selection unit.
-    fn selection_unit_span(
-        &self,
-        selection_type: SelectionType,
-        point: TuiContentPoint,
-        width: u16,
-        ctx: &mut TuiLayoutContext,
-        app: &AppContext,
-    ) -> TuiSelectionSpan {
-        match selection_type {
-            SelectionType::Simple | SelectionType::Rect => self
-                .selection_row_glyphs(point.row, width, ctx, app)
-                .into_iter()
-                .find(|glyph| point.col >= glyph.start_col && point.col < glyph.end_col)
-                .map(|glyph| TuiSelectionSpan {
-                    start: TuiContentPoint {
-                        row: point.row,
-                        col: glyph.start_col,
-                    },
-                    end: point_after_col(point.row, glyph.end_col, width),
-                })
-                .unwrap_or_else(|| cell_span(point, width)),
-            SelectionType::Semantic => {
-                let glyphs = self.selection_row_glyphs(point.row, width, ctx, app);
-                (self.selection().unwrap().word_resolver)(point, width, &glyphs, app)
-                    .unwrap_or_else(|| cell_span(point, width))
-            }
-            SelectionType::Lines => TuiSelectionSpan {
-                start: TuiContentPoint {
-                    row: point.row,
-                    col: 0,
-                },
-                end: TuiContentPoint {
-                    row: point.row.saturating_add(1),
-                    col: 0,
-                },
-            },
-        }
     }
 
     /// Extracts selected text from current read-only content rows.

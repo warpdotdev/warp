@@ -12,7 +12,6 @@ use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, SlashCommandId, SlashCommandMixer,
 };
-use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
@@ -34,6 +33,7 @@ use crate::editor_element::TuiEditorElement;
 use crate::inline_menu::TuiInlineMenu;
 use crate::input_mode_policy::TuiInputModePolicy;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
+use crate::test_fixtures::add_test_semantic_selection;
 
 const W: u16 = 80;
 
@@ -52,9 +52,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
     // `CodeEditorModel::new_tui` reads syntax colors from the `Appearance`
     // singleton, so register a mock one before constructing the editor.
     ctx.add_singleton_model(|_| Appearance::mock());
-    // Double-click word selection reads the `SemanticSelection` singleton for
-    // its word-boundary policy, so register a mock one too.
-    ctx.add_singleton_model(|_| SemanticSelection::mock(true, ""));
+    add_test_semantic_selection(ctx);
     let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
@@ -77,7 +75,7 @@ fn build_view_with_inline_menu(
     [SlashCommandId; 2],
 ) {
     ctx.add_singleton_model(|_| Appearance::mock());
-    ctx.add_singleton_model(|_| SemanticSelection::mock(true, ""));
+    add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
     let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
     let mixer = ctx.add_model(|_| SlashCommandMixer::new());

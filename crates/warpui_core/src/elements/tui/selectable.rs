@@ -10,13 +10,16 @@
 //! shared across element rebuilds.
 
 use std::ops::Range;
-use std::rc::Rc;
+
+use string_offset::{ByteOffset, CharOffset};
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
 };
-use crate::text::SelectionType;
+use crate::elements::SmartSelectFn;
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{SelectionDirection, SelectionType, TextBuffer};
 use crate::AppContext;
 
 mod cells;
@@ -29,35 +32,24 @@ pub use state::TuiSelectionHandle;
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
 type CopyCallback = Box<dyn FnMut(String, &mut TuiEventContext, &AppContext)>;
 
-/// Resolves a semantic word unit from rendered row glyphs.
-pub type TuiWordSelectionResolver =
-    Rc<dyn Fn(TuiContentPoint, u16, &[TuiRowGlyph], &AppContext) -> Option<TuiSelectionSpan>>;
-
-/// Semantic-word policy for a selectable viewport.
-#[derive(Clone)]
-pub struct TuiSelectionConfig {
-    pub(crate) word_resolver: TuiWordSelectionResolver,
-}
-
-impl TuiSelectionConfig {
-    /// Creates selection configuration with custom word semantics.
-    pub fn new(word_resolver: TuiWordSelectionResolver) -> Self {
-        Self { word_resolver }
-    }
-}
-
 /// Geometry, content, and rendering behavior implemented by a selectable child.
 pub trait TuiSelectableElement: TuiElement {
-    /// Resolves one screen position into a content-space selection span.
-    fn selection_span_at(
+    /// Resolves one screen position into a content-space point.
+    fn selection_point_at(
         &mut self,
         position: TuiPoint,
-        selection_type: SelectionType,
         area: TuiRect,
         clamp_outside: bool,
+    ) -> Option<TuiContentPoint>;
+
+    /// Returns rendered glyphs for one selectable content row.
+    fn selection_row_glyphs(
+        &self,
+        row: usize,
+        width: u16,
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
-    ) -> Option<TuiSelectionSpan>;
+    ) -> Vec<TuiRowGlyph>;
 
     /// Materializes text for one resolved content-space selection.
     fn selected_text(
@@ -87,6 +79,8 @@ pub trait TuiSelectableElement: TuiElement {
 pub struct TuiSelectable<Child> {
     selection: TuiSelectionHandle,
     child: Child,
+    word_boundaries_policy: WordBoundariesPolicy,
+    smart_select_fn: Option<SmartSelectFn>,
     on_selection_start: Option<SelectionCallback>,
     on_copy: Option<CopyCallback>,
 }
@@ -100,8 +94,84 @@ where
         Self {
             selection,
             child,
+            word_boundaries_policy: WordBoundariesPolicy::Default,
+            smart_select_fn: None,
             on_selection_start: None,
             on_copy: None,
+        }
+    }
+
+    /// Uses `policy` when expanding semantic word selections.
+    pub fn with_word_boundaries_policy(mut self, policy: WordBoundariesPolicy) -> Self {
+        self.word_boundaries_policy = policy;
+        self
+    }
+
+    /// Uses `smart_select_fn` before falling back to word-boundary expansion.
+    pub fn with_smart_select_fn(mut self, smart_select_fn: Option<SmartSelectFn>) -> Self {
+        self.smart_select_fn = smart_select_fn;
+        self
+    }
+    /// Resolves one screen position into the configured selection unit.
+    fn selection_span_at(
+        &mut self,
+        position: TuiPoint,
+        selection_type: SelectionType,
+        area: TuiRect,
+        clamp_outside: bool,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> Option<TuiSelectionSpan> {
+        let point = self
+            .child
+            .selection_point_at(position, area, clamp_outside)?;
+        Some(self.selection_unit_span(selection_type, point, area.width, ctx, app))
+    }
+
+    /// Expands one content point to a character, word, or line span.
+    fn selection_unit_span(
+        &self,
+        selection_type: SelectionType,
+        point: TuiContentPoint,
+        width: u16,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSelectionSpan {
+        match selection_type {
+            SelectionType::Simple | SelectionType::Rect => self
+                .child
+                .selection_row_glyphs(point.row, width, ctx, app)
+                .into_iter()
+                .find(|glyph| point.col >= glyph.start_col && point.col < glyph.end_col)
+                .map(|glyph| TuiSelectionSpan {
+                    start: TuiContentPoint {
+                        row: point.row,
+                        col: glyph.start_col,
+                    },
+                    end: point_after_col(point.row, glyph.end_col, width),
+                })
+                .unwrap_or_else(|| cell_span(point, width)),
+            SelectionType::Semantic => {
+                let glyphs = self.child.selection_row_glyphs(point.row, width, ctx, app);
+                word_span(
+                    point,
+                    width,
+                    &glyphs,
+                    &self.word_boundaries_policy,
+                    self.smart_select_fn,
+                )
+                .unwrap_or_else(|| cell_span(point, width))
+            }
+            SelectionType::Lines => TuiSelectionSpan {
+                start: TuiContentPoint {
+                    row: point.row,
+                    col: 0,
+                },
+                end: TuiContentPoint {
+                    row: point.row.saturating_add(1),
+                    col: 0,
+                },
+            },
         }
     }
 
@@ -179,8 +249,7 @@ where
             } if !*is_first_mouse => {
                 let selection_type = SelectionType::from_click_count(*click_count);
                 let Some(anchor_span) =
-                    self.child
-                        .selection_span_at(*position, selection_type, area, false, ctx, app)
+                    self.selection_span_at(*position, selection_type, area, false, ctx, app)
                 else {
                     return false;
                 };
@@ -200,7 +269,7 @@ where
                 let Some(interaction) = self.selection.interaction() else {
                     return false;
                 };
-                let Some(focus_span) = self.child.selection_span_at(
+                let Some(focus_span) = self.selection_span_at(
                     *position,
                     interaction.selection_type,
                     area,
@@ -248,6 +317,73 @@ where
             | TuiEvent::MouseMoved { .. } => false,
         }
     }
+}
+
+/// Resolves a semantic word span from rendered row glyphs.
+fn word_span(
+    point: TuiContentPoint,
+    width: u16,
+    glyphs: &[TuiRowGlyph],
+    policy: &WordBoundariesPolicy,
+    smart_select_fn: Option<SmartSelectFn>,
+) -> Option<TuiSelectionSpan> {
+    let clicked = glyphs
+        .iter()
+        .position(|glyph| point.col >= glyph.start_col && point.col < glyph.end_col)?;
+    let line = glyphs
+        .iter()
+        .map(|glyph| glyph.text.as_str())
+        .collect::<String>();
+    let byte_range = smart_select_fn
+        .and_then(|smart_select| {
+            smart_select(&line, ByteOffset::from(glyphs[clicked].byte_range.start))
+        })
+        .map(|range| range.start.as_usize()..range.end.as_usize())
+        .or_else(|| word_byte_range(&line, glyphs[clicked].byte_range.start, policy))?;
+    let start_index = glyphs.partition_point(|glyph| glyph.byte_range.end <= byte_range.start);
+    let end_index = glyphs.partition_point(|glyph| glyph.byte_range.start < byte_range.end);
+    let start = glyphs.get(start_index)?;
+    let end = glyphs.get(end_index.saturating_sub(1))?;
+    Some(TuiSelectionSpan {
+        start: TuiContentPoint {
+            row: point.row,
+            col: start.start_col,
+        },
+        end: point_after_col(point.row, end.end_col, width),
+    })
+}
+
+/// Expands one byte position using the shared text-buffer word semantics.
+fn word_byte_range(
+    line: &str,
+    clicked_byte: usize,
+    policy: &WordBoundariesPolicy,
+) -> Option<Range<usize>> {
+    let clicked_char = line.get(..clicked_byte)?.chars().count();
+    let start = line
+        .semantic_expansion_target(
+            CharOffset::from(clicked_char),
+            SelectionDirection::Backward,
+            policy,
+        )
+        .ok()?;
+    let end = line
+        .semantic_expansion_target(
+            CharOffset::from(clicked_char),
+            SelectionDirection::Forward,
+            policy,
+        )
+        .ok()?;
+    let start_char = line.to_offset(start).ok()?.as_usize();
+    let end_char = line.to_offset(end).ok()?.as_usize();
+    Some(byte_offset_for_char(line, start_char)..byte_offset_for_char(line, end_char))
+}
+
+/// Converts one character offset into its UTF-8 byte offset.
+fn byte_offset_for_char(text: &str, char_offset: usize) -> usize {
+    text.char_indices()
+        .nth(char_offset)
+        .map_or(text.len(), |(byte_offset, _)| byte_offset)
 }
 
 impl<Child> TuiScrollableElement for TuiSelectable<Child>
