@@ -897,16 +897,43 @@ enum VerticalTabsResolvedMode {
     Summary,
 }
 
+/// Wraps a value so it is ignored by `PartialEq`/`Eq`. Used to carry render-only agent
+/// status on `SummaryPaneKind` without letting it affect summary-icon dedup/pairing, which
+/// keys off pane *kind* only (an agent's status must not split it into a separate icon slot).
+#[derive(Clone, Debug, Default)]
+pub(super) struct IgnoredInEq<T>(pub T);
+
+impl<T> PartialEq for IgnoredInEq<T> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for IgnoredInEq<T> {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SummaryPaneKind {
     Terminal,
-    OzAgent { is_ambient: bool },
-    CLIAgent { agent: CLIAgent, is_ambient: bool },
-    Code { title: String },
+    OzAgent {
+        status: IgnoredInEq<Option<ConversationStatus>>,
+        is_ambient: bool,
+    },
+    CLIAgent {
+        agent: CLIAgent,
+        status: IgnoredInEq<Option<ConversationStatus>>,
+        is_ambient: bool,
+    },
+    Code {
+        title: String,
+    },
     CodeDiff,
     File,
-    Notebook { is_plan: bool },
-    Workflow { is_ai_prompt: bool },
+    Notebook {
+        is_plan: bool,
+    },
+    Workflow {
+        is_ai_prompt: bool,
+    },
     Settings,
     EnvVarCollection,
     EnvironmentManagement,
@@ -3509,12 +3536,21 @@ impl TypedPane<'_> {
                 // Route through the shared helper so summary mode agrees with
                 // `resolve_icon_with_status_variant` on what the tab represents.
                 match terminal_view_agent_icon_variant(terminal_view, app) {
-                    Some(IconWithStatusVariant::OzAgent { is_ambient, .. }) => {
-                        SummaryPaneKind::OzAgent { is_ambient }
+                    Some(IconWithStatusVariant::OzAgent { status, is_ambient }) => {
+                        SummaryPaneKind::OzAgent {
+                            status: IgnoredInEq(status),
+                            is_ambient,
+                        }
                     }
                     Some(IconWithStatusVariant::CLIAgent {
-                        agent, is_ambient, ..
-                    }) => SummaryPaneKind::CLIAgent { agent, is_ambient },
+                        agent,
+                        status,
+                        is_ambient,
+                    }) => SummaryPaneKind::CLIAgent {
+                        agent,
+                        status: IgnoredInEq(status),
+                        is_ambient,
+                    },
                     Some(_) | None => SummaryPaneKind::Terminal,
                 }
             }
@@ -4902,11 +4938,11 @@ pub(super) fn render_summary_pane_kind_icon_circle(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    // For ambient Oz / CLI agent kinds, delegate to `render_icon_with_status` so the
-    // brand-color circle is overlaid with the white cloud badge (status-less in summary
-    // mode). Non-ambient agent kinds and all other pane kinds fall through to the inline
-    // circle rendering below.
-    if let Some(variant) = ambient_agent_variant(&kind) {
+    // For Oz / CLI agent kinds, delegate to `render_icon_with_status` so the brand-color
+    // circle is overlaid with the agent's status badge (or the white cloud badge when
+    // ambient) — matching the status-aware icons on regular pane rows. All other pane kinds
+    // fall through to the inline circle rendering below.
+    if let Some(variant) = agent_status_variant(&kind) {
         return render_icon_with_status(variant, total_size, 0., theme, theme.background());
     }
     let icon_size = total_size * SUMMARY_INLINE_ICON_RATIO;
@@ -4980,22 +5016,25 @@ pub(super) fn render_summary_pane_kind_icon_circle(
     .finish()
 }
 
-/// Maps an ambient Oz / CLI agent summary-pane kind to the `IconWithStatusVariant` used to
-/// render the brand-color circle with the white cloud badge. Non-ambient kinds (and all
-/// other pane kinds) return `None` so the caller falls back to its inline rendering.
-fn ambient_agent_variant(kind: &SummaryPaneKind) -> Option<IconWithStatusVariant> {
+/// Maps an Oz / CLI agent summary-pane kind to the `IconWithStatusVariant` used to render
+/// the brand-color circle with its status overlay — the same status-aware renderer the
+/// regular (non-summary) pane rows use. Ambient agents get the white cloud badge; non-ambient
+/// agents get the status badge for their `ConversationStatus`. Non-agent pane kinds return
+/// `None` so the caller falls back to its inline rendering.
+fn agent_status_variant(kind: &SummaryPaneKind) -> Option<IconWithStatusVariant> {
     match kind {
-        SummaryPaneKind::OzAgent { is_ambient: true } => Some(IconWithStatusVariant::OzAgent {
-            status: None,
-            is_ambient: true,
+        SummaryPaneKind::OzAgent { status, is_ambient } => Some(IconWithStatusVariant::OzAgent {
+            status: status.0.clone(),
+            is_ambient: *is_ambient,
         }),
         SummaryPaneKind::CLIAgent {
             agent,
-            is_ambient: true,
+            status,
+            is_ambient,
         } => Some(IconWithStatusVariant::CLIAgent {
             agent: *agent,
-            status: None,
-            is_ambient: true,
+            status: status.0.clone(),
+            is_ambient: *is_ambient,
         }),
         _ => None,
     }

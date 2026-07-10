@@ -29112,7 +29112,9 @@ fn render_group_member_icon_collage(
         // element (leaving room for the cloud badge). Shift right-down by
         // (1 - CIRCLE_RATIO)/2 * icon_diameter so the circle centers on the grid point.
         let collage_pos = match &kind {
-            SummaryPaneKind::OzAgent { is_ambient: true }
+            SummaryPaneKind::OzAgent {
+                is_ambient: true, ..
+            }
             | SummaryPaneKind::CLIAgent {
                 is_ambient: true, ..
             } => {
