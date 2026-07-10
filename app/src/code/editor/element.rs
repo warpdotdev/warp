@@ -1620,7 +1620,6 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                 let broad_hovered_range =
                     self.gutter_element_range_containing_position(*position, only_check_y_axis);
 
-
                 let hovered_range = match broad_hovered_range {
                     Some(GutterRange::HiddenSection { .. }) => {
                         self.gutter_element_range_containing_position(*position, false)
