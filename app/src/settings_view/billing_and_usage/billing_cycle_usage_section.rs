@@ -41,9 +41,6 @@ use crate::workspaces::workspace::{
 
 const HEADER_FONT_SIZE: f32 = 16.;
 const LEGEND_DOT_SIZE: f32 = 8.;
-/// Wider than the default menu width so cross-year period labels
-/// (e.g. "Dec 27, 2025 - Jan 27, 2026") fit alongside the check icon
-/// without shrinking the text.
 const PERIOD_MENU_WIDTH: f32 = 240.;
 
 pub struct BillingCycleUsageSectionView {
