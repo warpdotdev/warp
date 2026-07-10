@@ -647,6 +647,86 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
     });
 }
 
+#[test]
+fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
+    // Regression test for QUALITY-866: a profile whose model was set to a custom
+    // endpoint on device A should NOT be reset when device B syncs that profile
+    // but does not have the corresponding custom endpoint configured.
+    //
+    // Before the fix, `reconcile_disabled_model_preferences` would clear any model
+    // ID that couldn't be resolved locally, causing the profile to revert to Auto
+    // and syncing that change back to cloud — erasing the user's setting on device A.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        // Simulate a model ID from a custom endpoint on another device.
+        // This device (device B) does NOT have the endpoint configured locally.
+        let remote_custom_model_id = LLMId::from("a1b2c3d4-5e6f-7890-abcd-ef1234567890");
+        // Intentionally skip adding the endpoint to ApiKeyManager.
+
+        let default_profile_id =
+            profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(
+                default_profile_id,
+                Some(remote_custom_model_id.clone()),
+                ctx,
+            );
+            profiles.set_coding_model(
+                default_profile_id,
+                Some(remote_custom_model_id.clone()),
+                ctx,
+            );
+            profiles.set_cli_agent_model(
+                default_profile_id,
+                Some(remote_custom_model_id.clone()),
+                ctx,
+            );
+        });
+
+        // Trigger a model list refresh (as happens on login, network reconnect, etc.).
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(ModelsByFeature::default()), ctx);
+        });
+
+        // The model IDs should be PRESERVED even though no matching custom endpoint
+        // is configured on this device.
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(
+                profile.data().base_model.as_ref(),
+                Some(&remote_custom_model_id),
+                "base_model must be preserved for unknown custom endpoint IDs (cross-device sync)"
+            );
+            assert_eq!(
+                profile.data().coding_model.as_ref(),
+                Some(&remote_custom_model_id),
+                "coding_model must be preserved for unknown custom endpoint IDs (cross-device sync)"
+            );
+            assert_eq!(
+                profile.data().cli_agent_model.as_ref(),
+                Some(&remote_custom_model_id),
+                "cli_agent_model must be preserved for unknown custom endpoint IDs (cross-device sync)"
+            );
+        });
+    });
+}
+
 // -- tui_agent_model_info tests --
 
 fn agent_llm(id: &str, display_name: &str) -> LLMInfo {
