@@ -3044,7 +3044,6 @@ pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
     pub subscribe_button_handle: &'a MouseStateHandle,
-    pub byo_inference_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
@@ -3072,7 +3071,6 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                     return render_out_of_credits_error(
                         message,
                         props.subscribe_button_handle,
-                        props.byo_inference_button_handle,
                         props.is_ai_input_enabled,
                         props.icon_right_margin,
                         app,
@@ -3226,12 +3224,10 @@ fn out_of_credits_cta_button(
         .with_cursor(Some(Cursor::PointingHand))
 }
 
-/// Renders the out-of-credits failure: alert icon + message with Subscribe and
-/// "Bring your own AI" CTAs below.
+/// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
 fn render_out_of_credits_error(
     message: &str,
     subscribe_button_handle: &MouseStateHandle,
-    byo_inference_button_handle: &MouseStateHandle,
     is_ai_input_enabled: bool,
     icon_right_margin: f32,
     app: &AppContext,
@@ -3279,17 +3275,6 @@ fn render_out_of_credits_error(
         })
         .finish();
 
-    let byo_button =
-        out_of_credits_cta_button("Bring your own AI", byo_inference_button_handle, app)
-            .build()
-            .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                    search_query: "api".to_string(),
-                    section: Some(SettingsSection::WarpAgent),
-                });
-            })
-            .finish();
-
     Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_spacing(12.)
@@ -3304,9 +3289,7 @@ fn render_out_of_credits_error(
                 Flex::row()
                     .with_main_axis_size(MainAxisSize::Min)
                     .with_main_axis_alignment(MainAxisAlignment::Start)
-                    .with_spacing(8.)
                     .with_child(subscribe_button)
-                    .with_child(byo_button)
                     .finish(),
             )
             .with_margin_left(icon_size(app) + icon_right_margin)
