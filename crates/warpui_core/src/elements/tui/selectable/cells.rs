@@ -2,20 +2,13 @@ use std::ops::Range;
 
 use ratatui::buffer::CellWidth;
 
-use super::super::TuiBuffer;
-
-/// An absolute cell position in selectable content.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct TuiContentPoint {
-    pub row: usize,
-    pub col: u16,
-}
+use super::super::{TuiBuffer, TuiGridPoint};
 
 /// A half-open linear span in selectable content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TuiSelectionSpan {
-    pub start: TuiContentPoint,
-    pub end: TuiContentPoint,
+    pub start: TuiGridPoint,
+    pub end: TuiGridPoint,
 }
 
 /// One rendered glyph and its cell/byte extents.
@@ -54,7 +47,7 @@ pub(crate) fn row_glyphs(buffer: &TuiBuffer, row: u16, width: u16) -> Vec<TuiRow
 }
 
 /// Returns the character cell span at `point`.
-pub(crate) fn cell_span(point: TuiContentPoint, width: u16) -> TuiSelectionSpan {
+pub(crate) fn cell_span(point: TuiGridPoint, width: u16) -> TuiSelectionSpan {
     TuiSelectionSpan {
         start: point,
         end: point_after_col(point.row, point.col.saturating_add(1), width),
@@ -82,13 +75,13 @@ pub(crate) fn row_text(buffer: &TuiBuffer, row: u16, columns: Range<u16>) -> Str
 
 /// Returns the exclusive end point after `col`, wrapping to the start of the
 /// next row when `col` reaches `width`.
-pub fn point_after_col(row: usize, col: u16, width: u16) -> TuiContentPoint {
+pub fn point_after_col(row: usize, col: u16, width: u16) -> TuiGridPoint {
     if col >= width {
-        TuiContentPoint {
+        TuiGridPoint {
             row: row.saturating_add(1),
             col: 0,
         }
     } else {
-        TuiContentPoint { row, col }
+        TuiGridPoint { row, col }
     }
 }

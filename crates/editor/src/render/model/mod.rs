@@ -40,7 +40,7 @@ use warpui_core::text_selection_utils::{
 use warpui_core::units::{IntoPixels, Pixels};
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
-pub use self::char_cell_display::{DisplayLattice, DisplayPoint, DisplayRow, DisplayRowKind};
+pub use self::char_cell_display::{DisplayLattice, DisplayRow, DisplayRowKind};
 use self::location::WrapDirection;
 pub use self::location::{HitTestOptions, Location};
 pub use self::offset_map::{OffsetMap, SelectableTextRun};

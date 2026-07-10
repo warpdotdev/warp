@@ -15,7 +15,8 @@ use string_offset::{ByteOffset, CharOffset};
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
+    TuiGridPoint, TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect, TuiScrollableElement,
+    TuiSize,
 };
 use crate::elements::SmartSelectFn;
 use crate::text::word_boundaries::WordBoundariesPolicy;
@@ -26,7 +27,7 @@ mod cells;
 mod state;
 
 pub(crate) use cells::{cell_span, row_glyphs, row_text};
-pub use cells::{point_after_col, TuiContentPoint, TuiRowGlyph, TuiSelectionSpan};
+pub use cells::{point_after_col, TuiRowGlyph, TuiSelectionSpan};
 pub use state::TuiSelectionHandle;
 
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
@@ -40,7 +41,7 @@ pub trait TuiSelectableElement: TuiElement {
         position: TuiPoint,
         area: TuiRect,
         clamp_outside: bool,
-    ) -> Option<TuiContentPoint>;
+    ) -> Option<TuiGridPoint>;
 
     /// Returns rendered glyphs for one selectable content row.
     fn selection_row_glyphs(
@@ -132,7 +133,7 @@ where
     fn selection_unit_span(
         &self,
         selection_type: SelectionType,
-        point: TuiContentPoint,
+        point: TuiGridPoint,
         width: u16,
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
@@ -144,7 +145,7 @@ where
                 .into_iter()
                 .find(|glyph| point.col >= glyph.start_col && point.col < glyph.end_col)
                 .map(|glyph| TuiSelectionSpan {
-                    start: TuiContentPoint {
+                    start: TuiGridPoint {
                         row: point.row,
                         col: glyph.start_col,
                     },
@@ -163,11 +164,11 @@ where
                 .unwrap_or_else(|| cell_span(point, width))
             }
             SelectionType::Lines => TuiSelectionSpan {
-                start: TuiContentPoint {
+                start: TuiGridPoint {
                     row: point.row,
                     col: 0,
                 },
-                end: TuiContentPoint {
+                end: TuiGridPoint {
                     row: point.row.saturating_add(1),
                     col: 0,
                 },
@@ -324,7 +325,7 @@ where
 
 /// Resolves a semantic word span from rendered row glyphs.
 fn word_span(
-    point: TuiContentPoint,
+    point: TuiGridPoint,
     width: u16,
     glyphs: &[TuiRowGlyph],
     policy: &WordBoundariesPolicy,
@@ -348,7 +349,7 @@ fn word_span(
     let start = glyphs.get(start_index)?;
     let end = glyphs.get(end_index.saturating_sub(1))?;
     Some(TuiSelectionSpan {
-        start: TuiContentPoint {
+        start: TuiGridPoint {
             row: point.row,
             col: start.start_col,
         },

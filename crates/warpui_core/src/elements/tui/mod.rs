@@ -59,13 +59,15 @@ pub use event::{
 };
 pub use event_handler::TuiEventHandler;
 pub use flex::TuiFlex;
-pub use geometry::{TuiConstraint, TuiPoint, TuiPointExt, TuiRect, TuiRectExt, TuiSize};
+pub use geometry::{
+    TuiConstraint, TuiGridPoint, TuiPoint, TuiPointExt, TuiRect, TuiRectExt, TuiSize,
+};
 pub use hoverable::TuiHoverable;
 pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use selectable::{
-    point_after_col, TuiContentPoint, TuiRowGlyph, TuiSelectable, TuiSelectableElement,
-    TuiSelectionHandle, TuiSelectionSpan,
+    point_after_col, TuiRowGlyph, TuiSelectable, TuiSelectableElement, TuiSelectionHandle,
+    TuiSelectionSpan,
 };
 pub use shimmering_text::TuiShimmeringText;
 pub use text::TuiText;

@@ -1,4 +1,4 @@
-use super::{TuiContentPoint, TuiSelectionHandle, TuiSelectionSpan};
+use super::{TuiGridPoint, TuiSelectionHandle, TuiSelectionSpan};
 use crate::text::SelectionType;
 
 /// Verifies multiple row resizes are applied in original content order.
@@ -7,12 +7,12 @@ fn batch_resize_rebases_selection_by_the_cumulative_delta() {
     let handle = TuiSelectionHandle::default();
     handle.start(
         TuiSelectionSpan {
-            start: TuiContentPoint { row: 10, col: 0 },
-            end: TuiContentPoint { row: 10, col: 1 },
+            start: TuiGridPoint { row: 10, col: 0 },
+            end: TuiGridPoint { row: 10, col: 1 },
         },
         Some(TuiSelectionSpan {
-            start: TuiContentPoint { row: 11, col: 0 },
-            end: TuiContentPoint { row: 12, col: 0 },
+            start: TuiGridPoint { row: 11, col: 0 },
+            end: TuiGridPoint { row: 12, col: 0 },
         }),
         SelectionType::Simple,
         10,
@@ -38,12 +38,12 @@ fn resize_below_selection_is_a_noop() {
     let handle = TuiSelectionHandle::default();
     handle.start(
         TuiSelectionSpan {
-            start: TuiContentPoint { row: 2, col: 0 },
-            end: TuiContentPoint { row: 2, col: 1 },
+            start: TuiGridPoint { row: 2, col: 0 },
+            end: TuiGridPoint { row: 2, col: 1 },
         },
         Some(TuiSelectionSpan {
-            start: TuiContentPoint { row: 3, col: 0 },
-            end: TuiContentPoint { row: 4, col: 0 },
+            start: TuiGridPoint { row: 3, col: 0 },
+            end: TuiGridPoint { row: 4, col: 0 },
         }),
         SelectionType::Simple,
         10,
@@ -54,8 +54,8 @@ fn resize_below_selection_is_a_noop() {
     assert_eq!(
         handle.range(),
         Some(TuiSelectionSpan {
-            start: TuiContentPoint { row: 2, col: 0 },
-            end: TuiContentPoint { row: 4, col: 0 },
+            start: TuiGridPoint { row: 2, col: 0 },
+            end: TuiGridPoint { row: 4, col: 0 },
         })
     );
 }

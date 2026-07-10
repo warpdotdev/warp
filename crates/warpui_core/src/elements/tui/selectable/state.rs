@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::{TuiContentPoint, TuiSelectionSpan};
+use super::{TuiGridPoint, TuiSelectionSpan};
 use crate::text::SelectionType;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -14,7 +14,7 @@ struct TuiSelectionState {
     selection_type: SelectionType,
     is_selecting: bool,
     width: u16,
-    cell_snapshot: BTreeMap<TuiContentPoint, String>,
+    cell_snapshot: BTreeMap<TuiGridPoint, String>,
 }
 
 impl TuiSelectionState {
@@ -117,7 +117,7 @@ impl TuiSelectionHandle {
     }
 
     /// Validates visible cells and records newly visible selected glyphs.
-    pub(crate) fn validate_and_snapshot(&self, cells: BTreeMap<TuiContentPoint, String>) -> bool {
+    pub(crate) fn validate_and_snapshot(&self, cells: BTreeMap<TuiGridPoint, String>) -> bool {
         let mut slot = self.0.borrow_mut();
         let Some(selection) = slot.as_mut() else {
             return false;
@@ -163,7 +163,7 @@ impl TuiSelectionHandle {
                 return true;
             }
         } else if let Some(range) = selection.range() {
-            let boundary = TuiContentPoint {
+            let boundary = TuiGridPoint {
                 row: old_end,
                 col: 0,
             };
@@ -258,7 +258,7 @@ fn rebase_span(
     let end = if span.end.row > old_end || (span.end.row == old_end && span.end.col > 0) {
         rebase_point(span.end, old_end, old_height, new_height)
     } else if span.end.row == old_end && span.end.col == 0 {
-        TuiContentPoint {
+        TuiGridPoint {
             row: min(span.end.row, new_end),
             col: 0,
         }
@@ -273,11 +273,11 @@ fn rebase_span(
 
 /// Rebases one content point around a resized row range.
 fn rebase_point(
-    point: TuiContentPoint,
+    point: TuiGridPoint,
     old_end: usize,
     old_height: usize,
     new_height: usize,
-) -> TuiContentPoint {
+) -> TuiGridPoint {
     if point.row < old_end {
         return point;
     }
@@ -290,7 +290,7 @@ fn rebase_point(
             .row
             .saturating_sub(old_height.saturating_sub(new_height))
     };
-    TuiContentPoint {
+    TuiGridPoint {
         row,
         col: point.col,
     }

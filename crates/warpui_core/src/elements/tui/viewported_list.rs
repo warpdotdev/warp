@@ -10,11 +10,11 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::selectable::{row_glyphs, row_text, TuiContentPoint, TuiSelectionHandle};
+use super::selectable::{row_glyphs, row_text, TuiSelectionHandle};
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSelectableElement,
-    TuiSelectionSpan, TuiSize,
+    TuiGridPoint, TuiPaintContext, TuiPresentationContext, TuiRect, TuiScrollableElement,
+    TuiSelectableElement, TuiSelectionSpan, TuiSize,
 };
 use crate::AppContext;
 
@@ -106,7 +106,7 @@ where
         position: super::TuiPoint,
         area: TuiRect,
         clamp_outside: bool,
-    ) -> Option<TuiContentPoint> {
+    ) -> Option<TuiGridPoint> {
         if clamp_outside {
             let delta = if position.y < area.y {
                 -1
@@ -206,7 +206,7 @@ where
             if start_col < end_col {
                 for col in start_col..end_col {
                     visible_cells.insert(
-                        TuiContentPoint { row, col },
+                        TuiGridPoint { row, col },
                         buffer[(area.x.saturating_add(col), y)].symbol().to_owned(),
                     );
                 }
@@ -588,7 +588,7 @@ where
         position: super::TuiPoint,
         area: TuiRect,
         clamp_outside: bool,
-    ) -> Option<TuiContentPoint> {
+    ) -> Option<TuiGridPoint> {
         let resolved = self.state.resolved_viewport()?;
         if resolved.content_height == 0 || area.width == 0 || area.height == 0 {
             return None;
@@ -619,7 +619,7 @@ where
             }
             position.y - content_top
         };
-        Some(TuiContentPoint {
+        Some(TuiGridPoint {
             row: resolved
                 .window
                 .scroll_top

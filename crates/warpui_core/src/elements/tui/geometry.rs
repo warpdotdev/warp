@@ -11,6 +11,8 @@
 //! column/container layout needs that ratatui's `Rect` does not provide.
 
 pub use ratatui::layout::{Position as TuiPoint, Rect as TuiRect, Size as TuiSize};
+/// A position in rendered TUI content, independent of its screen origin.
+pub use crate::text::TuiGridPoint;
 
 /// A layout constraint: an element handed a `TuiConstraint` must return a
 /// [`TuiSize`] with `min.width <= width <= max.width` and

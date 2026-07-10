@@ -26,12 +26,12 @@ use string_offset::CharOffset;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
 use warp_editor::render::model::{
-    char_cell_display_width, CharCellTemporaryBlock, DisplayPoint, DisplayRow, DisplayRowKind,
+    char_cell_display_width, CharCellTemporaryBlock, DisplayRow, DisplayRowKind,
 };
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
-    TuiLayoutContext, TuiPaintContext, TuiParentElement, TuiPoint, TuiRect, TuiRectExt, TuiSize,
-    TuiStyle, TuiText,
+    TuiGridPoint, TuiLayoutContext, TuiPaintContext, TuiParentElement, TuiPoint, TuiRect,
+    TuiRectExt, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::{AppContext, ModelHandle};
 
@@ -491,7 +491,7 @@ impl TuiEditorElement {
         };
 
         let row_in_view = i64::from(position.y) - i64::from(area.y);
-        let display_row = (i64::from(first_visible_row) + row_in_view).max(0) as u32;
+        let display_row = (i64::from(first_visible_row) + row_in_view).max(0) as usize;
         let col = position
             .x
             .saturating_sub(area.x)
@@ -503,7 +503,7 @@ impl TuiEditorElement {
         // (deferred wrap). Resolve it directly to the end-of-buffer gap;
         // otherwise cap at the last real display row so a drag below the
         // text resolves within it rather than past it.
-        let last_row = (lattice.rows().len() as u32).saturating_sub(1);
+        let last_row = lattice.rows().len().saturating_sub(1);
         if display_row > last_row {
             let end_char_offset = CharOffset::from(text.chars().count());
             if lattice
@@ -513,7 +513,7 @@ impl TuiEditorElement {
                 return Some(end_char_offset + 1);
             }
         }
-        let point = DisplayPoint {
+        let point = TuiGridPoint {
             row: display_row.min(last_row),
             col,
         };
