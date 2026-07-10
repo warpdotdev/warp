@@ -50,22 +50,18 @@ fn terminal_block_is_collapsed_by_default_and_expands_inline() {
         let invalidations_for_subscription = layout_invalidations.clone();
         app.update(|ctx| {
             ctx.subscribe_to_view(&view, move |_, event, _| match event {
-                TuiShellCommandViewEvent::LayoutInvalidated => {
+                TuiShellCommandViewEvent::LayoutChanged => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
             });
         });
-
         let collapsed_height = app.read(|app| {
             let collapsed_lines = render_non_empty_lines(&view, 80, app);
             assert_eq!(collapsed_lines, vec!["✓ Ran `printf result`  ▸"]);
             rendered_height(&view, 80, app)
         });
-
-        app.update(|ctx| {
-            view.update(ctx, |view, ctx| {
-                view.handle_action(&TuiShellCommandViewAction::ToggleExpanded, ctx);
-            });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiShellCommandViewAction::ToggleExpanded, ctx);
         });
         app.read(|app| {
             let expanded_lines = render_non_empty_lines(&view, 80, app);
@@ -78,10 +74,8 @@ fn terminal_block_is_collapsed_by_default_and_expands_inline() {
             assert!(rendered_height(&view, 80, app) > collapsed_height);
         });
 
-        app.update(|ctx| {
-            view.update(ctx, |view, ctx| {
-                view.handle_action(&TuiShellCommandViewAction::ToggleExpanded, ctx);
-            });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiShellCommandViewAction::ToggleExpanded, ctx);
         });
         app.read(|app| {
             assert_eq!(rendered_height(&view, 80, app), collapsed_height);
@@ -92,7 +86,7 @@ fn terminal_block_is_collapsed_by_default_and_expands_inline() {
 
 #[test]
 fn shell_command_views_keep_independent_collapse_state() {
-    let first = ShellCommandViewState::new_collapsed();
+    let mut first = ShellCommandViewState::new_collapsed();
     let second = ShellCommandViewState::new_collapsed();
 
     first.toggle();

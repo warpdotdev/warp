@@ -16,15 +16,13 @@ use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPoint, TuiRect, TuiSize,
+    Color, Modifier, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
 };
 use warpui_core::elements::Fill as CoreFill;
-use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext, ViewHandle};
+use warpui_core::{App, AppContext, EntityIdMap, TypedActionView, ViewContext, ViewHandle};
 
-use super::{TuiAIBlock, TuiAIBlockEvent, TuiAIBlockSection, TuiToolCallView};
+use super::{TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection, TuiToolCallView};
 use crate::agent_block_sections::render_fallback_tool_call_section;
 use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
 use crate::tui_shell_command_view::TuiShellCommandViewAction;
@@ -555,7 +553,7 @@ fn manual_expand_override_shows_finished_reasoning_body() {
 }
 
 #[test]
-fn header_click_records_a_manual_collapse_override() {
+fn thinking_action_records_a_manual_collapse_override() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let block = test_agent_block(
@@ -565,50 +563,18 @@ fn header_click_records_a_manual_collapse_override() {
                 status: reasoning_status(None, "body"),
             },
         );
+        let message_id = MessageId::new("reasoning-1".to_owned());
+        block.update(&mut app, |block, ctx| {
+            block.handle_action(
+                &TuiAIBlockAction::SetThinkingCollapsed {
+                    message_id: message_id.clone(),
+                    collapsed: true,
+                },
+                ctx,
+            );
+        });
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            let mut element = block.render_element(app_ctx);
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let area = TuiRect::new(0, 0, 40, 5);
-            element.layout(TuiConstraint::loose(TuiSize::new(40, 5)), &mut ctx, app_ctx);
-
-            // Click the `Thinking...` header row (row 1, below the block's top
-            // padding): the press arms the header's click and the release fires
-            // it. The runtime attributes dispatch to a rendered view, so give
-            // the context an origin view for the toggle's `notify()`.
-            let mut event_ctx = TuiEventContext::default();
-            event_ctx.set_origin_view(Some(EntityId::new()));
-            let handled = element.dispatch_event(
-                &TuiEvent::LeftMouseDown {
-                    position: TuiPoint::new(0, 1),
-                    modifiers: ModifiersState::default(),
-                    click_count: 1,
-                    is_first_mouse: false,
-                },
-                area,
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
-            );
-            assert!(handled, "the press arming the click must be consumed");
-            let handled = element.dispatch_event(
-                &TuiEvent::LeftMouseUp {
-                    position: TuiPoint::new(0, 1),
-                    modifiers: ModifiersState::default(),
-                },
-                area,
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
-            );
-            assert!(handled, "the release completing the click must be consumed");
-
-            // The streaming block was expanded, so the click records a collapse
-            // override that wins over the expanded-while-streaming default.
-            let message_id = MessageId::new("reasoning-1".to_owned());
             assert!(block.thinking_states.is_collapsed(&message_id, false));
         });
     });

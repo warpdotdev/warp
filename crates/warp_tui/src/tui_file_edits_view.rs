@@ -20,7 +20,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::rc::Rc;
 
 use ai::agent::action_result::{AIAgentActionResultType, RequestFileEditsResult};
 use ai::diff_validation::{DiffDelta, DiffType};
@@ -35,7 +34,7 @@ use warpui_core::elements::tui::{
     TuiText,
 };
 use warpui_core::elements::MouseStateHandle;
-use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
+use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
 use crate::agent_block_sections::{tool_call_glyph_style, tool_call_label_style};
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
@@ -60,9 +59,18 @@ pub(super) struct TuiFileEditsView {
     /// executor seeds the storage.
     sections: Vec<FileSection>,
     /// Shared per-section UI state (collapse + header hover) for the summary
-    /// header and each file, cloned into header click closures — the
-    /// thinking-block pattern.
+    /// header and each file.
     section_states: SectionStates,
+}
+/// Events emitted to the owning agent block.
+pub(super) enum TuiFileEditsViewEvent {
+    LayoutChanged,
+}
+
+/// User interactions handled by the file-edits view.
+#[derive(Clone, Debug)]
+pub(super) enum TuiFileEditsViewAction {
+    ToggleSection(SectionKey),
 }
 
 /// One edited file's diff: header facts plus the char-cell editor whose
@@ -100,18 +108,16 @@ impl FileSection {
 /// Keys the shared collapse/hover state map: the multi-file summary header or
 /// one file section by index. File states are independent of the summary's,
 /// so inner collapse choices survive outer toggles.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum SectionKey {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum SectionKey {
     Summary,
     File(usize),
 }
 
-/// Per-section UI state shared with header click closures. Lives outside the
-/// view (like `ThinkingBlockStates`) because click handlers only get a
-/// `TuiEventContext`, not the view.
-#[derive(Clone, Default)]
+/// Persistent collapse and hover state for each section.
+#[derive(Default)]
 struct SectionStates {
-    states: Rc<RefCell<HashMap<SectionKey, SectionUiState>>>,
+    states: RefCell<HashMap<SectionKey, SectionUiState>>,
 }
 
 /// UI state for a single collapsible section.
@@ -229,6 +235,7 @@ impl TuiFileEditsView {
                     if let Some(section) = me.sections.get_mut(index) {
                         section.diff_ready = true;
                     }
+                    ctx.emit(TuiFileEditsViewEvent::LayoutChanged);
                     ctx.notify();
                 }
             });
@@ -241,6 +248,7 @@ impl TuiFileEditsView {
                 diff_ready: false,
             });
         }
+        ctx.emit(TuiFileEditsViewEvent::LayoutChanged);
         ctx.notify();
     }
 
@@ -328,7 +336,6 @@ impl TuiFileEditsView {
         // The helper contributes one separating space with the chevron; add
         // another here to preserve the existing two-space disclosure gap.
         header_spans.push((" ".to_owned(), chevron_style));
-        let states = self.section_states.clone();
         tui_collapsible(
             collapsed,
             header_spans,
@@ -336,8 +343,7 @@ impl TuiFileEditsView {
             hover_state,
             body,
             move |event_ctx, _app| {
-                states.toggle_collapsed(key);
-                event_ctx.notify();
+                event_ctx.dispatch_typed_action(TuiFileEditsViewAction::ToggleSection(key));
             },
         )
     }
@@ -484,7 +490,7 @@ fn verb_and_name(diff: &FileDiff) -> (&'static str, String) {
 }
 
 impl Entity for TuiFileEditsView {
-    type Event = ();
+    type Event = TuiFileEditsViewEvent;
 }
 
 impl TuiView for TuiFileEditsView {
@@ -521,6 +527,20 @@ impl TuiView for TuiFileEditsView {
                     .finish()
             }),
         )
+    }
+}
+
+impl TypedActionView for TuiFileEditsView {
+    type Action = TuiFileEditsViewAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            TuiFileEditsViewAction::ToggleSection(key) => {
+                self.section_states.toggle_collapsed(*key);
+                ctx.emit(TuiFileEditsViewEvent::LayoutChanged);
+                ctx.notify();
+            }
+        }
     }
 }
 

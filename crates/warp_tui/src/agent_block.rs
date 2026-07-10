@@ -5,7 +5,7 @@
 //! composition ([`TuiAIBlock::render_element`]); the per-section render
 //! functions live in [`crate::agent_block_sections`].
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -23,9 +23,11 @@ use warpui_core::elements::tui::{
     TuiParentElement, TuiSize,
 };
 use warpui_core::elements::MouseStateHandle;
-use warpui_core::{AppContext, Entity, EntityId, ModelHandle, TuiView, ViewContext, ViewHandle};
+use warpui_core::{
+    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+};
 
-use super::tui_file_edits_view::TuiFileEditsView;
+use super::tui_file_edits_view::{TuiFileEditsView, TuiFileEditsViewEvent};
 use super::tui_shell_command_view::{TuiShellCommandView, TuiShellCommandViewEvent};
 use crate::agent_block_sections::{
     render_fallback_tool_call_section, render_input_section, render_plain_text_section,
@@ -50,9 +52,9 @@ enum TuiAIBlockSection {
 }
 
 /// Per-message UI state for thinking blocks, keyed by reasoning message.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct ThinkingBlockStates {
-    states: Rc<RefCell<HashMap<MessageId, ThinkingBlockState>>>,
+    states: RefCell<HashMap<MessageId, ThinkingBlockState>>,
 }
 
 /// UI state for a single thinking block.
@@ -134,6 +136,15 @@ pub(super) enum TuiAIBlockEvent {
     LayoutInvalidated,
 }
 
+/// User interactions handled by the owning agent block.
+#[derive(Clone, Debug)]
+pub(crate) enum TuiAIBlockAction {
+    SetThinkingCollapsed {
+        message_id: MessageId,
+        collapsed: bool,
+    },
+}
+
 /// A thin TUI rich-content view adapter backed by one agent exchange.
 ///
 /// The rendering logic is mostly section extraction, but the shared block list
@@ -160,6 +171,7 @@ pub(super) struct TuiAIBlock {
     /// Populated by [`Self::sync_action_views`]; stateless tool calls never
     /// get entries here.
     action_views: HashMap<AIAgentActionId, TuiToolCallView>,
+    last_measured_width: Cell<Option<u16>>,
 }
 
 /// Extracts model state into renderable agent block sections.
@@ -186,6 +198,7 @@ impl TuiAIBlock {
             thinking_states: Default::default(),
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
+            last_measured_width: Cell::new(None),
         };
         block.sync_action_views(&action_model, ctx);
 
@@ -257,8 +270,13 @@ impl TuiAIBlock {
             if self.action_views.contains_key(&action_id) {
                 continue;
             }
-            let view =
-                ctx.add_tui_view(|ctx| TuiFileEditsView::new(action_id.clone(), action_model, ctx));
+            let view_action_id = action_id.clone();
+            let view = ctx.add_typed_action_tui_view(move |ctx| {
+                TuiFileEditsView::new(view_action_id, action_model, ctx)
+            });
+            ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
+                TuiFileEditsViewEvent::LayoutChanged => me.invalidate_layout(ctx),
+            });
             self.action_views
                 .insert(action_id, TuiToolCallView::FileEdits(view));
             ctx.notify();
@@ -279,7 +297,7 @@ impl TuiAIBlock {
                 TuiShellCommandView::new(action, output_streaming, action_model, terminal_model)
             });
             ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
-                TuiShellCommandViewEvent::LayoutInvalidated => me.invalidate_layout(ctx),
+                TuiShellCommandViewEvent::LayoutChanged => me.invalidate_layout(ctx),
             });
             self.action_views
                 .insert(action_id, TuiToolCallView::ShellCommand(view));
@@ -336,6 +354,23 @@ impl TuiAIBlock {
             .block_list()
             .block_with_id(block_id)
             .and_then(|block| block.requested_command_action_id().cloned())
+    }
+
+    /// Whether the cached height is stale at `width`.
+    pub(super) fn needs_height_measurement(&self, width: u16, app: &AppContext) -> bool {
+        self.last_measured_width.get() != Some(width)
+            || self.block_model.status(app).is_streaming()
+            || self.action_views.values().any(|view| match view {
+                TuiToolCallView::FileEdits(_) => false,
+                TuiToolCallView::ShellCommand(view) => {
+                    view.as_ref(app).needs_continuous_height_measurement()
+                }
+            })
+    }
+
+    /// Records the width used for the latest height measurement.
+    pub(super) fn record_height_measurement(&self, width: u16) {
+        self.last_measured_width.set(Some(width));
     }
 
     /// Returns this block's wrapped height using the live layout context.
@@ -511,6 +546,23 @@ impl TuiView for TuiAIBlock {
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         self.render_element(app)
+    }
+}
+
+impl TypedActionView for TuiAIBlock {
+    type Action = TuiAIBlockAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            TuiAIBlockAction::SetThinkingCollapsed {
+                message_id,
+                collapsed,
+            } => {
+                self.thinking_states
+                    .set_collapsed(message_id.clone(), *collapsed);
+                self.invalidate_layout(ctx);
+            }
+        }
     }
 }
 

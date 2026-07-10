@@ -12,7 +12,7 @@ use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiStyle, Tu
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::AppContext;
 
-use crate::agent_block::ThinkingBlockStates;
+use crate::agent_block::{ThinkingBlockStates, TuiAIBlockAction};
 use crate::tool_call_labels::{
     tool_call_display_state, tool_call_glyph, tool_call_label, ResolvedCommandBlock,
     ToolCallDisplayState,
@@ -139,8 +139,7 @@ pub(crate) fn render_fallback_tool_call_section(
         .finish()
 }
 
-/// Renders a reasoning message as a collapsible thinking block. The header
-/// turns white and bold while the block's hover state reports it hovered.
+/// Renders a reasoning message as a collapsible thinking block.
 pub(crate) fn render_thinking_section(
     states: &ThinkingBlockStates,
     message_id: &MessageId,
@@ -162,7 +161,6 @@ pub(crate) fn render_thinking_section(
     .with_padding_left(4);
 
     let collapsed = states.is_collapsed(message_id, finished_duration.is_some());
-    let toggle_states = states.clone();
     let toggle_message_id = message_id.clone();
     builder.collapsible(
         collapsed,
@@ -170,8 +168,10 @@ pub(crate) fn render_thinking_section(
         states.hover_state(message_id),
         body_element.finish(),
         move |event_ctx, _app| {
-            toggle_states.set_collapsed(toggle_message_id.clone(), !collapsed);
-            event_ctx.notify();
+            event_ctx.dispatch_typed_action(TuiAIBlockAction::SetThinkingCollapsed {
+                message_id: toggle_message_id.clone(),
+                collapsed: !collapsed,
+            });
         },
     )
 }
