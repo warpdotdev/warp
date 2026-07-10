@@ -1,9 +1,11 @@
 ---
 name: create-launch-modal
-description: Create a one-time launch modal in the Warp client (feature announcement, onboarding, etc.). Use when adding a new modal that should appear exactly once per user on startup, gated by a feature flag, with colors sourced from Warp theme tokens and terminal theme colors.
+description: GUI desktop app only. Create a one-time launch modal in the Warp client (feature announcement, onboarding, etc.). Use when adding a new modal that should appear exactly once per user on startup, gated by a feature flag, with colors sourced from Warp theme tokens and terminal theme colors.
 ---
 
 # create-launch-modal
+
+**Scope — GUI desktop app only.** This skill applies to Warp's **GUI** desktop front-end (the `app/` crate on the WarpUI pixel/GPU framework). It does **not** apply to the headless **TUI** front-end (`crates/warp_tui`; cell-grid `TuiElement` library under `crates/warpui_core/src/elements/tui`), which has its own components, tests, and change-verification workflow. For TUI work, see the `warp-tui-guidelines`, `warp-tui-testing`, and `verify-tui-change` skills instead.
 
 Create a one-time launch modal — the feature-announcement design used for launches like "Orchestrate any agent, anywhere" or "Warp is now open-source."
 

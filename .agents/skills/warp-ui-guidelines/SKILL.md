@@ -1,9 +1,11 @@
 ---
 name: warp-ui-guidelines
-description: Catalog of guidelines for writing UI code in the Warp client. Read whenever doing any UI work in this repo, up front before writing the change, so the relevant guidelines shape the implementation.
+description: GUI desktop app only. Catalog of guidelines for writing UI code in the Warp client. Read whenever doing any UI work in this repo, up front before writing the change, so the relevant guidelines shape the implementation.
 ---
 
 # warp-ui-guidelines
+
+**Scope — GUI desktop app only.** This skill applies to Warp's **GUI** desktop front-end (the `app/` crate on the WarpUI pixel/GPU framework). It does **not** apply to the headless **TUI** front-end (`crates/warp_tui`; cell-grid `TuiElement` library under `crates/warpui_core/src/elements/tui`), which has its own components, tests, and change-verification workflow. For TUI work, see the `warp-tui-guidelines`, `warp-tui-testing`, and `verify-tui-change` skills instead.
 
 This skill is a growing catalog of guidelines for working on Warp's UI code. Each guideline captures a lesson that would otherwise be re-learned through review — typically because an agent or contributor reinvented a component, drifted from the design system, or bypassed a shared abstraction.
 
