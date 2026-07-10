@@ -142,8 +142,8 @@ fn viewport_layout_reports_original_agent_block_resize() {
         request_top_window(&app, &source, 10);
         let changes = source.take_selection_row_resizes();
         assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].0, 0..99);
-        assert_eq!(changes[0].1, expected);
+        assert_eq!(changes[0].old_rows, 0..99);
+        assert_eq!(changes[0].new_height, expected);
     });
 }
 

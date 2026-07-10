@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::{TuiGridPoint, TuiSelectionSpan};
+use super::{TuiGridPoint, TuiRowResize, TuiSelectionSpan};
 use crate::text::SelectionType;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -137,7 +137,11 @@ impl TuiSelectionHandle {
     }
 
     /// Rebases selection rows around one resized content range.
-    pub fn rebase_for_row_resize(&self, old_rows: Range<usize>, new_height: usize) -> bool {
+    pub fn rebase_for_row_resize(&self, resize: TuiRowResize) -> bool {
+        let TuiRowResize {
+            old_rows,
+            new_height,
+        } = resize;
         let old_height = old_rows.len();
         if old_height == new_height {
             return false;
@@ -191,23 +195,25 @@ impl TuiSelectionHandle {
     }
 
     /// Applies an ordered batch of content row resizes.
-    pub(crate) fn rebase_for_row_resizes(&self, mut changes: Vec<(Range<usize>, usize)>) -> bool {
+    pub(crate) fn rebase_for_row_resizes(&self, mut changes: Vec<TuiRowResize>) -> bool {
         // Viewport layout can report resizes even when no selection exists; avoid
         // sorting or processing those records when there is nothing to rebase.
         if self.0.borrow().is_none() {
             return false;
         }
 
-        changes.sort_by_key(|(rows, _)| rows.start);
+        changes.sort_by_key(|resize| resize.old_rows.start);
         let mut changed = false;
         let mut cumulative_delta = 0isize;
-        for (rows, new_height) in changes {
-            let old_height = rows.len();
-            let start = add_signed(rows.start, cumulative_delta);
-            changed |=
-                self.rebase_for_row_resize(start..start.saturating_add(old_height), new_height);
+        for resize in changes {
+            let old_height = resize.old_rows.len();
+            let start = add_signed(resize.old_rows.start, cumulative_delta);
+            changed |= self.rebase_for_row_resize(TuiRowResize {
+                old_rows: start..start.saturating_add(old_height),
+                new_height: resize.new_height,
+            });
             cumulative_delta = cumulative_delta
-                .saturating_add(new_height as isize)
+                .saturating_add(resize.new_height as isize)
                 .saturating_sub(old_height as isize);
         }
         changed

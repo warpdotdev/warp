@@ -12,9 +12,9 @@ use std::rc::Rc;
 
 use super::selectable::{row_glyphs, row_text, TuiSelectionHandle};
 use super::{
-    TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiGridPoint, TuiPaintContext, TuiPresentationContext, TuiRect, TuiScrollableElement,
-    TuiSelectableElement, TuiSelectionSpan, TuiSize,
+    TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
+    TuiLayoutContext, TuiPaintContext, TuiPresentationContext, TuiRect, TuiRowResize,
+    TuiScrollableElement, TuiSelectableElement, TuiSelectionSpan, TuiSize,
 };
 use crate::AppContext;
 
@@ -226,7 +226,7 @@ where
         }
     }
 
-    fn take_selection_row_resizes(&self) -> Vec<(Range<usize>, usize)> {
+    fn take_selection_row_resizes(&self) -> Vec<TuiRowResize> {
         self.content.take_selection_row_resizes()
     }
 }
@@ -283,7 +283,7 @@ pub trait TuiViewportedElement {
     }
 
     /// Drains row resizes produced during the latest layout.
-    fn take_selection_row_resizes(&self) -> Vec<(Range<usize>, usize)> {
+    fn take_selection_row_resizes(&self) -> Vec<TuiRowResize> {
         Vec::new()
     }
 }

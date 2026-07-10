@@ -666,7 +666,7 @@ impl CharCellState {
         let lattice = self.display_lattice(hidden_line_ranges);
         let cursor_row = lattice
             .offset_to_display_point(cursor_char_offset)
-            .map(|point| point.row);
+            .map(|point| point.row.min(u32::MAX as usize) as u32);
         let total_rows = cursor_row.map_or(lattice.rows().len() as u32, |cursor_row| {
             (lattice.rows().len() as u32).max(cursor_row + 1)
         });

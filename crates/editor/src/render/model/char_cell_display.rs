@@ -73,7 +73,6 @@ pub struct DisplayRow {
     pub is_continuation: bool,
 }
 
-
 /// The display-row projection at one snapshot of wrap tables, ghosts, and
 /// hidden line ranges: the row list plus the inputs it was computed from.
 ///
@@ -173,10 +172,7 @@ impl<'a> DisplayLattice<'a> {
             .iter()
             .position(|row| matches!(row.kind, DisplayRowKind::Buffer { .. }))
             .map_or(self.rows.len(), |offset| last_row + 1 + offset);
-        Some(TuiGridPoint {
-            row,
-            col,
-        })
+        Some(TuiGridPoint { row, col })
     }
 
     /// The 0-based character offset of the gap at `point`.

@@ -1,4 +1,4 @@
-use super::{TuiGridPoint, TuiSelectionHandle, TuiSelectionSpan};
+use super::{TuiGridPoint, TuiRowResize, TuiSelectionHandle, TuiSelectionSpan};
 use crate::text::SelectionType;
 
 /// Verifies multiple row resizes are applied in original content order.
@@ -19,7 +19,16 @@ fn batch_resize_rebases_selection_by_the_cumulative_delta() {
     );
     handle.finish();
 
-    assert!(handle.rebase_for_row_resizes(vec![(5..6, 0), (1..3, 4)]));
+    assert!(handle.rebase_for_row_resizes(vec![
+        TuiRowResize {
+            old_rows: 5..6,
+            new_height: 0,
+        },
+        TuiRowResize {
+            old_rows: 1..3,
+            new_height: 4,
+        },
+    ]));
 
     let range = handle.range().unwrap();
     assert_eq!(range.start.row, 11);
@@ -30,7 +39,10 @@ fn batch_resize_rebases_selection_by_the_cumulative_delta() {
 fn batch_resize_without_selection_is_a_noop() {
     let handle = TuiSelectionHandle::default();
 
-    assert!(!handle.rebase_for_row_resizes(vec![(1..2, 3)]));
+    assert!(!handle.rebase_for_row_resizes(vec![TuiRowResize {
+        old_rows: 1..2,
+        new_height: 3,
+    }]));
 }
 
 #[test]
@@ -50,7 +62,10 @@ fn resize_below_selection_is_a_noop() {
     );
     handle.finish();
 
-    assert!(!handle.rebase_for_row_resize(10..11, 2));
+    assert!(!handle.rebase_for_row_resize(TuiRowResize {
+        old_rows: 10..11,
+        new_height: 2,
+    }));
     assert_eq!(
         handle.range(),
         Some(TuiSelectionSpan {

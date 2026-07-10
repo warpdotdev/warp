@@ -13,8 +13,8 @@ use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiElement, TuiLayoutContext, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
-    TuiVisibleViewportItem,
+    TuiElement, TuiLayoutContext, TuiRowResize, TuiViewportContent, TuiViewportWindow,
+    TuiViewportedElement, TuiVisibleViewportItem,
 };
 use warpui_core::{AppContext, TuiView};
 
@@ -47,14 +47,12 @@ enum TuiBlockListVisibleItemKind {
     TerminalBlock(BlockId),
     AgentBlock(ViewHandle<TuiAIBlock>),
 }
-/// One original row range and its newly measured height.
-type TuiBlockListHeightChange = (Range<usize>, usize);
 
 /// Adapts a terminal model's canonical block-list order for TUI viewporting.
 pub(super) struct TuiBlockListViewportSource {
     model: Arc<FairMutex<TerminalModel>>,
     agent_blocks: AgentBlockRegistry,
-    height_changes: RefCell<Vec<TuiBlockListHeightChange>>,
+    height_changes: RefCell<Vec<TuiRowResize>>,
 }
 
 impl TuiBlockListViewportSource {
@@ -149,16 +147,14 @@ impl TuiBlockListViewportSource {
             .update_rich_content_heights_in_lines(line_heights);
     }
 
-    /// Collects one `(old row range, new height)` pair per re-measured
-    /// rich-content item, in canonical block-list order, computed against the
-    /// cached heights *before* the new ones are written back. The viewport
-    /// reports these pairs via `take_selection_row_resizes`, and the selectable
-    /// wrapper rebases its state so selected rows stay anchored to the same
-    /// content when blocks grow or shrink above or inside the selection.
+    /// Collects one [`TuiRowResize`] per changed rich-content item, in canonical
+    /// block-list order, computed against cached heights before the new ones
+    /// are written back. The viewport reports them to the selectable wrapper,
+    /// which rebases selected rows around content growth or shrinkage.
     fn rich_content_row_resizes(
         &self,
         line_heights: &HashMap<EntityId, BlockHeight>,
-    ) -> Vec<TuiBlockListHeightChange> {
+    ) -> Vec<TuiRowResize> {
         let model = self.model.lock();
         let block_list = model.block_list();
         let mut changes = line_heights
@@ -166,13 +162,15 @@ impl TuiBlockListViewportSource {
             .filter_map(|(view_id, height)| {
                 let old_rows = block_list.rich_content_row_range(*view_id)?;
                 let new_height = height.as_f64().ceil().max(0.0) as usize;
-                (old_rows.len() != new_height).then_some((old_rows, new_height))
+                (old_rows.len() != new_height).then_some(TuiRowResize {
+                    old_rows,
+                    new_height,
+                })
             })
             .collect::<Vec<_>>();
-        changes.sort_by_key(|(rows, _)| rows.start);
+        changes.sort_by_key(|resize| resize.old_rows.start);
         changes
     }
-
 
     fn visible_items_in_window(
         &self,
@@ -346,7 +344,7 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         Some(self.read_only_content(window, available_width, app))
     }
 
-    fn take_selection_row_resizes(&self) -> Vec<(Range<usize>, usize)> {
+    fn take_selection_row_resizes(&self) -> Vec<TuiRowResize> {
         self.height_changes.borrow_mut().drain(..).collect()
     }
 }

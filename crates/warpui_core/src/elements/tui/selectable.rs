@@ -14,9 +14,9 @@ use std::ops::Range;
 use string_offset::{ByteOffset, CharOffset};
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiGridPoint, TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect, TuiScrollableElement,
-    TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
+    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect,
+    TuiScrollableElement, TuiSize,
 };
 use crate::elements::SmartSelectFn;
 use crate::text::word_boundaries::WordBoundariesPolicy;
@@ -32,6 +32,14 @@ pub use state::TuiSelectionHandle;
 
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
 type CopyCallback = Box<dyn FnMut(String, &mut TuiEventContext, &AppContext)>;
+/// A content row range before layout and its height afterward.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TuiRowResize {
+    /// Rows occupied before layout.
+    pub old_rows: Range<usize>,
+    /// Rows occupied after layout.
+    pub new_height: usize,
+}
 
 /// Geometry, content, and rendering behavior implemented by a selectable child.
 pub trait TuiSelectableElement: TuiElement {
@@ -71,7 +79,7 @@ pub trait TuiSelectableElement: TuiElement {
     );
 
     /// Drains content-row resizes resolved during the latest child layout.
-    fn take_selection_row_resizes(&self) -> Vec<(Range<usize>, usize)> {
+    fn take_selection_row_resizes(&self) -> Vec<TuiRowResize> {
         Vec::new()
     }
 }

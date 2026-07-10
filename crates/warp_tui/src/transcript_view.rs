@@ -13,8 +13,8 @@ use warp::tui_export::{
 };
 use warp_core::semantic_selection::SemanticSelection;
 use warpui_core::elements::tui::{
-    TuiElement, TuiScrollable, TuiScrollableElement, TuiSelectable, TuiSelectionHandle,
-    TuiViewportVerticalAlignment, TuiViewportedList, TuiViewportedListState,
+    TuiElement, TuiRowResize, TuiScrollable, TuiScrollableElement, TuiSelectable,
+    TuiSelectionHandle, TuiViewportVerticalAlignment, TuiViewportedList, TuiViewportedListState,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TuiView, TypedActionView,
@@ -97,7 +97,6 @@ impl TuiTranscriptView {
             selection: TuiSelectionHandle::default(),
         }
     }
-
 
     fn mark_agent_block_dirty(&self, view_id: EntityId, ctx: &mut ViewContext<Self>) {
         self.model
@@ -316,7 +315,10 @@ impl TuiTranscriptView {
                 model.block_list().rich_content_row_range(view_id)
             };
             if let Some(rows) = rows {
-                self.selection.rebase_for_row_resize(rows, 0);
+                self.selection.rebase_for_row_resize(TuiRowResize {
+                    old_rows: rows,
+                    new_height: 0,
+                });
             }
             self.agent_blocks.borrow_mut().remove(&view_id);
             self.model
