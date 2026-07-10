@@ -1094,6 +1094,10 @@ pub struct Workspace {
     openwarp_launch_modal: ViewHandle<OpenWarpLaunchModal>,
     orchestration_launch_modal: ViewHandle<OrchestrationLaunchModal>,
     feature_intro_modal: ViewHandle<FeatureIntroModal>,
+    /// Tab that first received the feature-intro popover. The popover stays
+    /// pinned to this tab for the rest of its lifetime so switching tabs does
+    /// not re-show it elsewhere.
+    feature_intro_tab_pane_group_id: Option<EntityId>,
     auto_handoff_sleep_modal: ViewHandle<AutoHandoffSleepModal>,
     enable_auto_reload_modal: ViewHandle<EnableAutoReloadModal>,
     build_plan_migration_modal: ViewHandle<BuildPlanMigrationModal>,
@@ -3466,6 +3470,7 @@ impl Workspace {
             openwarp_launch_modal: openwarp_launch_view,
             orchestration_launch_modal: orchestration_launch_view,
             feature_intro_modal: feature_intro_view,
+            feature_intro_tab_pane_group_id: None,
             auto_handoff_sleep_modal: auto_handoff_sleep_view,
             enable_auto_reload_modal,
             agent_management_view,
@@ -12009,6 +12014,8 @@ impl Workspace {
             return;
         }
 
+        let closed_tab_id = self.tabs.get(index).map(|tab| tab.pane_group.id());
+
         let tabs_closed = self.close_tabs(
             vec![index].into_iter(),
             OpenDialogSource::CloseTab { tab_index: index },
@@ -12019,6 +12026,14 @@ impl Workspace {
 
         // Telemetry whenever tabs actually closed, not when confirmation dialog comes up.
         if tabs_closed {
+            if closed_tab_id.is_some() && closed_tab_id == self.feature_intro_tab_pane_group_id {
+                // The pinned tab is gone; drop the intro so it does not reappear
+                // on a different tab.
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.mark_feature_intro_dismissed(ctx);
+                });
+                self.feature_intro_tab_pane_group_id = None;
+            }
             ctx.dispatch_global_action("workspace:save_app", ());
             send_telemetry_from_ctx!(
                 TelemetryEvent::TabOperations {
@@ -15872,18 +15887,12 @@ impl Workspace {
                 if self.current_workspace_state.is_resource_center_open {
                     self.current_workspace_state.is_resource_center_open = false;
                     ctx.notify();
-                } else {
-                    let should_dismiss_feature_intro = {
-                        let one_time = OneTimeModalModel::as_ref(ctx);
-                        one_time.target_window_id() == Some(self.window_id)
-                            && one_time.active_feature_intro().is_some()
-                    };
-                    if should_dismiss_feature_intro {
-                        OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
-                            model.mark_feature_intro_dismissed(ctx);
-                        });
-                        ctx.notify();
-                    }
+                } else if self.is_feature_intro_visible_on_active_tab(ctx) {
+                    OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.mark_feature_intro_dismissed(ctx);
+                    });
+                    self.feature_intro_tab_pane_group_id = None;
+                    ctx.notify();
                 }
             }
             pane_group::Event::Exited { add_to_undo_stack } => {
@@ -18896,6 +18905,7 @@ impl Workspace {
         OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
             model.mark_feature_intro_dismissed(ctx);
         });
+        self.feature_intro_tab_pane_group_id = None;
         self.focus_active_tab(ctx);
 
         if let Some(cta_target) = cta_target {
@@ -23082,13 +23092,8 @@ impl Workspace {
                 .set
                 .insert(flags::SESSION_CONFIG_TAB_CONFIG_CHIP_OPEN);
         }
-        {
-            let one_time = OneTimeModalModel::as_ref(app);
-            if one_time.active_feature_intro().is_some()
-                && one_time.target_window_id() == Some(self.window_id)
-            {
-                context.set.insert(flags::FEATURE_INTRO_MODAL_OPEN);
-            }
+        if self.is_feature_intro_visible_on_active_tab(app) {
+            context.set.insert(flags::FEATURE_INTRO_MODAL_OPEN);
         }
 
         if tab_settings
@@ -23508,11 +23513,35 @@ impl Workspace {
 
     fn show_feature_intro_modal(&mut self, id: FeatureIntroId, ctx: &mut ViewContext<Self>) {
         // Non-blocking popover: set the descriptor but intentionally do NOT focus it,
-        // so the terminal and input stay usable while it is visible.
+        // so the terminal and input stay usable while it is visible. Pin to the
+        // currently active tab so the popover only appears there for the rest of
+        // its lifetime (switching tabs hides it; returning shows it again).
+        if self.feature_intro_tab_pane_group_id.is_none() {
+            self.feature_intro_tab_pane_group_id = self
+                .tabs
+                .get(self.active_tab_index)
+                .map(|tab| tab.pane_group.id());
+        }
         let intro = feature_intro_by_id(id);
         self.feature_intro_modal.update(ctx, |modal, ctx| {
             modal.set_feature(intro, ctx);
         });
+    }
+
+    fn is_feature_intro_visible_on_active_tab(&self, app: &AppContext) -> bool {
+        let one_time = OneTimeModalModel::as_ref(app);
+        if one_time.target_window_id() != Some(self.window_id)
+            || one_time.active_feature_intro().is_none()
+        {
+            return false;
+        }
+        let Some(pinned_tab) = self.feature_intro_tab_pane_group_id else {
+            // Fallback before the pin is assigned: only the currently active tab.
+            return true;
+        };
+        self.tabs
+            .get(self.active_tab_index)
+            .is_some_and(|tab| tab.pane_group.id() == pinned_tab)
     }
 
     fn focus_auto_handoff_sleep_modal(&mut self, ctx: &mut ViewContext<Self>) {
@@ -23894,6 +23923,7 @@ impl TypedActionView for Workspace {
                 OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
                     model.mark_feature_intro_dismissed(ctx);
                 });
+                self.feature_intro_tab_pane_group_id = None;
                 ctx.notify();
             }
             #[cfg(debug_assertions)]
@@ -27472,13 +27502,10 @@ impl View for Workspace {
         }
 
         // Feature-intro popover: a non-blocking bottom-right card anchored just above
-        // the input box (or the window corner when there is no input). Added before the
-        // changelog chip below so the chip renders above it.
-        let show_feature_intro = {
-            let one_time = OneTimeModalModel::as_ref(app);
-            one_time.target_window_id() == Some(self.window_id)
-                && one_time.active_feature_intro().is_some()
-        };
+        // the input box (or the window corner when there is no input). Pinned to
+        // the tab that first received it so it does not follow tab switches.
+        // Added before the changelog chip below so the chip renders above it.
+        let show_feature_intro = self.is_feature_intro_visible_on_active_tab(app);
         if show_feature_intro {
             let positioning = match &input_position_id {
                 Some(input_position_id) => {

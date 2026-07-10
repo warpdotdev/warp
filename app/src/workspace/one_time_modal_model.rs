@@ -247,6 +247,15 @@ impl OneTimeModalModel {
     ) -> bool {
         if self.active_feature_intro != intro {
             self.active_feature_intro = intro;
+            // Bind the popover to the focused window as soon as it opens. The
+            // workspace only renders / populates the view when
+            // `target_window_id` matches, and `on_active_window_changed` may not
+            // have run yet when the startup modal queue fires.
+            if intro.is_some() && self.target_window_id.is_none() {
+                if let Some(window_id) = ctx.windows().active_window() {
+                    self.target_window_id = Some(window_id);
+                }
+            }
             ctx.emit(OneTimeModalEvent::VisibilityChanged {
                 is_open: intro.is_some(),
             });
@@ -359,10 +368,21 @@ impl OneTimeModalModel {
 
     pub fn update_target_window_id(&mut self, window_id: WindowId, ctx: &mut ModelContext<Self>) {
         let was_any_modal_visible = self.is_any_modal_open();
+        // Feature intro is intentionally excluded from `is_any_modal_open`, so
+        // track it separately. Without this, activating a window after the
+        // startup queue already selected an intro never re-emits, and the
+        // workspace never calls `show_feature_intro_modal`.
+        let was_feature_intro_visible = self.active_feature_intro().is_some();
+        let previous_target = self.target_window_id;
         self.target_window_id = Some(window_id);
-        if was_any_modal_visible != self.is_any_modal_open() {
+        let is_any_modal_visible = self.is_any_modal_open();
+        let is_feature_intro_visible = self.active_feature_intro().is_some();
+        if was_any_modal_visible != is_any_modal_visible
+            || was_feature_intro_visible != is_feature_intro_visible
+            || (is_feature_intro_visible && previous_target != Some(window_id))
+        {
             ctx.emit(OneTimeModalEvent::VisibilityChanged {
-                is_open: self.is_any_modal_open(),
+                is_open: is_any_modal_visible || is_feature_intro_visible,
             });
         }
     }
