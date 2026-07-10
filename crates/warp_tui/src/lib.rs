@@ -18,6 +18,7 @@ mod tui_builder;
 mod ui;
 
 mod conversation_selection;
+mod editor_element;
 mod exit_confirmation;
 mod input_mode_policy;
 mod keybindings;
@@ -34,6 +35,7 @@ mod tui_diff_storage;
 mod tui_file_edits_view;
 mod usage;
 mod warping_indicator;
+mod zero_state;
 
 pub use root_view::RootTuiView;
 pub use session::run;

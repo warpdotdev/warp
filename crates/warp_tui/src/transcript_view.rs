@@ -22,6 +22,7 @@ use warpui_core::{
 };
 
 use super::agent_block::TuiAIBlock;
+use super::terminal_block::should_render_terminal_block;
 use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
 
 /// Rows of blank space above every transcript block. Terminal blocks get it
@@ -177,6 +178,23 @@ impl TuiTranscriptView {
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
             | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
         }
+    }
+
+    /// Whether the transcript has no visible content: no agent block and no
+    /// terminal block it would render (per [`should_render_terminal_block`];
+    /// the idle prompt block awaiting the first command doesn't count). The
+    /// session view fills the transcript slot with the zero state exactly
+    /// while this holds.
+    pub(super) fn is_empty(&self) -> bool {
+        if !self.agent_blocks.borrow().is_empty() {
+            return false;
+        }
+        let model = self.model.lock();
+        let block_list = model.block_list();
+        !block_list
+            .blocks()
+            .iter()
+            .any(|block| should_render_terminal_block(block, block_list))
     }
 
     /// Returns the view id of the agent block rendering `exchange_id`, if any.

@@ -1,6 +1,5 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
@@ -53,8 +52,6 @@ pub enum FeatureIntroCtaTarget {
 pub struct FeatureIntro {
     /// Stable identifier; also the persisted "seen" key.
     pub id: FeatureIntroId,
-    /// Per-feature rollout gate. The popover only triggers when this is enabled.
-    pub flag: FeatureFlag,
     /// Bundled hero image shown at the top of the card.
     pub hero_image_path: &'static str,
     /// Optional metadata label rendered above the title (e.g. "NEW").
@@ -71,11 +68,9 @@ pub struct FeatureIntro {
 }
 
 /// The registry of feature-intro popovers, in priority order. On startup the
-/// first entry whose [`FeatureIntro::flag`] is enabled and whose id has not yet
-/// been seen is shown.
+/// first entry whose id has not yet been seen is shown.
 pub const FEATURE_INTROS: &[FeatureIntro] = &[FeatureIntro {
     id: FeatureIntroId::CustomModelRouter,
-    flag: FeatureFlag::CustomModelRouterIntro,
     hero_image_path: "async/png/onboarding/custom_model_router_intro_banner.png",
     badge: Some("NEW"),
     title: "Build a custom model router for the Warp Agent.",

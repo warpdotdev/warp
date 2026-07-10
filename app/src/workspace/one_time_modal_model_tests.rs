@@ -2,8 +2,8 @@ use futures::FutureExt;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    free_ai_removal_modal_decision, AISettings, FeatureFlag, FeatureIntroId,
-    FreeAiRemovalModalDecision, OneTimeModalModel, FEATURE_INTROS,
+    free_ai_removal_modal_decision, AISettings, FeatureIntroId, FreeAiRemovalModalDecision,
+    OneTimeModalModel, FEATURE_INTROS,
 };
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspaces::workspace::CustomerType;
@@ -217,17 +217,21 @@ fn test_free_ai_removal_modal_decision_matrix() {
 }
 
 #[test]
-fn feature_intro_triggers_for_enabled_unseen_feature() {
+fn feature_intro_triggers_for_unseen_feature() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
 
         terminal.update(&mut app, |_, ctx| {
-            let _flag = FeatureFlag::CustomModelRouterIntro.override_enabled(true);
             let key = FeatureIntroId::CustomModelRouter.as_key();
+            let window_id = ctx.window_id();
+            let active_window = ctx.windows().active_window();
 
             OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
                 assert!(!AISettings::as_ref(ctx).is_feature_intro_seen(key));
+                // Simulate the startup race where the modal queue runs before
+                // on_active_window_changed has assigned a target window.
+                model.target_window_id = None;
 
                 let shown = model.check_and_trigger_feature_intro_modal(ctx);
 
@@ -239,6 +243,19 @@ fn feature_intro_triggers_for_enabled_unseen_feature() {
                         model.active_feature_intro,
                         Some(FeatureIntroId::CustomModelRouter)
                     );
+                    // Prefer binding to the focused window immediately. If the
+                    // window manager has not yet reported an active window, the
+                    // intro stays pending until `update_target_window_id`.
+                    if active_window.is_some() {
+                        assert_eq!(model.target_window_id, Some(window_id));
+                        assert_eq!(
+                            model.active_feature_intro(),
+                            Some(FeatureIntroId::CustomModelRouter)
+                        );
+                    } else {
+                        assert_eq!(model.target_window_id, None);
+                        assert_eq!(model.active_feature_intro(), None);
+                    }
                 }
 
                 // It is shown at most once: a second check is a no-op.
@@ -249,20 +266,28 @@ fn feature_intro_triggers_for_enabled_unseen_feature() {
 }
 
 #[test]
-fn feature_intro_skipped_when_flag_disabled() {
+fn feature_intro_becomes_visible_when_target_window_is_assigned() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
 
         terminal.update(&mut app, |_, ctx| {
-            // No override: the per-feature flag defaults to disabled in tests.
-            let key = FeatureIntroId::CustomModelRouter.as_key();
+            let window_id = ctx.window_id();
 
             OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
-                assert!(!model.check_and_trigger_feature_intro_modal(ctx));
-                assert_eq!(model.active_feature_intro, None);
-                // A disabled feature is left unmarked so it can still show once enabled.
-                assert!(!AISettings::as_ref(ctx).is_feature_intro_seen(key));
+                // Intro selected before any window is active (no active window
+                // available to bind yet).
+                model.target_window_id = None;
+                model.active_feature_intro = Some(FeatureIntroId::CustomModelRouter);
+                assert_eq!(model.active_feature_intro(), None);
+
+                model.update_target_window_id(window_id, ctx);
+
+                assert_eq!(model.target_window_id, Some(window_id));
+                assert_eq!(
+                    model.active_feature_intro(),
+                    Some(FeatureIntroId::CustomModelRouter)
+                );
             });
         });
     });
@@ -275,8 +300,6 @@ fn feature_intro_skipped_when_all_seen() {
         let terminal = add_window_with_terminal(&mut app, None);
 
         terminal.update(&mut app, |_, ctx| {
-            let _flag = FeatureFlag::CustomModelRouterIntro.override_enabled(true);
-
             OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
                 // Mirror the new-user pre-dismissal: mark every registered intro seen.
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
