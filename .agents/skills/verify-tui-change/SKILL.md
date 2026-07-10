@@ -56,12 +56,16 @@ The OSS build starts **logged out** and stops at a `Sign in to continue`
 placeholder (it drives a device-authorization login flow that needs a browser).
 The login-gated root has three pre-session states you may see:
 
-- `AwaitingLogin` → the `Sign in to continue` placeholder (says *Press Ctrl-C to
-  exit*).
-- `LoggedIn` → briefly a "terminal starting" state, then the **zero state**
-  (`Warp Agent` + version, a "What's new" list, and the project context section)
-  with the input view.
-- `Failed` → an error placeholder.
+- `AwaitingLogin` → a centered placeholder that reads `Sign in to continue`,
+  then `Opening your browser…` (or, once the device code is known, `Open <uri> in
+  your browser` and `and enter code: <code>`). It does **not** show a Ctrl-C hint.
+- `LoggedIn` → briefly `Starting terminal…`, then the **zero state** (`Warp
+  Agent` + version, a "What's new" list, and the project context section) with the
+  input view.
+- `Failed` → `Login failed: <message>` followed by `Press Ctrl-C to exit.`
+
+(Exact strings live in `crates/warp_tui/src/ui.rs` — verify against it if you're
+asserting on placeholder text.)
 
 So: if your change is on the **login placeholder** or a pure element/layout, the
 logged-out OSS build is enough. If your change is in the **live terminal /
@@ -168,8 +172,10 @@ diff — as the verification evidence. This is the TUI equivalent of the GUI's
 
 ## Related skills
 
-- `warp-tui-guidelines` — how TUI UI code is structured (the `TuiElement`
-  cell-grid library).
-- `warp-tui-testing` — render-to-lines unit tests for TUI elements/screens.
-- GUI-only counterparts (do **not** use for TUI work): `warp-integration-test`,
-  `integration-test-video`, `onboarding-verification-skill`.
+`warp-tui-guidelines` (the `TuiElement` cell-grid library) and `warp-tui-testing`
+(render-to-lines unit tests) are companion TUI skills added alongside this one;
+land them together. This skill's build/run/observe workflow stands on its own —
+those cover authoring TUI UI and writing durable tests.
+
+GUI-only counterparts (do **not** use for TUI work): `warp-integration-test`,
+`integration-test-video`, `onboarding-verification-skill`.
