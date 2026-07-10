@@ -253,7 +253,7 @@ fn todo_and_conversation_status_events_dirty_affected_agent_blocks() {
         let terminal_surface_id = EntityId::new();
         let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
         let model_for_view = terminal_model.clone();
-        let action_model = add_test_action_model(&mut app);
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
         let (_, transcript) = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {
@@ -261,7 +261,13 @@ fn todo_and_conversation_status_events_dirty_affected_agent_blocks() {
                     ..Default::default()
                 },
                 |ctx| {
-                    TuiTranscriptView::new(terminal_surface_id, model_for_view, action_model, ctx)
+                    TuiTranscriptView::new(
+                        terminal_surface_id,
+                        model_for_view,
+                        action_model,
+                        &model_events,
+                        ctx,
+                    )
                 },
             )
         });
@@ -538,13 +544,17 @@ fn append_test_agent_block(
     exchange_id: AIAgentExchangeId,
     ctx: &mut ViewContext<TuiTranscriptView>,
 ) -> EntityId {
+    let action_model = view.action_model.clone();
+    let model_events = view.model_events.clone();
+    let terminal_model = view.model.clone();
     let agent_block = ctx.add_tui_view(|ctx| {
         TuiAIBlock::new(
             conversation_id,
             exchange_id,
-            Rc::new(EmptyAgentBlockModel),
-            view.action_model.clone(),
-            view.model.clone(),
+            Rc::new(FakeAgentBlockModel { inputs: Vec::new() }),
+            action_model,
+            &model_events,
+            terminal_model,
             ctx,
         )
     });

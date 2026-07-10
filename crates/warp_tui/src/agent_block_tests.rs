@@ -809,10 +809,8 @@ fn task_list_renders_header_and_status_glyph_rows() {
                 CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.yellow)).into();
             let green: Color =
                 CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.green)).into();
-            let white: Color =
-                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into();
-            let grey: Color =
-                CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into();
+            let primary = expected_output_text_color(app_ctx);
+            let muted = expected_tool_call_text_color(app_ctx);
 
             let rows = vec![
                 ("Compile list".to_owned(), TodoStatus::Completed),
@@ -844,19 +842,19 @@ fn task_list_renders_header_and_status_glyph_rows() {
                 ],
             );
             // Header is bold primary text (the design's prominent header).
-            assert_eq!(frame.buffer[(0, 0)].fg, white);
+            assert_eq!(frame.buffer[(0, 0)].fg, primary);
             assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
             // Completed: green check, primary title.
             assert_eq!(frame.buffer[(2, 1)].fg, green);
-            assert_eq!(frame.buffer[(4, 1)].fg, white);
+            assert_eq!(frame.buffer[(4, 1)].fg, primary);
             // In progress: yellow bullet, primary title.
             assert_eq!(frame.buffer[(2, 2)].fg, yellow);
-            assert_eq!(frame.buffer[(4, 2)].fg, white);
+            assert_eq!(frame.buffer[(4, 2)].fg, primary);
             // Pending: primary glyph and title.
-            assert_eq!(frame.buffer[(2, 3)].fg, white);
+            assert_eq!(frame.buffer[(2, 3)].fg, primary);
             // Cancelled: muted glyph, struck-through muted title.
-            assert_eq!(frame.buffer[(2, 4)].fg, grey);
-            assert_eq!(frame.buffer[(4, 4)].fg, grey);
+            assert_eq!(frame.buffer[(2, 4)].fg, muted);
+            assert_eq!(frame.buffer[(4, 4)].fg, muted);
             assert!(frame.buffer[(4, 4)]
                 .modifier
                 .contains(Modifier::CROSSED_OUT));
