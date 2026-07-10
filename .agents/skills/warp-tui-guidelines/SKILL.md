@@ -16,7 +16,7 @@ The TUI is a distinct front-end from the GUI desktop app. Do **not** carry over 
 
 **Shared with the GUI** (do reuse): the Entity/model core in `warp_core`/`warpui` — `App`/`Entity`/`AppContext`/`ViewContext`, the actions system, `Appearance`/theming, `FeatureFlag` runtime checks (`FeatureFlag::X.is_enabled()` works in both front-ends), telemetry, and logging.
 
-**Different from the GUI** (do NOT use here): the GUI `Element`/`View` types, pixel geometry, `MouseStateHandle`-based pixel hit-testing, and GPU/WGSL rendering or pixel-drawn button themes. The TUI has its own `crates/warp_tui/Cargo.toml`; the compile-time Cargo-feature bridge in `app/Cargo.toml` + `app/src/lib.rs enabled_features()` is GUI-app-specific and does not gate TUI code.
+**Different from the GUI** (do NOT use here): the GUI `Element`/`View` types, pixel geometry, and GPU/WGSL rendering or pixel-drawn button themes. The TUI has its own `crates/warp_tui/Cargo.toml`; the compile-time Cargo-feature bridge in `app/Cargo.toml` + `app/src/lib.rs enabled_features()` is GUI-app-specific and does not gate TUI code. (The TUI *does* have hover/click: `TuiHoverable` and `tui_collapsible` reuse the shared `MouseStateHandle`, so own that handle outside render just like the GUI — only pixel-based hit-testing is GUI-only.)
 
 ## The `TuiElement` trait
 
@@ -79,5 +79,5 @@ Keep examples faithful to the real APIs — read the actual source (`crates/warp
 ## Reference
 
 - Run/observe the TUI with `./script/run-tui`.
-- Verify a TUI change with the `verify-tui-change` skill.
+- Verify a TUI change by building and running it (`./script/run-tui`) and observing the output in an interactive terminal; the `verify-tui-change` skill covers this end to end.
 - Write and run TUI tests with the `warp-tui-testing` skill.

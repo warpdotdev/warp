@@ -17,7 +17,7 @@ TUI tests live in two crates, and which render helper you use depends on where t
 
 Tests for the shared cell-grid elements live in `crates/warpui_core/src/elements/tui/*_tests.rs` and use the crate-internal `test_support` helpers from `crates/warpui_core/src/elements/tui/mod.rs`:
 
-- `test_support::render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String>` — one-call harness: builds `area = TuiRect::new(0, 0, size.width, size.height)` and `TuiBuffer::empty(area)`, calls `element.render(area, &mut buffer, ctx)` inside a paint context, and returns `buffer.to_lines()`.
+- `test_support::render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String>` — one-call harness: builds `area = TuiRect::new(0, 0, size.width, size.height)` and `TuiBuffer::empty(area)`, calls `element.render(area, &mut buffer, ctx)` inside a paint context, and returns `buffer.to_lines()`. **It only calls `render`, not `layout`** — fine for a leaf like `TuiText`, but composite elements (e.g. `TuiFlex`) populate child sizes during `layout`, so lay the element out first (see the `layout_at` helper in `flex_tests.rs`) or it renders empty/stale.
 - `test_support::with_paint_context(|ctx| ...)` — runs a closure with a `TuiPaintContext` over a fresh, empty view map. Use it when you need the `TuiBuffer` afterward to assert on individual `Cell`s.
 
 These helpers are `pub(crate)` to `warpui_core`, so they are only callable from that crate's own tests. Simplest leaf assertion (see `text_tests.rs`, `flex_tests.rs`):
