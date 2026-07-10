@@ -113,18 +113,33 @@ impl EnvironmentFormValues {
             }
         };
 
-        AmbientAgentEnvironment::new(
+        let docker_image = self.docker_image.trim();
+        let mut environment = AmbientAgentEnvironment::new(
             self.name.trim().to_string(),
             description,
             self.selected_repos.clone(),
-            self.docker_image.trim().to_string(),
+            docker_image.to_string(),
             setup_commands,
-        )
+        );
+        // An empty docker image field means the environment does not pin a base
+        // image; preserve that as `None` rather than an empty image string.
+        if docker_image.is_empty() {
+            environment.base_image = None;
+        }
+        environment
     }
 
-    /// Validates the form values.
-    pub fn is_valid(&self) -> bool {
-        !self.name.trim().is_empty() && !self.docker_image.trim().is_empty()
+    /// Validates the form values. The docker image is required only when
+    /// `require_docker_image` is set (the create flow); editing an environment
+    /// that has no base image must stay savable.
+    pub fn is_valid(&self, require_docker_image: bool) -> bool {
+        if self.name.trim().is_empty() {
+            return false;
+        }
+        if require_docker_image && self.docker_image.trim().is_empty() {
+            return false;
+        }
+        true
     }
 }
 
@@ -443,7 +458,7 @@ impl UpdateEnvironmentForm {
             &setup_commands_input_editor,
             |me, _, event, ctx| match event {
                 crate::editor::Event::Navigate(NavigationKey::Tab) => {
-                    if me.form_state.is_valid() {
+                    if me.form_state.is_valid(me.docker_image_required()) {
                         ctx.focus(&me.submit_button);
                     } else {
                         // Wrap around to name (first field)
@@ -930,7 +945,7 @@ impl UpdateEnvironmentForm {
     }
 
     fn update_button_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let is_valid = self.form_state.is_valid();
+        let is_valid = self.form_state.is_valid(self.docker_image_required());
         self.submit_button.update(ctx, |button, ctx| {
             button.set_disabled(!is_valid, ctx);
         });
@@ -938,6 +953,12 @@ impl UpdateEnvironmentForm {
 
     fn is_edit_mode(&self) -> bool {
         matches!(self.mode, EnvironmentFormMode::Edit { .. })
+    }
+
+    /// The docker image is required to create an environment, but editing an
+    /// existing environment that has no base image must stay savable.
+    fn docker_image_required(&self) -> bool {
+        matches!(self.mode, EnvironmentFormMode::Create)
     }
 
     fn update_repos_input_placeholder(&mut self, ctx: &mut ViewContext<Self>) {
@@ -3278,7 +3299,7 @@ impl TypedActionView for UpdateEnvironmentForm {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             UpdateEnvironmentFormAction::Submit => {
-                if !self.form_state.is_valid() {
+                if !self.form_state.is_valid(self.docker_image_required()) {
                     return;
                 }
 

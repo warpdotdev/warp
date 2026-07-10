@@ -13,7 +13,7 @@ use super::{
 };
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::ambient_agents::github_auth_url::{self, AuthSource, GithubAuthRedirectTarget};
-use crate::ai::cloud_environments::GithubRepo;
+use crate::ai::cloud_environments::{BaseImage, GithubRepo};
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
@@ -391,6 +391,88 @@ fn test_submit_button_disabled_until_required_fields_present() {
             assert!(
                 !is_disabled,
                 "Expected submit button enabled when required fields set"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_is_valid_requires_docker_image_only_when_creating() {
+    let values = EnvironmentFormValues {
+        name: "env".to_string(),
+        description: String::new(),
+        selected_repos: vec![],
+        docker_image: String::new(),
+        setup_commands: vec![],
+    };
+
+    // The create flow requires a docker image; editing an environment without
+    // one must stay savable.
+    assert!(!values.is_valid(true));
+    assert!(values.is_valid(false));
+
+    // An empty name is invalid regardless of the docker-image requirement.
+    let no_name = EnvironmentFormValues {
+        name: "  ".to_string(),
+        ..values.clone()
+    };
+    assert!(!no_name.is_valid(false));
+}
+
+#[test]
+fn test_empty_docker_image_produces_none_base_image() {
+    let values = EnvironmentFormValues {
+        name: "env".to_string(),
+        description: String::new(),
+        selected_repos: vec![],
+        docker_image: "  ".to_string(),
+        setup_commands: vec![],
+    };
+    assert_eq!(values.to_ambient_agent_environment().base_image, None);
+
+    let with_image = EnvironmentFormValues {
+        docker_image: "ubuntu:latest".to_string(),
+        ..values
+    };
+    assert_eq!(
+        with_image.to_ambient_agent_environment().base_image,
+        Some(BaseImage::DockerImage("ubuntu:latest".to_string()))
+    );
+}
+
+#[test]
+fn test_edit_mode_allows_saving_environment_without_docker_image() {
+    App::test((), |mut app| async move {
+        init_update_environment_form_test_models(&mut app);
+        let window_id = create_test_window(&mut app);
+
+        app.update(|ctx| {
+            let env_id = SyncId::ClientId(ClientId::new());
+            let initial_values = EnvironmentFormValues {
+                name: "No image env".to_string(),
+                description: String::new(),
+                selected_repos: vec![],
+                docker_image: String::new(),
+                setup_commands: vec![],
+            };
+
+            let view_handle = ctx.add_typed_action_view(window_id, |ctx| {
+                UpdateEnvironmentForm::new_for_test(
+                    EnvironmentFormInitArgs::Edit {
+                        env_id,
+                        initial_values: Box::new(initial_values),
+                    },
+                    ctx,
+                )
+            });
+
+            let is_disabled = view_handle
+                .as_ref(ctx)
+                .submit_button
+                .read(ctx, |button, _| button.is_disabled());
+            assert!(
+                !is_disabled,
+                "Expected save enabled when editing a no-image environment"
             );
         });
     })
