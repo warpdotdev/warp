@@ -1,5 +1,6 @@
 use super::*;
 use crate::keymap::macros::*;
+use crate::keymap::ContextPredicate;
 
 #[test]
 fn test_matcher() -> anyhow::Result<()> {
@@ -248,4 +249,76 @@ impl AsAction for Arc<dyn Action> {
     fn as_action<A: Action>(&self) -> &A {
         self.as_ref().as_any().downcast_ref::<A>().unwrap()
     }
+}
+
+// Regression coverage for the headless-TUI startup crash: a GUI keystroke
+// binding that leaks into a TUI keymap context must be caught by
+// `validate_bindings`, and scoping it out of TUI contexts must make validation
+// pass. This is the exact failure mode that panicked the debug TUI at startup
+// with `app:reopen_closed_session` (see `app/src/undo_close/mod.rs`). These run
+// in the standard `cargo nextest` suite on Linux/macOS/Windows. Gated on
+// `debug_assertions` because `validate_bindings` is a no-op in release.
+
+#[cfg(debug_assertions)]
+#[derive(Debug, PartialEq)]
+enum ValidationTestAction {
+    ReopenClosedSession,
+}
+
+/// Mirrors `warp_tui::keybindings::is_tui_owned_binding`: a keystroke binding
+/// that matches a TUI view context must be TUI-owned (a `tui:`-prefixed name or
+/// the `tui` group). Non-keystroke triggers are exempt.
+#[cfg(debug_assertions)]
+fn require_tui_owned(binding: BindingLens) -> IsBindingValid {
+    if !matches!(binding.trigger, Trigger::Keystrokes(_)) {
+        return IsBindingValid::Yes;
+    }
+    if binding.name.starts_with("tui:") || binding.group == Some("tui") {
+        IsBindingValid::Yes
+    } else {
+        IsBindingValid::No
+    }
+}
+
+#[cfg(debug_assertions)]
+fn matcher_with_reopen_binding(context_predicate: Option<ContextPredicate>) -> Matcher {
+    let mut binding = EditableBinding::new(
+        "app:reopen_closed_session",
+        "Reopen closed session",
+        ValidationTestAction::ReopenClosedSession,
+    )
+    .with_key_binding("ctrl-alt-t");
+    if let Some(predicate) = context_predicate {
+        binding = binding.with_context_predicate(predicate);
+    }
+
+    let mut keymap = Keymap::default();
+    keymap.register_editable_bindings([binding]);
+
+    let mut matcher = Matcher::new(keymap);
+    // Validate against a TUI view context, as the headless TUI does.
+    let mut tui_context = Context::default();
+    tui_context.set.insert("RootTuiView");
+    matcher.register_binding_validator(tui_context, require_tui_owned);
+    matcher
+}
+
+/// Without a context predicate the binding defaults to `Just(true)`, so its
+/// keystroke matches the TUI view context and, not being TUI-owned, fails
+/// validation — reproducing the debug-TUI startup panic.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "Bindings failed validation")]
+fn unscoped_gui_keystroke_binding_fails_tui_validation() {
+    let mut matcher = matcher_with_reopen_binding(None);
+    matcher.validate_bindings();
+}
+
+/// Scoping the binding to the GUI `Workspace` context (the fix) keeps it out of
+/// TUI keymap contexts, so validation passes.
+#[cfg(debug_assertions)]
+#[test]
+fn workspace_scoped_binding_passes_tui_validation() {
+    let mut matcher = matcher_with_reopen_binding(Some(id!("Workspace")));
+    matcher.validate_bindings();
 }

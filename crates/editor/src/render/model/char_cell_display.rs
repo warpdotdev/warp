@@ -33,6 +33,7 @@ use std::cell::Ref;
 use std::ops::Range;
 
 use string_offset::CharOffset;
+use warpui_core::text::TuiGridPoint;
 
 use super::{
     CharCellTemporaryBlock, char_cell_display_width, char_cell_line_gap_position,
@@ -70,17 +71,6 @@ pub struct DisplayRow {
     pub char_range: Range<CharOffset>,
     /// Whether this is a soft-wrap continuation of the previous row.
     pub is_continuation: bool,
-}
-
-/// A position in display-row space: a 0-based display row and a 0-based
-/// display column in terminal cells. The display-space analogue of
-/// [`SoftWrapPoint`](super::SoftWrapPoint) with
-/// [`ColumnUnit::Chars`](super::ColumnUnit) columns; display space is
-/// char-cell only, so the column is a bare `u16`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DisplayPoint {
-    pub row: u32,
-    pub col: u16,
 }
 
 /// The display-row projection at one snapshot of wrap tables, ghosts, and
@@ -134,7 +124,7 @@ impl<'a> DisplayLattice<'a> {
         &self.ghosts
     }
 
-    /// The [`DisplayPoint`] of the gap before 0-based `char_offset`.
+    /// The [`TuiGridPoint`] of the gap before 0-based `char_offset`.
     ///
     /// Returns `None` when the offset is inside a hidden line. A deferred-wrap
     /// cursor at the end of a line that exactly fills the width lands on the
@@ -142,7 +132,7 @@ impl<'a> DisplayLattice<'a> {
     /// follows — never on an interleaved ghost or gap row, which holds no
     /// buffer gap for a cursor. Callers sizing a viewport must accommodate
     /// that phantom row.
-    pub fn offset_to_display_point(&self, char_offset: CharOffset) -> Option<DisplayPoint> {
+    pub fn offset_to_display_point(&self, char_offset: CharOffset) -> Option<TuiGridPoint> {
         let char_idx = char_offset.as_usize();
         let line_index = self
             .line_starts
@@ -169,8 +159,8 @@ impl<'a> DisplayLattice<'a> {
         let (first_row, _) = line_rows.next()?;
         let last_row = line_rows.next_back().map_or(first_row, |(index, _)| index);
         if (row_within_line as usize) <= last_row - first_row {
-            return Some(DisplayPoint {
-                row: first_row as u32 + row_within_line,
+            return Some(TuiGridPoint {
+                row: first_row + row_within_line as usize,
                 col,
             });
         }
@@ -182,18 +172,15 @@ impl<'a> DisplayLattice<'a> {
             .iter()
             .position(|row| matches!(row.kind, DisplayRowKind::Buffer { .. }))
             .map_or(self.rows.len(), |offset| last_row + 1 + offset);
-        Some(DisplayPoint {
-            row: row as u32,
-            col,
-        })
+        Some(TuiGridPoint { row, col })
     }
 
     /// The 0-based character offset of the gap at `point`.
     ///
     /// Returns `None` for ghost, gap, and out-of-range rows because they have
     /// no corresponding buffer offset.
-    pub fn display_point_to_offset(&self, point: DisplayPoint) -> Option<CharOffset> {
-        let row = self.rows.get(point.row as usize)?;
+    pub fn display_point_to_offset(&self, point: TuiGridPoint) -> Option<CharOffset> {
+        let row = self.rows.get(point.row)?;
         match &row.kind {
             DisplayRowKind::Buffer { .. } => {
                 // Walk the row's per-char widths to the gap at or just before

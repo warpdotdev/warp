@@ -65,11 +65,12 @@ use crate::terminal::model::session::Session;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::color_dot;
 use crate::view_components::DismissibleToast;
+use crate::workflows::command_parser::compute_workflow_display_data;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::TelemetryEvent;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AcceptSlashCommandOrSavedPrompt {
     SlashCommand {
         id: SlashCommandId,
@@ -85,6 +86,47 @@ pub enum AcceptSlashCommandOrSavedPrompt {
 }
 impl InlineMenuAction for AcceptSlashCommandOrSavedPrompt {
     const MENU_TYPE: InlineMenuType = InlineMenuType::SlashCommands;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlashCommandSelectionBehavior {
+    InsertCommandText(String),
+    Execute,
+}
+
+/// Shared menu-selection policy for static slash commands.
+///
+/// GUI and TUI both first decide whether accepting a menu row should insert the
+/// slash command text for further argument entry, or execute the command
+/// immediately. Surface-specific execution remains in `Input::execute_slash_command`
+/// for GUI and in `TuiTerminalSessionView::execute_tui_slash_command` for TUI.
+pub fn slash_command_selection_behavior(command: &StaticCommand) -> SlashCommandSelectionBehavior {
+    if command
+        .argument
+        .as_ref()
+        .is_some_and(|argument| !argument.should_execute_on_selection)
+    {
+        SlashCommandSelectionBehavior::InsertCommandText(format!("{} ", command.name))
+    } else {
+        SlashCommandSelectionBehavior::Execute
+    }
+}
+/// Returns whether TUI can execute or otherwise handle the static slash command today.
+///
+/// GUI-only actions such as opening settings panes or inline menus should stay hidden until the
+/// TUI has equivalent flows.
+pub fn slash_command_is_supported_in_tui(command: &StaticCommand) -> bool {
+    command.name == commands::AGENT.name
+        || command.name == commands::NEW.name
+        || command.name == commands::COMPACT.name
+        || command.name == commands::PLAN.name
+}
+
+pub fn saved_prompt_text_for_id(id: &SyncId, ctx: &AppContext) -> Option<String> {
+    let workflow = CloudModel::as_ref(ctx).get_workflow(id)?;
+    workflow.model().data.is_agent_mode_workflow().then(|| {
+        compute_workflow_display_data(&workflow.model().data).command_with_replaced_arguments
+    })
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -176,36 +218,36 @@ impl Input {
         if !self.is_slash_command_available(command, ctx) {
             return;
         }
-        if command.argument.as_ref().is_none() {
-            self.execute_slash_command(
-                command, None, trigger, /*is_queued_prompt*/ false, None, None, ctx,
-            );
-        } else if command
-            .argument
-            .as_ref()
-            .is_some_and(|arg| arg.should_execute_on_selection)
-        {
-            // TODO (zachbai): this is a hack for Oz launch. Caller
-            // should probably be invoking `execute_slash_command` in this case.
-            let argument = if !self.suggestions_mode_model.as_ref(ctx).is_slash_commands() {
-                let trimmed = self.buffer_text(ctx).trim().to_owned();
-                (!trimmed.is_empty()).then_some(trimmed)
-            } else {
-                None
-            };
-            self.execute_slash_command(
-                command,
-                argument.as_ref(),
-                trigger,
-                /*is_queued_prompt*/ false,
-                None,
-                None,
-                ctx,
-            );
-        } else {
-            self.editor.update(ctx, |editor, ctx| {
-                editor.set_buffer_text(&format!("{} ", command.name), ctx);
-            });
+        match slash_command_selection_behavior(command) {
+            SlashCommandSelectionBehavior::Execute => {
+                // TODO (zachbai): this is a hack for Oz launch. Caller
+                // should probably be invoking `execute_slash_command` in this case.
+                let argument = if command
+                    .argument
+                    .as_ref()
+                    .is_some_and(|arg| arg.should_execute_on_selection)
+                    && !self.suggestions_mode_model.as_ref(ctx).is_slash_commands()
+                {
+                    let trimmed = self.buffer_text(ctx).trim().to_owned();
+                    (!trimmed.is_empty()).then_some(trimmed)
+                } else {
+                    None
+                };
+                self.execute_slash_command(
+                    command,
+                    argument.as_ref(),
+                    trigger,
+                    /*is_queued_prompt*/ false,
+                    None,
+                    None,
+                    ctx,
+                );
+            }
+            SlashCommandSelectionBehavior::InsertCommandText(text) => {
+                self.editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text(&text, ctx);
+                });
+            }
         }
     }
 
@@ -231,7 +273,7 @@ impl Input {
         }
 
         match self.slash_command_model.as_ref(ctx).state().clone() {
-            SlashCommandEntryState::None | SlashCommandEntryState::DisabledUntilEmptyBuffer => {
+            SlashCommandEntryState::None => {
                 if self.suggestions_mode_model.as_ref(ctx).is_slash_commands() {
                     self.close_slash_commands_menu(ctx);
                 }
@@ -1296,9 +1338,7 @@ impl Input {
                 let user_query = detected_skill.argument.clone();
                 self.execute_skill_command(reference, user_query, None, None, ctx)
             }
-            SlashCommandEntryState::None
-            | SlashCommandEntryState::Composing { .. }
-            | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
+            SlashCommandEntryState::None | SlashCommandEntryState::Composing { .. } => false,
         }
     }
 
@@ -1397,9 +1437,7 @@ impl Input {
                 let user_query = detected_skill.argument.clone();
                 self.execute_skill_command(reference, user_query, None, None, ctx)
             }
-            SlashCommandEntryState::None
-            | SlashCommandEntryState::Composing { .. }
-            | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
+            SlashCommandEntryState::None | SlashCommandEntryState::Composing { .. } => false,
         }
     }
 
@@ -1467,7 +1505,7 @@ impl Input {
 /// Every other slash command emits an immediate action (forking, switching model, opening a
 /// menu, etc.), so callers gating prompt queuing or shared-session forwarding should treat those
 /// as "run now".
-pub(crate) fn slash_command_is_submitted_as_prompt(command: &StaticCommand) -> bool {
+pub fn slash_command_is_submitted_as_prompt(command: &StaticCommand) -> bool {
     command.name == commands::COMPACT.name
         || command.name == commands::PLAN.name
         || command.name == commands::ORCHESTRATE.name

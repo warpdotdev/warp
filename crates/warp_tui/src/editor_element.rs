@@ -26,12 +26,12 @@ use string_offset::CharOffset;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
 use warp_editor::render::model::{
-    char_cell_display_width, CharCellTemporaryBlock, DisplayPoint, DisplayRow, DisplayRowKind,
+    char_cell_display_width, CharCellTemporaryBlock, DisplayRow, DisplayRowKind,
 };
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
-    TuiLayoutContext, TuiPaintContext, TuiParentElement, TuiPoint, TuiRect, TuiRectExt, TuiSize,
-    TuiStyle, TuiText,
+    TuiGridPoint, TuiLayoutContext, TuiPaintContext, TuiParentElement, TuiPoint, TuiRect,
+    TuiRectExt, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::{AppContext, ModelHandle};
 
@@ -280,7 +280,7 @@ impl TuiEditorElement {
         // The first visible row is model-side scroll state; unwindowed
         // consumers always render from the top.
         let first_visible_row = if self.viewport_rows.is_some() {
-            char_cell.scroll_offset()
+            char_cell.scroll_offset() as usize
         } else {
             0
         };
@@ -295,16 +295,13 @@ impl TuiEditorElement {
             // is part of the layout, so include it when sizing and windowing.
             let cursor = lattice.offset_to_display_point(cursor_offset);
             let total_rows = if self.editable {
-                cursor.map_or(rows.len(), |cursor| rows.len().max(cursor.row as usize + 1))
+                cursor.map_or(rows.len(), |cursor| rows.len().max(cursor.row + 1))
             } else {
                 rows.len()
             };
 
             let (visible_start, visible_rows) = match self.viewport_rows {
-                Some(max_rows) => (
-                    first_visible_row as usize,
-                    (max_rows as usize).min(total_rows),
-                ),
+                Some(max_rows) => (first_visible_row, (max_rows as usize).min(total_rows)),
                 None => (0, total_rows),
             };
             let visible_end = (visible_start + visible_rows).min(total_rows);
@@ -349,9 +346,8 @@ impl TuiEditorElement {
         if let Some(cursor) = cursor {
             self.cursor_col = cursor.col + self.gutter_cols;
             self.cursor_row_in_view = cursor.row.saturating_sub(first_visible_row) as u16;
-            self.cursor_visible = self.editable
-                && cursor.row >= first_visible_row
-                && (cursor.row as usize) < visible_end.max(1);
+            self.cursor_visible =
+                self.editable && cursor.row >= first_visible_row && cursor.row < visible_end.max(1);
         } else {
             self.cursor_col = 0;
             self.cursor_row_in_view = 0;
@@ -491,7 +487,7 @@ impl TuiEditorElement {
         };
 
         let row_in_view = i64::from(position.y) - i64::from(area.y);
-        let display_row = (i64::from(first_visible_row) + row_in_view).max(0) as u32;
+        let display_row = (i64::from(first_visible_row) + row_in_view).max(0) as usize;
         let col = position
             .x
             .saturating_sub(area.x)
@@ -503,7 +499,7 @@ impl TuiEditorElement {
         // (deferred wrap). Resolve it directly to the end-of-buffer gap;
         // otherwise cap at the last real display row so a drag below the
         // text resolves within it rather than past it.
-        let last_row = (lattice.rows().len() as u32).saturating_sub(1);
+        let last_row = lattice.rows().len().saturating_sub(1);
         if display_row > last_row {
             let end_char_offset = CharOffset::from(text.chars().count());
             if lattice
@@ -513,7 +509,7 @@ impl TuiEditorElement {
                 return Some(end_char_offset + 1);
             }
         }
-        let point = DisplayPoint {
+        let point = TuiGridPoint {
             row: display_row.min(last_row),
             col,
         };

@@ -21,6 +21,10 @@ use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
+use crate::terminal::input::slash_command_model::{
+    slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,
+    ParsedSlashCommandInput,
+};
 use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::terminal::model::session::SessionType;
@@ -37,6 +41,14 @@ const SCORE_MULTIPLIER: OrderedFloat<f64> = OrderedFloat(1000.0);
 /// Add command names here to make them accessible when composing prompts
 /// for a running CLI agent (Claude Code, Codex, etc.).
 const CLI_AGENT_INPUT_ALLOWED_COMMANDS: &[&str] = &["/prompts", "/skills"];
+
+fn split_command_and_argument(buffer: &str) -> (&str, Option<&str>) {
+    buffer
+        .split_once(' ')
+        .map_or((buffer, None), |(command, argument)| {
+            (command, Some(argument))
+        })
+}
 
 /// Command availability gates whose inputs are identical on every surface.
 ///
@@ -183,6 +195,72 @@ pub trait SlashCommandDataSource {
 
     fn active_commands(&self) -> impl Iterator<Item = (&SlashCommandId, &StaticCommand)> {
         self.state().active_commands_by_id.iter()
+    }
+
+    /// Classifies slash command input consistently across GUI and TUI surfaces.
+    fn parse_input(&self, buffer: &str, ctx: &AppContext) -> ParsedSlashCommandInput {
+        if !buffer.starts_with('/') {
+            return ParsedSlashCommandInput::None;
+        }
+        if let Some(detected) = self.parse_slash_command(buffer) {
+            return ParsedSlashCommandInput::SlashCommand(detected);
+        }
+        if let Some(detected) = self.parse_skill_command(buffer, ctx) {
+            return ParsedSlashCommandInput::SkillCommand(detected);
+        }
+        match slash_command_composition_filter(buffer) {
+            Some(filter) => ParsedSlashCommandInput::Composing {
+                filter: filter.to_owned(),
+            },
+            None => ParsedSlashCommandInput::None,
+        }
+    }
+
+    /// Matches `buffer` against active slash commands, returning the detected command and
+    /// space-delimited argument, if provided.
+    fn parse_slash_command(&self, buffer: &str) -> Option<DetectedCommand> {
+        let (possible_command, possible_argument) = split_command_and_argument(buffer);
+
+        let is_matching_command = |command: &StaticCommand| {
+            if command.name != possible_command {
+                return false;
+            }
+
+            if let Some(argument) = command.argument.as_ref() {
+                argument.is_optional || possible_argument.is_some()
+            } else {
+                possible_argument.is_none_or(|argument| argument.trim().is_empty())
+            }
+        };
+        let matched_command = self
+            .active_commands()
+            .find_map(|(_, command)| is_matching_command(command).then(|| command.clone()))?;
+
+        Some(DetectedCommand {
+            command: matched_command,
+            argument: possible_argument.map(str::to_owned),
+        })
+    }
+
+    /// Matches `buffer` against skills available for the active working directory, returning the
+    /// detected skill and space-delimited argument, if provided.
+    fn parse_skill_command(&self, buffer: &str, ctx: &AppContext) -> Option<DetectedSkillCommand> {
+        let (possible_command, possible_argument) = split_command_and_argument(buffer);
+        let skill_name = possible_command.strip_prefix('/')?;
+
+        let active_session = self.active_session().as_ref(ctx);
+        let cwd_path = active_session.current_working_directory_location(ctx);
+        let matched_skill = SkillManager::handle(ctx)
+            .as_ref(ctx)
+            .get_skills_for_working_directory(cwd_path.as_ref(), ctx)
+            .into_iter()
+            .find(|skill| skill.name == skill_name)?;
+
+        Some(DetectedSkillCommand {
+            reference: matched_skill.reference,
+            name: matched_skill.name,
+            argument: possible_argument.map(str::to_owned),
+        })
     }
 
     /// Update the active repository root for this terminal. Returns whether the value changed,

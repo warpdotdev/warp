@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
 use crate::ai::active_agent_views_model::{ActiveAgentViewsEvent, ActiveAgentViewsModel};
@@ -12,8 +11,6 @@ use crate::ai::agent_management::notifications::{
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, ConversationStatusUpdate, QueuedQueryModel};
-use crate::server::telemetry::TelemetryEvent;
-use crate::settings::AISettings;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
@@ -437,8 +434,6 @@ impl AgentNotificationsModel {
         branch: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let show_agent_notifications = *AISettings::as_ref(ctx).show_agent_notifications;
-
         let is_visible = is_terminal_view_visible(terminal_view_id, ctx);
         let item = NotificationItem::new(
             title,
@@ -451,14 +446,6 @@ impl AgentNotificationsModel {
             artifacts,
             branch,
         );
-        if show_agent_notifications {
-            send_telemetry_from_ctx!(
-                TelemetryEvent::AgentNotificationShown {
-                    agent_variant: agent.into(),
-                },
-                ctx
-            );
-        }
 
         let id = item.id;
         self.notifications.push(item);

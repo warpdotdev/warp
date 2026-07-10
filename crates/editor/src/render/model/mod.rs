@@ -40,7 +40,7 @@ use warpui_core::text_selection_utils::{
 use warpui_core::units::{IntoPixels, Pixels};
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
-pub use self::char_cell_display::{DisplayLattice, DisplayPoint, DisplayRow, DisplayRowKind};
+pub use self::char_cell_display::{DisplayLattice, DisplayRow, DisplayRowKind};
 use self::location::WrapDirection;
 pub use self::location::{HitTestOptions, Location};
 pub use self::offset_map::{OffsetMap, SelectableTextRun};
@@ -666,7 +666,7 @@ impl CharCellState {
         let lattice = self.display_lattice(hidden_line_ranges);
         let cursor_row = lattice
             .offset_to_display_point(cursor_char_offset)
-            .map(|point| point.row);
+            .map(|point| point.row.min(u32::MAX as usize) as u32);
         let total_rows = cursor_row.map_or(lattice.rows().len() as u32, |cursor_row| {
             (lattice.rows().len() as u32).max(cursor_row + 1)
         });

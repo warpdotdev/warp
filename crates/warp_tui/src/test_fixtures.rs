@@ -6,7 +6,8 @@ use warp::tui_export::{
     ActiveSession, BlocklistAIActionModel, BlocklistAIHistoryModel, GetRelevantFilesController,
     ModelEventDispatcher, Sessions, TerminalModel,
 };
-use warpui::{App, EntityId, ModelHandle};
+use warp_core::semantic_selection::SemanticSelection;
+use warpui::{AddSingletonModel, App, EntityId, ModelHandle};
 use warpui_core::elements::tui::{TuiElement, TuiText};
 use warpui_core::{AppContext, Entity, TuiView, TypedActionView};
 
@@ -31,6 +32,15 @@ impl TuiView for TestHostView {
 impl TypedActionView for TestHostView {
     type Action = ();
 }
+/// Registers semantic-selection settings shared by selectable TUI test views.
+pub(crate) fn add_test_semantic_selection(ctx: &mut impl AddSingletonModel) {
+    ctx.add_singleton_model(|_| SemanticSelection::mock(true, ""));
+}
+
+/// Builds the action model injected into stateful TUI tool-call views.
+pub(crate) fn add_test_action_model(app: &mut App) -> ModelHandle<BlocklistAIActionModel> {
+    add_test_action_model_and_events(app).0
+}
 
 /// Builds the action model and terminal-event dispatcher injected into TUI agent blocks.
 pub(crate) fn add_test_action_model_and_events(
@@ -39,6 +49,7 @@ pub(crate) fn add_test_action_model_and_events(
     ModelHandle<BlocklistAIActionModel>,
     ModelHandle<ModelEventDispatcher>,
 ) {
+    add_test_semantic_selection(app);
     // Read as a singleton by the action model's executors.
     app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));

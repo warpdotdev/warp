@@ -3478,7 +3478,6 @@ impl Input {
             SlashCommandModel::new(
                 &buffer_model,
                 &ai_input_model,
-                active_session.clone(),
                 slash_command_data_source.clone(),
                 ctx,
             )
@@ -5767,15 +5766,6 @@ impl Input {
             );
         });
 
-        send_telemetry_from_ctx!(
-            TelemetryEvent::OpenSuggestionsMenu(
-                self.suggestions_mode_model
-                    .as_ref(ctx)
-                    .mode()
-                    .to_telemetry_mode(),
-            ),
-            ctx
-        );
         ctx.notify();
     }
 
@@ -9233,15 +9223,6 @@ impl Input {
                 );
             });
 
-            send_telemetry_from_ctx!(
-                TelemetryEvent::OpenSuggestionsMenu(
-                    self.suggestions_mode_model
-                        .as_ref(ctx)
-                        .mode()
-                        .to_telemetry_mode(),
-                ),
-                ctx
-            );
             ctx.notify();
             return;
         }
@@ -11845,15 +11826,6 @@ impl Input {
                 ctx,
             );
         });
-        send_telemetry_from_ctx!(
-            TelemetryEvent::OpenSuggestionsMenu(
-                self.suggestions_mode_model
-                    .as_ref(ctx)
-                    .mode()
-                    .to_telemetry_mode(),
-            ),
-            ctx
-        );
 
         self.select_and_refresh_voltron(VoltronItem::History, ctx);
 
@@ -12605,16 +12577,6 @@ impl Input {
                                 ctx,
                             );
                         });
-
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::OpenSuggestionsMenu(
-                                self.suggestions_mode_model
-                                    .as_ref(ctx)
-                                    .mode()
-                                    .to_telemetry_mode(),
-                            ),
-                            ctx
-                        );
 
                         let preselect_option = if self.is_classic_completions_enabled(ctx) {
                             TabCompletionsPreselectOption::Unselected
@@ -13479,24 +13441,6 @@ impl Input {
             && (self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
                 || self.is_cloud_mode_input_v2_composing(ctx))
         {
-            // If we're submitting an AI query, we want to send telemetry for the input type.
-            let input_model = self.ai_input_model.as_ref(ctx);
-            let input_type = input_model.input_type();
-            let is_locked = input_model.is_input_type_locked();
-            let input_type_decision_source = input_model.last_ai_autodetection_source();
-            let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
-            let block_id = self.model.lock().active_block_id().clone();
-            send_telemetry_from_ctx!(
-                TelemetryEvent::InputBufferSubmitted {
-                    input_type,
-                    is_locked,
-                    input_type_decision_source,
-                    was_lock_set_with_empty_buffer,
-                    block_id,
-                },
-                ctx
-            );
-
             // Check if we're configuring an ambient agent and spawn it instead of submitting a regular AI query.
             if self
                 .ambient_agent_view_model()
@@ -13600,24 +13544,6 @@ impl Input {
 
             self.submit_ai_query_with_routing(None, ctx);
         } else {
-            // If we're submitting a shell command, we want to send telemetry for the input type.
-            let input_model = self.ai_input_model.as_ref(ctx);
-            let input_type = input_model.input_type();
-            let is_locked = input_model.is_input_type_locked();
-            let last_ai_autodetection_source = input_model.last_ai_autodetection_source();
-            let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
-            let block_id = self.model.lock().active_block_id().clone();
-            send_telemetry_from_ctx!(
-                TelemetryEvent::InputBufferSubmitted {
-                    input_type,
-                    is_locked,
-                    input_type_decision_source: last_ai_autodetection_source,
-                    was_lock_set_with_empty_buffer,
-                    block_id,
-                },
-                ctx
-            );
-
             if FeatureFlag::WorkflowAliases.is_enabled() {
                 let mut command_string = self.editor.as_ref(ctx).buffer_text(ctx);
                 // If the alias was inserted from the completions menu, it will have trailing

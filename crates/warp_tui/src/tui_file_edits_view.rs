@@ -31,12 +31,13 @@ use warp::tui_export::{
 };
 use warp_editor::content::buffer::InitialBufferState;
 use warpui_core::elements::tui::{
-    tui_disclosure_chevron, Modifier, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
-    TuiParentElement, TuiStyle, TuiText,
+    tui_collapsible, Modifier, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiStyle,
+    TuiText,
 };
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
+use crate::agent_block_sections::{tool_call_glyph_style, tool_call_label_style};
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
 use crate::tool_call_labels::{tool_call_display_state, tool_call_glyph, ToolCallDisplayState};
 use crate::tui_builder::TuiUiBuilder;
@@ -314,71 +315,61 @@ impl TuiFileEditsView {
         app: &AppContext,
         body: Option<impl FnOnce() -> Box<dyn TuiElement>>,
     ) -> Box<dyn TuiElement> {
-        let has_body = body.is_some();
-        let mut column = TuiFlex::column()
-            .child(self.render_header(key, label, line_stats, has_body, builder, app));
-        if let Some(body) = body {
-            if !self.section_states.is_collapsed(key) {
-                column.add_child(body());
-            }
-        }
-        column.finish()
+        let Some(body) = body else {
+            let (header_spans, _) = self.header_spans(label, line_stats, false, builder, app);
+            return TuiText::from_spans(header_spans).truncate().finish();
+        };
+
+        let collapsed = self.section_states.is_collapsed(key);
+        let hover_state = self.section_states.hover_state(key);
+        let hovered = hover_state.lock().unwrap().is_hovered();
+        let (mut header_spans, chevron_style) =
+            self.header_spans(label, line_stats, hovered, builder, app);
+        // The helper contributes one separating space with the chevron; add
+        // another here to preserve the existing two-space disclosure gap.
+        header_spans.push((" ".to_owned(), chevron_style));
+        let states = self.section_states.clone();
+        tui_collapsible(
+            collapsed,
+            header_spans,
+            chevron_style,
+            hover_state,
+            body,
+            move |event_ctx, _app| {
+                states.toggle_collapsed(key);
+                event_ctx.notify();
+            },
+        )
     }
 
-    /// Renders a collapsible header row as one styled-span paragraph: a state
-    /// glyph (colored like `render_tool_call_section`'s rows), `label` in
-    /// bold, colored `+a −r` counts, and the collapse chevron, clickable to
-    /// toggle the keyed section. The counts are omitted while `line_stats` is
+    /// Builds a section header's styled spans: a state glyph (colored like
+    /// `render_tool_call_section`'s rows), `label` in bold, and colored
+    /// `+a −r` counts. [`tui_collapsible`] appends the shared chevron for
+    /// sections with bodies; the counts are omitted while `line_stats` is
     /// `None` (diff(s) not yet computed).
-    fn render_header(
+    fn header_spans(
         &self,
-        key: SectionKey,
         label: &str,
         line_stats: Option<(usize, usize)>,
-        show_chevron: bool,
+        hovered: bool,
         builder: &TuiUiBuilder,
         app: &AppContext,
-    ) -> Box<dyn TuiElement> {
+    ) -> (Vec<(String, TuiStyle)>, TuiStyle) {
         let state = self.display_state(app);
-        let hovered = self
-            .section_states
-            .hover_state(key)
-            .lock()
-            .unwrap()
-            .is_hovered();
 
         // State lives in the glyph, mirroring `render_tool_call_section`.
-        let glyph_style = match state {
-            ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-                builder.dim_text_style()
-            }
-            ToolCallDisplayState::AwaitingApproval | ToolCallDisplayState::Running => {
-                builder.attention_glyph_style()
-            }
-            ToolCallDisplayState::Succeeded => builder.success_glyph_style(),
-            ToolCallDisplayState::Failed => builder.error_text_style(),
-            ToolCallDisplayState::Cancelled => builder.muted_text_style(),
-        };
-        let name_style = match state {
-            ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-                builder.dim_text_style()
-            }
-            ToolCallDisplayState::AwaitingApproval
-            | ToolCallDisplayState::Running
-            | ToolCallDisplayState::Succeeded
-            | ToolCallDisplayState::Failed
-            | ToolCallDisplayState::Cancelled => builder.primary_text_style(),
-        };
+        let glyph_style = tool_call_glyph_style(state, builder);
+        let name_style = tool_call_label_style(state, builder);
         let bold = |style: TuiStyle| style.add_modifier(Modifier::BOLD);
         let embolden = |style: TuiStyle| if hovered { bold(style) } else { style };
 
         let mut spans = vec![
             (format!("{} ", tool_call_glyph(state)), glyph_style),
-            (format!("{label} "), embolden(bold(name_style))),
+            (label.to_owned(), embolden(bold(name_style))),
         ];
         if let Some((added, removed)) = line_stats {
             spans.push((
-                format!("+{added}"),
+                format!(" +{added}"),
                 embolden(bold(builder.diff_added_style())),
             ));
             spans.push((
@@ -386,19 +377,7 @@ impl TuiFileEditsView {
                 embolden(bold(builder.diff_removed_style())),
             ));
         }
-        if show_chevron {
-            let chevron = tui_disclosure_chevron(self.section_states.is_collapsed(key));
-            spans.push((format!("  {chevron}"), embolden(name_style)));
-        }
-        let row = TuiText::from_spans(spans).truncate();
-
-        let states = self.section_states.clone();
-        TuiHoverable::new(self.section_states.hover_state(key), row.finish())
-            .on_click(move |event_ctx, _app| {
-                states.toggle_collapsed(key);
-                event_ctx.notify();
-            })
-            .finish()
+        (spans, embolden(name_style))
     }
 
     /// Renders the per-file sections as a column of collapsible sections with

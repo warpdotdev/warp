@@ -1,9 +1,10 @@
 use std::ops::Range;
 
 use string_offset::CharOffset;
+use warpui_core::text::TuiGridPoint;
 
 use super::super::{CharCellState, CharCellTemporaryBlock, LineCount};
-use super::{DisplayPoint, DisplayRow, DisplayRowKind};
+use super::{DisplayRow, DisplayRowKind};
 
 /// A `CharCellState` with wrap tables built for `text`, the public entry
 /// point for everything under test.
@@ -28,7 +29,7 @@ fn rows(state: &CharCellState, hidden: &[Range<usize>]) -> Vec<DisplayRow> {
 }
 
 /// `offset_to_display_point` as a bare `(row, col)` pair.
-fn point(state: &CharCellState, char_idx: usize, hidden: &[Range<usize>]) -> Option<(u32, u16)> {
+fn point(state: &CharCellState, char_idx: usize, hidden: &[Range<usize>]) -> Option<(usize, u16)> {
     state
         .display_lattice(hidden)
         .offset_to_display_point(CharOffset::from(char_idx))
@@ -38,13 +39,13 @@ fn point(state: &CharCellState, char_idx: usize, hidden: &[Range<usize>]) -> Opt
 /// `display_point_to_offset` from a bare `(row, col)` pair.
 fn offset(
     state: &CharCellState,
-    row: u32,
+    row: usize,
     col: u16,
     hidden: &[Range<usize>],
 ) -> Option<CharOffset> {
     state
         .display_lattice(hidden)
-        .display_point_to_offset(DisplayPoint { row, col })
+        .display_point_to_offset(TuiGridPoint { row, col })
 }
 
 /// `(kind, char_range, is_continuation)` triples for compact assertions.

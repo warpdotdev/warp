@@ -1838,7 +1838,7 @@ fn read_skill_display_text(
 ) -> String {
     skill
         .map(|s| format!("/{}", s.name))
-        .unwrap_or_else(|| skill_reference.to_string())
+        .unwrap_or_else(|| skill_reference.display_label())
 }
 
 fn render_read_skill(

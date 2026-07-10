@@ -1999,7 +1999,7 @@ impl BlocklistAIHistoryModel {
 
     /// Handle clearing the blocklist for a terminal surface.
     /// The terminal surface will also cancel the active stream on processing the event emitted here.
-    pub(crate) fn clear_conversations_for_terminal_surface(
+    pub fn clear_conversations_for_terminal_surface(
         &mut self,
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,

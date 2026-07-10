@@ -438,7 +438,7 @@ fn label_for_action(
             State::Cancelled => "Stop recording cancelled".to_owned(),
         },
         AIAgentActionType::ReadSkill(request) => {
-            let skill = single_line(&request.skill.to_string());
+            let skill = single_line(&request.skill.display_label());
             match state {
                 State::Constructing => "Reading skill…".to_owned(),
                 State::Pending | State::AwaitingApproval | State::Succeeded => {

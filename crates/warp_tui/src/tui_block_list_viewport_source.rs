@@ -13,13 +13,13 @@ use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiElement, TuiLayoutContext, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
-    TuiVisibleViewportItem,
+    TuiElement, TuiLayoutContext, TuiRowResize, TuiViewportContent, TuiViewportWindow,
+    TuiViewportedElement, TuiVisibleViewportItem,
 };
 use warpui_core::{AppContext, TuiView};
 
 use super::agent_block::TuiAIBlock;
-use super::terminal_block::{should_render_terminal_block, TerminalBlockVisibleRowsElement};
+use super::terminal_block::{should_render_terminal_block, TerminalBlockElement};
 
 pub(super) type AgentBlockRegistry = Rc<RefCell<HashMap<EntityId, ViewHandle<TuiAIBlock>>>>;
 
@@ -49,10 +49,10 @@ enum TuiBlockListVisibleItemKind {
 }
 
 /// Adapts a terminal model's canonical block-list order for TUI viewporting.
-#[derive(Clone)]
 pub(super) struct TuiBlockListViewportSource {
     model: Arc<FairMutex<TerminalModel>>,
     agent_blocks: AgentBlockRegistry,
+    height_changes: RefCell<Vec<TuiRowResize>>,
 }
 
 impl TuiBlockListViewportSource {
@@ -64,6 +64,7 @@ impl TuiBlockListViewportSource {
         Self {
             model,
             agent_blocks,
+            height_changes: RefCell::new(Vec::new()),
         }
     }
 
@@ -137,10 +138,38 @@ impl TuiBlockListViewportSource {
         if line_heights.is_empty() {
             return;
         }
+        self.height_changes
+            .borrow_mut()
+            .extend(self.rich_content_row_resizes(line_heights));
         self.model
             .lock()
             .block_list_mut()
             .update_rich_content_heights_in_lines(line_heights);
+    }
+
+    /// Collects one [`TuiRowResize`] per changed rich-content item, in canonical
+    /// block-list order, computed against cached heights before the new ones
+    /// are written back. The viewport reports them to the selectable wrapper,
+    /// which rebases selected rows around content growth or shrinkage.
+    fn rich_content_row_resizes(
+        &self,
+        line_heights: &HashMap<EntityId, BlockHeight>,
+    ) -> Vec<TuiRowResize> {
+        let model = self.model.lock();
+        let block_list = model.block_list();
+        let mut changes = line_heights
+            .iter()
+            .filter_map(|(view_id, height)| {
+                let old_rows = block_list.rich_content_row_range(*view_id)?;
+                let new_height = height.as_f64().ceil().max(0.0) as usize;
+                (old_rows.len() != new_height).then_some(TuiRowResize {
+                    old_rows,
+                    new_height,
+                })
+            })
+            .collect::<Vec<_>>();
+        changes.sort_by_key(|resize| resize.old_rows.start);
+        changes
     }
 
     fn visible_items_in_window(
@@ -224,6 +253,31 @@ impl TuiBlockListViewportSource {
         (content_height, visible_items)
     }
 
+    /// Returns viewport items without measuring or mutating cached heights.
+    ///
+    /// Two callers need this read-only path: `visible_items` calls it after
+    /// it has already measured and written fresh heights for this frame, and
+    /// `selection_content` calls it directly because selection scraping reads
+    /// arbitrary row windows (often outside the rendered viewport) and must
+    /// not dirty heights or emit resize events mid-gesture. Any path that
+    /// needs up-to-date heights must measure first via `visible_items`.
+    fn read_only_content(
+        &self,
+        window: TuiViewportWindow,
+        available_width: u16,
+        app: &AppContext,
+    ) -> TuiViewportContent {
+        let (content_height, visible_items) = self.visible_items_in_window(window);
+        let items = visible_items
+            .into_iter()
+            .map(|item| item.render(&self.model, window, available_width, app))
+            .collect();
+        TuiViewportContent {
+            content_height,
+            items,
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn item_ids_for_test(&self) -> Vec<TuiBlockListViewportItemId> {
         let model = self.model.lock();
@@ -278,16 +332,20 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         let heights = self.measured_agent_heights(view_ids_to_measure, available_width, ctx, app);
         self.write_line_heights(&heights);
 
-        let (content_height, visible_items) = self.visible_items_in_window(window);
-        let items = visible_items
-            .into_iter()
-            .map(|item| item.render(&self.model, window, available_width, app))
-            .collect();
+        self.read_only_content(window, available_width, app)
+    }
 
-        TuiViewportContent {
-            content_height,
-            items,
-        }
+    fn selection_content(
+        &self,
+        window: TuiViewportWindow,
+        available_width: u16,
+        app: &AppContext,
+    ) -> Option<TuiViewportContent> {
+        Some(self.read_only_content(window, available_width, app))
+    }
+
+    fn take_selection_row_resizes(&self) -> Vec<TuiRowResize> {
+        self.height_changes.borrow_mut().drain(..).collect()
     }
 }
 
@@ -336,7 +394,7 @@ impl TuiBlockListVisibleItem {
         match self.kind {
             TuiBlockListVisibleItemKind::TerminalBlock(block_id) => {
                 debug_assert!(visible_rows.end <= self.height);
-                TerminalBlockVisibleRowsElement::new(model.clone(), block_id, visible_rows, width)
+                TerminalBlockElement::visible_rows(model.clone(), block_id, visible_rows, width)
                     .finish()
             }
             TuiBlockListVisibleItemKind::AgentBlock(view) => view.as_ref(app).render(app),

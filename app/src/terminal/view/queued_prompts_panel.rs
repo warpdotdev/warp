@@ -265,6 +265,10 @@ impl QueuedPromptsPanelView {
             me.handle_cli_subagent_event(event, ctx);
         });
 
+        ctx.subscribe_to_model(&suggestions_mode_model, |_, _, _, ctx| {
+            ctx.notify();
+        });
+
         let host_editor_was_empty = host_editor.as_ref(ctx).is_empty(ctx);
         let mut me = Self {
             view_id: ctx.view_id(),

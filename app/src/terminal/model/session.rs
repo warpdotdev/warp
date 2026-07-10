@@ -2,6 +2,8 @@ pub mod active_session;
 pub mod command_executor;
 
 use std::collections::{HashMap, HashSet};
+#[cfg(windows)]
+use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
@@ -24,6 +26,7 @@ use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
+use warp_errors::{register_error, ErrorExt};
 use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
     ShellFamily,
@@ -44,25 +47,34 @@ use crate::terminal::warpify::SubshellSource;
 use crate::terminal::{History, ShellHost, ShellLaunchData};
 
 #[derive(thiserror::Error, Debug)]
-pub enum ReadHistoryContentsError {
+#[allow(
+    clippy::enum_variant_names,
+    reason = "Each variant names a distinct read failure, so the shared `Error` suffix is intentional."
+)]
+enum ReadHistoryContentsError {
+    /// Intentionally omit this source anyhow error as it may contain stderr contents which can be
+    /// lengthy.
     #[cfg(windows)]
-    #[error("Couldn't get path to history file")]
-    HistoryFilePathError,
-
-    #[cfg(windows)]
-    #[error("Error running PowerShell commands to read history file: {0}")]
+    #[error("Error running PowerShell commands to read history file")]
     PowerShellError(anyhow::Error),
 
+    #[error("Error reading history file from filesystem")]
+    AsyncFsError(#[source] std::io::Error),
+
     #[cfg(windows)]
-    #[error("Error running PowerShell commands and reading from filesystem to read history file. PowerShell error: {powershell_error}, filesystem error: {async_fs_error}")]
+    #[error("Error running PowerShell commands and reading from filesystem to read history file.")]
     PowerShellAndAsyncFsError {
         powershell_error: anyhow::Error,
         async_fs_error: std::io::Error,
     },
-
-    #[error("Error reading history file from filesystem: {0}")]
-    AsyncFsError(std::io::Error),
 }
+
+impl ErrorExt for ReadHistoryContentsError {
+    fn is_actionable(&self) -> bool {
+        true
+    }
+}
+register_error!(ReadHistoryContentsError);
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
 pub use warp_core::SessionId;
@@ -1375,8 +1387,7 @@ impl Session {
                 {
                     Ok(contents) => contents,
                     Err(e) => {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Failed to read history contents for file"));
+                        report_error!(e);
                         continue;
                     }
                 };
@@ -1418,15 +1429,16 @@ impl Session {
         history_file: &Path,
         is_kaspersky_running: bool,
     ) -> Result<Vec<u8>, ReadHistoryContentsError> {
-        let Some(history_file_path) = history_file.as_os_str().to_str() else {
-            return Err(ReadHistoryContentsError::HistoryFilePathError);
-        };
-
         // Try reading the history file using PowerShell commands first.
-        let powershell_error = match Self::read_history_via_powershell(history_file_path).await {
-            Ok(result) => return Ok(result),
-            Err(e) => e,
-        };
+        let powershell_error =
+            match Self::read_history_via_powershell(history_file.as_os_str()).await {
+                Ok(result) => return Ok(result),
+                Err(e) => e,
+            };
+        // Log the detailed error locally as a breadcrumb only; the failure is reported once at the
+        // sink via the registered `ReadHistoryContentsError`, whose static message keeps Sentry
+        // grouping stable and omits the (potentially sensitive/lengthy) PowerShell stderr.
+        log::error!("{powershell_error:?}");
 
         // If Kaspersky is running, early return since we can't use [`async_fs`] to read the history
         // file.
@@ -1435,45 +1447,16 @@ impl Session {
         }
 
         // Otherwise, fall back to using [`async_fs`] to read the history file.
-        match async_fs::read(history_file).await {
-            Ok(contents) => {
-                // Report this error so we have some data on whether this method of running
-                // PowerShell commands is reliable. If this turns out to be noisy, we can remove
-                // this log line.
-                log::warn!(
-                    "Failed to read history using PowerShell commands: {powershell_error:?}"
-                );
-                #[cfg(feature = "crash_reporting")]
-                sentry::with_scope(
-                    |scope| {
-                        let mut context = std::collections::BTreeMap::new();
-                        context.insert(
-                            "powershell_error".to_string(),
-                            format!("{powershell_error:?}").into(),
-                        );
-                        scope.set_context(
-                            "powershell_history",
-                            sentry::protocol::Context::Other(context),
-                        );
-                    },
-                    || {
-                        sentry::capture_message(
-                            "Failed to read history using PowerShell commands",
-                            sentry::Level::Error,
-                        )
-                    },
-                );
-                Ok(contents)
-            }
-            Err(e) => Err(ReadHistoryContentsError::PowerShellAndAsyncFsError {
+        async_fs::read(history_file).await.map_err(|e| {
+            ReadHistoryContentsError::PowerShellAndAsyncFsError {
                 powershell_error,
                 async_fs_error: e,
-            }),
-        }
+            }
+        })
     }
 
     #[cfg(windows)]
-    async fn read_history_via_powershell(history_file_path: &str) -> Result<Vec<u8>> {
+    async fn read_history_via_powershell(history_file_path: &OsStr) -> Result<Vec<u8>> {
         let Some(powershell_command) = crate::util::windows::any_powershell_path() else {
             return Err(anyhow::anyhow!(
                 "Failed to find powershell executable to read history"
@@ -1484,9 +1467,8 @@ impl Session {
             .arg("-NoProfile")
             .arg("-NoLogo")
             .arg("-Command")
-            .arg(format!(
-                "[System.IO.File]::ReadAllText('{history_file_path}')"
-            ))
+            .arg("[System.IO.File]::ReadAllText($args[0])")
+            .arg(history_file_path)
             .output()
             .await;
         match read_result {

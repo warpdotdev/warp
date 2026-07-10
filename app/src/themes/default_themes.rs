@@ -261,7 +261,7 @@ pub(super) fn adeberry_colors() -> TerminalColors {
 /// Default bundled themes
 pub fn dark_theme() -> WarpTheme {
     WarpTheme::new(
-        Fill::Solid(ColorU::from_u32(0x000000FF)),
+        Fill::Solid(ColorU::from_u32(0x050505FF)),
         ColorU::from_u32(0xffffffff),
         Fill::Solid(ColorU::from_u32(0x19AAD8FF)),
         None,

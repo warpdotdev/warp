@@ -25,27 +25,32 @@ use std::ops::Range;
 
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
-use warp::tui_export::{BlocklistAIInputModel, InputTypeAutoDetectionSource};
+use warp::tui_export::{
+    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputTypeAutoDetectionSource,
+};
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::keymap::macros::*;
-use warpui_core::keymap::{Context, EditableBinding};
+use warpui_core::keymap::{self, EditableBinding};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
 use super::kill_buffer::KillBuffer;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement};
+use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::tui_builder::TuiUiBuilder;
 
-/// Keymap-context flag set by [`TuiInputView::keymap_context`] while the input
-/// is in `!` shell mode; gates the `tui:input:exit_shell_mode` binding so Esc
-/// stays available to ancestors otherwise.
-const SHELL_MODE_INPUT_FLAG: &str = "ShellModeInput";
-
+/// Keymap-context flag set while the input has contextual Escape behavior.
+///
+/// The input owns a single Escape binding so modes can arbitrate explicitly in
+/// [`TuiInputView::handle_escape`] instead of relying on keymap registration
+/// order. Inline menus take priority; later input modes should be handled only
+/// after the menu branch.
+const INPUT_HANDLES_ESCAPE_FLAG: &str = "TuiInputHandlesEscape";
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -97,6 +102,14 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("TuiInputView"))
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("alt-enter"),
+        EditableBinding::new(
+            "tui:input:handle_escape",
+            "Handle contextual input escape",
+            TuiInputAction::HandleEscape,
+        )
+        .with_context_predicate(id!("TuiInputView") & id!(INPUT_HANDLES_ESCAPE_FLAG))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("escape"),
         // ── Deletion ───────────────────────────────────────────────────
         EditableBinding::new(
             "tui:input:backspace",
@@ -438,15 +451,6 @@ pub fn init(app: &mut AppContext) {
             .with_context_predicate(id!("TuiInputView"))
             .with_group(TUI_BINDING_GROUP)
             .with_key_binding("ctrl-shift-Z"),
-        // ── Shell mode ──────────────────────────────────────────────────
-        EditableBinding::new(
-            "tui:input:exit_shell_mode",
-            "Exit shell mode",
-            TuiInputAction::ExitShellMode,
-        )
-        .with_context_predicate(id!("TuiInputView") & id!(SHELL_MODE_INPUT_FLAG))
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("escape"),
     ]);
 }
 
@@ -459,13 +463,15 @@ pub fn init(app: &mut AppContext) {
 pub enum TuiInputViewEvent {
     /// The user pressed Enter to submit the current input. Contains the final text.
     Submitted(String),
+    /// The user selected a slash command menu item.
+    AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Typed action enum
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// All editing operations dispatched from `TuiInputElement::dispatch_event`.
+/// All editing operations dispatched from [`TuiEditorElement`].
 ///
 /// Each variant corresponds to one or more keybindings from the spec keybinding table.
 #[derive(Debug, Clone)]
@@ -476,6 +482,8 @@ pub enum TuiInputAction {
     InsertNewline,
     /// Submit the current input (`Enter`).
     Submit,
+    /// Handle contextual input Escape behavior, prioritizing an open inline menu.
+    HandleEscape,
     /// Delete the character before the cursor (`Backspace`, `Ctrl+H`).
     Backspace,
     /// Delete the character after the cursor (`Delete`, `Ctrl+D`).
@@ -524,8 +532,6 @@ pub enum TuiInputAction {
     Undo,
     /// Redo (`Ctrl+Shift+Z`).
     Redo,
-    /// Exit shell mode, keeping any typed text (`Esc`, only while in shell mode).
-    ExitShellMode,
     /// Place the cursor / begin a character selection at `offset` (single click).
     SelectionStartAt { offset: CharOffset },
     /// Extend the active selection's head to `offset` (shift-click).
@@ -558,6 +564,8 @@ pub struct TuiInputView {
     model: ModelHandle<CodeEditorModel>,
     /// Shared input-mode state driving `!` shell-mode handling.
     input_mode: ModelHandle<BlocklistAIInputModel>,
+    /// Optional generalized inline menu used to route prioritized menu actions.
+    inline_menu: Option<TuiInlineMenu>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
     kill_buffer: KillBuffer,
     /// Maximum number of visible rows before the input scrolls.
@@ -573,7 +581,11 @@ impl Entity for TuiInputView {
 
 impl TuiInputView {
     /// Construct a new `TuiInputView` backed by `model` (must be in char-cell
-    /// mode). The model carries the terminal width (set via
+    /// mode). Construction stays crate-internal because `inline_menu` is the
+    /// crate-private active-menu adapter; keeping this as the only constructor
+    /// prevents menu and non-menu initialization paths from diverging.
+    ///
+    /// The model carries the terminal width (set via
     /// [`CodeEditorModel::new_tui`]); the view does not keep its own copy.
     ///
     /// `input_mode` is the shared input-mode model backing `!` shell-mode
@@ -581,9 +593,10 @@ impl TuiInputView {
     ///
     /// Subscribes to [`CodeEditorModelEvent::ContentChanged`] to trigger re-renders
     /// whenever the buffer changes from outside `handle_action`.
-    pub fn new(
+    pub(crate) fn new(
         model: ModelHandle<CodeEditorModel>,
         input_mode: ModelHandle<BlocklistAIInputModel>,
+        inline_menu: Option<TuiInlineMenu>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
@@ -597,6 +610,7 @@ impl TuiInputView {
         Self {
             model,
             input_mode,
+            inline_menu,
             kill_buffer: KillBuffer::default(),
             max_visible_rows: 6,
             prefix_mouse_state: MouseStateHandle::default(),
@@ -639,10 +653,32 @@ impl TuiInputView {
                 event_ctx.dispatch_typed_action(TuiInputAction::from(action))
             })
     }
+    /// Collapses the current text selection to its head without changing text.
+    pub(crate) fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        let head = self
+            .model
+            .as_ref(ctx)
+            .buffer_selection_model()
+            .as_ref(ctx)
+            .first_selection_head();
+        self.model.update(ctx, |model, ctx| {
+            model.select_at(head, false, ctx);
+            model.end_selection(ctx);
+        });
+        ctx.notify();
+    }
 
     /// The editor element for this frame, boxed for the render tree.
     fn render_input(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         Box::new(self.render_element(ctx))
+    }
+    pub(crate) fn set_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |m, ctx| {
+            m.clear_buffer(ctx);
+            m.user_insert(text, ctx);
+        });
+        self.follow_cursor(ctx);
+        ctx.notify();
     }
 
     /// Composes the shell-mode input row: the accent-styled `!` affordance in a
@@ -682,12 +718,13 @@ impl TuiView for TuiInputView {
         }
     }
 
-    fn keymap_context(&self, app: &AppContext) -> Context {
-        let mut ctx = Self::default_keymap_context();
-        if self.is_shell_mode(app) {
-            ctx.set.insert(SHELL_MODE_INPUT_FLAG);
-        }
-        ctx
+    fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
+        input_keymap_context(
+            self.inline_menu
+                .as_ref()
+                .is_some_and(|inline_menu| inline_menu.is_open(ctx))
+                || self.is_shell_mode(ctx),
+        )
     }
 }
 
@@ -706,10 +743,21 @@ impl From<TuiEditorAction> for TuiInputAction {
     }
 }
 
+fn input_keymap_context(input_handles_escape: bool) -> keymap::Context {
+    let mut context = keymap::Context::default();
+    context.set.insert(TuiInputView::ui_name());
+    if input_handles_escape {
+        context.set.insert(INPUT_HANDLES_ESCAPE_FLAG);
+    }
+    context
+}
 impl TypedActionView for TuiInputView {
     type Action = TuiInputAction;
 
     fn handle_action(&mut self, action: &TuiInputAction, ctx: &mut ViewContext<Self>) {
+        if self.handle_inline_menu_action(action, ctx) {
+            return;
+        }
         match action {
             TuiInputAction::InsertChar(c) => {
                 // A `!` typed at the very start of the input enters shell mode
@@ -725,6 +773,9 @@ impl TypedActionView for TuiInputView {
                 self.model.update(ctx, |m, ctx| m.user_insert("\n", ctx));
             }
             TuiInputAction::Submit => self.submit(ctx),
+            TuiInputAction::HandleEscape => {
+                self.handle_escape(ctx);
+            }
             TuiInputAction::Backspace => {
                 // With nothing left to delete, backspace removes the `!`
                 // affordance instead; typed text is preserved.
@@ -855,11 +906,6 @@ impl TypedActionView for TuiInputView {
             }
             TuiInputAction::Redo => {
                 self.model.update(ctx, |m, ctx| m.redo(ctx));
-            }
-            TuiInputAction::ExitShellMode => {
-                if self.is_shell_mode(ctx) {
-                    self.exit_shell_mode(ctx);
-                }
             }
             TuiInputAction::SelectionStartAt { offset } => {
                 self.model
@@ -1022,6 +1068,68 @@ impl TuiInputView {
     fn submit(&mut self, ctx: &mut ViewContext<Self>) {
         let text = self.plain_text(ctx);
         ctx.emit(TuiInputViewEvent::Submitted(text));
+    }
+
+    fn handle_inline_menu_action(
+        &mut self,
+        action: &TuiInputAction,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !matches!(
+            action,
+            TuiInputAction::MoveUp
+                | TuiInputAction::MoveDown
+                | TuiInputAction::Submit
+                | TuiInputAction::HandleEscape
+        ) {
+            return false;
+        }
+        let Some(inline_menu) = self.inline_menu.clone() else {
+            return false;
+        };
+        if !inline_menu.is_open(ctx) {
+            return false;
+        }
+
+        match action {
+            TuiInputAction::MoveUp => {
+                inline_menu.select_previous(ctx);
+            }
+            TuiInputAction::MoveDown => {
+                inline_menu.select_next(ctx);
+            }
+            TuiInputAction::Submit => {
+                if let Some(accepted) = inline_menu.accept(ctx) {
+                    match accepted {
+                        TuiInlineMenuAccepted::SlashCommand(action) => {
+                            ctx.emit(TuiInputViewEvent::AcceptedSlashCommand(action));
+                        }
+                    }
+                }
+            }
+            TuiInputAction::HandleEscape => return self.handle_escape(ctx),
+            _ => return false,
+        }
+        ctx.notify();
+        true
+    }
+
+    /// Handles the input's contextual Escape behavior in explicit priority
+    /// order. New input modes should be added after the inline-menu branch so
+    /// one Escape always closes the most local surface first.
+    fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        if let Some(inline_menu) = self.inline_menu.clone() {
+            if inline_menu.is_open(ctx) {
+                inline_menu.dismiss(ctx);
+                ctx.notify();
+                return true;
+            }
+        }
+        if self.is_shell_mode(ctx) {
+            self.exit_shell_mode(ctx);
+            return true;
+        }
+        false
     }
 
     // ── Kill / yank ───────────────────────────────────────────────────────────
