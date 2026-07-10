@@ -669,14 +669,11 @@ impl OneTimeModalModel {
         if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
             return false;
         }
-        // Show the first registered feature intro whose flag is enabled and that the
-        // user hasn't seen yet (see `FEATURE_INTROS`).
+        // Show the first registered feature intro that the user hasn't seen yet
+        // (see `FEATURE_INTROS`).
         let next_id = FEATURE_INTROS
             .iter()
-            .find(|intro| {
-                intro.flag.is_enabled()
-                    && !AISettings::as_ref(ctx).is_feature_intro_seen(intro.id.as_key())
-            })
+            .find(|intro| !AISettings::as_ref(ctx).is_feature_intro_seen(intro.id.as_key()))
             .map(|intro| intro.id);
         let Some(id) = next_id else {
             return false;
