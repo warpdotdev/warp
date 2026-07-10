@@ -360,7 +360,7 @@ fn test_submit_button_disabled_until_required_fields_present() {
             assert!(is_disabled, "Expected submit button disabled initially");
         });
 
-        // Only name set -> still disabled.
+        // Name set (docker image optional) -> enabled.
         app.update(|ctx| {
             view_handle.update(ctx, |form, ctx| {
                 form.form_state.name = "My Env".to_string();
@@ -372,32 +372,15 @@ fn test_submit_button_disabled_until_required_fields_present() {
                 .submit_button
                 .read(ctx, |button, _| button.is_disabled());
             assert!(
-                is_disabled,
-                "Expected submit button disabled without docker image"
-            );
-        });
-
-        // Name + docker image set -> enabled.
-        app.update(|ctx| {
-            view_handle.update(ctx, |form, ctx| {
-                form.form_state.docker_image = "ubuntu:latest".to_string();
-                form.update_button_state(ctx);
-            });
-
-            let is_disabled = view_handle
-                .as_ref(ctx)
-                .submit_button
-                .read(ctx, |button, _| button.is_disabled());
-            assert!(
                 !is_disabled,
-                "Expected submit button enabled when required fields set"
+                "Expected submit button enabled once the name is set"
             );
         });
     })
 }
 
 #[test]
-fn test_is_valid_requires_docker_image_only_when_creating() {
+fn test_is_valid_requires_only_name() {
     let values = EnvironmentFormValues {
         name: "env".to_string(),
         description: String::new(),
@@ -406,17 +389,15 @@ fn test_is_valid_requires_docker_image_only_when_creating() {
         setup_commands: vec![],
     };
 
-    // The create flow requires a docker image; editing an environment without
-    // one must stay savable.
-    assert!(!values.is_valid(true));
-    assert!(values.is_valid(false));
+    // The docker image is optional; a name alone is valid.
+    assert!(values.is_valid());
 
-    // An empty name is invalid regardless of the docker-image requirement.
+    // An empty name is invalid.
     let no_name = EnvironmentFormValues {
         name: "  ".to_string(),
-        ..values.clone()
+        ..values
     };
-    assert!(!no_name.is_valid(false));
+    assert!(!no_name.is_valid());
 }
 
 #[test]
