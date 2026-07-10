@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
-    BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
+    BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, ConversationBlockRestorationPlan, ModelEventDispatcher,
     RichContentItem, RichContentType, TerminalModel,
 };
@@ -135,7 +135,7 @@ impl TuiTranscriptView {
                     .and_then(|conversation| conversation.get_task(task_id))
                     .is_some_and(should_show_task_in_blocklist);
                 if should_show {
-                    self.insert_agent_block(*conversation_id, *exchange_id, ctx);
+                    self.insert_agent_block(*conversation_id, *exchange_id, None, ctx);
                 }
             }
             BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => {
@@ -215,16 +215,7 @@ impl TuiTranscriptView {
         &mut self,
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.insert_agent_block_at(conversation_id, exchange_id, None, ctx);
-    }
-
-    fn insert_agent_block_at(
-        &mut self,
-        conversation_id: AIConversationId,
-        exchange_id: AIAgentExchangeId,
-        command_block_index: Option<warp::tui_export::BlockIndex>,
+        command_block_index: Option<BlockIndex>,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.view_id_for_exchange(exchange_id, ctx).is_some() {
@@ -286,8 +277,12 @@ impl TuiTranscriptView {
         ctx: &mut ViewContext<Self>,
     ) {
         for restored_exchange in restoration_plan.into_exchanges() {
-            let (exchange, command_block_index) = restored_exchange.into_parts();
-            self.insert_agent_block_at(conversation_id, exchange.id, command_block_index, ctx);
+            self.insert_agent_block(
+                conversation_id,
+                restored_exchange.exchange().id,
+                restored_exchange.command_block_index(),
+                ctx,
+            );
         }
         self.viewport.scroll_to_end();
         ctx.notify();

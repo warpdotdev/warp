@@ -1,9 +1,16 @@
-//! Shared preparation for restoring an agent conversation into a terminal blocklist.
+//! Frontend-independent preparation for restoring an agent conversation into a terminal block
+//! list.
+//!
+//! Restoration first rebuilds persisted command blocks in the terminal model, filters the
+//! conversation down to agent exchanges that should be visible, and determines where each
+//! exchange belongs relative to those command blocks. The resulting
+//! [`ConversationBlockRestorationPlan`] lets GUI and TUI consumers create their own agent-block
+//! views without duplicating command restoration or placement logic.
 
 use chrono::{DateTime, Local};
 
 use crate::ai::agent::conversation::AIConversation;
-use crate::ai::agent::{AIAgentExchange, AIAgentExchangeId};
+use crate::ai::agent::AIAgentExchange;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::view::blocklist_filter::exchanges_for_blocklist;
@@ -16,14 +23,14 @@ pub struct RestoredConversationExchange {
 }
 
 impl RestoredConversationExchange {
-    /// Returns the restored exchange ID.
-    pub fn exchange_id(&self) -> AIAgentExchangeId {
-        self.exchange.id
+    /// Returns the visible exchange to restore.
+    pub fn exchange(&self) -> &AIAgentExchange {
+        &self.exchange
     }
 
-    /// Consumes the entry into its exchange and command-block placement.
-    pub fn into_parts(self) -> (AIAgentExchange, Option<BlockIndex>) {
-        (self.exchange, self.command_block_index)
+    /// Returns the command block before which the exchange should be inserted.
+    pub fn command_block_index(&self) -> Option<BlockIndex> {
+        self.command_block_index
     }
 }
 

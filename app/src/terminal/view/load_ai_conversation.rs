@@ -597,7 +597,7 @@ impl TerminalView {
         // Process all exchanges for this conversation
         let mut all_ai_block_params = Vec::new();
         for restored_exchange in restoration_plan.into_exchanges() {
-            let (exchange, command_block_index) = restored_exchange.into_parts();
+            let exchange = restored_exchange.exchange().clone();
             let params = AIBlockCreationParams {
                 ai_controller: self.ai_controller.clone(),
                 get_relevant_files_controller: self.get_relevant_files_controller.clone(),
@@ -612,7 +612,7 @@ impl TerminalView {
                 conversation_id,
                 exchange_id: exchange.id,
                 working_directory: exchange.working_directory.clone(),
-                command_block_index,
+                command_block_index: restored_exchange.command_block_index(),
                 exchange,
                 use_live_appearance,
                 is_restoring_on_startup: false,

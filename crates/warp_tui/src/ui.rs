@@ -57,7 +57,7 @@ pub(crate) fn compact_footer_path(path: &str) -> String {
 /// Placeholder shown while a requested conversation is restored.
 pub(crate) fn conversation_restoring(app: &AppContext) -> Box<dyn TuiElement> {
     let muted = TuiUiBuilder::from_app(app).muted_text_style();
-    centered_element(
+    centered_in_viewport(
         TuiConstrainedBox::new(
             TuiFlex::column()
                 .child(render_spinner(
@@ -81,7 +81,7 @@ pub(crate) fn conversation_restoring(app: &AppContext) -> Box<dyn TuiElement> {
 /// Placeholder shown when a requested conversation cannot be restored.
 pub(crate) fn conversation_restore_failed(message: &str) -> Box<dyn TuiElement> {
     let dim = TuiStyle::default().add_modifier(Modifier::DIM);
-    centered(
+    vertically_centered(
         TuiFlex::column()
             .child(
                 TuiText::new(format!("Could not restore conversation: {message}"))
@@ -97,8 +97,8 @@ pub(crate) fn conversation_restore_failed(message: &str) -> Box<dyn TuiElement> 
     )
 }
 
-/// Vertically centers `content` by padding above and below with flex spacers.
-pub(crate) fn centered(content: TuiFlex) -> Box<dyn TuiElement> {
+/// Vertically centers `content` with its existing horizontal alignment.
+fn vertically_centered(content: TuiFlex) -> Box<dyn TuiElement> {
     TuiFlex::column()
         .flex_child(TuiFlex::column().finish())
         .child(content.finish())
@@ -106,8 +106,8 @@ pub(crate) fn centered(content: TuiFlex) -> Box<dyn TuiElement> {
         .finish()
 }
 
-/// Centers an element both horizontally and vertically.
-fn centered_element(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
+/// Centers `content` horizontally and vertically within the viewport.
+fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
     let centered_row = TuiFlex::row()
         .flex_child(TuiFlex::row().finish())
         .child(content)
@@ -161,13 +161,13 @@ pub(crate) fn login_placeholder(
             );
         }
     }
-    centered(content)
+    vertically_centered(content)
 }
 
 /// Placeholder shown between login completion and terminal session creation.
 pub(crate) fn terminal_starting() -> Box<dyn TuiElement> {
     let dim = TuiStyle::default().add_modifier(Modifier::DIM);
-    centered(
+    vertically_centered(
         TuiFlex::column().child(
             TuiText::new("Starting terminal…")
                 .with_style(dim)
@@ -192,7 +192,7 @@ pub(crate) fn login_failed(message: &str) -> Box<dyn TuiElement> {
                 .truncate()
                 .finish(),
         );
-    centered(content)
+    vertically_centered(content)
 }
 
 #[cfg(test)]
