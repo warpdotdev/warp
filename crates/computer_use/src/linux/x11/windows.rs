@@ -181,7 +181,14 @@ fn top_level_windows(
     children
 }
 
+/// The maximum property length requested by [`read_property`], in 32-bit units (1 MiB total).
+/// The properties read during enumeration (client lists, titles, `WM_CLASS`, `_NET_WM_PID`) are
+/// far smaller in practice; the cap keeps a window with a pathologically large property from
+/// forcing large allocations.
+const MAX_PROPERTY_LENGTH: u32 = 256 * 1024;
+
 /// Reads a property, returning `None` when the property is missing or the request fails.
+/// Reads at most [`MAX_PROPERTY_LENGTH`] 32-bit units; anything beyond that is truncated.
 fn read_property(
     conn: &RustConnection,
     window: xproto::Window,
@@ -189,7 +196,7 @@ fn read_property(
     type_: xproto::Atom,
 ) -> Option<xproto::GetPropertyReply> {
     let reply = conn
-        .get_property(false, window, property, type_, 0, u32::MAX)
+        .get_property(false, window, property, type_, 0, MAX_PROPERTY_LENGTH)
         .ok()?
         .reply()
         .ok()?;
