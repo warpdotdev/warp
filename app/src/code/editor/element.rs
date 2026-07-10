@@ -1620,17 +1620,12 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                 let broad_hovered_range =
                     self.gutter_element_range_containing_position(*position, only_check_y_axis);
 
-                // Hidden-section expand-all is scoped to the "N unmodified lines" label, so
-                // a broad line hit must not light up the gutter chevrons. Use a precise hit
-                // so arrow hover only appears when the mouse is over the gutter control.
-                let over_hidden_section = matches!(
-                    &broad_hovered_range,
-                    Some(GutterRange::HiddenSection { .. })
-                );
-                let hovered_range = if over_hidden_section {
-                    self.gutter_element_range_containing_position(*position, false)
-                } else {
-                    broad_hovered_range
+
+                let hovered_range = match broad_hovered_range {
+                    Some(GutterRange::HiddenSection { .. }) => {
+                        self.gutter_element_range_containing_position(*position, false)
+                    }
+                    other => other,
                 };
 
                 let hovered_line = hovered_range.map(|gutter_range| gutter_range.line().clone());
