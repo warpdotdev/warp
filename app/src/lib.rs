@@ -921,13 +921,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     #[cfg(feature = "tui")]
     if let LaunchMode::Tui { api_key, .. } = &mut launch_mode {
         *api_key = warp_cli::Args::from_env().api_key().cloned();
-        // Scrub `WARP_API_KEY` from this process's environment once we've read
-        // it. The TUI later spawns terminal sessions that inherit the process
-        // environment (`std::env::vars_os()`), so leaving the key in place would
-        // leak it to every child shell and command. Mirrors the cloud-agent
-        // OTLP token scrubbing in `tracing::cloud_agent_auth`. A no-op when the
-        // key was passed via `--api-key` rather than the env var.
-        std::env::remove_var("WARP_API_KEY");
     }
 
     #[cfg(feature = "crash_reporting")]
