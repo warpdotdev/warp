@@ -92,9 +92,8 @@ Add to `crates/warp_tui/src/agent_block_sections.rs`:
 
 ### Redraw and heights
 
-No new subscriptions are needed:
-- New `TodoOperation` messages enter through the existing response-stream path; `UpdatedStreamingExchange` already dirties the owning rich-content item, and `TuiBlockListViewportSource` re-measures via `desired_height`.
-- Per-item status restyling (e.g. an older list's items becoming `Cancelled` when a new list supersedes it) changes colors but not row count; statuses are read at render time, so any frame redraw picks them up without a height invalidation.
+- New `TodoOperation` messages enter through the existing response-stream path; `UpdatedStreamingExchange` dirties the owning rich-content item, and `TuiBlockListViewportSource` re-measures via `desired_height`.
+- Per-item statuses are projections of conversation-wide state. `UpdatedTodoList` therefore dirties every agent block on the terminal surface: a new list can make rows in older exchanges `Cancelled`. `UpdatedConversationStatus` dirties blocks for that conversation because the first pending row switches between `InProgress` and `Stopped`.
 - Collapse toggles change height and follow the same notify path the thinking section already uses.
 
 ## Testing and validation

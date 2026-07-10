@@ -17,11 +17,13 @@ use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
+    Color, Modifier, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext, TuiLayoutContext,
+    TuiPoint, TuiRect, TuiSize,
 };
 use warpui_core::elements::Fill as CoreFill;
+use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityIdMap, ViewContext, ViewHandle};
+use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext, ViewHandle};
 
 use super::{
     CollapsibleSectionStates, TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection,

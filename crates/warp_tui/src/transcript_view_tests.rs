@@ -4,9 +4,9 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentExchangeId, AIAgentInput, AIBlockModel, AIBlockOutputStatus, AIConversationId,
-    AIRequestType, Appearance, BlockHeightItem, BlocklistAIHistoryEvent, LLMId,
-    OutputStatusUpdateCallback, RichContentItem, RichContentType, ServerOutputId, TerminalModel,
-    UserQueryMode,
+    AIRequestType, Appearance, BlockHeightItem, BlocklistAIHistoryEvent, ConversationStatus,
+    ConversationStatusUpdate, LLMId, OutputStatusUpdateCallback, RichContentItem, RichContentType,
+    ServerOutputId, TerminalModel, UserQueryMode,
 };
 use warpui::event::ModifiersState;
 use warpui::platform::WindowStyle;
@@ -248,6 +248,75 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
 }
 
 #[test]
+fn todo_and_conversation_status_events_dirty_affected_agent_blocks() {
+    App::test((), |mut app| async move {
+        let terminal_surface_id = EntityId::new();
+        let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let model_for_view = terminal_model.clone();
+        let action_model = add_test_action_model(&mut app);
+        let (_, transcript) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |ctx| {
+                    TuiTranscriptView::new(terminal_surface_id, model_for_view, action_model, ctx)
+                },
+            )
+        });
+        let first_conversation_id = AIConversationId::new();
+        let second_conversation_id = AIConversationId::new();
+
+        let (first_block_id, second_block_id) = transcript.update(&mut app, |view, ctx| {
+            (
+                append_test_agent_block(view, first_conversation_id, AIAgentExchangeId::new(), ctx),
+                append_test_agent_block(
+                    view,
+                    second_conversation_id,
+                    AIAgentExchangeId::new(),
+                    ctx,
+                ),
+            )
+        });
+        // Drain append invalidations so each event's effects are isolated.
+        take_dirty_rich_content_items(&terminal_model);
+
+        transcript.update(&mut app, |view, ctx| {
+            view.handle_history_event(
+                &BlocklistAIHistoryEvent::UpdatedTodoList {
+                    terminal_surface_id,
+                },
+                ctx,
+            );
+        });
+        assert_eq!(
+            take_dirty_rich_content_items(&terminal_model),
+            [first_block_id, second_block_id].into_iter().collect(),
+            "a todo update can restyle task rows in any exchange on the surface"
+        );
+
+        transcript.update(&mut app, |view, ctx| {
+            view.handle_history_event(
+                &BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                    conversation_id: first_conversation_id,
+                    terminal_surface_id,
+                    update: ConversationStatusUpdate::Changed {
+                        prev_status: ConversationStatus::InProgress,
+                    },
+                    new_status: ConversationStatus::Success,
+                },
+                ctx,
+            );
+        });
+        assert_eq!(
+            take_dirty_rich_content_items(&terminal_model),
+            [first_block_id].into_iter().collect(),
+            "a status update should only dirty blocks from that conversation"
+        );
+    });
+}
+#[test]
 fn transcript_view_scrolls_only_with_the_mouse_wheel() {
     App::test((), |mut app| async move {
         let mut terminal_model = TerminalModel::mock(None, None);
@@ -461,6 +530,31 @@ fn dispatch_event(
         event_ctx.set_origin_view(Some(EntityId::new()));
         element.dispatch_event(event, area, &mut event_ctx, &mut layout_ctx, app)
     })
+}
+
+fn append_test_agent_block(
+    view: &mut TuiTranscriptView,
+    conversation_id: AIConversationId,
+    exchange_id: AIAgentExchangeId,
+    ctx: &mut ViewContext<TuiTranscriptView>,
+) -> EntityId {
+    let agent_block = ctx.add_tui_view(|ctx| {
+        TuiAIBlock::new(
+            conversation_id,
+            exchange_id,
+            Rc::new(EmptyAgentBlockModel),
+            view.action_model.clone(),
+            view.model.clone(),
+            ctx,
+        )
+    });
+    let view_id = agent_block.id();
+    view.agent_blocks.borrow_mut().insert(view_id, agent_block);
+    view.model.lock().block_list_mut().append_rich_content(
+        RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+        false,
+    );
+    view_id
 }
 fn rich_content_count(model: &Arc<FairMutex<TerminalModel>>) -> usize {
     model
