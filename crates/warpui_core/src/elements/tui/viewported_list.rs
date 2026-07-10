@@ -11,7 +11,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use super::selectable::{
-    cell_span, point_after_col, row_glyphs, scrape_row, TuiContentPoint, TuiSelectionHandle,
+    cell_span, point_after_col, row_glyphs, row_text, TuiContentPoint, TuiSelectionHandle,
     TuiWordSelectionResolver,
 };
 use super::{
@@ -838,7 +838,7 @@ where
                 } else {
                     area.width
                 };
-                lines.push(scrape_row(&buffer, buffer_row, start_col..end_col));
+                lines.push(row_text(&buffer, buffer_row, start_col..end_col));
             }
             chunk_start = chunk_end;
         }

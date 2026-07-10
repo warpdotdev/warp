@@ -1,7 +1,14 @@
+//! Double-click word selection semantics for the transcript viewport.
+//!
+//! The transcript's viewported list resolves double-click (semantic)
+//! selection through a pluggable word resolver (see `TuiSelectionConfig`).
+//! This module provides that resolver: it expands the clicked glyph into a
+//! word span using the same configurable smart-selection rules as the GUI
+//! terminal, falling back to word-boundary scanning when no rule matches.
 use string_offset::ByteOffset;
 use warp_core::semantic_selection::SemanticSelection;
 use warpui::SingletonEntity;
-use warpui_core::elements::tui::{TuiContentPoint, TuiRowGlyph, TuiSelectionSpan};
+use warpui_core::elements::tui::{point_after_col, TuiContentPoint, TuiRowGlyph, TuiSelectionSpan};
 use warpui_core::AppContext;
 
 /// Resolves transcript word selection using configured smart-selection rules.
@@ -59,16 +66,4 @@ pub(super) fn word_span(
         },
         end: point_after_col(point.row, end.end_col, width),
     })
-}
-
-/// Returns the point after `col`, wrapping at `width`.
-fn point_after_col(row: usize, col: u16, width: u16) -> TuiContentPoint {
-    if col >= width {
-        TuiContentPoint {
-            row: row.saturating_add(1),
-            col: 0,
-        }
-    } else {
-        TuiContentPoint { row, col }
-    }
 }

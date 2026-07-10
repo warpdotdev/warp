@@ -1,4 +1,18 @@
 //! Thin interaction plumbing for TUI elements that own selection behavior.
+//!
+//! [`TuiSelectable`] wraps a child implementing [`TuiSelectableElement`] and
+//! sequences the mouse-driven selection gesture: it lets the child handle
+//! events first (except while a drag is in flight), delegates
+//! selection-related events to the child's
+//! [`dispatch_selection_event`](TuiSelectableElement::dispatch_selection_event),
+//! and fires the external callbacks — `on_selection_start` when a gesture
+//! begins and `on_copy` when one completes with text. The child owns all
+//! selection state and highlight rendering; this wrapper owns only the
+//! callbacks and repaint notification.
+//!
+//! Submodules provide the shared building blocks: [`cells`] for cell/glyph
+//! geometry and row-text extraction, and [`state`] for the drag-state handle
+//! shared across element rebuilds.
 
 use std::rc::Rc;
 
@@ -11,8 +25,8 @@ use crate::AppContext;
 mod cells;
 mod state;
 
-pub(crate) use cells::{cell_span, point_after_col, row_glyphs, scrape_row};
-pub use cells::{TuiContentPoint, TuiRowGlyph, TuiSelectionSpan};
+pub(crate) use cells::{cell_span, row_glyphs, row_text};
+pub use cells::{point_after_col, TuiContentPoint, TuiRowGlyph, TuiSelectionSpan};
 pub(crate) use state::TuiSelectionHandle;
 
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;

@@ -149,7 +149,12 @@ impl TuiBlockListViewportSource {
             .update_rich_content_heights_in_lines(line_heights);
     }
 
-    /// Collects measured rich-content resizes in canonical block-list order.
+    /// Collects one `(old row range, new height)` pair per re-measured
+    /// rich-content item, in canonical block-list order, computed against the
+    /// cached heights *before* the new ones are written back. The viewport
+    /// drains these pairs via `take_selection_row_resizes` and rebases any
+    /// active selection around them, so selected rows stay anchored to the
+    /// same content when blocks grow or shrink above or inside the selection.
     fn rich_content_row_resizes(
         &self,
         line_heights: &HashMap<EntityId, BlockHeight>,
@@ -289,6 +294,13 @@ impl TuiBlockListViewportSource {
     }
 
     /// Returns viewport items without measuring or mutating cached heights.
+    ///
+    /// Two callers need this read-only path: `visible_items` calls it after
+    /// it has already measured and written fresh heights for this frame, and
+    /// `selection_content` calls it directly because selection scraping reads
+    /// arbitrary row windows (often outside the rendered viewport) and must
+    /// not dirty heights or emit resize events mid-gesture. Any path that
+    /// needs up-to-date heights must measure first via `visible_items`.
     fn read_only_content(
         &self,
         window: TuiViewportWindow,

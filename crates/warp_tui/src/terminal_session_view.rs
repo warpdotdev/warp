@@ -109,8 +109,8 @@ pub(crate) enum TuiTerminalSessionAction {
     ToggleUsageDisplay,
     /// A transcript drag began; clear the input editor's selection.
     TranscriptSelectionStarted,
-    /// A transcript drag ended with selected text.
-    CopyTranscriptSelection(String),
+    /// A transcript drag ended; carries the selected text to copy.
+    TranscriptSelectionEnded(String),
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -1178,7 +1178,7 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.input_view
                     .update(ctx, |input, ctx| input.clear_selection(ctx));
             }
-            TuiTerminalSessionAction::CopyTranscriptSelection(text) => {
+            TuiTerminalSessionAction::TranscriptSelectionEnded(text) => {
                 copy_to_clipboard(text);
                 self.show_copy_hint(ctx);
             }

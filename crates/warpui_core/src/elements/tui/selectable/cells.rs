@@ -61,8 +61,9 @@ pub(crate) fn cell_span(point: TuiContentPoint, width: u16) -> TuiSelectionSpan 
     }
 }
 
-/// Scrapes one selected buffer-row slice.
-pub(crate) fn scrape_row(buffer: &TuiBuffer, row: u16, columns: Range<u16>) -> String {
+/// Returns the text of one buffer row restricted to `columns`, with trailing
+/// whitespace trimmed.
+pub(crate) fn row_text(buffer: &TuiBuffer, row: u16, columns: Range<u16>) -> String {
     let width = buffer.area.width;
     let start = columns.start.min(width);
     let end = columns.end.min(width);
@@ -79,8 +80,9 @@ pub(crate) fn scrape_row(buffer: &TuiBuffer, row: u16, columns: Range<u16>) -> S
     text.trim_end().to_owned()
 }
 
-/// Returns the point after `col`, wrapping at `width`.
-pub(crate) fn point_after_col(row: usize, col: u16, width: u16) -> TuiContentPoint {
+/// Returns the exclusive end point after `col`, wrapping to the start of the
+/// next row when `col` reaches `width`.
+pub fn point_after_col(row: usize, col: u16, width: u16) -> TuiContentPoint {
     if col >= width {
         TuiContentPoint {
             row: row.saturating_add(1),

@@ -361,8 +361,9 @@ impl TuiView for TuiTranscriptView {
                     .dispatch_typed_action(TuiTerminalSessionAction::TranscriptSelectionStarted);
             })
             .on_copy(|text, event_ctx, _| {
-                event_ctx
-                    .dispatch_typed_action(TuiTerminalSessionAction::CopyTranscriptSelection(text));
+                event_ctx.dispatch_typed_action(
+                    TuiTerminalSessionAction::TranscriptSelectionEnded(text),
+                );
             });
         TuiScrollable::new(selectable.finish_scrollable()).finish()
     }
