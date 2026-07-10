@@ -1635,7 +1635,7 @@ impl ConversationDetailsPanel {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let environment_name = &env_model.name;
-        let docker_image = env_model.base_image.to_string();
+        let docker_image = env_model.base_image_display();
 
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
@@ -2263,7 +2263,7 @@ impl TypedActionView for ConversationDetailsPanel {
                     if let Ok(server_id) = ServerId::try_from(env_id.as_str()) {
                         let sync_id = SyncId::ServerId(server_id);
                         if let Some(env) = CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx) {
-                            let docker_image = env.model().string_model.base_image.to_string();
+                            let docker_image = env.model().string_model.base_image_display();
                             ctx.clipboard()
                                 .write(ClipboardContent::plain_text(docker_image));
                             self.record_copy(CopyButtonKind::DockerImage, ctx);
