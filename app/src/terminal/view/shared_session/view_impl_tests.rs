@@ -2345,3 +2345,53 @@ fn test_on_ambient_agent_execution_ended_inserts_tombstone_without_handoff() {
         });
     });
 }
+
+#[test]
+fn passive_suggestions_suppressed_for_shared_ambient_viewer() {
+    // A link-join viewer of a shared *cloud-agent* session starts with no ambient view model
+    // (it is created lazily at `SessionJoined` and never propagated back to the
+    // passive-suggestions model). In this case, we still should not send passive suggestion requests.
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.ambient_agent_view_model().is_none(),
+                "a link-join shared-session viewer starts without an ambient view model"
+            );
+        });
+
+        // A non-ambient (user) shared-session viewer must still get passive suggestions:
+        // the fix must not over-suppress ordinary shared sessions.
+        let suppressed_for_user_viewer = terminal.update(&mut app, |view, ctx| {
+            view.passive_suggestions_models
+                .maa
+                .update(ctx, |model, ctx| {
+                    model.is_ambient_agent_session_for_test(ctx)
+                })
+        });
+        assert!(
+            !suppressed_for_user_viewer,
+            "passive suggestions must not be suppressed for a non-ambient shared-session viewer"
+        );
+
+        // Once the viewer discovers it is viewing an ambient (cloud-agent) run, passive
+        // suggestions must be suppressed even though the ambient view model is still absent.
+        let suppressed_for_ambient_viewer = terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    "44444444-4444-4444-4444-444444444444".to_string(),
+                )));
+            view.passive_suggestions_models
+                .maa
+                .update(ctx, |model, ctx| {
+                    model.is_ambient_agent_session_for_test(ctx)
+                })
+        });
+        assert!(
+            suppressed_for_ambient_viewer,
+            "passive suggestions must be suppressed for a shared cloud-agent viewer"
+        );
+    });
+}
