@@ -26,8 +26,7 @@ use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
-use warp_core::errors::ErrorExt;
-use warp_core::register_error;
+use warp_errors::{register_error, ErrorExt};
 use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
     ShellFamily,
