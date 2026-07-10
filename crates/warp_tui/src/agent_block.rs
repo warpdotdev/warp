@@ -49,12 +49,6 @@ enum TuiAIBlockSection {
     },
 }
 
-/// Events emitted to the transcript that owns this rich-content block.
-pub(super) enum TuiAIBlockEvent {
-    /// The block's cached canonical height must be remeasured.
-    LayoutInvalidated,
-}
-
 /// Per-message UI state for thinking blocks, keyed by reasoning message.
 #[derive(Clone, Default)]
 pub(crate) struct ThinkingBlockStates {
@@ -132,6 +126,12 @@ impl TuiToolCallView {
             Self::ShellCommand(view) => TuiChildView::new(view),
         }
     }
+}
+
+/// Events emitted to the transcript that owns this rich-content block.
+pub(super) enum TuiAIBlockEvent {
+    /// The block's cached canonical height must be remeasured.
+    LayoutInvalidated,
 }
 
 /// A thin TUI rich-content view adapter backed by one agent exchange.
