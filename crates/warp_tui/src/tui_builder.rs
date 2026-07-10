@@ -8,6 +8,7 @@
 use pathfinder_color::ColorU;
 use warp::tui_export::Appearance;
 use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::Opacity;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -34,20 +35,31 @@ impl TuiUiBuilder {
         }
     }
 
-    /// Style for primary response/body text (the terminal palette's normal
-    /// white), matching the transcript design token.
+    /// Style for primary response/body text: the theme foreground at the
+    /// theme's main-text strength (the GUI's `text_main` recipe). This remains
+    /// readable on light and custom themes where the ANSI white slot would
+    /// wash out.
     pub(crate) fn primary_text_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().normal.white,
-        )))
+        TuiStyle::default()
+            .fg(self.foreground_text_color(self.warp_theme.details().main_text_opacity))
+    }
+
+    /// The theme foreground over the transcript's base background at
+    /// `opacity` percent. Pre-blended to a solid because terminal cells drop
+    /// the alpha channel that the GUI's text tokens rely on.
+    fn foreground_text_color(&self, opacity: Opacity) -> Color {
+        cell_color(
+            self.base_background()
+                .blend(&self.warp_theme.foreground().with_opacity(opacity)),
+        )
     }
 
     /// Style for muted secondary text (e.g. thinking headers, bodies, and
-    /// footer metadata), matching the terminal palette's bright-black token.
+    /// footer metadata): the theme foreground at the theme's sub-text
+    /// strength. This remains readable across dark, light, and custom themes.
     pub(crate) fn muted_text_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().bright.black,
-        )))
+        TuiStyle::default()
+            .fg(self.foreground_text_color(self.warp_theme.details().sub_text_opacity))
     }
 
     /// Muted and dimmed: de-emphasized status rows (e.g. tool-call stubs).
@@ -207,3 +219,7 @@ impl TuiUiBuilder {
 fn cell_color(fill: ThemeFill) -> Color {
     CoreFill::from(fill).into()
 }
+
+#[cfg(test)]
+#[path = "tui_builder_tests.rs"]
+mod tests;

@@ -640,7 +640,7 @@ impl TuiTerminalSessionView {
         repo_path: Option<LocalOrRemotePath>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if self.current_repo_path == repo_path {
+        if self.current_repo_path == repo_path && self.git_repo_status.is_some() {
             return;
         }
         self.current_repo_path = repo_path.clone();

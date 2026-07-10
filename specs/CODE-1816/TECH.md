@@ -6,8 +6,8 @@ While an agent turn is running, the TUI shows no in-progress indicator. Per the 
 
 - Layout: `<spinner> <Warping> <(Ns)>` on one row, one space (1 cell) between parts, one blank row above (separating it from the transcript's last row).
 - Spinner: follows the prototype's rotation choreography — a 180° rotation right, a 180° rotation back left, a rest at vertical, then fast spins right (one and a half turns), restarting. The prototype's motion data isn't machine-readable via the Figma API (the CharAni variants only expose per-frame glyphs), so the choreography is encoded from designer/user observation, mapping each 45° step to the nearest three-dot orientation glyph (`⋮ ⋰ ⋯ ⋱`, repeating every 180°). Non-bold, using the active theme's normal cyan.
-- "Warping": bold, base ANSI normal cyan, with a shimmer band sweeping left→right whose peak is the active theme foreground. The cyan base matches the lilac family in the final TUI mock while remaining theme-derived; the elapsed suffix uses the dark theme's `bright.black` (`#8e8e8e`).
-- `(Ns)`: elapsed whole seconds since the request started, ANSI bright black (the existing muted style).
+- "Warping": bold, base ANSI normal cyan, with a shimmer band sweeping left→right whose peak is the active theme foreground. The cyan base matches the lilac family in the final TUI mock while remaining theme-derived; the elapsed suffix uses the contrast-adaptive muted style.
+- `(Ns)`: elapsed whole seconds since the request started, using the theme foreground at `sub_text_opacity`.
 
 There is no `PRODUCT.md`; the Figma node above is the behavior source of truth.
 

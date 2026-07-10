@@ -121,12 +121,24 @@ fn expected_input_background(app: &AppContext) -> Color {
 
 fn expected_output_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()
+    let opacity = theme.details().main_text_opacity;
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(opacity)),
+    )
+    .into()
 }
 
 fn expected_tool_call_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into()
+    let opacity = theme.details().sub_text_opacity;
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(opacity)),
+    )
+    .into()
 }
 
 #[test]
