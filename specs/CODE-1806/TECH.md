@@ -85,10 +85,10 @@ Defaults disable off-screen extraction and return no resizes. No extension trait
 
 1. `TuiBlockListViewportSource`;
 2. `TuiViewportedList` with `GrowFromBottom` alignment;
-3. `TuiSelectable` with the transcript's persistent handle, semantic-selection policy, smart-select function, and callbacks for cross-surface clearing and copy;
+3. `TuiSelectable` with the transcript's persistent handle, semantic-selection policy, smart-select function, and transcript-owned selection actions;
 4. the existing `TuiScrollable` wheel driver.
 
-The transcript view owns the selectable region. `TuiTerminalSessionView` owns cross-surface policy and clipboard side effects (`crates/warp_tui/src/terminal_session_view.rs`).
+The transcript view owns the selectable region and translates element actions into `TuiTranscriptViewEvent`s. `TuiTerminalSessionView` subscribes to those child-view events and owns cross-surface policy and clipboard side effects (`crates/warp_tui/src/terminal_session_view.rs`).
 
 ## Event flow
 
@@ -97,7 +97,7 @@ The transcript view owns the selectable region. `TuiTerminalSessionView` owns cr
 1. `TuiSelectable` dispatches to interactive descendants first.
 2. If unhandled, the wrapper asks the viewport to resolve the pointer through its current window.
 3. The wrapper expands the returned content point into a character, word, or line span and starts selection.
-4. The selection-start callback causes the session to clear input-editor selection.
+4. The transcript handles the selection-start action and emits an event that causes the subscribed session to clear input-editor selection.
 
 ### Drag and scrolling
 
@@ -117,8 +117,8 @@ The transcript view owns the selectable region. `TuiTerminalSessionView` owns cr
 1. The wrapper ends the gesture and orders anchor/focus.
 2. It asks the viewport to materialize the resolved span; the viewport requests selected row windows through `TuiViewportedElement::selection_content`.
 3. Rows are rendered with the viewport's canonical clipping helper, scraped by cell width, trimmed, and joined with newlines.
-4. The wrapper's copy callback dispatches `TranscriptSelectionEnded`.
-5. The session writes OSC 52 clipboard and PRIMARY targets and shows the success hint (`crates/warp_tui/src/clipboard.rs`, `crates/warp_tui/src/transient_hint.rs`).
+4. The wrapper dispatches a transcript-owned completion action, and the transcript emits the selected text as a view event.
+5. The subscribed session writes OSC 52 clipboard and PRIMARY targets and shows the success hint (`crates/warp_tui/src/clipboard.rs`, `crates/warp_tui/src/transient_hint.rs`).
 
 ## Content updates and invalidation
 
@@ -136,7 +136,7 @@ Conversation removal obtains the rich-content row range before deletion and appl
 
 `TuiTerminalSessionView` owns the single-selection-domain invariant:
 
-- transcript selection start clears the input editor through `TranscriptSelectionStarted`;
+- transcript selection start emits a transcript view event that clears the input editor;
 - non-empty input-editor selection clears `TuiSelectionHandle`;
 - typing alone does not clear transcript selection;
 - active drag ownership remains with the originating surface until mouse-up.

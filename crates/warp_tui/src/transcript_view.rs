@@ -24,7 +24,6 @@ use warpui_core::{
 
 use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
 use super::terminal_block::should_render_terminal_block;
-use super::terminal_session_view::TuiTerminalSessionAction;
 use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
 
 /// Rows of blank space above every transcript block. Terminal blocks get it
@@ -49,6 +48,20 @@ pub(crate) const TRANSCRIPT_BLOCK_SPACING: BlockSpacing = BlockSpacing {
     warp_prompt_height_lines: 0.0,
     show_memory_stats: false,
 };
+
+/// Events emitted by the transcript to its owning session view.
+#[derive(Debug, Clone)]
+pub(super) enum TuiTranscriptViewEvent {
+    SelectionStarted,
+    SelectionEnded(String),
+}
+
+/// Selection actions originating from the transcript's element tree.
+#[derive(Debug, Clone)]
+pub(super) enum TuiTranscriptAction {
+    SelectionStarted,
+    SelectionEnded(String),
+}
 
 /// TUI transcript view over one terminal surface's canonical block-list order.
 pub(super) struct TuiTranscriptView {
@@ -340,7 +353,7 @@ impl TuiTranscriptView {
 }
 
 impl Entity for TuiTranscriptView {
-    type Event = ();
+    type Event = TuiTranscriptViewEvent;
 }
 
 impl TuiView for TuiTranscriptView {
@@ -361,20 +374,28 @@ impl TuiView for TuiTranscriptView {
             .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
             .with_smart_select_fn(semantic_selection.smart_select_fn())
             .on_selection_start(|event_ctx, _| {
-                event_ctx
-                    .dispatch_typed_action(TuiTerminalSessionAction::TranscriptSelectionStarted);
+                event_ctx.dispatch_typed_action(TuiTranscriptAction::SelectionStarted);
             })
             .on_copy(|text, event_ctx, _| {
-                event_ctx.dispatch_typed_action(
-                    TuiTerminalSessionAction::TranscriptSelectionEnded(text),
-                );
+                event_ctx.dispatch_typed_action(TuiTranscriptAction::SelectionEnded(text));
             });
         TuiScrollable::new(selectable.finish_scrollable()).finish()
     }
 }
 
 impl TypedActionView for TuiTranscriptView {
-    type Action = ();
+    type Action = TuiTranscriptAction;
+
+    fn handle_action(&mut self, action: &TuiTranscriptAction, ctx: &mut ViewContext<Self>) {
+        match action {
+            TuiTranscriptAction::SelectionStarted => {
+                ctx.emit(TuiTranscriptViewEvent::SelectionStarted);
+            }
+            TuiTranscriptAction::SelectionEnded(text) => {
+                ctx.emit(TuiTranscriptViewEvent::SelectionEnded(text.clone()));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

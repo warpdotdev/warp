@@ -50,7 +50,7 @@ use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::slash_commands::TuiSlashCommandModel;
-use crate::transcript_view::TuiTranscriptView;
+use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::compact_footer_path;
@@ -107,10 +107,6 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Click on the footer's usage entry: flips the persisted credits⇄cost
     /// display-mode setting.
     ToggleUsageDisplay,
-    /// A transcript drag began; clear the input editor's selection.
-    TranscriptSelectionStarted,
-    /// A transcript drag ended; carries the selected text to copy.
-    TranscriptSelectionEnded(String),
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -309,6 +305,18 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
+
+        ctx.subscribe_to_view(&transcript, |view, _, event, ctx| match event {
+            TuiTranscriptViewEvent::SelectionStarted => {
+                view.input_view
+                    .update(ctx, |input, ctx| input.clear_selection(ctx));
+            }
+            TuiTranscriptViewEvent::SelectionEnded(text) => {
+                copy_to_clipboard(text);
+                view.show_copy_hint(ctx);
+            }
+        });
+
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
             TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), ctx),
             TuiInputViewEvent::AcceptedSlashCommand(action) => {
@@ -1174,14 +1182,6 @@ impl TypedActionView for TuiTerminalSessionView {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
-            TuiTerminalSessionAction::TranscriptSelectionStarted => {
-                self.input_view
-                    .update(ctx, |input, ctx| input.clear_selection(ctx));
-            }
-            TuiTerminalSessionAction::TranscriptSelectionEnded(text) => {
-                copy_to_clipboard(text);
-                self.show_copy_hint(ctx);
-            }
         }
     }
 }
