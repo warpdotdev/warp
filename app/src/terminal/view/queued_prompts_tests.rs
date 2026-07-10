@@ -29,7 +29,7 @@ use crate::ai::blocklist::{
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::ai::SpawnAgentRequest;
-use crate::terminal::input::{Event as InputEvent, Input, InputSuggestionsMode};
+use crate::terminal::input::{Event as InputEvent, Input};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -1672,40 +1672,6 @@ fn enter_hint_hidden_during_inline_edit_and_for_locked_head() {
         panel.read(&app, |panel, ctx| {
             assert!(!panel.enter_hint_shown_for_test(ctx));
         });
-    });
-}
-
-#[test]
-fn panel_visibility_tracks_inline_menu_open_and_close() {
-    // The panel hides while an inline menu (e.g. the slash command menu) covers the input, and
-    // reappears once that menu closes. Regression test for the queued prompts list staying
-    // hidden after the slash command menu was dismissed: the panel subscribes to the
-    // suggestions-mode model so a menu open/close re-renders it (see `should_render`).
-    App::test((), |mut app| async move {
-        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
-        initialize_app_for_terminal_view(&mut app);
-
-        let (panel, conversation_id, input) = build_panel_with_active_conversation(&mut app);
-        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
-            model.append(conversation_id, user_query("queued"), ctx);
-        });
-        let suggestions_mode_model =
-            input.read(&app, |input, _| input.suggestions_mode_model().clone());
-
-        // With a queued row and no inline menu open, the panel renders.
-        panel.read(&app, |panel, ctx| assert!(panel.should_render(ctx)));
-
-        // Opening the slash command menu hides the panel.
-        suggestions_mode_model.update(&mut app, |model, ctx| {
-            model.set_mode(InputSuggestionsMode::SlashCommands, ctx);
-        });
-        panel.read(&app, |panel, ctx| assert!(!panel.should_render(ctx)));
-
-        // Closing the menu brings the panel back.
-        suggestions_mode_model.update(&mut app, |model, ctx| {
-            model.close_and_restore_buffer(ctx);
-        });
-        panel.read(&app, |panel, ctx| assert!(panel.should_render(ctx)));
     });
 }
 

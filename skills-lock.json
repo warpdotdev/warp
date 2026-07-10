@@ -59,7 +59,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/readout/SKILL.md",
-      "computedHash": "a894a051070e2269e3f5621bbeb73aa87dd812a747ca49c0e767d7db171aa13c"
+      "computedHash": "edd6db4febba8cfe06b653d240da712d3ac64505865a13841f2b709aed12f28c"
     },
     "reproduce-bug-report": {
       "source": "warpdotdev/common-skills",

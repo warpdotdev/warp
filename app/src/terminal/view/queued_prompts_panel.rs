@@ -46,9 +46,7 @@ use crate::editor::{
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
-use crate::terminal::input::suggestions_mode_model::{
-    InputSuggestionsModeEvent, InputSuggestionsModeModel,
-};
+use crate::terminal::input::suggestions_mode_model::InputSuggestionsModeModel;
 use crate::ui_components::icons::Icon as TerminalIcon;
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
@@ -267,11 +265,8 @@ impl QueuedPromptsPanelView {
             me.handle_cli_subagent_event(event, ctx);
         });
 
-        // The panel hides while an inline menu (slash commands, model selector, etc.) covers it
-        // and must re-appear once that menu closes, so re-render whenever the suggestions mode
-        // changes. `should_render` reads the menu state live, so a plain notify is enough.
-        ctx.subscribe_to_model(&suggestions_mode_model, |me, _, event, ctx| {
-            me.handle_suggestions_mode_event(event, ctx);
+        ctx.subscribe_to_model(&suggestions_mode_model, |_, model, _, ctx| {
+            ctx.notify();
         });
 
         let host_editor_was_empty = host_editor.as_ref(ctx).is_empty(ctx);
@@ -359,18 +354,6 @@ impl QueuedPromptsPanelView {
             self.host_editor_was_empty = is_empty;
             ctx.notify();
         }
-    }
-
-    /// Re-renders when the inline suggestions menu (slash commands, model selector, etc.) opens
-    /// or closes. The panel hides while such a menu is open (see [`Self::should_render`]); this
-    /// keeps it in sync so it re-appears once the menu goes away, rather than staying hidden
-    /// until some other event happens to re-render the panel.
-    fn handle_suggestions_mode_event(
-        &mut self,
-        _event: &InputSuggestionsModeEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        ctx.notify();
     }
 
     /// Re-renders the header hint when the CLI-agent rich input opens or closes for this
