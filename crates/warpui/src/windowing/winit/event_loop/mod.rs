@@ -494,6 +494,10 @@ pub(super) struct EventLoop {
     state: State,
     proxy: EventLoopProxy<CustomEvent>,
     ime_enabled: bool,
+    /// Last IME cursor area sent to winit. Used to skip redundant
+    /// `set_ime_cursor_area` calls (which can re-trigger IME events on some
+    /// Wayland compositors, notably KDE Plasma).
+    last_ime_cursor_area: Option<(LogicalPosition<f32>, LogicalSize<f32>)>,
     /// Whether to downrank non-NVIDIA vulkan adapters. This is set to true when we detect a DRI3
     /// error that occurs when trying to present against a non-NVIDIA Vulkan adapter when the
     /// PRIME Profile is set to "Performance" mode.  It's not fully clear why this error occurs. Our
@@ -523,6 +527,7 @@ impl EventLoop {
             state: Default::default(),
             proxy,
             ime_enabled: false,
+            last_ime_cursor_area: None,
             downrank_non_nvidia_vulkan_adapters: false,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
@@ -1519,14 +1524,28 @@ impl EventLoop {
     fn handle_ime_event(&mut self, winit_window_id: WinitWindowId, event: ImeEvent) {
         match event {
             winit::event::Ime::Enabled => {
+                // Only push a cursor-position update on the disabled→enabled edge.
+                // Re-emitting on every `Enabled` (which some Wayland compositors send
+                // after each `set_ime_cursor_area`) previously fed an infinite
+                // Enabled → update_ime_position → set_ime_cursor_area → Enabled loop
+                // on KDE Plasma.
+                let was_enabled = self.ime_enabled;
                 self.ime_enabled = true;
-                self.ui_app
-                    .update(|ctx| ctx.report_active_cursor_position_update());
+                log::debug!("IME enabled (was_enabled={was_enabled})");
+                if !was_enabled {
+                    self.ui_app
+                        .update(|ctx| ctx.report_active_cursor_position_update());
+                }
             }
             winit::event::Ime::Preedit(preedit_text, cursor_position) => {
                 if !self.ime_enabled {
                     return;
                 }
+
+                log::debug!(
+                    "IME preedit: text_len={} cursor={cursor_position:?}",
+                    preedit_text.len()
+                );
 
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
                     return;
@@ -1547,6 +1566,8 @@ impl EventLoop {
                 });
             }
             winit::event::Ime::Commit(chars) => {
+                log::debug!("IME commit: chars_len={}", chars.len());
+
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
                     return;
                 };
@@ -1564,7 +1585,9 @@ impl EventLoop {
                 window_callbacks.dispatch_event(TypedCharacters { chars });
             }
             winit::event::Ime::Disabled => {
+                log::debug!("IME disabled");
                 self.ime_enabled = false;
+                self.last_ime_cursor_area = None;
             }
         };
     }
@@ -1803,9 +1826,44 @@ impl EventLoop {
                 active_cursor_position.font_size,
                 active_cursor_position.font_size,
             );
-            // TODO(abhishek): We make sure that the position is different than last time to prevent winit from
-            // caching the old position and not properly updating on `WindowMoved` or `WindowResized` events.
-            winit_window.set_ime_position(LogicalPosition::new(position.x, position.y + 1.), size);
+
+            // Skip identical updates. On Wayland (especially KDE), repeated
+            // `set_ime_cursor_area` can re-fire IME enable/preedit events and
+            // recreate a feedback loop with ActiveCursorPositionUpdated.
+            if self.last_ime_cursor_area == Some((position, size)) {
+                return;
+            }
+            self.last_ime_cursor_area = Some((position, size));
+
+            log::debug!(
+                "Updating IME cursor area to position=({:.1}, {:.1}) size=({:.1}, {:.1})",
+                position.x,
+                position.y,
+                size.width,
+                size.height
+            );
+
+            // On X11, winit can cache the previous cursor area and ignore a
+            // subsequent set with the same value after WindowMoved/Resized.
+            // Nudge once then set the real position. Do NOT do this on Wayland:
+            // the extra call has been linked to IME event storms on KDE Plasma.
+            let is_wayland = {
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                {
+                    matches!(
+                        super::app::WINDOWING_SYSTEM.get(),
+                        Some(super::app::WindowingSystem::Wayland)
+                    )
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+                {
+                    false
+                }
+            };
+            if !is_wayland {
+                winit_window
+                    .set_ime_position(LogicalPosition::new(position.x, position.y + 1.), size);
+            }
             winit_window.set_ime_position(position, size);
         }
     }
