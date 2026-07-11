@@ -4,8 +4,8 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::App;
 
 use super::{
-    render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuRow, TuiInlineMenuRowStyle,
-    TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab,
+    format_slash_command_title, render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuRow,
+    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -229,4 +229,31 @@ fn slash_command_rows_match_figma_layout_and_colors() {
             );
         });
     });
+}
+
+#[test]
+fn long_slash_command_titles_are_ellipsized_before_the_description() {
+    let lines = render(TuiInlineMenuSnapshot {
+        header: None,
+        rows: vec![TuiInlineMenuRow {
+            title: "/respond-to-pr-comments-in-blocklist".to_owned(),
+            description: Some("Walk users through PR review comments".to_owned()),
+            is_selectable: true,
+            style: TuiInlineMenuRowStyle::SlashCommand,
+        }],
+        selected_index: Some(0),
+        scroll_offset: 0,
+        max_visible_rows: 8,
+        status: None,
+    });
+
+    assert!(lines[0].starts_with("/respond-to-pr-comments-i... Walk users"));
+}
+
+#[test]
+fn ellipsis_follows_wide_character_prefix_without_padding() {
+    assert_eq!(
+        format_slash_command_title("/12345678901234567890123界suffix"),
+        "/12345678901234567890123...  "
+    );
 }

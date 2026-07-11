@@ -15,8 +15,8 @@ use warp::tui_export::{
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPoint, TuiRect, TuiSize,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiSize,
 };
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
@@ -47,6 +47,31 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
     let open = input_keymap_context(true);
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
+}
+
+#[test]
+fn slash_command_argument_hint_renders_as_ghost_text() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (view, menu_model, _) = build_view_with_inline_menu(ctx);
+            let input = "/export-to-file ";
+            view.update(ctx, |view, ctx| view.set_text(input, ctx));
+            menu_model.update(ctx, |model, _| {
+                model.set_argument_hint_text_for_test(Some("<optional filename>"));
+            });
+
+            let buffer = render_input_buffer(&view, ctx);
+            let line = &buffer.to_lines()[0];
+            assert!(line.starts_with("/export-to-file <optional filename>"));
+
+            let hint_column = input.chars().count() as u16;
+            let expected = TuiUiBuilder::from_app(ctx)
+                .dim_text_style()
+                .fg
+                .expect("ghost text has a foreground");
+            assert_eq!(buffer[(hint_column, 0)].fg, expected);
+        });
+    });
 }
 
 fn render_input_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> TuiBuffer {

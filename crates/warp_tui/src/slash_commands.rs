@@ -51,6 +51,20 @@ fn highlighted_prefix_len_for_parsed_input(
     }
 }
 
+fn argument_hint_text_for_parsed_input(
+    parsed_input: &ParsedSlashCommandInput,
+    input: &str,
+) -> Option<&'static str> {
+    let ParsedSlashCommandInput::SlashCommand(detected) = parsed_input else {
+        return None;
+    };
+    detected
+        .command
+        .argument_hint()
+        .filter(|hint| hint.input_prefix == input)
+        .map(|hint| hint.text)
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub(crate) enum TuiSlashCommandState {
@@ -75,6 +89,7 @@ pub(crate) struct TuiSlashCommandModel {
     state: TuiSlashCommandState,
     lifecycle: InputDrivenInlineMenuLifecycle,
     highlighted_prefix_len: Option<usize>,
+    argument_hint_text: Option<&'static str>,
 }
 
 impl TuiSlashCommandModel {
@@ -108,6 +123,7 @@ impl TuiSlashCommandModel {
             state: TuiSlashCommandState::Closed,
             lifecycle: InputDrivenInlineMenuLifecycle::default(),
             highlighted_prefix_len: None,
+            argument_hint_text: None,
         };
         model.update_from_input(false, ctx);
         model
@@ -135,6 +151,7 @@ impl TuiSlashCommandModel {
             },
             lifecycle: InputDrivenInlineMenuLifecycle::default(),
             highlighted_prefix_len: None,
+            argument_hint_text: None,
         }
     }
 
@@ -143,12 +160,21 @@ impl TuiSlashCommandModel {
         self.highlighted_prefix_len = len;
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_argument_hint_text_for_test(&mut self, text: Option<&'static str>) {
+        self.argument_hint_text = text;
+    }
+
     pub(crate) fn is_open(&self) -> bool {
         matches!(self.state, TuiSlashCommandState::Open { .. })
     }
     pub(crate) fn highlighted_prefix_range(&self) -> Option<Range<CharOffset>> {
         self.highlighted_prefix_len
             .map(|len| CharOffset::zero()..CharOffset::from(len))
+    }
+
+    pub(crate) fn argument_hint_text(&self) -> Option<&'static str> {
+        self.argument_hint_text
     }
 
     pub(crate) fn selected_action(&self) -> Option<AcceptSlashCommandOrSavedPrompt> {
@@ -177,6 +203,18 @@ impl TuiSlashCommandModel {
         if let Some(selected_index) = selection.select_previous(rows.len(), |_| true) {
             keep_selected_visible(rows.len(), selected_index, MAX_VISIBLE_ROWS, scroll_offset);
         }
+        ctx.emit(TuiSlashCommandModelEvent);
+    }
+
+    fn set_argument_hint_text(
+        &mut self,
+        argument_hint_text: Option<&'static str>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.argument_hint_text == argument_hint_text {
+            return;
+        }
+        self.argument_hint_text = argument_hint_text;
         ctx.emit(TuiSlashCommandModelEvent);
     }
 
@@ -259,6 +297,7 @@ impl TuiSlashCommandModel {
             .input_changed(input.is_empty(), input.starts_with('/'))
         {
             self.set_highlighted_prefix_len(None, ctx);
+            self.set_argument_hint_text(None, ctx);
             self.close(ctx);
             return;
         }
@@ -269,6 +308,10 @@ impl TuiSlashCommandModel {
         let parsed_input = slash_commands_source.as_ref(ctx).parse_input(&input, ctx);
         self.set_highlighted_prefix_len(
             highlighted_prefix_len_for_parsed_input(&parsed_input, &input),
+            ctx,
+        );
+        self.set_argument_hint_text(
+            argument_hint_text_for_parsed_input(&parsed_input, &input),
             ctx,
         );
         let menu_was_open = self.is_open();

@@ -646,24 +646,32 @@ impl TuiInputView {
     /// boxes it (behind the shell-mode `!` gutter when active); tests construct
     /// it directly to exercise mouse dispatch.
     fn render_element(&self, ctx: &AppContext) -> TuiEditorElement {
+        let builder = TuiUiBuilder::from_app(ctx);
         let mut styles = TuiEditorStyles::default();
         if let Some(range) = self
             .inline_menu
             .as_ref()
             .and_then(|inline_menu| inline_menu.input_highlight_range(ctx))
         {
-            styles.text_overrides.push((
-                range,
-                TuiUiBuilder::from_app(ctx).slash_command_text_style(),
-            ));
+            styles
+                .text_overrides
+                .push((range, builder.slash_command_text_style()));
         }
-        TuiEditorElement::new(&self.model, ctx)
+        let mut element = TuiEditorElement::new(&self.model, ctx)
             .editable()
             .with_viewport_rows(self.max_visible_rows)
             .with_styles(styles)
             .on_action(|action, event_ctx| {
                 event_ctx.dispatch_typed_action(TuiInputAction::from(action))
-            })
+            });
+        if let Some(hint_text) = self
+            .inline_menu
+            .as_ref()
+            .and_then(|inline_menu| inline_menu.input_argument_hint_text(ctx))
+        {
+            element = element.with_trailing_ghost_text(hint_text, builder.dim_text_style());
+        }
+        element
     }
     /// Collapses the current text selection to its head without changing text.
     pub(crate) fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {

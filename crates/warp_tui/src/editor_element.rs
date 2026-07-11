@@ -116,6 +116,7 @@ pub(crate) struct TuiEditorElement {
     /// [`Self::hide_trailing_empty_line`]).
     hide_trailing_empty_line: bool,
     styles: TuiEditorStyles,
+    trailing_ghost_text: Option<(String, TuiStyle)>,
     on_action: Option<TuiEditorActionHandler>,
 
     // ── Built during layout ─────────────────────────────────────────────────
@@ -177,6 +178,7 @@ impl TuiEditorElement {
             line_number_gutter: false,
             hide_trailing_empty_line: false,
             styles: TuiEditorStyles::default(),
+            trailing_ghost_text: None,
             on_action: None,
             column: TuiFlex::column(),
             gutter_cols: 0,
@@ -216,6 +218,15 @@ impl TuiEditorElement {
 
     pub(crate) fn with_styles(mut self, styles: TuiEditorStyles) -> Self {
         self.styles = styles;
+        self
+    }
+
+    pub(crate) fn with_trailing_ghost_text(
+        mut self,
+        text: impl Into<String>,
+        style: TuiStyle,
+    ) -> Self {
+        self.trailing_ghost_text = Some((text.into(), style));
         self
     }
 
@@ -633,6 +644,23 @@ impl TuiElement for TuiEditorElement {
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         self.column.render(area, buffer, ctx);
+        if let Some((text, style)) = &self.trailing_ghost_text {
+            let cursor_at_end =
+                self.cursor_offset.as_usize().saturating_sub(1) == self.text.chars().count();
+            if cursor_at_end && self.cursor_visible {
+                let x = area.x.saturating_add(self.cursor_col);
+                let y = area.y.saturating_add(self.cursor_row_in_view);
+                if x < area.x.saturating_add(area.width) && y < area.y.saturating_add(area.height) {
+                    buffer.set_stringn(
+                        x,
+                        y,
+                        text,
+                        usize::from(area.width.saturating_sub(self.cursor_col)),
+                        *style,
+                    );
+                }
+            }
+        }
         for &(row_in_view, start_col, end_col, style) in &self.styled_spans {
             let y = area.y.saturating_add(row_in_view);
             let x = area.x.saturating_add(start_col);

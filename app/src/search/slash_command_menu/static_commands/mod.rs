@@ -99,6 +99,11 @@ pub struct StaticCommand {
     pub auto_enter_ai_mode: bool,
     pub argument: Option<Argument>,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashCommandArgumentHint {
+    pub input_prefix: String,
+    pub text: &'static str,
+}
 
 impl StaticCommand {
     pub fn matches_filter(&self, filter_text: &str) -> bool {
@@ -116,6 +121,14 @@ impl StaticCommand {
 
     pub fn is_active(&self, session_context: Availability) -> bool {
         session_context.contains(self.availability)
+    }
+
+    pub fn argument_hint(&self) -> Option<SlashCommandArgumentHint> {
+        let text = self.argument.as_ref()?.hint_text?;
+        Some(SlashCommandArgumentHint {
+            input_prefix: format!("{} ", self.name),
+            text,
+        })
     }
 }
 

@@ -6953,16 +6953,8 @@ impl Input {
         // Loop through all static commands and set placeholders for those with hint text
         self.editor.update(ctx, |editor, ctx| {
             for command in COMMAND_REGISTRY.all_commands() {
-                if let Some(hint_text) = command
-                    .argument
-                    .as_ref()
-                    .and_then(|argument| argument.hint_text)
-                {
-                    editor.set_placeholder_text_with_prefix(
-                        format!("{} ", command.name),
-                        hint_text,
-                        ctx,
-                    );
+                if let Some(hint) = command.argument_hint() {
+                    editor.set_placeholder_text_with_prefix(hint.input_prefix, hint.text, ctx);
                 }
             }
         });

@@ -2,6 +2,7 @@
 use std::ops::Range;
 
 use string_offset::CharOffset;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp::tui_export::AcceptSlashCommandOrSavedPrompt;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiFlex,
@@ -12,7 +13,10 @@ use warpui_core::{AppContext, ModelAsRef, ModelHandle, UpdateModel};
 
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
+
 const SLASH_COMMAND_TITLE_COLUMNS: usize = 29;
+const SLASH_COMMAND_DESCRIPTION_GAP_COLUMNS: usize = 1;
+const SLASH_COMMAND_TITLE_ELLIPSIS: &str = "...";
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +96,12 @@ impl TuiInlineMenu {
     pub(crate) fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
         match self {
             Self::SlashCommands(model) => model.as_ref(ctx).highlighted_prefix_range(),
+        }
+    }
+
+    pub(crate) fn input_argument_hint_text(&self, ctx: &AppContext) -> Option<&'static str> {
+        match self {
+            Self::SlashCommands(model) => model.as_ref(ctx).argument_hint_text(),
         }
     }
 
@@ -281,6 +291,36 @@ fn menu_status_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
     .with_padding_right(1)
     .finish()
 }
+fn format_slash_command_title(title: &str) -> String {
+    let available_title_columns =
+        SLASH_COMMAND_TITLE_COLUMNS - SLASH_COMMAND_DESCRIPTION_GAP_COLUMNS;
+    let title_width = UnicodeWidthStr::width(title);
+    if title_width <= available_title_columns {
+        return format!(
+            "{title}{}",
+            " ".repeat(SLASH_COMMAND_TITLE_COLUMNS - title_width)
+        );
+    }
+
+    let prefix_columns =
+        available_title_columns - UnicodeWidthStr::width(SLASH_COMMAND_TITLE_ELLIPSIS);
+    let mut prefix = String::new();
+    let mut prefix_width = 0;
+    for character in title.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or_default();
+        if prefix_width + character_width > prefix_columns {
+            break;
+        }
+        prefix.push(character);
+        prefix_width += character_width;
+    }
+
+    format!(
+        "{prefix}{SLASH_COMMAND_TITLE_ELLIPSIS}{}{}",
+        " ".repeat(prefix_columns - prefix_width),
+        " ".repeat(SLASH_COMMAND_DESCRIPTION_GAP_COLUMNS),
+    )
+}
 
 fn menu_result_row(
     row: &TuiInlineMenuRow,
@@ -300,9 +340,7 @@ fn menu_result_row(
     };
     let title = match row.style {
         TuiInlineMenuRowStyle::Default => row.title.clone(),
-        TuiInlineMenuRowStyle::SlashCommand => {
-            format!("{:<SLASH_COMMAND_TITLE_COLUMNS$}", row.title)
-        }
+        TuiInlineMenuRowStyle::SlashCommand => format_slash_command_title(&row.title),
     };
     let title = TuiText::new(title)
         .with_style(title_style)
