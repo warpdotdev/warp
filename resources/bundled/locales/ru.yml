@@ -14,9 +14,43 @@ ru:
   tab:
     rename: "Переименовать вкладку"
     reset_name: "Сбросить имя вкладки"
-    close: "Закрыть вкладку"
+    shared_session:
+      stop_sharing: Прекратить общий доступ
+      share_session: Открыть общий доступ к сессии
+      stop_sharing_all: Прекратить весь общий доступ
+      copy_link: Скопировать ссылку
+    metadata:
+      copy_tab_title: Скопировать заголовок вкладки
+      copy_pane_title: Скопировать заголовок панели
+      copy_tab_title_v2: Скопировать заголовок вкладки
+      copy_branch: Скопировать ветку
+      copy_working_directory: Скопировать рабочую директорию
+      copy_pull_request_link: Скопировать ссылку на pull request
+    modify:
+      rename_tab: Переименовать вкладку
+      reset_tab_name: Сбросить имя вкладки
+      move_tab_down: Переместить вкладку вниз
+      move_tab_right: Переместить вкладку вправо
+      move_tab_up: Переместить вкладку вверх
+      move_tab_left: Переместить вкладку влево
+    close:
 
   # ── Рабочая область / Панель инструментов ──
+      close_tab: Закрыть вкладку
+      close_other_tabs: Закрыть остальные вкладки
+      close_tabs_below: Закрыть вкладки ниже
+      close_tabs_to_the_right: Закрыть вкладки справа
+    config:
+      save_as_new_config: Сохранить как новый конфиг
+    pin:
+      unpin_tab: Открепить вкладку
+      pin_tab: Закрепить вкладку
+    group:
+      new_group_with_tab: Новая группа с этой вкладкой
+    color:
+      default_no_color: По умолчанию (без цвета)
+    indicator:
+      cloud_agent_run_tooltip: Запуск облачного агента
   terminal:
     share_block:
       command: "Команда"
@@ -55,6 +89,17 @@ ru:
       fork: "Форк"
       fork_from_here: "Ответвить отсюда"
       rewind_to_before_here: "Откатить до этого момента"
+    auto_reload_settings_updated: Настройки автопополнения обновлены
+    auto_reload_enable_failed: Не удалось включить автопополнение. Попробуйте обновить настройки в Биллинг и использование.
+    auto_reload_when_enabled_prefix: 'Когда включено, '
+    auto_reload_term: автопополнение
+    auto_reload_when_enabled_suffix: ' автоматически купит выбранный пакет, когда кредиты закончатся. '
+    learn_more: Подробнее
+    cancel: Отмена
+    saving: Сохранение...
+    enable: Включить
+    team_data_not_found: Ой, что-то пошло не так; данные вашей команды не найдены.
+    enable_auto_reload_title: Включить автопополнение?
   workspace:
     settings: "Настройки"
     agent: "Агент"
@@ -330,6 +375,27 @@ ru:
   # ── Free AI Removal ──
   # ── Аутентификация ──
   # ── Настройки ──
+    choose_ai_execution_profile: Выберите профиль выполнения AI
+    choose_agent_model: Выберите модель агента
+    followups_use_original_model: Для продолжения используется модель исходного запуска
+    default_model: по умолчанию
+    request_edit_access_to_change_model: Запросите доступ на редактирование, чтобы изменить модель
+    auto_select_best_model: автоматический выбор лучшей модели для задачи
+    new_models_available: Доступны новые модели
+    manage: Управление
+    manage_api_keys: Управление API-ключами
+    profiles: Профили
+    manage_profiles: Управление профилями
+    custom_models: Пользовательские модели
+    cost: Стоимость
+    intelligence: Интеллект
+    speed: Скорость
+    model_specs: Характеристики модели
+    model_specs_description: Бенчмарки Warp, показывающие, насколько хорошо модель работает в нашей среде исполнения, интенсивность потребления кредитов и скорость выполнения задач.
+    auto_mode: Автоматический режим
+    auto_mode_description: Авто выберет лучшую модель для задачи. Экономичность оптимизирует стоимость, отзывчивость — скорость ответа.
+    reasoning_level: Уровень рассуждения
+    reasoning_level_description: Повышенные уровни рассуждения потребляют больше кредитов и имеют большую задержку, но лучше справляются со сложными задачами.
   settings:
     execution_profile:
       apply_code_diffs: "Применять изменения кода:"
@@ -959,6 +1025,20 @@ ru:
       export: "Экспорт"
 
   # ── Код ──
+    auto_reload_enable_failed: Не удалось включить автопополнение для вашей команды. Попробуйте ещё раз в Настройки > Биллинг и использование.
+    auto_reload: Автопополнение
+    monthly_limit_reached_description_admin: Достигнут месячный лимит расходов. Увеличьте его, чтобы продолжить.
+    monthly_limit_reached_description_member: Обратитесь к администратору команды, чтобы увеличить месячный лимит.
+    monthly_limit_reached: Достигнут месячный лимит
+    manage_billing: Управление биллингом
+    out_of_credits: Закончились кредиты
+    purchase_exceeds_limit_warning_prefix: 'Покупка этих кредитов превысит ваш месячный лимит расходов. '
+    increase_limit: Увеличить лимит
+    to_continue: ', чтобы продолжить.'
+    out_of_credits_description_admin: Добавьте кредитов в аккаунт, чтобы продолжить использовать Oz-агентов.
+    out_of_credits_description_member: Обратитесь к администратору команды, чтобы купить больше кредитов и продолжить.
+    buying: Покупка…
+    buy: Купить
   code:
     discard_this_version: "Отменить эту версию"
     overwrite: "Перезаписать"
@@ -971,6 +1051,25 @@ ru:
   # ── Конфигурации запуска ──
   # ── Диск ──
   # ── Блокнот ──
+    file_tree:
+      remote_text: Обозреватель проекта требует доступа к локальному рабочему пространству, что не поддерживается в удалённых сессиях.
+      disabled_text: Обозреватель проекта требует доступа к локальному рабочему пространству. Откройте новую сессию или перейдите к активной сессии, чтобы просмотреть.
+      wsl_text: Обозреватель проекта в данный момент не работает в WSL.
+      unavailable_title: Обозреватель проекта недоступен
+      open_in_new_pane: Открыть в новой панели
+      open_in_new_tab: Открыть в новой вкладке
+      open_file: Открыть файл
+      new_file: Новый файл
+      cd_to_directory: Перейти в каталог
+      open_in_new_tab_directory: Открыть в новой вкладке
+      reveal_in_finder: Показать в Finder
+      reveal_in_explorer: Показать в Проводнике
+      reveal_in_file_manager: Показать в файловом менеджере
+      rename: Переименовать
+      delete: Удалить
+      attach_as_context: Прикрепить как контекст
+      copy_path: Копировать путь
+      copy_relative_path: Копировать относительный путь
   notebook:
     context_menu:
       cut: "Вырезать"
@@ -983,6 +1082,42 @@ ru:
       close_pane: "Закрыть панель"
 
   # ── Onboarding ──
+    block_insertion:
+      embed: Встроить
+      divider: Разделитель
+      insert_block_tooltip: Вставить блок
+    mermaid:
+      open_full_screen_label: Открыть на весь экран
+    code_block:
+      copy_label: Копировать
+      run_in_terminal_label: Запустить в терминале
+    file_pane:
+      refresh_file: Обновить файл
+      open_in_editor: Открыть в редакторе
+      try_again_label: Попробовать снова
+      missing_source_file: Исходный файл отсутствует
+    save:
+      secrets_in_content_toast: Этот блокнот нельзя сохранить, так как его содержимое содержит секреты
+      secrets_in_title_toast: Этот блокнот нельзя сохранить, так как его название содержит секреты
+    pane_header_overflow:
+      attach_to_active_session: Прикрепить к активной сессии
+      copy_link: Копировать ссылку
+      open_on_desktop: Открыть на рабочем столе
+      duplicate: Дублировать
+      export: Экспортировать
+      trash: В корзину
+    trash:
+      restore_tooltip: Восстановить блокнот из корзины
+      restore_label: Восстановить
+      copy_to_personal_tooltip: Копировать содержимое блокнота в личное рабочее пространство
+      copy_to_personal_label: Копировать в личное
+    conflict:
+      copy_all_tooltip: Копировать содержимое блокнота в буфер обмена
+      copy_all_label: Копировать всё
+      refresh_tooltip: Обновить блокнот
+      refresh_label: Обновить
+    link:
+      copied_toast: Ссылка скопирована в буфер обмена
   onboarding:
     agent_slide:
       autonomy: "Автономность"
@@ -1679,6 +1814,66 @@ ru:
     creator_unknown: "Неизвестно"
     copied_branch_name: "Название ветки скопировано"
   # ── Agent Message Bar ──
+    orchestration:
+      env_none_label: Пустое окружение
+      default_model_label: Модель по умолчанию
+      skip_advanced: Пропустить (для опытных)
+      api_key: API-ключ
+      new_api_key: Новый API-ключ…
+      opencode_not_supported_cloud: OpenCode пока не поддерживается в облаке. Переключитесь на локальный режим или выберите другую среду исполнения.
+      disabled_by_administrator: Отключено вашим администратором
+      new_environment: Новое окружение
+      select_api_key_to_continue: Выберите API-ключ для этой среды исполнения, чтобы продолжить.
+      loading_secrets: Загрузка…
+      unable_to_load_secrets: Не удалось загрузить секреты
+      agent_location: Расположение агента
+      local: Local
+      cloud: Cloud
+      agent_harness: Среда исполнения агента
+      host: Хост
+      environment: Окружение
+      base_model: Базовая модель
+      recommend_selecting_environment: Рекомендуем выбрать окружение для облачных агентов.
+      recommend_creating_environment: Рекомендуем создать окружение для облачных агентов.
+    ambient:
+      auth_secret:
+        search_placeholder: Найдите секреты или создайте новый
+        no_results: Секреты не найдены
+        loading: Загрузка…
+        load_failed: Не удалось загрузить секреты
+        skip_label: Пропустить (для опытных)
+        skip_description: Только если ваш ключ уже задан в окружении (например, внедрён как секрет Kubernetes)
+        search_helper_text: Секреты не найдены. Сохраните, чтобы использовать значение напрямую, или нажмите на ключ, чтобы добавить секрет.
+        name_placeholder: напр. Мой API-ключ
+        credentials_help: Введите ваши учётные данные ниже.
+        privacy_note: 'Ваши учётные данные зашифрованы сквозным шифрованием. '
+        share_with_team: Поделиться с командой
+        name_field_label: ИМЯ
+        back: Назад
+        cancel: Отмена
+        continue: Продолжить
+        button_tooltip: API-ключ
+        menu_header: API-ключ
+        sidecar_header: Выберите тип
+        no_secret_label: Наследовать ключ из окружения
+        new_item: Новый
+      harness:
+        button_tooltip: Среда исполнения агента
+        menu_header: Среда исполнения агента
+        locked_to_oz_tooltip: Этот диалог ведётся с агентом Warp, поэтому передача в облако также будет использовать Warp
+        disabled_tooltip: Отключено вашим администратором
+      host:
+        button_tooltip: Хост исполнения
+        menu_header: Хост исполнения
+        badge_default: По умолчанию
+        badge_connected: Подключён
+        badge_disconnected: Отключён
+        warp_display: Warp
+      model:
+        search_placeholder: Поиск моделей
+        button_tooltip: Выберите модель агента
+        no_results: Нет результатов
+        default: по умолчанию
   agent.message_bar:
 
   # ── Agent Output ──

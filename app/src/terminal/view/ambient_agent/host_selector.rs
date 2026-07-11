@@ -56,7 +56,7 @@ pub enum Host {
 impl Host {
     fn display_name(&self) -> &str {
         match self {
-            Host::Warp => "Warp",
+            Host::Warp => crate::menu_label("agent.ambient.host.warp_display", "Warp"),
             Host::SelfHosted { slug } => slug.as_str(),
         }
     }
@@ -107,7 +107,10 @@ impl HostSelector {
             ActionButton::new(initial_label, NakedHeaderButtonTheme)
                 .with_size(ButtonSize::AgentInputButton)
                 .with_menu(true)
-                .with_tooltip(BUTTON_TOOLTIP)
+                .with_tooltip(crate::menu_label(
+                    "agent.ambient.host.button_tooltip",
+                    BUTTON_TOOLTIP,
+                ))
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(HostSelectorAction::ToggleMenu);
@@ -283,11 +286,14 @@ fn build_menu_items(
     ctx: &mut ViewContext<HostSelector>,
 ) -> Vec<MenuItem<HostSelectorAction>> {
     let header = MenuItem::Header {
-        fields: MenuItemFields::new(MENU_HEADER_LABEL)
-            .with_font_size_override(HEADER_FONT_SIZE)
-            .with_override_text_color(header_text_color)
-            .with_padding_override(HEADER_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-            .with_no_interaction_on_hover(),
+        fields: MenuItemFields::new(crate::menu_label(
+            "agent.ambient.host.menu_header",
+            MENU_HEADER_LABEL,
+        ))
+        .with_font_size_override(HEADER_FONT_SIZE)
+        .with_override_text_color(header_text_color)
+        .with_padding_override(HEADER_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+        .with_no_interaction_on_hover(),
         clickable: false,
         right_side_fields: None,
     };
@@ -313,7 +319,13 @@ fn build_menu_items(
 
     let mut items = vec![header];
     if let Some(host) = default_host {
-        items.push(item_for(host.clone(), Some(DEFAULT_BADGE)));
+        items.push(item_for(
+            host.clone(),
+            Some(crate::menu_label(
+                "agent.ambient.host.badge_default",
+                DEFAULT_BADGE,
+            )),
+        ));
     }
     items.push(item_for(Host::Warp, None));
     let default_slug = match default_host {
@@ -329,7 +341,10 @@ fn build_menu_items(
     for host in &connected_hosts {
         items.push(item_for(
             Host::SelfHosted { slug: host.clone() },
-            Some(CONNECTED_BADGE),
+            Some(crate::menu_label(
+                "agent.ambient.host.badge_connected",
+                CONNECTED_BADGE,
+            )),
         ));
     }
     if let Host::SelfHosted { slug } = selected {
@@ -340,7 +355,10 @@ fn build_menu_items(
         if !is_default && !is_connected {
             items.push(item_for(
                 Host::SelfHosted { slug: slug.clone() },
-                Some(DISCONNECTED_BADGE),
+                Some(crate::menu_label(
+                    "agent.ambient.host.badge_disconnected",
+                    DISCONNECTED_BADGE,
+                )),
             ));
         }
     }

@@ -14,9 +14,43 @@ en:
   tab:
     rename: "Rename tab"
     reset_name: "Reset tab name"
-    close: "Close tab"
+    shared_session:
+      stop_sharing: Stop sharing
+      share_session: Share session
+      stop_sharing_all: Stop sharing all
+      copy_link: Copy link
+    metadata:
+      copy_tab_title: Copy tab title
+      copy_pane_title: Copy pane title
+      copy_tab_title_v2: Copy tab title
+      copy_branch: Copy branch
+      copy_working_directory: Copy working directory
+      copy_pull_request_link: Copy pull request link
+    modify:
+      rename_tab: Rename tab
+      reset_tab_name: Reset tab name
+      move_tab_down: Move Tab Down
+      move_tab_right: Move Tab Right
+      move_tab_up: Move Tab Up
+      move_tab_left: Move Tab Left
+    close:
 
   # ── Workspace / Toolbar ──
+      close_tab: Close tab
+      close_other_tabs: Close other tabs
+      close_tabs_below: Close Tabs Below
+      close_tabs_to_the_right: Close Tabs to the Right
+    config:
+      save_as_new_config: Save as new config
+    pin:
+      unpin_tab: Unpin tab
+      pin_tab: Pin tab
+    group:
+      new_group_with_tab: New group with tab
+    color:
+      default_no_color: Default (no color)
+    indicator:
+      cloud_agent_run_tooltip: Cloud agent run
   terminal:
     share_block:
       command: "Command"
@@ -55,6 +89,17 @@ en:
       fork: "Fork"
       fork_from_here: "Fork from here"
       rewind_to_before_here: "Rewind to before here"
+    auto_reload_settings_updated: Auto-reload settings updated
+    auto_reload_enable_failed: Failed to enable auto-reload. Please try updating your settings in Billing & usage.
+    auto_reload_when_enabled_prefix: 'When enabled, '
+    auto_reload_term: auto-reload
+    auto_reload_when_enabled_suffix: ' will automatically purchase your selected package when you run out. '
+    learn_more: Learn more
+    cancel: Cancel
+    saving: Saving...
+    enable: Enable
+    team_data_not_found: Oops, something went wrong; your team's data could not be found.
+    enable_auto_reload_title: Enable auto reload?
   workspace:
     settings: "Settings"
     agent: "Agent"
@@ -330,6 +375,27 @@ en:
   # ── Free AI Removal ──
   # ── Auth ──
   # ── Settings ──
+    choose_ai_execution_profile: Choose an AI execution profile
+    choose_agent_model: Choose an agent model
+    followups_use_original_model: Follow-ups use the original run's model
+    default_model: default
+    request_edit_access_to_change_model: Request edit access to change model
+    auto_select_best_model: auto-select the best model for the task
+    new_models_available: New models available
+    manage: Manage
+    manage_api_keys: Manage API keys
+    profiles: Profiles
+    manage_profiles: Manage profiles
+    custom_models: Custom models
+    cost: Cost
+    intelligence: Intelligence
+    speed: Speed
+    model_specs: Model Specs
+    model_specs_description: Warp’s benchmarks for how well a model performs in our harness, the rate at which it consumes credits, and task speed.
+    auto_mode: Auto mode
+    auto_mode_description: Auto will select the best model for the task. Cost-efficiency optimizes for cost, Responsiveness optimizes for response speed.
+    reasoning_level: Reasoning level
+    reasoning_level_description: Increased reasoning levels consume more credits and have higher latency, but higher performance for complicated tasks.
   settings:
     execution_profile:
       apply_code_diffs: "Apply code diffs:"
@@ -959,6 +1025,20 @@ en:
       export: "Export"
 
   # ── Code ──
+    auto_reload_enable_failed: Failed to enable auto-reload for your team. Please try again in Settings > Billing and Usage.
+    auto_reload: Auto reload
+    monthly_limit_reached_description_admin: Your monthly spend limit has been reached. Increase it to continue.
+    monthly_limit_reached_description_member: Contact a team admin to increase monthly limit.
+    monthly_limit_reached: Monthly limit reached
+    manage_billing: Manage billing
+    out_of_credits: Out of credits
+    purchase_exceeds_limit_warning_prefix: 'Purchasing these credits would take you over your monthly spend limit. '
+    increase_limit: Increase it
+    to_continue: ' to continue.'
+    out_of_credits_description_admin: Add more credits to your account to continue using Oz agents.
+    out_of_credits_description_member: Contact a team admin to purchase more credits to continue.
+    buying: Buying…
+    buy: Buy
   code:
     discard_this_version: "Discard this version"
     overwrite: "Overwrite"
@@ -971,6 +1051,25 @@ en:
   # ── Launch Configs ──
   # ── Drive ──
   # ── Notebook ──
+    file_tree:
+      remote_text: The Project Explorer requires access to your local workspace, which isn’t supported in remote sessions.
+      disabled_text: The Project Explorer requires access to your local workspace. Open a new session or navigate to an active session to view.
+      wsl_text: The Project Explorer doesn't currently work in WSL.
+      unavailable_title: Project explorer unavailable
+      open_in_new_pane: Open in new pane
+      open_in_new_tab: Open in new tab
+      open_file: Open file
+      new_file: New file
+      cd_to_directory: cd to directory
+      open_in_new_tab_directory: Open in new tab
+      reveal_in_finder: Reveal in Finder
+      reveal_in_explorer: Reveal in Explorer
+      reveal_in_file_manager: Reveal in file manager
+      rename: Rename
+      delete: Delete
+      attach_as_context: Attach as context
+      copy_path: Copy path
+      copy_relative_path: Copy relative path
   notebook:
     context_menu:
       cut: "Cut"
@@ -983,6 +1082,42 @@ en:
       close_pane: "Close pane"
 
   # ── Onboarding ──
+    block_insertion:
+      embed: Embed
+      divider: Divider
+      insert_block_tooltip: Insert block
+    mermaid:
+      open_full_screen_label: Open full screen
+    code_block:
+      copy_label: Copy
+      run_in_terminal_label: Run in terminal
+    file_pane:
+      refresh_file: Refresh file
+      open_in_editor: Open in editor
+      try_again_label: Try again
+      missing_source_file: Missing source file
+    save:
+      secrets_in_content_toast: This notebook cannot be saved because its content contains secrets
+      secrets_in_title_toast: This notebook cannot be saved because its title contains secrets
+    pane_header_overflow:
+      attach_to_active_session: Attach to active session
+      copy_link: Copy link
+      open_on_desktop: Open on Desktop
+      duplicate: Duplicate
+      export: Export
+      trash: Trash
+    trash:
+      restore_tooltip: Restore notebook from trash
+      restore_label: Restore
+      copy_to_personal_tooltip: Copy notebook contents into your personal workspace
+      copy_to_personal_label: Copy to Personal
+    conflict:
+      copy_all_tooltip: Copy notebook contents to your clipboard
+      copy_all_label: Copy All
+      refresh_tooltip: Refresh notebook
+      refresh_label: Refresh
+    link:
+      copied_toast: Link copied to clipboard
   onboarding:
     agent_slide:
       autonomy: "Autonomy"
@@ -1679,6 +1814,66 @@ en:
     creator_unknown: "Unknown"
     copied_branch_name: "Copied branch name"
   # ── Agent Message Bar ──
+    orchestration:
+      env_none_label: Empty environment
+      default_model_label: Default model
+      skip_advanced: Skip (advanced)
+      api_key: API key
+      new_api_key: New API key…
+      opencode_not_supported_cloud: OpenCode is not supported on Cloud yet. Switch to Local or pick a different harness.
+      disabled_by_administrator: Disabled by your administrator
+      new_environment: New environment
+      select_api_key_to_continue: Select an API key for this harness to continue.
+      loading_secrets: Loading…
+      unable_to_load_secrets: Unable to load secrets
+      agent_location: Agent location
+      local: Local
+      cloud: Cloud
+      agent_harness: Agent harness
+      host: Host
+      environment: Environment
+      base_model: Base model
+      recommend_selecting_environment: We recommend selecting an environment for cloud agents.
+      recommend_creating_environment: We recommend creating an environment for cloud agents.
+    ambient:
+      auth_secret:
+        search_placeholder: Search secrets or create a new one
+        no_results: No secrets found
+        loading: Loading…
+        load_failed: Unable to load secrets
+        skip_label: Skip (advanced)
+        skip_description: Only if your key is already set in the environment (e.g. injected as a Kubernetes secret)
+        search_helper_text: No secrets found. Save to use this value directly or click the key to add a secret.
+        name_placeholder: e.g. My API Key
+        credentials_help: Enter your credentials below.
+        privacy_note: "Your credentials are encrypted end-to-end. "
+        share_with_team: Share with team
+        name_field_label: NAME
+        back: Back
+        cancel: Cancel
+        continue: Continue
+        button_tooltip: API key
+        menu_header: API key
+        sidecar_header: Choose a type
+        no_secret_label: Inherit key from environment
+        new_item: New
+      harness:
+        button_tooltip: Agent harness
+        menu_header: Agent harness
+        locked_to_oz_tooltip: This conversation is with the Warp Agent, so the cloud handoff will also use Warp
+        disabled_tooltip: Disabled by your administrator
+      host:
+        button_tooltip: Execution host
+        menu_header: Execution host
+        badge_default: Default
+        badge_connected: Connected
+        badge_disconnected: Disconnected
+        warp_display: Warp
+      model:
+        search_placeholder: Search models
+        button_tooltip: Choose agent model
+        no_results: No results
+        default: default
   agent.message_bar:
 
   # ── Agent Output ──

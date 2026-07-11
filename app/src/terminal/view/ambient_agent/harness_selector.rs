@@ -95,7 +95,10 @@ impl HarnessSelector {
                 .with_size(ButtonSize::AgentInputButton)
                 .with_menu(true)
                 .with_disabled_theme(AgentInputButtonTheme)
-                .with_tooltip(BUTTON_TOOLTIP)
+                .with_tooltip(crate::menu_label(
+                    "agent.ambient.harness.button_tooltip",
+                    BUTTON_TOOLTIP,
+                ))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(HarnessSelectorAction::ToggleMenu);
                 })
@@ -225,9 +228,12 @@ impl HarnessSelector {
             button.set_disabled(is_locked_to_oz, ctx);
             button.set_tooltip(
                 Some(if is_locked_to_oz {
-                    "This conversation is with the Warp Agent, so the cloud handoff will also use Warp"
+                    crate::menu_label(
+                        "agent.ambient.harness.locked_to_oz_tooltip",
+                        "This conversation is with the Warp Agent, so the cloud handoff will also use Warp",
+                    )
                 } else {
-                    BUTTON_TOOLTIP
+                    crate::menu_label("agent.ambient.harness.button_tooltip", BUTTON_TOOLTIP)
                 }),
                 ctx,
             );
@@ -283,11 +289,14 @@ fn build_menu_items(
     disabled_text_color: pathfinder_color::ColorU,
 ) -> Vec<MenuItem<HarnessSelectorAction>> {
     let header = MenuItem::Header {
-        fields: MenuItemFields::new(MENU_HEADER_LABEL)
-            .with_font_size_override(HEADER_FONT_SIZE)
-            .with_override_text_color(header_text_color)
-            .with_padding_override(HEADER_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-            .with_no_interaction_on_hover(),
+        fields: MenuItemFields::new(crate::menu_label(
+            "agent.ambient.harness.menu_header",
+            MENU_HEADER_LABEL,
+        ))
+        .with_font_size_override(HEADER_FONT_SIZE)
+        .with_override_text_color(header_text_color)
+        .with_padding_override(HEADER_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+        .with_no_interaction_on_hover(),
         clickable: false,
         right_side_fields: None,
     };
@@ -312,7 +321,10 @@ fn build_menu_items(
             fields = fields
                 .with_disabled(true)
                 .with_override_text_color(disabled_text_color)
-                .with_tooltip("Disabled by your administrator");
+                .with_tooltip(crate::menu_label(
+                    "agent.ambient.harness.disabled_tooltip",
+                    "Disabled by your administrator",
+                ));
         }
         items.push(MenuItem::Item(fields));
     }
