@@ -9,14 +9,14 @@ use super::{
 };
 use crate::tui_builder::TuiUiBuilder;
 
-fn render_at_height(snapshot: TuiInlineMenuSnapshot, height: u16) -> Vec<String> {
+fn render_at_size(snapshot: TuiInlineMenuSnapshot, width: u16, height: u16) -> Vec<String> {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         app.read(move |ctx| {
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 render_inline_menu(&snapshot, &TuiUiBuilder::from_app(ctx)),
-                TuiRect::new(0, 0, 50, height),
+                TuiRect::new(0, 0, width, height),
                 ctx,
             );
             frame.buffer.to_lines()
@@ -24,6 +24,9 @@ fn render_at_height(snapshot: TuiInlineMenuSnapshot, height: u16) -> Vec<String>
     })
 }
 
+fn render_at_height(snapshot: TuiInlineMenuSnapshot, height: u16) -> Vec<String> {
+    render_at_size(snapshot, 50, height)
+}
 fn render(snapshot: TuiInlineMenuSnapshot) -> Vec<String> {
     render_at_height(snapshot, 12)
 }
@@ -251,9 +254,84 @@ fn long_slash_command_titles_are_ellipsized_before_the_description() {
 }
 
 #[test]
+fn wide_slash_command_rows_expand_to_show_long_titles() {
+    let lines = render_at_size(
+        TuiInlineMenuSnapshot {
+            header: None,
+            rows: vec![TuiInlineMenuRow {
+                title: "/respond-to-pr-comments-in-blocklist".to_owned(),
+                description: Some("Walk users through PR review comments".to_owned()),
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::SlashCommand,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+            max_visible_rows: 8,
+            status: None,
+        },
+        80,
+        1,
+    );
+
+    assert!(lines[0]
+        .starts_with("/respond-to-pr-comments-in-blocklist Walk users through PR review comments"));
+}
+
+#[test]
+fn boundary_width_preserves_useful_title_and_description_columns() {
+    let lines = render_at_size(
+        TuiInlineMenuSnapshot {
+            header: None,
+            rows: vec![TuiInlineMenuRow {
+                title: "/agent".to_owned(),
+                description: Some("Start a new agent conversation".to_owned()),
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::SlashCommand,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+            max_visible_rows: 8,
+            status: None,
+        },
+        20,
+        1,
+    );
+
+    assert!(lines[0].starts_with("/agent  Start a new"));
+}
+
+#[test]
+fn narrow_slash_command_rows_use_the_full_width_for_titles() {
+    let lines = render_at_size(
+        TuiInlineMenuSnapshot {
+            header: None,
+            rows: vec![TuiInlineMenuRow {
+                title: "/12345678901234567890".to_owned(),
+                description: Some("Description hidden at narrow widths".to_owned()),
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::SlashCommand,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+            max_visible_rows: 8,
+            status: None,
+        },
+        19,
+        1,
+    );
+
+    assert_eq!(lines[0], "/123456789012345...");
+}
+
+#[test]
 fn ellipsis_follows_wide_character_prefix_without_padding() {
     assert_eq!(
-        format_slash_command_title("/12345678901234567890123界suffix"),
+        format_slash_command_title("/12345678901234567890123界suffix", 29, true),
         "/12345678901234567890123...  "
     );
+}
+
+#[test]
+fn ellipsis_scales_down_for_extremely_narrow_titles() {
+    assert_eq!(format_slash_command_title("/agent", 2, false), "..");
 }
