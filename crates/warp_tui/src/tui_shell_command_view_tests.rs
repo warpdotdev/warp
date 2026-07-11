@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
@@ -9,9 +11,11 @@ use warpui::platform::WindowStyle;
 use warpui::AddWindowOptions;
 use warpui_core::elements::tui::{TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize};
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityIdMap, TuiView, ViewHandle};
+use warpui_core::{App, AppContext, EntityIdMap, TuiView, TypedActionView, ViewHandle};
 
-use super::{ShellCommandViewState, TuiShellCommandView};
+use super::{
+    ShellCommandViewState, TuiShellCommandView, TuiShellCommandViewAction, TuiShellCommandViewEvent,
+};
 use crate::test_fixtures::{add_test_action_model, TestHostView};
 
 #[test]
@@ -42,13 +46,28 @@ fn terminal_block_is_collapsed_by_default_and_expands_inline() {
         let terminal_model =
             terminal_model_with_command(&action, "printf result", "command output");
         let view = add_shell_view(&mut app, action, terminal_model);
+        let layout_invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = layout_invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&view, move |_, event, _| match event {
+                TuiShellCommandViewEvent::LayoutInvalidated => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+            });
+        });
 
-        app.read(|app| {
+        let collapsed_height = app.read(|app| {
             let collapsed_lines = render_non_empty_lines(&view, 80, app);
             assert_eq!(collapsed_lines, vec!["✓ Ran `printf result`  ▸"]);
-            let collapsed_height = rendered_height(&view, 80, app);
+            rendered_height(&view, 80, app)
+        });
 
-            view.as_ref(app).state.toggle();
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| {
+                view.handle_action(&TuiShellCommandViewAction::ToggleExpanded, ctx);
+            });
+        });
+        app.read(|app| {
             let expanded_lines = render_non_empty_lines(&view, 80, app);
             assert_eq!(expanded_lines[0], "✓ Ran `printf result`  ▾");
             let terminal_content = expanded_lines[1..].join("");
@@ -57,6 +76,16 @@ fn terminal_block_is_collapsed_by_default_and_expands_inline() {
                 "{expanded_lines:?}"
             );
             assert!(rendered_height(&view, 80, app) > collapsed_height);
+        });
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| {
+                view.handle_action(&TuiShellCommandViewAction::ToggleExpanded, ctx);
+            });
+        });
+        app.read(|app| {
+            assert_eq!(rendered_height(&view, 80, app), collapsed_height);
+            assert_eq!(layout_invalidations.get(), 2);
         });
     });
 }
@@ -86,7 +115,7 @@ fn add_shell_view(
             },
             |_| TestHostView,
         );
-        ctx.add_tui_view(window_id, move |_| {
+        ctx.add_typed_action_tui_view(window_id, move |_| {
             TuiShellCommandView::new(action, false, action_model, terminal_model)
         })
     })

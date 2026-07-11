@@ -20,7 +20,7 @@ pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
 };
-pub use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+pub use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 pub use crate::ai::blocklist::block::model::{
     AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
 };

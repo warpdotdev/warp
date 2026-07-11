@@ -12,18 +12,19 @@ use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
     build_slash_command_mixer, detect_possible_git_repo, saved_prompt_text_for_id,
     slash_command_is_submitted_as_prompt, slash_command_selection_behavior, slash_commands,
-    throttle, AIAgentPtyWriteMode, AcceptSlashCommandOrSavedPrompt, ActiveSession,
+    throttle, AIAgentActionId, AIAgentPtyWriteMode, AcceptSlashCommandOrSavedPrompt, ActiveSession,
     ActiveSessionEvent, AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CancellationReason,
-    ChangelogModel, ChangelogModelEvent, ChangelogRequestType, CommandExecutionSource,
-    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
-    ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
-    GitStatusMetadata, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent, PtyIntentEvent,
-    RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
-    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
-    TuiZeroStateDataSource, COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CLISubagentEvent,
+    CancellationReason, ChangelogModel, ChangelogModelEvent, ChangelogRequestType,
+    CommandExecutionSource, ConversationSelection, ConversationSelectionHandle,
+    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
+    GitRepoStatusModel, GitStatusMetadata, LLMPreferences, LLMPreferencesEvent, ModelEvent,
+    PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
+    ShellCommandExecutorEvent, SlashCommandDataSource as _, SlashCommandSelectionBehavior,
+    StaticCommand, TerminalModel, TerminalSurface, TerminalSurfaceInit, TuiSlashCommandDataSource,
+    TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, COMMAND_REGISTRY,
+    WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
@@ -96,6 +97,24 @@ const NEW_CONVERSATION_COMMAND_RUNNING_HINT: &str =
 /// Footer hint shown while the input is in `!` shell mode.
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
+/// Keeps an agent-requested command's canonical block out of the TUI's
+/// top-level transcript. The shell-command action embeds the block's terminal
+/// content inside its own disclosure, so the canonical block must have zero
+/// layout height even after the shared CLI-subagent transition unhides it for
+/// the GUI's adjacent-block presentation.
+fn hide_agent_requested_command_from_top_level(
+    model: &Arc<FairMutex<TerminalModel>>,
+    action_id: Option<&AIAgentActionId>,
+) -> bool {
+    let Some(action_id) = action_id else {
+        return false;
+    };
+    model
+        .lock()
+        .block_list_mut()
+        .set_visibility_of_block_for_ai_action(action_id, false);
+    true
+}
 
 /// Typed actions handled by [`TuiTerminalSessionView`].
 #[derive(Debug, Clone)]
@@ -222,6 +241,21 @@ impl TuiTerminalSessionView {
                 terminal_surface_id,
                 ctx,
             )
+        });
+        let model_for_cli_subagent_events = model.clone();
+        ctx.subscribe_to_model(&cli_subagent_controller, move |_, _, event, ctx| {
+            if let CLISubagentEvent::SpawnedSubagent {
+                initial_requested_command_action_id,
+                ..
+            } = event
+            {
+                if hide_agent_requested_command_from_top_level(
+                    &model_for_cli_subagent_events,
+                    initial_requested_command_action_id.as_ref(),
+                ) {
+                    ctx.notify();
+                }
+            }
         });
         let transcript = ctx.add_typed_action_tui_view(|ctx| {
             TuiTranscriptView::new(
@@ -1196,3 +1230,7 @@ impl TerminalSurface for TuiTerminalSessionView {
         ctx.notify();
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_session_view_tests.rs"]
+mod tests;

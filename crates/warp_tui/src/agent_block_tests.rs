@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,9 +24,10 @@ use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext, ViewHandle};
 
-use super::{TuiAIBlock, TuiAIBlockSection};
+use super::{TuiAIBlock, TuiAIBlockEvent, TuiAIBlockSection, TuiToolCallView};
 use crate::agent_block_sections::render_fallback_tool_call_section;
 use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
+use crate::tui_shell_command_view::TuiShellCommandViewAction;
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
@@ -377,6 +379,48 @@ fn agent_block_desired_height_accounts_for_tool_call_stub() {
     });
 }
 
+#[test]
+fn shell_command_disclosure_invalidates_agent_block_layout() {
+    App::test((), |mut app| async move {
+        let action = test_command_action("action-1", "printf result");
+        let action_id = action.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", action)]),
+            },
+        );
+        let layout_invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = layout_invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::LayoutInvalidated => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        let shell_view = app.read(|ctx| {
+            let Some(TuiToolCallView::ShellCommand(view)) =
+                block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("shell-command child view");
+            };
+            view.clone()
+        });
+        app.update(|ctx| {
+            let window_id = shell_view.window_id(ctx);
+            ctx.dispatch_typed_action_for_view(
+                window_id,
+                shell_view.id(),
+                &TuiShellCommandViewAction::ToggleExpanded,
+            );
+        });
+
+        assert_eq!(layout_invalidations.get(), 1);
+    });
+}
 #[test]
 fn agent_block_ignores_unsupported_message_variants() {
     App::test((), |mut app| async move {

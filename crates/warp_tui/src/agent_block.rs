@@ -26,7 +26,7 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, EntityId, ModelHandle, TuiView, ViewContext, ViewHandle};
 
 use super::tui_file_edits_view::TuiFileEditsView;
-use super::tui_shell_command_view::TuiShellCommandView;
+use super::tui_shell_command_view::{TuiShellCommandView, TuiShellCommandViewEvent};
 use crate::agent_block_sections::{
     render_fallback_tool_call_section, render_input_section, render_plain_text_section,
     render_thinking_section,
@@ -275,8 +275,11 @@ impl TuiAIBlock {
             let action_id = action.id.clone();
             let action_model = action_model.clone();
             let terminal_model = self.terminal_model.clone();
-            let view = ctx.add_tui_view(|_| {
+            let view = ctx.add_typed_action_tui_view(|_| {
                 TuiShellCommandView::new(action, output_streaming, action_model, terminal_model)
+            });
+            ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
+                TuiShellCommandViewEvent::LayoutInvalidated => me.invalidate_layout(ctx),
             });
             self.action_views
                 .insert(action_id, TuiToolCallView::ShellCommand(view));
