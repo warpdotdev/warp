@@ -38,9 +38,9 @@ use warpui::elements::new_scrollable::{
 use warpui::elements::{
     resizable_state_handle, Align, Border, CacheOption, ChildAnchor, ChildView, Clipped,
     ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Flex, Hoverable, Image, List,
-    ListState, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Percentage, PositionedElementAnchor,
+    DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Expanded, Flex, Hoverable,
+    Image, List, ListState, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Percentage, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Rect, Resizable, ResizableStateHandle, SavePosition,
     ScrollOffset, ScrollStateHandle, ScrollbarWidth, Shrinkable, Stack, Text,
     DEFAULT_UI_LINE_HEIGHT_RATIO,
@@ -5376,7 +5376,8 @@ impl CodeReviewView {
     /// Renders the inline image preview for a binary image file
     /// (specs/GH12093/PRODUCT.md §2): a single image for added, deleted and
     /// renamed-without-changes files; the old and new image side by side for
-    /// modified files. A side that can't render an image shows its
+    /// modified files, each side taking exactly half of the available pane
+    /// content width. A side that can't render an image shows its
     /// side-specific note instead, so neither half of a comparison is
     /// silently hidden.
     fn render_image_preview(
@@ -5388,7 +5389,7 @@ impl CodeReviewView {
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_main_axis_size(MainAxisSize::Min);
+            .with_main_axis_size(MainAxisSize::Max);
         if let Some(old) = preview.old.as_ref() {
             let label = if both_sides {
                 Some(("Old", remove_color(appearance)))
@@ -5396,11 +5397,15 @@ impl CodeReviewView {
                 // Only the base side remains: the image was removed.
                 Some(("Removed", remove_color(appearance)))
             };
-            row.add_child(
-                Container::new(Self::render_image_preview_side(old, label, appearance))
-                    .with_margin_right(24.)
-                    .finish(),
-            );
+            let side = Self::render_image_preview_side(old, label, appearance);
+            if both_sides {
+                row.add_child(
+                    Expanded::new(1., Container::new(side).with_margin_right(12.).finish())
+                        .finish(),
+                );
+            } else {
+                row.add_child(side);
+            }
         }
         if let Some(new) = preview.new.as_ref() {
             let label = if both_sides {
@@ -5412,7 +5417,14 @@ impl CodeReviewView {
                 // with the rename carried by the path/status presentation.
                 None
             };
-            row.add_child(Self::render_image_preview_side(new, label, appearance));
+            let side = Self::render_image_preview_side(new, label, appearance);
+            if both_sides {
+                row.add_child(
+                    Expanded::new(1., Container::new(side).with_margin_left(12.).finish()).finish(),
+                );
+            } else {
+                row.add_child(side);
+            }
         }
         row.finish()
     }
@@ -5422,9 +5434,10 @@ impl CodeReviewView {
         label: Option<(&'static str, ColorU)>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        /// Max rendered size for one preview side; larger images scale down
-        /// (aspect preserved), smaller ones render at natural size.
-        const MAX_RENDERED_WIDTH: f32 = 560.;
+        /// Max rendered height for one preview side. Width is bounded by the
+        /// available pane content (half of it for a two-sided comparison)
+        /// and by the image's natural size; taller/wider images scale down
+        /// with aspect preserved rather than being clipped.
         const MAX_RENDERED_HEIGHT: f32 = 280.;
 
         let theme = appearance.theme();
@@ -5468,7 +5481,11 @@ impl CodeReviewView {
                             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
                             .finish(),
                         )
-                        .with_max_width((*width as f32).min(MAX_RENDERED_WIDTH))
+                        // Cap at the natural size so small images never
+                        // upscale; the incoming constraint (pane or half-pane
+                        // width) bounds the box further and the contain-fit
+                        // scales the image down into it.
+                        .with_max_width(*width as f32)
                         .with_max_height((*height as f32).min(MAX_RENDERED_HEIGHT))
                         .finish(),
                     )
