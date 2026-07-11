@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use ai::skills::SkillProvider;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+#[cfg(not(target_family = "wasm"))]
+use repo_metadata::repositories::DetectedRepositories;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon as WarpIcon;
@@ -293,9 +295,6 @@ pub trait SlashCommandDataSource {
     /// conversation) on top of this baseline.
     fn base_availability(&self, ctx: &AppContext) -> Availability {
         let mut availability = Availability::empty();
-        if self.state().active_repo_root.is_some() {
-            availability |= Availability::REPOSITORY;
-        }
 
         let is_local = self
             .active_session()
@@ -304,6 +303,19 @@ pub trait SlashCommandDataSource {
             .is_some_and(|st| st == SessionType::Local);
         if is_local {
             availability |= Availability::LOCAL;
+        }
+
+        // Derive REPOSITORY from the *live* working directory rather than the
+        // cached `active_repo_root`. The cache is only refreshed after async git
+        // detection resolves, but the pwd-changed recompute runs immediately on
+        // `cd`; keying off the cache would leave repo-gated commands (e.g.
+        // `/pr-comments`) available in the stale window after leaving a repo.
+        // Repo roots are only tracked for local sessions, so this is gated on
+        // `is_local`. `active_repo_root` is retained solely as the recompute
+        // trigger that re-runs this once detection caches a newly-entered
+        // repo's root.
+        if is_local && self.cwd_is_in_repository(ctx) {
+            availability |= Availability::REPOSITORY;
         }
 
         if !self
@@ -324,6 +336,30 @@ pub trait SlashCommandDataSource {
         }
 
         availability
+    }
+
+    /// Whether the active session's current working directory is inside a
+    /// detected git repository. Uses the live cwd (not the cached
+    /// `active_repo_root`) so REPOSITORY-gated commands update immediately on
+    /// `cd`, without waiting for async repo detection to resolve. Delegates path
+    /// membership to `DetectedRepositories`, reusing its centralized
+    /// canonicalization + ancestor walk.
+    #[cfg(not(target_family = "wasm"))]
+    fn cwd_is_in_repository(&self, ctx: &AppContext) -> bool {
+        self.active_session()
+            .as_ref(ctx)
+            .current_working_directory_location(ctx)
+            .is_some_and(|cwd| {
+                DetectedRepositories::as_ref(ctx)
+                    .get_root_for_path(&cwd)
+                    .is_some()
+            })
+    }
+
+    /// Repo detection is not wired up on wasm, so no directory is ever in a repo.
+    #[cfg(target_family = "wasm")]
+    fn cwd_is_in_repository(&self, _ctx: &AppContext) -> bool {
+        false
     }
 
     /// Whether a command should be shown given the availability set and the shared gates.
