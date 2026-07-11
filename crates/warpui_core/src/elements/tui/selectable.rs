@@ -10,6 +10,7 @@
 //! shared across element rebuilds.
 
 use std::ops::Range;
+use std::time::Duration;
 
 use string_offset::{ByteOffset, CharOffset};
 
@@ -32,6 +33,12 @@ pub use state::TuiSelectionHandle;
 
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
 type CopyCallback = Box<dyn FnMut(String, &mut TuiEventContext, &AppContext)>;
+
+/// How long between continuous auto-scroll steps while a drag is held past an
+/// edge. Each repaint tick advances the scroll one row and extends the
+/// selection toward that edge.
+const AUTO_SCROLL_INTERVAL: Duration = Duration::from_millis(50);
+
 /// A content row range before layout and its height afterward.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiRowResize {
@@ -121,6 +128,39 @@ where
         self.smart_select_fn = smart_select_fn;
         self
     }
+    /// Advances a parked-past-edge drag one auto-scroll step: re-resolves the
+    /// selection edge at the last drag position (which scrolls the viewport one
+    /// row) and extends the focus toward that edge. Disarms once the focus stops
+    /// advancing, i.e. the content start/end has been reached.
+    fn tick_auto_scroll(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        if !self.selection.is_selecting() {
+            return;
+        }
+        let Some(target) = self.selection.auto_scroll_target() else {
+            return;
+        };
+        let Some(interaction) = self.selection.interaction() else {
+            return;
+        };
+        let Some(focus_span) = self.selection_span_at(
+            target.position,
+            interaction.selection_type,
+            target.area,
+            true,
+            ctx,
+            app,
+        ) else {
+            return;
+        };
+        // The parked pointer no longer produces a new edge: content boundary
+        // reached, so stop ticking (and repainting).
+        if self.selection.focus_span() == Some(focus_span) {
+            self.selection.clear_auto_scroll();
+            return;
+        }
+        self.selection.update_focus(focus_span);
+    }
+
     /// Resolves one screen position into the configured selection unit.
     fn selection_span_at(
         &mut self,
@@ -216,6 +256,10 @@ where
         // Width changes rewrap content and invalidate grid-coordinate selections.
         // Clear first so child layout cannot rebase already-stale row positions.
         self.selection.validate_width(constraint.max.width);
+        // Advance a held-past-edge drag before laying out, so this frame renders
+        // at the newly scrolled position. Uses the previous frame's resolved
+        // viewport; the child layout below reconciles content for the new scroll.
+        self.tick_auto_scroll(ctx, app);
         let size = self.child.layout(constraint, ctx, app);
         self.selection
             .rebase_for_row_resizes(self.child.take_selection_row_resizes());
@@ -226,6 +270,12 @@ where
         self.child.render(area, buffer, ctx);
         self.child
             .render_selection(&self.selection, area, buffer, ctx);
+        // Keep the frames coming while a drag is parked past an edge, so
+        // auto-scroll continues even without new mouse events. The layout tick
+        // disarms this once the content boundary is reached.
+        if self.selection.is_selecting() && self.selection.auto_scroll_target().is_some() {
+            ctx.repaint_after(AUTO_SCROLL_INTERVAL);
+        }
     }
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         self.child.cursor_position(area, ctx)
@@ -281,6 +331,14 @@ where
                 let Some(interaction) = self.selection.interaction() else {
                     return false;
                 };
+                // Arm/disarm continuous auto-scroll: while the pointer is held
+                // past the top or bottom edge, later repaint ticks keep
+                // scrolling and extending the selection even without new events.
+                if position.y < area.y || position.y >= area.bottom() {
+                    self.selection.set_auto_scroll(*position, area);
+                } else {
+                    self.selection.clear_auto_scroll();
+                }
                 let Some(focus_span) = self.selection_span_at(
                     *position,
                     interaction.selection_type,
@@ -306,6 +364,7 @@ where
             }
             TuiEvent::LeftMouseUp { .. } if self.selection.is_selecting() => {
                 self.selection.finish();
+                self.selection.clear_auto_scroll();
                 let text = self
                     .selection
                     .range()

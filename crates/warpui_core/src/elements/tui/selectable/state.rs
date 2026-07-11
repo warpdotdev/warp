@@ -4,8 +4,18 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::{TuiGridPoint, TuiRowResize, TuiSelectionSpan};
+use super::{TuiGridPoint, TuiPoint, TuiRect, TuiRowResize, TuiSelectionSpan};
 use crate::text::SelectionType;
+
+/// The parked-pointer target that drives continuous auto-scroll while a drag
+/// gesture is held past an edge of the selectable's slot. Records the last
+/// drag position and the slot rect it was resolved against, so a repaint tick
+/// can re-resolve the selection edge without a new mouse event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TuiAutoScrollTarget {
+    pub(crate) position: TuiPoint,
+    pub(crate) area: TuiRect,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TuiSelectionState {
@@ -15,6 +25,10 @@ struct TuiSelectionState {
     is_selecting: bool,
     width: u16,
     cell_snapshot: BTreeMap<TuiGridPoint, String>,
+    /// Set while the gesture is held past an edge; drives continuous
+    /// auto-scroll on repaint ticks. Cleared when the pointer returns inside,
+    /// when the gesture ends, or when scrolling reaches the content boundary.
+    auto_scroll: Option<TuiAutoScrollTarget>,
 }
 
 impl TuiSelectionState {
@@ -67,7 +81,34 @@ impl TuiSelectionHandle {
             is_selecting: true,
             width,
             cell_snapshot: BTreeMap::new(),
+            auto_scroll: None,
         });
+    }
+
+    /// Returns the current focus span, if a gesture has established one.
+    pub(crate) fn focus_span(&self) -> Option<TuiSelectionSpan> {
+        self.0.borrow().as_ref().and_then(|s| s.focus_span)
+    }
+
+    /// Arms continuous auto-scroll toward the edge `position` sits past.
+    pub(crate) fn set_auto_scroll(&self, position: TuiPoint, area: TuiRect) {
+        if let Some(selection) = self.0.borrow_mut().as_mut() {
+            selection.auto_scroll = Some(TuiAutoScrollTarget { position, area });
+        }
+    }
+
+    /// Disarms continuous auto-scroll, returning whether it was armed.
+    pub(crate) fn clear_auto_scroll(&self) -> bool {
+        self.0
+            .borrow_mut()
+            .as_mut()
+            .and_then(|selection| selection.auto_scroll.take())
+            .is_some()
+    }
+
+    /// The armed parked-pointer auto-scroll target, if any.
+    pub(crate) fn auto_scroll_target(&self) -> Option<TuiAutoScrollTarget> {
+        self.0.borrow().as_ref().and_then(|s| s.auto_scroll)
     }
 
     /// Updates the selection focus while preserving existing glyph baselines.
@@ -83,6 +124,7 @@ impl TuiSelectionHandle {
     pub(crate) fn finish(&self) {
         if let Some(selection) = self.0.borrow_mut().as_mut() {
             selection.is_selecting = false;
+            selection.auto_scroll = None;
         }
     }
 
@@ -128,7 +170,12 @@ impl TuiSelectionHandle {
                 .get(point)
                 .is_some_and(|previous| previous != symbol)
         });
-        if changed {
+        // An in-progress gesture is authoritative and follows the pointer; a
+        // cosmetic re-render (e.g. auto-scroll during a drag-past-edge, or
+        // streaming content behind the drag) must not clear it. Only invalidate
+        // a settled selection, whose highlight would otherwise point at content
+        // that has since changed underneath it.
+        if changed && !selection.is_selecting {
             *slot = None;
             return false;
         }
