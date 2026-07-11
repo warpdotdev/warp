@@ -378,6 +378,14 @@ Built-in callers wrap their existing `LspServerConfig` in `LspServerConfigKind::
 
 **No settings-group subscription.** The manager does not subscribe to `LanguageServersSettingsChangedEvent`. Per product.md invariant 19 — and matching the existing built-in behavior where the only path to `LspServerModel::restart()` is the user-initiated footer action at `app/src/code/local_code_editor.rs:1323` — config edits do not trigger any automatic action. Descriptors live in `LanguageServersSettings::as_ref(ctx)` and are read on demand at file-open time (Phase 4's dispatch path). New entries take effect on the next matching file open; edited entries take effect on the next launch the user triggers (close-and-reopen, or an explicit restart action that already exists for built-ins).
 
+**A custom (re)launch always rebuilds config from current settings — never reuses a running model's copy.** This is what makes invariants 8/19 mechanically hold given `ServerKey::Custom(name)` duplicate detection:
+
+- While a custom model is **live**, its config is frozen (invariant 19), and duplicate detection by `ServerKey::Custom(name)` correctly suppresses registering a second model for that name — so edits do not disturb it.
+- When the last editor pane for a filetype closes, the custom model is **stopped and removed from the workspace vec** (not left registered). Because the slot is gone, the ServerKey check no longer matches, so the next matching file open **re-registers fresh**, constructing `CustomLspServerConfig` from the *current* descriptor in `LanguageServersSettings` (looked up by name). This is the "close-and-reopen picks up new values" path.
+- The **restart action**, for a custom, does not reuse the model's stored config: it re-looks-up the descriptor by name in `LanguageServersSettings` and rebuilds `CustomLspServerConfig` before respawn (built-ins rebuild from their static `LSPServerType`, unchanged). If the name is no longer present in settings, restart tears the model down without respawning.
+
+So a live server keeps its launch-time config, and every path that starts a new process — reopen after teardown, or restart — rehydrates from settings; there is no path that respawns a stale custom config.
+
 **Tests.** Manager unit tests covering custom-server register/start/stop/remove (mirror existing built-in tests). Mock-LSP integration test: a small Rust binary in `crates/integration/test_fixtures/` that echoes JSON-RPC `initialize`/`initialized`/`shutdown` exchanges. Run it via a custom descriptor and verify the lifecycle, including a placeholder in `args` asserted substituted before spawn (invariant 7). Covers invariants 7, 16, 17, 18 for the custom path.
 
 **Pause for review after Phase 3.**
@@ -459,9 +467,14 @@ CREATE TABLE workspace_language_server (
     enabled TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'BuiltIn'
 );
+-- The uniqueness/upsert key becomes the full triple. The pre-existing unique
+-- index on (workspace_id, language_server_name) is dropped and recreated to
+-- include kind, so a custom row and a built-in row that share a name coexist:
+CREATE UNIQUE INDEX workspace_language_server_key
+    ON workspace_language_server (workspace_id, kind, language_server_name);
 ```
 
-Built-in rows: `kind = 'BuiltIn'`, `language_server_name` = serialized `LSPServerType` variant name (`"RustAnalyzer"`, `"GoPls"`, etc.). Custom rows: `kind = 'Custom'`, `language_server_name = descriptor.name` (e.g. `"ruby-lsp"`). The `(workspace_id, kind, language_server_name)` triple is the effective key — built-in and custom rows occupy disjoint subspaces, so a custom can carry the same string as a built-in variant name without an on-disk conflict. A custom may share a built-in's name (the by-name override, product.md invariant 3); the `kind` triple keeps its enable/disable rows disjoint from the built-in's even when the names coincide.
+Built-in rows: `kind = 'BuiltIn'`, `language_server_name` = serialized `LSPServerType` variant name (`"RustAnalyzer"`, `"GoPls"`, etc.). Custom rows: `kind = 'Custom'`, `language_server_name = descriptor.name` (e.g. `"ruby-lsp"`). The `(workspace_id, kind, language_server_name)` triple is the effective key — built-in and custom rows occupy disjoint subspaces, so a custom can carry the same string as a built-in variant name without an on-disk conflict. A custom may share a built-in's name (the by-name override, product.md invariant 3); the `kind` triple keeps its enable/disable rows disjoint from the built-in's even when the names coincide. **This requires `kind` in every predicate, not just conceptually:** the migration widens the unique index to the triple (above), the upsert's `ON CONFLICT` target is `(workspace_id, kind, language_server_name)`, and every read `WHERE` filters on `kind` alongside workspace and name. The pre-existing path keyed only on `(workspace_id, language_server_name)` is updated at each site the compiler surfaces. A regression test covers a custom named exactly a serialized built-in variant (e.g. `RustAnalyzer`): enabling/disabling that custom must not read or overwrite the built-in `RustAnalyzer` row for the same workspace, and vice versa.
 
 **Persistence event shape.** Application code writes enablement state by emitting the existing `ModelEvent::UpsertWorkspaceLanguageServer` (`app/src/persistence/mod.rs:378`), whose payload changes from `lsp_type: LSPServerType` to the shared key:
 
