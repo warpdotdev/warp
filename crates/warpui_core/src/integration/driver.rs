@@ -19,8 +19,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use futures::{Future, FutureExt};
 use instant::{Duration, Instant};
+use warp_errors::report_error;
 
 use crate::integration::step::PersistedDataMap;
 use crate::platform::TerminationMode;
@@ -438,11 +440,10 @@ impl TestDriver {
             let path = artifacts::get_artifacts(step_data_map)
                 .map(|artifacts| artifacts.path(&filename))
                 .unwrap_or_else(|| PathBuf::from(&filename));
-            if let Err(e) = video_recorder::save_captured_frame_as_png(&frame, &path) {
-                log::error!(
-                    "VideoRecorder: failed to save screenshot to {}: {e}",
-                    path.display()
-                );
+            if let Err(e) = video_recorder::save_captured_frame_as_png(&frame, &path)
+                .context("VideoRecorder: failed to save screenshot")
+            {
+                report_error!(e, extra: { "path" => %path.display() });
             } else {
                 log::info!("VideoRecorder: screenshot saved to {}", path.display());
             }
@@ -470,7 +471,7 @@ impl TestDriver {
                 if let Some(ref dir) = artifacts_dir {
                     let output = dir.join("recording.mp4");
                     if let Err(e) = recorder.finalize(&output, overlay_log.as_ref()) {
-                        log::error!("VideoRecorder: finalization failed: {e}");
+                        report_error!(e.context("VideoRecorder: finalization failed"));
                     }
                 }
             }
@@ -479,8 +480,11 @@ impl TestDriver {
         if let Some(ref dir) = artifacts_dir {
             let log_output = dir.join("recording.log");
             if let Some(action_log) = action_log::get_action_log(step_data_map) {
-                if let Err(e) = action_log.write_to_file(&log_output) {
-                    log::error!("ActionLog: finalization failed: {e}");
+                if let Err(e) = action_log
+                    .write_to_file(&log_output)
+                    .context("ActionLog: finalization failed")
+                {
+                    report_error!(e);
                 }
             }
         }
@@ -501,14 +505,16 @@ impl TestDriver {
 
     fn export_runtime_tags(&self) {
         if let Ok(output_file) = std::env::var("RUNTIME_TAGS_OUTPUT_FILE") {
-            match serde_json::to_string_pretty(&self.persisted_data) {
-                Ok(json_content) => match std::fs::write(&output_file, json_content) {
+            match serde_json::to_string_pretty(&self.persisted_data)
+                .context("Failed to serialize runtime tags to JSON")
+            {
+                Ok(json_content) => match std::fs::write(&output_file, json_content)
+                    .context("Failed to write runtime tags to file")
+                {
                     Ok(_) => log::info!("Runtime tags exported to: {output_file}"),
-                    Err(e) => {
-                        log::error!("Failed to write runtime tags to file {output_file}: {e}")
-                    }
+                    Err(e) => report_error!(e, extra: { "file" => %output_file }),
                 },
-                Err(e) => log::error!("Failed to serialize runtime tags to JSON: {e}"),
+                Err(e) => report_error!(e),
             }
         } else {
             log::debug!("RUNTIME_TAGS_OUTPUT_FILE environment variable not set, skipping runtime tags export");

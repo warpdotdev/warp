@@ -12,6 +12,7 @@ use lazy_static::lazy_static;
 use pathfinder_geometry::vector::Vector2F;
 use thiserror::Error;
 use version_compare::Version;
+use warp_errors::report_error;
 use warpui_core::rendering::{GPUBackend, GPUDeviceInfo, GPUDeviceType};
 use wgpu::{
     Adapter, Backend, CompositeAlphaMode, CurrentSurfaceTexture, Device, DeviceType, PresentMode,
@@ -414,10 +415,9 @@ fn is_older_nvidia_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
 
     let Some(version) = Version::from(&adapter_info.driver_info) else {
         // Log an error so we know this occurred and can improve the logic as-needed.
-        log::error!(
-            "Unable to parse Vulkan-backed Nvidia adapter version {:?}; de-prioritizing out of an \
-            abundance of caution.",
-            adapter_info.driver_info
+        report_error!(
+            "Unable to parse Vulkan-backed Nvidia adapter version; de-prioritizing",
+            extra: { "driver_info" => ?adapter_info.driver_info }
         );
         return true;
     };
@@ -443,9 +443,9 @@ fn is_newer_nondx12_nvidia_adapter_on_windows(adapter_info: &wgpu::AdapterInfo) 
 
     let Some(version) = Version::from(&adapter_info.driver_info) else {
         // Log an error so we know this occurred and can improve the logic as-needed.
-        log::error!(
-            "Unable to parse Nvidia adapter version {:?} adapter_info.driver_info",
-            adapter_info.driver_info
+        report_error!(
+            "Unable to parse Nvidia adapter version",
+            extra: { "driver_info" => ?adapter_info.driver_info }
         );
         return false;
     };
@@ -578,8 +578,9 @@ fn is_older_lavapipe_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
 fn mesa_driver_version_is_below_minimum(info_str: &str, min_version: &Version) -> bool {
     let &[name, version, ..] = info_str.splitn(3, ' ').collect_vec().as_slice() else {
         // Log an error so we know this occurred and can improve the logic as-needed.
-        log::error!(
-            "Encountered Mesa driver info {info_str:?} with an unexpected format! (too few parts)"
+        report_error!(
+            "Encountered Mesa driver info with an unexpected format (too few parts)",
+            extra: { "info" => ?info_str }
         );
         return false;
     };
@@ -587,8 +588,9 @@ fn mesa_driver_version_is_below_minimum(info_str: &str, min_version: &Version) -
     // Perform an extra check that we parsed the driver info string properly.
     if name.trim() != "Mesa" {
         // Log an error so we know this occurred and can improve the logic as-needed.
-        log::error!(
-            "Encountered Mesa driver info {info_str:?} with an unexpected format! (name != Mesa)"
+        report_error!(
+            "Encountered Mesa driver info with an unexpected format (name != Mesa)",
+            extra: { "info" => ?info_str }
         );
         return false;
     }
@@ -600,8 +602,9 @@ fn mesa_driver_version_is_below_minimum(info_str: &str, min_version: &Version) -
     };
     let Some(version) = Version::from_manifest(version, &manifest) else {
         // Log an error so we know this occurred and can improve the logic as-needed.
-        log::error!(
-            "Unable to parse Mesa version {version:?}; de-prioritizing out of an abundance of caution."
+        report_error!(
+            "Unable to parse Mesa version; de-prioritizing",
+            extra: { "version" => ?version }
         );
         return true;
     };

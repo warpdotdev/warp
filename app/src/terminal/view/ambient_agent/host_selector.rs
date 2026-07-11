@@ -6,6 +6,7 @@ use settings::Setting as _;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
     ParentOffsetBounds, Stack,
@@ -19,7 +20,6 @@ use crate::ai::blocklist::inline_action::orchestration_controls::ORCHESTRATION_W
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, TooltipAlignment,

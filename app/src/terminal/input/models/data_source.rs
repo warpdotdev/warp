@@ -16,7 +16,9 @@ use warpui::platform::{Cursor, OperatingSystem};
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _};
+use warpui::{
+    AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
+};
 
 use super::model_spec_scores::{
     render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
@@ -26,8 +28,8 @@ use super::model_spec_scores::{
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
-    is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,
-    LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
+    byo_key_source_for_model, should_show_bedrock_icon_for_model, should_show_key_icon_for_model,
+    ByoKeySource, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
 };
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
@@ -146,6 +148,23 @@ impl ModelSelectorDataSource {
             terminal_view_id,
             ambient_agent_view_model,
         }
+    }
+
+    /// Attaches an ambient agent view model after construction so the picker treats this pane as a
+    /// cloud pane, which changes the listed models (custom-endpoint models are suppressed; see
+    /// [`Self::include_model_in_picker`]). Used on the shared-session viewer path where the model
+    /// is created lazily at `SessionJoined`. Idempotent: a no-op when a model is already set. The
+    /// next `run_query` (menu open / typing) picks up the new value.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        self.ambient_agent_view_model = Some(ambient_agent_view_model);
+        ctx.notify();
     }
 
     /// Returns whether a model should appear in the inline picker.
@@ -273,9 +292,9 @@ struct ModelSearchItem {
     spec: Option<LLMSpec>,
     leading_icon: Icon,
     credential_icon: Option<Icon>,
+    byo_key_source: Option<ByoKeySource>,
     display_text: String,
     is_selected: bool,
-    is_custom_endpoint: bool,
     is_custom_router: bool,
     /// Source/routing description for custom model routers (from `LLMInfo.description`).
     description: Option<String>,
@@ -295,20 +314,16 @@ impl ModelSearchItem {
         // If the model requires an upgrade but the user already has a BYOK key
         // for this provider, treat it as enabled by clearing the disable reason.
         let disable_reason = if llm.disable_reason == Some(DisableReason::RequiresUpgrade)
-            && is_using_api_key_for_provider(&llm.provider, app)
+            && should_show_key_icon_for_model(llm, app)
         {
             None
         } else {
             llm.disable_reason.clone()
         };
-        let is_custom_endpoint = LLMPreferences::as_ref(app)
-            .custom_llm_info_for_id(&llm.id)
-            .is_some();
         let is_custom_router = is_custom_router_id(llm.id.as_str());
         let is_auto = is_auto(llm);
         let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
-        let is_using_api_key =
-            is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
+        let byo_key_source = byo_key_source_for_model(llm, app);
         let leading_icon = if is_using_bedrock {
             Icon::Aws
         } else if is_custom_router {
@@ -316,7 +331,7 @@ impl ModelSearchItem {
         } else {
             llm.provider.icon().unwrap_or(Icon::Oz)
         };
-        let credential_icon = if !is_using_bedrock && is_using_api_key {
+        let credential_icon = if !is_using_bedrock && byo_key_source.is_some() {
             Some(Icon::Key)
         } else {
             None
@@ -327,9 +342,9 @@ impl ModelSearchItem {
             spec: llm.spec.clone(),
             leading_icon,
             credential_icon,
+            byo_key_source,
             display_text: llm.display_name.clone(),
             is_selected: &llm.id == active_llm_id,
-            is_custom_endpoint,
             is_custom_router,
             description: llm.description.clone(),
             disable_reason,
@@ -474,7 +489,7 @@ impl SearchItem for ModelSearchItem {
 
         if should_show_discount_chip(
             self.discount_percentage,
-            is_using_api_key_for_provider(&self.provider, app) || self.is_using_bedrock,
+            self.credential_icon.is_some() || self.is_using_bedrock,
         ) {
             let discount_percentage = self.discount_percentage.unwrap_or(0.);
             let chip = Container::new(
@@ -544,9 +559,7 @@ impl SearchItem for ModelSearchItem {
         };
         let header = render_model_spec_header(title, description, app);
 
-        let is_using_api_key =
-            self.is_custom_endpoint || is_using_api_key_for_provider(&self.provider, app);
-        let cost_row = if self.is_using_bedrock || is_using_api_key {
+        let cost_row = if self.is_using_bedrock || self.byo_key_source.is_some() {
             let search_query = if self.is_using_bedrock {
                 "bedrock"
             } else {
@@ -584,6 +597,8 @@ impl SearchItem for ModelSearchItem {
                     "Inference may use Bedrock"
                 } else if self.is_using_bedrock {
                     "Inference via Bedrock"
+                } else if let Some(source) = self.byo_key_source {
+                    source.inference_label()
                 } else {
                     "Inference via API key"
                 },

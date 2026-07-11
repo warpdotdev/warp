@@ -52,6 +52,7 @@ thiserror.workspace = true
 url.workspace = true
 uuid.workspace = true
 warp_core.workspace = true
+warp_errors.workspace = true
 warp_graphql.workspace = true
 warp_isolation_platform.workspace = true
 warp_server_auth.workspace = true

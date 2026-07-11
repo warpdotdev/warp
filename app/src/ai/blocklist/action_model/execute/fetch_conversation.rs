@@ -1,6 +1,7 @@
 use ai::agent::action_result::FetchConversationResult;
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -95,7 +96,9 @@ fn materialize_conversation(
             })
         }
         Err(e) => {
-            log::error!("FetchConversation: failed to materialize YAML: {e}");
+            report_error!(
+                anyhow::anyhow!("{e}").context("FetchConversation: failed to materialize YAML")
+            );
             AIAgentActionResultType::FetchConversation(FetchConversationResult::Error(format!(
                 "Failed to materialize conversation: {e}"
             )))

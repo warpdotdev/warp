@@ -86,6 +86,29 @@ pub fn create_cloud_mode_view(
         log::warn!("Cloud mode view was created without an ambient agent view model");
         return (terminal_view, terminal_manager);
     };
+    wire_ambient_agent_session_events(&terminal_manager, &view_model, ctx);
+
+    (terminal_view, terminal_manager)
+}
+
+/// Wires an [`AmbientAgentViewModel`]'s session lifecycle events to the viewer
+/// [`shared_session::viewer::TerminalManager`] so the viewer connects/attaches to
+/// the right shared session as runs come and go:
+/// - [`AmbientAgentViewModelEvent::SessionReady`]: a freshly spawned run's session is
+///   ready, so connect the viewer to it (initial run).
+/// - [`AmbientAgentViewModelEvent::ExecutionSessionReady`]: a follow-up run started on a
+///   new VM after the previous one ended, so re-attach the viewer to the new session.
+///
+/// Shared by the compose path ([`create_cloud_mode_view`]) and the shared-session viewer
+/// path (`PaneGroup::create_shared_session_viewer`) so every ambient viewer re-attaches on
+/// follow-up runs — including a raw `shared_session` link join whose model is created lazily
+/// at `SessionJoined`.
+pub fn wire_ambient_agent_session_events(
+    terminal_manager: &ModelHandle<Box<dyn TerminalManager>>,
+    view_model: &ModelHandle<AmbientAgentViewModel>,
+    ctx: &mut AppContext,
+) {
+    let view_model = view_model.clone();
     terminal_manager.update(ctx, |_, ctx| {
         ctx.subscribe_to_model(&view_model, move |manager, view_model, event, ctx| {
             let Some(manager) = manager
@@ -133,8 +156,6 @@ pub fn create_cloud_mode_view(
             }
         });
     });
-
-    (terminal_view, terminal_manager)
 }
 
 /// Returns `true` when a cloud agent shared session is in any pre-first-exchange phase —
@@ -171,8 +192,15 @@ pub fn is_cloud_agent_pre_first_exchange(
 
     // Handoff panes enter agent view with `RestoreExistingConversation` because they restore the
     // forked conversation, not `CloudAgent`. The `is_local_to_cloud_handoff` flag is the
-    // authoritative "this is a cloud agent pane" signal for that path, so accept either.
-    if !origin.is_cloud_agent() && !view_model.is_local_to_cloud_handoff() {
+    // authoritative "this is a cloud agent pane" signal for that path. Shared-session viewers of
+    // an ambient run (raw link join / attach-to-running) enter agent view via
+    // `SharedSessionSelection` / `ThirdPartyCloudAgent`, so `is_shared_ambient_agent_session()` is
+    // the authoritative signal for that path — e.g. a post-death cloud follow-up spinning up a new
+    // VM must still count as pre-first-exchange so the setup progress + prompt-queuing UI render.
+    if !origin.is_cloud_agent()
+        && !view_model.is_local_to_cloud_handoff()
+        && !terminal_model.is_shared_ambient_agent_session()
+    {
         return false;
     }
 

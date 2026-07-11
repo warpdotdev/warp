@@ -1,7 +1,10 @@
 use std::time::{Duration, SystemTime};
 
+#[cfg(not(target_family = "wasm"))]
+use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui_core::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
@@ -141,6 +144,25 @@ impl GrokTokens {
             None => false,
         }
     }
+
+    /// Returns `true` when the token is known to be at or past its hard expiry.
+    /// Unlike [`Self::needs_refresh`] there is no lead time: a token expiring
+    /// soon but still valid reports `false`. Tokens with an unknown expiry are
+    /// never considered expired.
+    pub fn is_expired(&self) -> bool {
+        self.needs_refresh(Duration::ZERO)
+    }
+}
+
+/// Outcome of a Grok OAuth token refresh, delivered to each request blocked
+/// waiting on it so the request can either send with the freshly refreshed
+/// token or surface the failure instead of sending an expired one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrokRefreshOutcome {
+    /// The token was refreshed and the new value stored.
+    Refreshed,
+    /// The refresh failed; the stored token is unchanged (still expired).
+    Failed,
 }
 
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
@@ -171,11 +193,14 @@ pub struct ApiKeyManager {
     /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_allowed: bool,
-    /// Guards against overlapping Grok token refreshes: the proactive refresh
-    /// timer and the request-time safety net
-    /// (`ApiKeyManager::refresh_grok_tokens_if_needed`) can otherwise race.
+    /// Coordinates Grok token refreshes so only one runs at a time (shared by
+    /// the proactive refresh timer and the request-time blocking refresh in
+    /// `crate::grok_subscription`). `Some` means a refresh is in flight; the
+    /// vector holds the completion senders for any requests waiting on it (it
+    /// may be empty for a proactive refresh with no waiters). `None` means no
+    /// refresh is running. Always cleared when the refresh finishes.
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) grok_refresh_in_flight: bool,
+    pub(crate) grok_refresh_waiters: Option<Vec<oneshot::Sender<GrokRefreshOutcome>>>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     /// In-memory Gemini Enterprise (GEAP) credential state.
@@ -194,7 +219,7 @@ impl ApiKeyManager {
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
-            grok_refresh_in_flight: false,
+            grok_refresh_waiters: None,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             geap_credentials_state: GeapCredentialsState::Missing,
@@ -534,7 +559,8 @@ impl ApiKeyManager {
             Ok(json) => json,
             Err(e) => {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    log::error!("Failed to read API keys from secure storage: {e:#}");
+                    report_error!(anyhow::Error::new(e)
+                        .context("Failed to read API keys from secure storage"));
                 }
                 return ApiKeys::default();
             }
@@ -543,7 +569,7 @@ impl ApiKeyManager {
         match serde_json::from_str(&key_json) {
             Ok(keys) => keys,
             Err(e) => {
-                log::error!("Failed to deserialize API keys: {e:#}");
+                report_error!(anyhow::Error::new(e).context("Failed to deserialize API keys"));
                 ApiKeys::default()
             }
         }
@@ -553,7 +579,7 @@ impl ApiKeyManager {
         let json = match serde_json::to_string(&self.keys) {
             Ok(json) => json,
             Err(e) => {
-                log::error!("Failed to serialize API keys: {e:#}");
+                report_error!(anyhow::Error::new(e).context("Failed to serialize API keys"));
                 return;
             }
         };
@@ -571,7 +597,9 @@ impl ApiKeyManager {
                 return;
             }
             if let Err(e) = ctx.secure_storage().write_value(SECURE_STORAGE_KEY, &json) {
-                log::error!("Failed to write API keys to secure storage: {e:#}");
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to write API keys to secure storage")
+                );
             }
         });
     }
@@ -581,7 +609,8 @@ impl ApiKeyManager {
             Ok(json) => json,
             Err(e) => {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    log::error!("Failed to read Grok tokens from secure storage: {e:#}");
+                    report_error!(anyhow::Error::new(e)
+                        .context("Failed to read Grok tokens from secure storage"));
                 }
                 return None;
             }
@@ -590,7 +619,7 @@ impl ApiKeyManager {
         match serde_json::from_str(&json) {
             Ok(tokens) => Some(tokens),
             Err(e) => {
-                log::error!("Failed to deserialize Grok tokens: {e:#}");
+                report_error!(anyhow::Error::new(e).context("Failed to deserialize Grok tokens"));
                 None
             }
         }
@@ -603,7 +632,7 @@ impl ApiKeyManager {
         let payload = match self.grok_tokens.as_ref().map(serde_json::to_string) {
             Some(Ok(json)) => Some(json),
             Some(Err(e)) => {
-                log::error!("Failed to serialize Grok tokens: {e:#}");
+                report_error!(anyhow::Error::new(e).context("Failed to serialize Grok tokens"));
                 return;
             }
             None => None,
@@ -625,7 +654,8 @@ impl ApiKeyManager {
             };
             if let Err(e) = result {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    log::error!("Failed to persist Grok tokens to secure storage: {e:#}");
+                    report_error!(anyhow::Error::new(e)
+                        .context("Failed to persist Grok tokens to secure storage"));
                 }
             }
         });

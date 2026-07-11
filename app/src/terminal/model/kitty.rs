@@ -8,6 +8,8 @@ use base64::Engine;
 use flate2::read::ZlibDecoder;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
+#[cfg(feature = "local_fs")]
+use warp_errors::report_error;
 use warpui::assets::asset_cache::Asset;
 use warpui::image_cache::{
     resize_dimensions, CustomHeaderCreationError, CustomImageFormat, CustomImageHeader, FitType,
@@ -762,7 +764,10 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
 fn safe_delete_temp_file(path: &str) {
     if is_path_in_temp_dir(path) && path.contains("tty-graphics-protocol") {
         if let Err(err) = fs::remove_file(path) {
-            log::error!("Failed to delete kitty temporary file (path = {path}): {err}");
+            report_error!(
+                anyhow::Error::new(err).context("Failed to delete kitty temporary file"),
+                extra: { "path" => %path }
+            );
         }
     }
 }

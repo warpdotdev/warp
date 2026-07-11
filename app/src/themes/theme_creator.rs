@@ -5,6 +5,7 @@ use deltae::*;
 use kmeans_colors::{get_kmeans_hamerly, Calculate, CentroidData, Sort};
 use palette::{FromColor, IntoColor, Lab, Pixel, Srgb, Srgba};
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 
 use crate::util::color::hex_color::coloru_from_hex_string;
 
@@ -27,7 +28,8 @@ pub fn top_colors_for_image(image_path: PathBuf) -> Result<Vec<ColorU>> {
                 .map(|color| match coloru_from_hex_string(color) {
                     Ok(color_u) => color_u,
                     Err(e) => {
-                        log::error!("kmeans algorithm did not produce valid hex strings: {e}");
+                        report_error!(anyhow::anyhow!("{e}")
+                            .context("kmeans algorithm did not produce valid hex strings"));
                         ColorU::black()
                     }
                 })

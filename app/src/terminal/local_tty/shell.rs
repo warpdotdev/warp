@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use typed_path::UnixPathBuf;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::session_id::SessionId;
+use warp_errors::report_error;
 use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
 
 use crate::terminal::available_shells::AvailableShell;
@@ -186,12 +187,12 @@ impl ShellStarter {
     fn compute_fallback_shell() -> Option<ShellStarterSource> {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
-                let pw_shell_path = nix::unistd::User::from_uid(nix::unistd::getuid())
-                    .ok()
-                    .flatten()
-                    .map(|user| user.shell.display().to_string());
+                let pw_shell_path = super::unix::resolve_current_user().map(|user| user.shell);
                 if pw_shell_path.is_none() {
-                    log::error!("user lookup from nix::unistd::User::from_uid failed");
+                    report_error!(
+                        "could not resolve the current user (getpwuid, getent, and /etc/passwd all failed)",
+                        extra: { "uid" => %nix::unistd::getuid().as_raw() }
+                    );
                 }
                 if let Some((resolved_pw_shell_path, shell_type)) =
                     pw_shell_path.as_deref().and_then(supported_shell_path_and_type)
@@ -586,7 +587,11 @@ impl WslShellStarter {
             &home_dir.to_typed_path(),
             &self.distribution,
         )
-        .inspect_err(|err| log::error!("error conversion WSL home dir for host: {err:#}"))
+        .inspect_err(|err| {
+            report_error!(
+                anyhow::anyhow!("{err:#}").context("error conversion WSL home dir for host")
+            )
+        })
         .ok()
     }
 }
@@ -777,7 +782,7 @@ pub fn ssh_socket_dir() -> String {
 fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPathBuf> {
     match result {
         Err(err) => {
-            log::error!("error finding wsl.exe: {err:#}");
+            report_error!(anyhow::Error::new(err).context("error finding wsl.exe"));
             None
         }
         Ok(output) => {
@@ -798,9 +803,11 @@ fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPat
                 if wsl_err_msg.is_empty() {
                     if let Ok(inner_err_msg) = String::from_utf8(output.stderr) {
                         log::error!("Error from WSL command: {inner_err_msg}");
+                        report_error!("Error from WSL command");
                     }
                 } else {
                     log::error!("Error invoking wsl.exe: {wsl_err_msg:?}");
+                    report_error!("Error invoking wsl.exe");
                 }
                 return None;
             }

@@ -10,6 +10,7 @@ use futures::future::{BoxFuture, LocalBoxFuture};
 use futures::{Future, FutureExt};
 use futures_util::future::{AbortHandle, Abortable};
 use tracing::Instrument as _;
+use warp_errors::report_error;
 
 use crate::platform;
 use crate::r#async::executor::Error;
@@ -197,7 +198,7 @@ impl Background {
         let inner = match &self.runtime {
             Some(runtime) => Some(runtime.spawn(future)),
             None => {
-                log::error!("tried to spawn a background task after the executor was shut down");
+                report_error!("tried to spawn a background task after the executor was shut down");
                 None
             }
         };

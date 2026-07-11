@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use chrono::Local;
+use chrono::{Local, Utc};
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
 use warp_cli::agent::Harness;
@@ -22,7 +22,9 @@ use crate::ai::agent::{
     AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
     UserQueryMode,
 };
-use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::task::TaskPrincipalInfo;
+use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryBlock, AgentViewEntryOrigin, AgentViewState, EnterAgentBlockAction,
@@ -37,6 +39,7 @@ use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
 };
 use crate::ai::llms::LLMId;
+use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions};
 use crate::context_chips::prompt::Prompt;
@@ -93,6 +96,40 @@ fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView
         view.model.lock().set_is_dummy_cloud_mode_session(true);
     });
     terminal
+}
+
+/// Builds a resumable, owned (created by the current test user) Oz cloud task so
+/// `resolve_ai_query_routing` classifies a pane bound to it as a `NewCloudVm` follow-up target.
+fn owned_resumable_oz_task(task_id: AmbientAgentTaskId) -> AmbientAgentTask {
+    let now = Utc::now();
+    AmbientAgentTask {
+        task_id,
+        parent_run_id: None,
+        title: "Task".to_string(),
+        state: AmbientAgentTaskState::Succeeded,
+        prompt: "test".to_string(),
+        created_at: now,
+        started_at: Some(now),
+        updated_at: now,
+        run_time: None,
+        status_message: None,
+        source: None,
+        session_id: None,
+        session_link: None,
+        creator: Some(TaskPrincipalInfo {
+            creator_type: "USER".to_string(),
+            uid: TEST_USER_UID.to_string(),
+            display_name: None,
+        }),
+        executor: None,
+        conversation_id: None,
+        request_usage: None,
+        is_sandbox_running: false,
+        agent_config_snapshot: None,
+        artifacts: vec![],
+        last_event_sequence: None,
+        children: vec![],
+    }
 }
 
 fn has_pending_user_query_block(view: &TerminalView) -> bool {
@@ -1869,6 +1906,7 @@ fn shared_third_party_viewer_syncs_from_cli_agent_state_without_ambient_model() 
         });
     });
 }
+
 #[test]
 fn cloud_mode_followup_input_uses_explicit_submit_event_even_when_view_pending() {
     App::test((), |mut app| async move {
@@ -1883,11 +1921,32 @@ fn cloud_mode_followup_input_uses_explicit_submit_event_even_when_view_pending()
         let task_id = AmbientAgentTaskId::from_str("123e4567-e89b-12d3-a456-426614174000")
             .expect("valid task id");
 
+        // Seed a resumable, owned Oz task so `resolve_ai_query_routing` — the single source of
+        // truth for follow-up submission — classifies this pane as a `NewCloudVm` follow-up target.
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(owned_resumable_oz_task(task_id));
+        });
+
         let ambient_agent_view_model = terminal.update(&mut app, |view, ctx| {
             view.model
                 .lock()
                 .set_shared_session_status(SharedSessionStatus::ViewPending);
             view.pending_cloud_followup_task_id = Some(task_id);
+
+            // A cloud follow-up is only submitted from within an agent view, which is what makes
+            // the input AI-capable and gives the routing its active-conversation context.
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("agent view entry should succeed");
+            });
+
             let ambient_agent_view_model = view
                 .ambient_agent_view_model()
                 .expect("cloud mode terminal should have ambient model")
@@ -5390,7 +5449,12 @@ fn ctrl_c_after_stop_takeover_cancels_conversation() {
                 .expect("command should become agent monitored");
 
             view.cli_subagent_controller.update(ctx, |controller, ctx| {
-                controller.switch_control_to_user(UserTakeOverReason::Stop, ctx);
+                controller.switch_control_to_user(
+                    UserTakeOverReason::Stop {
+                        should_auto_resume: true,
+                    },
+                    ctx,
+                );
             });
 
             conversation_id
@@ -5469,6 +5533,108 @@ fn ctrl_c_after_transfer_takeover_does_not_cancel_conversation() {
             // completion to the agent, so Ctrl-C should interrupt the command without
             // cancelling the conversation.
             assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+        });
+    })
+}
+
+#[test]
+fn completed_user_controlled_lrc_resumes_when_not_suppressed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.view_id, false, false, false, ctx)
+                });
+
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 20", "running");
+            let task_id = TaskId::new("test-cli-subagent".to_owned());
+            let block_id = {
+                let mut model = view.model.lock();
+                let active_block = model.block_list_mut().active_block_mut();
+                active_block.set_agent_interaction_mode_for_requested_command(
+                    AIAgentActionId::from("requested-command".to_owned()),
+                    Some(task_id.clone()),
+                    conversation_id,
+                );
+                active_block
+                    .set_agent_interaction_mode_for_agent_monitored_command(
+                        &task_id,
+                        conversation_id,
+                    )
+                    .expect("command should become agent monitored");
+                active_block
+                    .take_over_control_for_user(UserTakeOverReason::Stop {
+                        should_auto_resume: true,
+                    })
+                    .expect("user takeover should succeed");
+                active_block.id().clone()
+            };
+
+            assert!(!view
+                .ai_controller
+                .as_ref(ctx)
+                .has_active_stream_for_conversation(conversation_id, ctx));
+
+            view.on_user_block_completed(&block_id, ctx);
+
+            // A Ctrl-C takeover (Stop) without an explicit teardown should resume the
+            // conversation once the command completes, just like a manual takeover.
+            assert!(view
+                .ai_controller
+                .as_ref(ctx)
+                .has_active_stream_for_conversation(conversation_id, ctx));
+        });
+    })
+}
+
+#[test]
+fn completed_user_controlled_lrc_skips_resume_when_suppressed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.view_id, false, false, false, ctx)
+                });
+
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 20", "running");
+            let task_id = TaskId::new("test-cli-subagent".to_owned());
+            let block_id = {
+                let mut model = view.model.lock();
+                let active_block = model.block_list_mut().active_block_mut();
+                active_block.set_agent_interaction_mode_for_requested_command(
+                    AIAgentActionId::from("requested-command".to_owned()),
+                    Some(task_id.clone()),
+                    conversation_id,
+                );
+                active_block
+                    .set_agent_interaction_mode_for_agent_monitored_command(
+                        &task_id,
+                        conversation_id,
+                    )
+                    .expect("command should become agent monitored");
+                // Mirrors rewind / stop_local_agent_conversation tearing down the conversation.
+                active_block.set_user_control_for_teardown();
+                active_block.id().clone()
+            };
+
+            view.on_user_block_completed(&block_id, ctx);
+
+            assert!(!view
+                .ai_controller
+                .as_ref(ctx)
+                .has_active_stream_for_conversation(conversation_id, ctx));
         });
     })
 }

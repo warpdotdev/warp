@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -11,9 +12,9 @@ use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
 
 use super::{
-    app_database_file_path, database_file_path_for_scope, decode_path, deduplicate_events,
-    encode_path, get_all_codebase_index_metadata, read_sqlite_data, save_app_state,
-    save_codebase_index_metadata, setup_database, start_writer,
+    app_database_file_path, database_file_path_for_current_scope, database_file_path_for_scope,
+    decode_path, deduplicate_events, encode_path, get_all_codebase_index_metadata,
+    read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database, start_writer,
 };
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
@@ -23,7 +24,7 @@ use crate::cloud_object::{CloudObjectPermissions, Owner};
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
 use crate::persistence::model::ObjectPermissions;
-use crate::persistence::{BlockCompleted, ModelEvent, PersistenceScope};
+use crate::persistence::{BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope};
 use crate::server::ids::ClientId;
 use crate::tab::SelectedTabColor;
 use crate::terminal::model::block::SerializedBlock;
@@ -35,6 +36,39 @@ use crate::workspace::tab_group::TabGroupId;
 fn app_scope_database_path_matches_app_database_path() {
     assert_eq!(
         database_file_path_for_scope(&PersistenceScope::App),
+        app_database_file_path()
+    );
+}
+
+#[test]
+fn tui_scope_database_path_is_tui_subdirectory_of_app_database_dir() {
+    let tui_path = database_file_path_for_scope(&PersistenceScope::Tui);
+    let app_path = database_file_path_for_scope(&PersistenceScope::App);
+
+    assert_ne!(tui_path, app_path);
+    assert_eq!(
+        tui_path,
+        warp_core::paths::tui_state_dir().join("warp.sqlite")
+    );
+
+    // The TUI database lives in a `tui` subdirectory of the same base
+    // directory that holds the GUI database, so the two front-ends never
+    // share (or migrate) each other's database.
+    let tui_dir = tui_path
+        .parent()
+        .expect("TUI database path should have a parent");
+    assert_eq!(tui_dir.file_name(), Some(OsStr::new("tui")));
+    assert_eq!(tui_dir.parent(), app_path.parent());
+}
+
+#[test]
+fn database_path_for_current_scope_defaults_to_app_scope() {
+    // Unit tests never call `persistence::initialize`, so the process-wide
+    // scope defaults to `App` and ad-hoc read-only connections resolve to
+    // the GUI database. (nextest runs each test in its own process, so no
+    // other test can have set the scope.)
+    assert_eq!(
+        database_file_path_for_current_scope(),
         app_database_file_path()
     );
 }
@@ -117,8 +151,41 @@ fn sqlite_read_restores_app_state_and_codebase_metadata() {
     let metadata = test_codebase_metadata("/tmp/remote-repo");
     save_codebase_index_metadata(&mut conn, metadata.clone())
         .expect("codebase index metadata should save");
-    let restored = read_sqlite_data(&mut conn, None).expect("persisted data should load");
-    assert_eq!(restored.app_state.windows.len(), 1);
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("persisted data should load");
+    let restored_app_state = restored
+        .app_state
+        .expect("app state should be present for the full scope");
+    assert_eq!(restored_app_state.windows.len(), 1);
+    assert_eq!(restored.codebase_indices.len(), 1);
+    assert_eq!(restored.codebase_indices[0].path, metadata.path);
+}
+
+/// Mirrors `init_db(&PersistenceScope::Tui)` in an isolated tempdir: the TUI
+/// database lives in a `tui/` subdirectory, runs the same migrations, and
+/// round-trips a write+read using the TUI's `PersistedDataScope`.
+#[test]
+fn tui_database_in_tui_subdirectory_round_trips_data() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("tui").join("warp.sqlite");
+    std::fs::create_dir_all(
+        database_path
+            .parent()
+            .expect("database path should have a parent"),
+    )
+    .expect("tui subdirectory should be created");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let metadata = test_codebase_metadata("/tmp/tui-repo");
+    save_codebase_index_metadata(&mut conn, metadata.clone())
+        .expect("codebase index metadata should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::TuiFrontend)
+        .expect("persisted data should load");
+    // The TUI data scope skips GUI session restoration and history...
+    assert!(restored.app_state.is_none());
+    assert!(restored.command_history.is_empty());
+    // ...but still round-trips shared data like codebase index metadata.
     assert_eq!(restored.codebase_indices.len(), 1);
     assert_eq!(restored.codebase_indices[0].path, metadata.path);
 }
@@ -320,9 +387,10 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.active_window_index, Some(1));
     assert_eq!(
@@ -393,9 +461,10 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     let PaneNodeSnapshot::Leaf(LeafSnapshot {
         custom_vertical_tabs_title,
@@ -470,9 +539,10 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     let restored_tab = &restored.windows[0].tabs[0];
@@ -593,9 +663,10 @@ fn test_sqlite_round_trips_tab_groups() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     let restored_window = &restored.windows[0];
@@ -752,9 +823,10 @@ fn test_sqlite_round_trips_pinned_state() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     let restored_window = &restored.windows[0];
@@ -929,9 +1001,10 @@ fn test_sqlite_drops_too_small_bounds_on_read() {
     )
     .expect("corrupting update should succeed");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     assert!(

@@ -15,6 +15,7 @@ use conpty_api::ConptyApiError;
 use environment::get_shell_environment_variables;
 pub use environment::get_user_and_system_env_variable;
 use thiserror::Error;
+use warp_errors::report_error;
 use warpui::{AppContext, SingletonEntity};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
@@ -166,7 +167,7 @@ pub(super) fn spawn(
             // never reach the Windows PTY spawn path. Surface as an error
             // rather than panicking so a rogue persisted/round-tripped
             // sandbox starter degrades gracefully on Windows.
-            log::error!("Docker sandbox shell starter reached the Windows PTY spawn path");
+            report_error!("Docker sandbox shell starter reached the Windows PTY spawn path");
             return Err(PtySpawnError::UnsupportedShellStarter(
                 "Docker sandbox shells are not supported on Windows".to_owned(),
             ));
@@ -433,7 +434,7 @@ impl EventedPty for Pty {
 
     fn on_resize(&mut self, size: &crate::terminal::SizeInfo) {
         if let Err(err) = unsafe { self.conpty_api.resize(self.pty_handle, size.to_coord()) } {
-            log::error!("Failed to resize pseudoconsole: {err:?}");
+            report_error!(anyhow::Error::new(err).context("Failed to resize pseudoconsole"));
         }
     }
 

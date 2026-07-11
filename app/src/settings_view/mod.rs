@@ -524,6 +524,7 @@ pub mod flags {
         "Use_Latest_User_Prompt_As_Conversation_Title_In_Tab_Names";
     pub const ALT_SCREEN_PADDING_FLAG: &str = "Alt_Screen_Padding";
     pub const SESSION_CONFIG_TAB_CONFIG_CHIP_OPEN: &str = "Session_Config_Tab_Config_Chip_Open";
+    pub const FEATURE_INTRO_MODAL_OPEN: &str = "Feature_Intro_Modal_Open";
     pub const FOCUS_PANES_ON_HOVER_CONTEXT_FLAG: &str = "Focus_Panes_On_Hover";
     pub const HIDE_WORKSPACE_DECORATIONS_CONTEXT_FLAG: &str = "Hide_Workspace_Decorations";
     pub const ALIAS_EXPANSION_FLAG: &str = "Alias_Expansion_Enabled";

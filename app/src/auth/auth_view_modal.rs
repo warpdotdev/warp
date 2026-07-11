@@ -4,9 +4,9 @@ use anyhow::{anyhow, Result};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use url::Url;
-use warp_core::errors::ErrorExt;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_anyhow, safe_error};
+use warp_errors::{report_error, ErrorExt};
 use warpui::actions::StandardAction;
 use warpui::elements::{
     ChildAnchor, ChildView, Container, Fill, HighlightedHyperlink, MouseStateHandle,
@@ -289,7 +289,7 @@ impl AuthView {
             }
             AuthManagerEvent::AuthFailed(err) => {
                 if err.is_actionable() {
-                    log::error!("Failed to log in user: {err:#}");
+                    report_error!(err);
                 }
 
                 if let UserAuthenticationError::InvalidStateParameter = err {

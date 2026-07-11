@@ -106,10 +106,10 @@ fn test_save_uninitialized_file() {
                 ContentVersion::new(),
                 ctx,
             );
-            assert!(result.is_err());
-
-            let e = result.unwrap_err();
-            assert!(matches!(e, FileSaveError::NoFilePath(file_id) if file_id == id));
+            assert!(
+                matches!(result, Err(FileSaveError::NoFilePath(file_id)) if file_id == id),
+                "expected NoFilePath error"
+            );
         });
     });
 }

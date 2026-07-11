@@ -6,6 +6,8 @@ pub mod code_block;
 mod context_model;
 mod controller;
 pub(crate) mod conversation_selection;
+pub(crate) mod diff_storage;
+pub(crate) mod diff_types;
 pub(crate) mod handoff;
 
 pub(crate) mod local_agent_task_sync_model;
@@ -17,6 +19,7 @@ pub(crate) mod queued_query;
 pub(super) use controller::RequestInput;
 pub mod history_model;
 pub mod inline_action;
+mod input_mode_policy;
 mod input_model;
 mod permissions;
 mod persistence;
@@ -30,16 +33,24 @@ pub mod usage;
 
 pub(crate) mod codebase_index_speedbump_banner;
 pub(crate) mod telemetry_banner;
-pub(super) mod view_util;
+pub(crate) mod view_util;
 
 pub(crate) use action_model::recording_controller::RecordingController;
+// Consumed by `tui_export` for the `warp_tui` frontend.
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use action_model::AIActionStatus;
+// Consumed by `tui_export` for the `warp_tui` frontend.
+#[cfg(feature = "tui")]
+pub use action_model::RequestFileEditsExecutor;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
-    apply_edits, read_local_file_context, BlocklistAIActionEvent, FileReadResult,
-    ReadFileContextResult, RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentRequest, StartAgentRequestId,
+    apply_edits, read_local_file_context, FileReadResult, ReadFileContextResult,
+    RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
+    StartAgentRequestId,
 };
-pub use action_model::{BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent};
+pub use action_model::{
+    BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
+};
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};
@@ -68,9 +79,12 @@ pub(crate) use history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FORK_PREFIX,
     PRE_REWIND_PREFIX,
 };
-pub use input_model::BlocklistAIInputModel;
-pub(crate) use input_model::{
-    BlocklistAIInputEvent, InputConfig, InputType, InputTypeAutoDetectionSource,
+// The policy types are re-exported for the TUI frontend via `tui_export`.
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use input_mode_policy::{InputModePolicy, InputModePolicyHandle, PolicyConfigUpdate};
+pub(crate) use input_model::BlocklistAIInputEvent;
+pub use input_model::{
+    BlocklistAIInputModel, InputConfig, InputType, InputTypeAutoDetectionSource,
 };
 pub(crate) use passive_suggestions::{
     LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,

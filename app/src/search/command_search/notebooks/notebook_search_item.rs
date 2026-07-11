@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
+use warp_errors::report_error;
 use warpui::elements::{
     ConstrainedBox, Container, Flex, Highlight, Icon, MainAxisAlignment, MainAxisSize,
     ParentElement, Text,
@@ -116,7 +117,7 @@ impl SearchItem for NotebookSearchItem {
                 // This branch should never be executed because a Notebooks search result should
                 // always have some match with the query, otherwise it should not appear as a
                 // result.
-                log::error!(
+                report_error!(
                     "Notebook in search results has neither a name nor command match result."
                 );
                 OrderedFloat(f64::MIN)

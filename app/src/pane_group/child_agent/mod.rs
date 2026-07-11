@@ -6,6 +6,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use warp_cli::agent::Harness;
+use warp_errors::report_error;
 use warpui::{EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -147,7 +148,7 @@ pub(crate) fn create_hidden_child_agent_conversation(
         ctx,
     );
     let Some(new_terminal_view) = group.terminal_view_from_pane_id(new_pane_id, ctx) else {
-        log::error!("Failed to get terminal view for new StartAgent pane");
+        report_error!("Failed to get terminal view for new StartAgent pane");
         group.discard_pane(new_pane_id.into(), ctx);
         return None;
     };
@@ -241,8 +242,12 @@ pub(crate) fn create_error_child_agent_conversation(
             ctx,
         )
     else {
-        log::error!(
-            "Failed to surface local child harness error for parent conversation {parent_conversation_id:?}: {error_message}"
+        report_error!(
+            "Failed to surface local child harness error for parent conversation",
+            extra: {
+                "parent_conversation_id" => ?parent_conversation_id,
+                "error_message" => %error_message
+            }
         );
         return None;
     };

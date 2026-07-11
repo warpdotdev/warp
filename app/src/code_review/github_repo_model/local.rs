@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use settings::Setting as _;
+use warp_errors::report_if_error;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::GitHubRepoEvent;
 use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
-use crate::report_if_error;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};

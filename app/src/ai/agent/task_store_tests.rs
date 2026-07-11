@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::iter;
 
 use chrono::Local;
 use uuid::Uuid;
@@ -11,6 +12,7 @@ use crate::ai::agent::{
     SubagentCall,
 };
 use crate::ai::llms::LLMId;
+use crate::test_util::ai_agent_tasks::{create_api_task, create_subagent_tool_call_message};
 
 fn create_test_exchange() -> AIAgentExchange {
     AIAgentExchange {
@@ -429,10 +431,6 @@ fn test_modify_task_conditional_rebuild() {
     assert_eq!(all_ids[2], new_exchange_id);
 }
 
-// =============================================================================
-// Subtask Linearization Tests
-// =============================================================================
-
 #[test]
 fn test_linearization_parent_with_one_subtask() {
     // Create a subtask first so we have its ID
@@ -697,6 +695,132 @@ fn test_exchange_by_id_after_remove_task_exchange_index_shift() {
         store.exchange_by_id(exchange_ids[0]).map(|e| e.id),
         Some(exchange_ids[0])
     );
+}
+
+#[test]
+fn test_prune_unreachable_subtasks_noop_when_no_subtasks() {
+    let root_task = create_test_task_with_exchanges(3);
+    let root_task_id = root_task.id().clone();
+    let mut store = TaskStore::with_root_task(root_task);
+
+    store.prune_unreachable_subtasks();
+
+    assert_eq!(store.task_count(), 1);
+    assert_eq!(store.exchange_count(), 3);
+    assert!(store.get(&root_task_id).is_some());
+}
+
+#[test]
+fn test_prune_unreachable_subtasks_removes_orphan_and_its_exchanges() {
+    // Optimistic root has no api messages, so reachable_task_ids finds nothing
+    // reachable beyond the root itself — any subtask is unreachable.
+    let root_task = create_test_task_with_exchanges(1);
+    let root_task_id = root_task.id().clone();
+    let mut store = TaskStore::with_root_task(root_task);
+
+    let subtask = create_test_subtask_with_exchanges(2);
+    let subtask_id = subtask.id().clone();
+    let subtask_exchange_ids: Vec<_> = subtask.exchanges().map(|e| e.id).collect();
+
+    // Wire the subtask into the exchange DFS so its exchanges appear in the index.
+    let subagent_exchange = create_exchange_with_subagent_call(&subtask_id);
+    store.append_exchange(&root_task_id, subagent_exchange);
+    store.insert(subtask);
+
+    // 1 root + 1 subagent-call exchange + 2 subtask exchanges = 4.
+    assert_eq!(store.task_count(), 2);
+    assert_eq!(store.exchange_count(), 4);
+    assert!(store.exchange_by_id(subtask_exchange_ids[0]).is_some());
+    assert!(store.exchange_by_id(subtask_exchange_ids[1]).is_some());
+
+    store.prune_unreachable_subtasks();
+
+    assert_eq!(store.task_count(), 1);
+    assert!(store.get(&subtask_id).is_none());
+    assert!(!store.contains(&subtask_id));
+    // Subtask exchange refs are gone.
+    assert!(store.exchange_by_id(subtask_exchange_ids[0]).is_none());
+    assert!(store.exchange_by_id(subtask_exchange_ids[1]).is_none());
+    // Root's own exchanges are intact (1 original + 1 subagent-call).
+    assert_eq!(store.exchange_count(), 2);
+}
+
+#[test]
+fn test_prune_unreachable_subtasks_keeps_reachable_subtask() {
+    // Server root with an api message containing a subagent tool call — the
+    // subtask is reachable via reachable_task_ids and must survive the prune.
+    let subtask_id_str = "subtask_reachable";
+    let root_api = create_api_task(
+        "root_server",
+        vec![create_subagent_tool_call_message(
+            "msg1",
+            "root_server",
+            subtask_id_str,
+            None,
+        )],
+    );
+    let root_task = Task::new_restored_root(root_api, iter::empty());
+    let mut store = TaskStore::with_root_task(root_task);
+
+    let subtask_api = create_api_task(subtask_id_str, vec![]);
+    let subtask = Task::new_restored_root(subtask_api, iter::empty());
+    let subtask_task_id = subtask.id().clone();
+    store.insert(subtask);
+
+    assert_eq!(store.task_count(), 2);
+
+    store.prune_unreachable_subtasks();
+
+    // Subtask is reachable — must not be removed.
+    assert_eq!(store.task_count(), 2);
+    assert!(store.get(&subtask_task_id).is_some());
+    assert!(store.contains(&subtask_task_id));
+}
+
+#[test]
+fn test_prune_unreachable_subtasks_removes_nested_orphans() {
+    // Optimistic root → child (has subagent-call exchange → grandchild).
+    // root has no api messages, so neither child nor grandchild is reachable.
+    let grandchild = create_test_subtask_with_exchanges(1);
+    let grandchild_id = grandchild.id().clone();
+    let grandchild_exchange_id = grandchild.exchanges().next().unwrap().id;
+
+    let child_task = create_test_subtask_with_exchanges(1);
+    let child_id = child_task.id().clone();
+    let child_exchange_id = child_task.exchanges().next().unwrap().id;
+
+    let root_task = create_test_task_with_exchanges(1);
+    let root_task_id = root_task.id().clone();
+    let mut store = TaskStore::with_root_task(root_task);
+
+    // root → child
+    store.append_exchange(&root_task_id, create_exchange_with_subagent_call(&child_id));
+    store.insert(child_task);
+
+    // child → grandchild
+    store.append_exchange(
+        &child_id,
+        create_exchange_with_subagent_call(&grandchild_id),
+    );
+    store.insert(grandchild);
+
+    // root(1) + root→child(1) + child(1) + child→grandchild(1) + grandchild(1) = 5
+    assert_eq!(store.task_count(), 3);
+    assert_eq!(store.exchange_count(), 5);
+    assert!(store.exchange_by_id(child_exchange_id).is_some());
+    assert!(store.exchange_by_id(grandchild_exchange_id).is_some());
+
+    store.prune_unreachable_subtasks();
+
+    assert_eq!(store.task_count(), 1);
+    assert!(store.get(&child_id).is_none());
+    assert!(!store.contains(&child_id));
+    assert!(store.get(&grandchild_id).is_none());
+    assert!(!store.contains(&grandchild_id));
+    assert!(store.exchange_by_id(child_exchange_id).is_none());
+    assert!(store.exchange_by_id(grandchild_exchange_id).is_none());
+    // Only root's own exchanges remain (1 original + 1 subagent-call to child).
+    assert_eq!(store.exchange_count(), 2);
 }
 
 #[test]

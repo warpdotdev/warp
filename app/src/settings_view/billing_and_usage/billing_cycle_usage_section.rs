@@ -221,20 +221,15 @@ impl BillingCycleUsageSectionView {
         let Some(data) = workspace.billing_cycle_usage.as_ref() else {
             return;
         };
-        let items: Vec<MenuItem<BillingCycleUsageAction>> = data
-            .summaries
-            .iter()
-            .map(|summary| {
-                let label = format_period_range(summary.period_start, summary.period_end);
-                MenuItem::Item(MenuItemFields::new(label).with_on_select_action(
-                    BillingCycleUsageAction::SelectPeriod(Some(summary.period_end)),
-                ))
-            })
-            .collect();
+        let items = build_period_menu_items(&data.summaries);
+        let selected_index = selected_period_index(&data.summaries, self.selected_period_end);
 
         self.period_menu
             .update(ctx, |menu: &mut Menu<BillingCycleUsageAction>, ctx| {
                 menu.set_items(items, ctx);
+                if let Some(index) = selected_index {
+                    menu.set_selected_by_index(index, ctx);
+                }
             });
     }
 }
@@ -799,3 +794,34 @@ fn format_period_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
         )
     }
 }
+
+fn build_period_menu_items(
+    summaries: &[BillingCycleUsageSummary],
+) -> Vec<MenuItem<BillingCycleUsageAction>> {
+    summaries
+        .iter()
+        .map(|summary| {
+            let label = format_period_range(summary.period_start, summary.period_end);
+            MenuItem::Item(MenuItemFields::new(label).with_on_select_action(
+                BillingCycleUsageAction::SelectPeriod(Some(summary.period_end)),
+            ))
+        })
+        .collect()
+}
+
+fn selected_period_index(
+    summaries: &[BillingCycleUsageSummary],
+    selected_period_end: Option<DateTime<Utc>>,
+) -> Option<usize> {
+    if summaries.is_empty() {
+        return None;
+    }
+    match selected_period_end {
+        Some(end) => summaries.iter().position(|s| s.period_end == end),
+        None => Some(0),
+    }
+}
+
+#[cfg(test)]
+#[path = "billing_cycle_usage_section_tests.rs"]
+mod tests;

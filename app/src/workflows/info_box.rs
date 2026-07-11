@@ -4,6 +4,7 @@ use std::ops::Range;
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
+use warp_errors::report_error;
 use warpui::color::ColorU;
 use warpui::elements::{
     self, Align, Border, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
@@ -94,10 +95,9 @@ impl SelectedWorkflowState {
         if *index < *self.num_arguments {
             self.currently_selected_argument = index;
         } else {
-            log::error!(
-                "Tried to set the argument index to {:?} but the len is {:?}",
-                *index,
-                *self.num_arguments
+            report_error!(
+                "Tried to set the argument index beyond the number of arguments",
+                extra: { "index" => ?*index, "len" => ?*self.num_arguments }
             );
         }
     }

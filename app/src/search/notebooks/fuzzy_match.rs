@@ -1,5 +1,6 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+use warp_errors::report_error;
 use warpui::elements::{Highlight, Text};
 use warpui::{AppContext, SingletonEntity};
 
@@ -132,7 +133,7 @@ impl FuzzyMatchNotebookResult {
             // This branch should never be executed because a notebooks search result should
             // always have some match with the query, otherwise it should not appear as a
             // result.
-            log::error!("Notebook has neither a name nor content match result.");
+            report_error!("Notebook has neither a name nor content match result.");
             OrderedFloat(f64::MIN)
         } else {
             OrderedFloat(weighted_sum)

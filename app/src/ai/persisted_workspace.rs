@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "local_fs")]
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_if_error;
 #[cfg(feature = "local_fs")]
 use warp_util::{local_or_remote_path::LocalOrRemotePath, standardized_path::StandardizedPath};
 #[cfg(feature = "local_fs")]
@@ -44,13 +45,14 @@ use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager
 use crate::code::lsp_telemetry::LspTelemetryEvent;
 use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
+use crate::send_telemetry_from_ctx;
+#[cfg(feature = "local_fs")]
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::CodeSettings;
 #[cfg(feature = "local_fs")]
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::TerminalView;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
 #[cfg(feature = "local_fs")]
 use crate::{view_components::DismissibleToast, workspace::ToastStack};
 
@@ -244,13 +246,9 @@ impl PersistedWorkspace {
                     CodebaseIndexManagerEvent::IndexMetadataUpdated { root_path, event } => {
                         me.handle_index_metadata_event(root_path, *event);
                     }
-                    CodebaseIndexManagerEvent::NewIndexCreated { .. } => {
-                        send_active_indexed_repos_changed_telemetry(ctx);
-                    }
                     CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { expired_metadata } => {
                         // TODO: Disable expired metadata removal once we have other consumers of the workspace metadata.
                         me.clean_up_expired_metadata(expired_metadata.clone(), ctx);
-                        send_active_indexed_repos_changed_telemetry(ctx);
                     }
                     _ => {}
                 }
@@ -309,13 +307,19 @@ impl PersistedWorkspace {
             });
         }
 
+        // Registered regardless of whether codebase indexing is enabled:
+        // `index_repo` also drives project-rules (and, transitively, project
+        // skills) discovery, which must work in modes that keep codebase
+        // indexing off (e.g. the TUI front-end). The embedding half of
+        // `index_repo` stays behind its own gates, and
+        // `CodebaseIndexManager::index_directory` no-ops when indexing is
+        // disabled.
         #[cfg(feature = "local_fs")]
         if !cfg!(any(
             test,
             feature = "fast_dev",
             feature = "integration_tests"
-        )) && CodebaseIndexManager::as_ref(ctx).is_indexing_enabled()
-        {
+        )) {
             ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
                 let DetectedRepositoriesEvent::DetectedGitRepo { repository, .. } = event;
                 let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
@@ -1262,18 +1266,6 @@ impl PersistedWorkspace {
             }
         }
     }
-}
-
-fn send_active_indexed_repos_changed_telemetry<T: Entity>(ctx: &mut ModelContext<T>) {
-    let total = CodebaseIndexManager::as_ref(ctx).num_active_indices();
-    let hit_max = AIRequestUsageModel::as_ref(ctx).hit_codebase_index_limit(total);
-    send_telemetry_from_ctx!(
-        TelemetryEvent::ActiveIndexedReposChanged {
-            updated_number_of_codebase_indices: total,
-            hit_max_indices: hit_max
-        },
-        ctx
-    );
 }
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]

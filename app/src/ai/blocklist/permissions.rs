@@ -8,6 +8,7 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::{report_error, report_if_error};
 use warp_util::path::EscapeChar;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -20,7 +21,6 @@ use crate::ai::execution_profiles::{
 use crate::ai::mcp::mcp_provider_from_file_path;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::report_if_error;
 use crate::settings::{
     AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate,
 };
@@ -152,7 +152,8 @@ impl BlocklistAIPermissions {
                 .private_user_preferences()
                 .remove_value("AgentModeAutoReadFiles")
             {
-                log::error!("Failed to remove old AgentModeAutoReadFiles user pref: {e}");
+                report_error!(anyhow::Error::new(e)
+                    .context("Failed to remove old AgentModeAutoReadFiles user pref"));
             }
             if can_read_files {
                 report_if_error!(AISettings::handle(ctx).update(ctx, |settings, ctx| {

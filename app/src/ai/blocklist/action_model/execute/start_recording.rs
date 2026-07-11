@@ -40,6 +40,7 @@ impl StartRecordingExecutor {
             frame_rate,
             max_duration,
             max_size_bytes,
+            ..
         } = &action.action
         else {
             return ActionExecution::InvalidAction;

@@ -1,8 +1,12 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+#[cfg(feature = "integration_tests")]
+use anyhow::Context as _;
 use image::ImageEncoder;
 use instant::Instant;
+#[cfg(feature = "integration_tests")]
+use warp_errors::report_error;
 
 use crate::platform::CapturedFrame;
 
@@ -312,10 +316,12 @@ cfg_if::cfg_if! {
 
             const FRAME_DURATION_MS: u128 = 1000 / 15;
 
-            let mut encoder = match Encoder::new() {
+            let mut encoder = match Encoder::new()
+                .context("CaptureRecorder: failed to create encoder on background thread")
+            {
                 Ok(e) => e,
                 Err(e) => {
-                    log::error!("CaptureRecorder: failed to create encoder on background thread: {e}");
+                    report_error!(e);
                     if let Ok(mut s) = inner.lock() {
                         s.encoding_in_progress = false;
                     }
@@ -350,13 +356,13 @@ cfg_if::cfg_if! {
                 prev_captured_at = Some(ts_frame.captured_at);
 
                 for _ in 0..repeat_count {
-                    match encoder.encode(&yuv) {
+                    match encoder.encode(&yuv).context("CaptureRecorder: encode error") {
                         Ok(bitstream) => {
                             bitstream.write_vec(&mut batch_h264);
                             batch_encoded += 1;
                         }
                         Err(e) => {
-                            log::error!("CaptureRecorder: encode error: {e}");
+                            report_error!(e);
                             break;
                         }
                     }

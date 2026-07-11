@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::ops::Range;
 use std::path::Path;
-use std::rc::Rc;
 
 use ai::diff_validation::DiffDelta;
 use lazy_static::lazy_static;
@@ -71,8 +70,8 @@ use crate::code::editor::nav_bar::{NavBar, NavBarBehavior, NavBarEvent};
 use crate::code::editor::scroll::{ScrollPosition, ScrollTrigger, ScrollWheelBehavior};
 use crate::code::editor::EditorReviewComment;
 use crate::code::{
-    DiffResult, NoopCommentEditorProvider, NoopFindReferencesCardProvider,
-    ShowCommentEditorProvider, ShowFindReferencesCardProvider,
+    NoopCommentEditorProvider, NoopFindReferencesCardProvider, ShowCommentEditorProvider,
+    ShowFindReferencesCardProvider,
 };
 use crate::code_review::comments::{CommentId, CommentOrigin};
 use crate::editor::InteractionState;
@@ -101,7 +100,8 @@ pub enum CodeEditorEvent {
     ContentChanged {
         origin: EditOrigin,
     },
-    UnifiedDiffComputed(Rc<DiffResult>),
+    /// Emitted when a unified diff computation completes.
+    UnifiedDiffComputed,
     SelectionChanged,
     SelectionStart,
     SelectionEnd,
@@ -903,6 +903,36 @@ impl CodeEditorView {
         ctx.emit(CodeEditorEvent::HiddenSectionExpanded);
     }
 
+    /// The number of collapsed hidden sections currently in this editor. Fully
+    /// expanding a section removes its range (count drops by one); a chunked
+    /// reveal only shrinks a range (count unchanged).
+    #[cfg(feature = "integration_tests")]
+    pub fn hidden_section_count_for_test(&self, ctx: &AppContext) -> usize {
+        self.model.as_ref(ctx).hidden_ranges(ctx).iter().count()
+    }
+
+    /// Fully expand the first hidden section the same way a bar double-click
+    /// does: resolve the section's full line range from its offset and expand
+    /// with [`ExpansionType::Both`]. Returns whether a section was expanded.
+    #[cfg(feature = "integration_tests")]
+    pub fn fully_expand_first_hidden_section_for_test(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(line_range) = self
+            .model
+            .as_ref(ctx)
+            .render_state()
+            .as_ref(ctx)
+            .content()
+            .first_hidden_section_line_range()
+        else {
+            return false;
+        };
+        self.expand_hidden_section(line_range, &ExpansionType::Both, ctx);
+        true
+    }
+
     pub(crate) fn with_can_show_diff_ui(mut self, can_show_diff_ui: bool) -> Self {
         self.display_options.can_show_diff_ui = can_show_diff_ui;
         self
@@ -1274,8 +1304,8 @@ impl CodeEditorView {
                 }
                 ctx.emit(CodeEditorEvent::ContentChanged { origin: *origin });
             }
-            CodeEditorModelEvent::UnifiedDiffComputed(diff) => {
-                ctx.emit(CodeEditorEvent::UnifiedDiffComputed(diff.clone()));
+            CodeEditorModelEvent::UnifiedDiffComputed(_) => {
+                ctx.emit(CodeEditorEvent::UnifiedDiffComputed);
             }
             CodeEditorModelEvent::ViewportUpdated(version) => {
                 if let Some(trigger) = self

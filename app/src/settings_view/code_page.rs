@@ -15,9 +15,9 @@ use pathfinder_color::ColorU;
 #[cfg(not(target_family = "wasm"))]
 use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
 use warp_core::features::FeatureFlag;
-use warp_core::report_if_error;
 use warp_core::settings::ToggleableSetting as _;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
+use warp_errors::report_if_error;
 use warp_util::path::user_friendly_path;
 #[cfg(not(target_family = "wasm"))]
 use warp_util::remote_path::RemotePath;

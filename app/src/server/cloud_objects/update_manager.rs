@@ -14,7 +14,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
 use warp_graphql::object_permissions::AccessLevel;
 use warp_graphql::scalars::time::ServerTimestamp;
@@ -262,7 +262,7 @@ impl UpdateManager {
         if let Some(model_event_sender) = &model_event_sender {
             for event in events {
                 if let Err(e) = model_event_sender.send(event) {
-                    log::error!("Error saving to database: {e:?}");
+                    report_error!(anyhow::Error::new(e).context("Error saving to database"));
                 }
             }
         }
@@ -1551,7 +1551,7 @@ impl UpdateManager {
                         ctx,
                     );
                 }
-                Err(err) => log::error!("error getting cloud object: {err:?}"),
+                Err(err) => report_error!(err.context("error getting cloud object")),
             },
         );
 
@@ -2882,7 +2882,7 @@ impl UpdateManager {
                 let cloud_model = CloudModel::as_ref(ctx);
                 let object: Option<&CloudWorkflowEnum> = cloud_model.get_object_of_type(enum_id);
                 let Some(object) = object else {
-                    log::error!("Could not find referenced workflow enum to copy over to the new space, skipping");
+                    report_error!("Could not find referenced workflow enum to copy over to the new space, skipping");
                     continue;
                 };
 
@@ -2913,9 +2913,9 @@ impl UpdateManager {
                 None
             }
         } else {
-            log::error!(
+            report_error!(anyhow::anyhow!(
                 "Tried to move workflow enums to new space but could not find associated workflow",
-            );
+            ));
             None
         }
     }
@@ -3096,13 +3096,13 @@ impl UpdateManager {
                         id, ctx,
                     );
                 } else {
-                    log::error!("Tried to duplicate an unsupported type: json object");
+                    report_error!("Tried to duplicate an unsupported type: json object");
                     debug_assert!(false, "Tried to duplicate an unsupported type: json object");
                 }
             }
             CloudObjectTypeAndId::Folder(_) => {
                 // Duplicating folders not currently supported.
-                log::error!("Tried to duplicate an unsupported type: folder");
+                report_error!("Tried to duplicate an unsupported type: folder");
                 debug_assert!(false, "Tried to duplicate an unsupported type: folder");
             }
         }

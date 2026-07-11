@@ -60,7 +60,7 @@ use super::view::{
 };
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
 use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
-use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
+use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
 use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
 use crate::appearance::Appearance;
@@ -2367,7 +2367,6 @@ impl BlockListElement {
         ai_render_context: &BlocklistAIRenderContext,
         agent_view_state: &AgentViewState,
         ctx: &mut PaintContext,
-        app: &AppContext,
     ) {
         let block_height = block.height(agent_view_state).as_f64() as f32 * cell_size.y();
         if block.is_restored()
@@ -2379,16 +2378,6 @@ impl BlockListElement {
                     Vector2F::new(bounds.width(), block_height),
                 ))
                 .with_background(warp_theme.restored_blocks_overlay());
-        }
-
-        // Update the background for the current active long running command when the inline agent view is active.
-        if agent_view_state.is_inline() && block.is_active_and_long_running() {
-            ctx.scene
-                .draw_rect_with_hit_recording(RectF::new(
-                    grid_origin,
-                    Vector2F::new(bounds.width(), block_height),
-                ))
-                .with_background(agent_view_bg_fill(app));
         }
 
         let mut did_render_ai_stripe = false;
@@ -2498,7 +2487,6 @@ impl BlockListElement {
             ai_render_context,
             agent_view_state,
             ctx,
-            app,
         );
 
         let cell_size_height = block_grid_params.grid_render_params.cell_size.y();

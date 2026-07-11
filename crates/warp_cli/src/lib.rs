@@ -327,6 +327,20 @@ impl Args {
             });
         }
 
+        // Hide the third-party harness flags on `run-cloud` when the harness
+        // feature is off, so `--help` matches the runtime gating (a non-oz
+        // `--harness` is rejected unless AgentHarness is enabled).
+        if !FeatureFlag::AgentHarness.is_enabled() {
+            command = command.mut_subcommand("agent", |agent_cmd| {
+                agent_cmd.mut_subcommand("run-cloud", |cloud_cmd| {
+                    cloud_cmd
+                        .mut_arg("harness", |arg| arg.hide(true))
+                        .mut_arg("claude_auth_secret", |arg| arg.hide(true))
+                        .mut_arg("codex_auth_secret", |arg| arg.hide(true))
+                })
+            });
+        }
+
         // Hide the provider subcommand from help text
         if !FeatureFlag::ProviderCommand.is_enabled() {
             command = command.mut_subcommand("provider", |c| c.hide(true));

@@ -11,6 +11,7 @@ use ignore::gitignore::Gitignore;
 #[cfg(feature = "local_fs")]
 use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
+use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::standing_queries::{StandingQueryDefinitions, StandingQueryResults};
@@ -483,7 +484,7 @@ impl Entry {
                 *directory = entry;
             }
             Entry::File(_) => {
-                log::error!("Called load on a directory but a file entry was returned");
+                report_error!("Called load on a directory but a file entry was returned");
             }
         })
     }

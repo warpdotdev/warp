@@ -5,8 +5,8 @@ use string_offset::CharCounter;
 use warp_completer::signatures::CommandRegistry;
 use warp_completer::util::parse_current_commands_and_tokens;
 use warp_completer::ParsedTokensSnapshot;
-use warp_core::report_error;
 use warp_core::ui::theme::{AnsiColorIdentifier, AnsiColors};
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{ClippedAxisConfiguration, DualAxisConfig, NewScrollable};
 use warpui::elements::{
@@ -385,10 +385,10 @@ impl CloudSetupGuideView {
             )),
             _ => None,
         }) else {
-            report_error!(anyhow::anyhow!(
-                "Received unknown code in render_code_block: {}",
-                code
-            ));
+            report_error!(
+                "Received unknown code in render_code_block",
+                extra: { "code" => %code }
+            );
             return Empty::new().finish();
         };
 

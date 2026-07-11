@@ -3,12 +3,14 @@ use std::collections::HashMap;
 
 use settings::{Setting, ToggleableSetting};
 use warp_core::features::FeatureFlag;
+use warp_errors::report_if_error;
 use warpui::elements::{Flex, MouseStateHandle, ParentElement};
 use warpui::ui_components::components::UiComponent;
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::appearance::Appearance;
+use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings_view::settings_page::{
     render_body_item, render_dropdown_item, AdditionalInfo, LocalOnlyIconState, ToggleState,
@@ -19,7 +21,6 @@ use crate::util::file::external_editor::settings::{
 };
 use crate::util::file::external_editor::{EditorSettings, SUPPORTED_EDITORS};
 use crate::view_components::{Dropdown, DropdownItem};
-use crate::{report_if_error, send_telemetry_from_ctx};
 
 fn tabbed_file_viewer_toggle_header() -> &'static str {
     crate::menu_label("settings.code_page.tabbed_editor_header", "Group files into single editor pane")

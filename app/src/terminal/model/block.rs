@@ -21,6 +21,7 @@ use pathfinder_geometry::vector::Vector2F;
 pub use serialized_block::*;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_terminal::model::grid::Dimensions as _;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warp_util::path::user_friendly_path;
@@ -3088,7 +3089,7 @@ macro_rules! delegate_image_completion {
 
 impl ansi::Handler for Block {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method Block::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method Block::set_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
@@ -3331,11 +3332,11 @@ impl ansi::Handler for Block {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method Block::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method Block::push_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method Block::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method Block::pop_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn prompt_marker(&mut self, marker: ansi::PromptMarker) {

@@ -15,6 +15,7 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting;
 use warp_cli::agent::Harness;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
@@ -52,7 +53,7 @@ use crate::view_components::dropdown::{
 };
 use crate::view_components::FilterableDropdown;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_if_error, LLMPreferences};
+use crate::LLMPreferences;
 
 /// Env var override for the workspace default host (developer testing).
 /// Mirrors the single-agent ambient flow.

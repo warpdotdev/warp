@@ -1,7 +1,8 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 #[cfg(feature = "local_fs")]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use ai::skills::SkillPathOrigin;
 use anyhow::anyhow;
@@ -14,6 +15,7 @@ use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::client_action::{Action, StartNewConversation};
+use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::response_event::stream_finished::{
     ConversationUsageMetadata, TokenUsage,
 };
@@ -40,7 +42,7 @@ use crate::input_suggestions::HistoryOrder;
 use crate::persistence::model::{AgentConversation, AgentConversationData};
 use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
@@ -52,6 +54,7 @@ pub use conversation_loader::{
     convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,
     CLIAgentConversation, CloudConversationData,
 };
+use warp_errors::report_error;
 
 /// Mirrors [`crate::persistence::agent::MAX_PERSISTED_CONVERSATION_COUNT`].
 /// Moot at steady state because the disk-side prune already keeps the
@@ -203,6 +206,15 @@ struct InFlightConversationRename {
     previous_cached_metadata_title: Option<String>,
 }
 
+/// A single agent prompt-history candidate with prompt text and start_ts.
+#[derive(Clone, Debug)]
+pub(crate) struct PromptHistoryEntry {
+    /// The user prompt text.
+    pub(crate) text: Arc<str>,
+    /// When the prompt was submitted.
+    pub(crate) start_ts: DateTime<Local>,
+}
+
 /// Responsible for managing the history of user and AI exchanges.
 #[derive(Default)]
 pub struct BlocklistAIHistoryModel {
@@ -247,6 +259,14 @@ pub struct BlocklistAIHistoryModel {
     /// history.
     persisted_queries: Vec<PersistedAIInput>,
 
+    // TODO: When up-arrow prompt history supports pagination, consolidate
+    // `persisted_queries` and `prompt_history` (both seeded from the same `ai_queries`
+    // read) and share the in-memory conversation appending done by `all_ai_queries`.
+    /// Prompt-history candidates for NLD input classification. Seeded once from `ai_queries`
+    /// at startup, then extended with prompts submitted during the session
+    /// (see [`Self::append_session_prompt`]). Ordered oldest-first.
+    prompt_history: Vec<PromptHistoryEntry>,
+
     /// Metadata for both local and ambient agent conversations.
     /// Does not include the actual content of the conversations.
     all_conversations_metadata: HashMap<AIConversationId, AIConversationMetadata>,
@@ -284,10 +304,11 @@ pub struct BlocklistAIHistoryModel {
 impl BlocklistAIHistoryModel {
     pub(crate) fn new(
         persisted_queries: Vec<PersistedAIInput>,
+        prompt_history: Vec<(String, DateTime<Local>)>,
         multi_agent_conversations: &[AgentConversation],
     ) -> Self {
         #[cfg(feature = "local_fs")]
-        let db_connection = database_file_path_for_scope(&PersistenceScope::App)
+        let db_connection = database_file_path_for_current_scope()
             .to_str()
             .and_then(|db_url| {
                 establish_ro_connection(db_url)
@@ -295,8 +316,18 @@ impl BlocklistAIHistoryModel {
                     .map(|conn| Arc::new(Mutex::new(conn)))
             });
 
+        let prompt_history = prompt_history
+            .into_iter()
+            .filter(|(text, _)| !text.trim().is_empty())
+            .map(|(text, start_ts)| PromptHistoryEntry {
+                text: Arc::from(text),
+                start_ts,
+            })
+            .collect();
+
         let mut model = Self {
             persisted_queries,
+            prompt_history,
             #[cfg(feature = "local_fs")]
             db_connection,
             ..Self::default()
@@ -986,18 +1017,41 @@ impl BlocklistAIHistoryModel {
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), UpdateHistoryError> {
+        let conversation_id = request_input.conversation_id;
         let conversation = self
             .conversations_by_id
-            .get_mut(&request_input.conversation_id)
-            .ok_or(UpdateHistoryError::ConversationNotFound(
-                request_input.conversation_id,
-            ))?;
+            .get_mut(&conversation_id)
+            .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
+
+        // That first exchange is the synthetic orchestrator prompt (not user input)
+        // which the NLD prompt history needs to exclude.
+        let is_synthetic_orchestrator_prompt = conversation.is_child_agent_conversation()
+            && conversation.root_task_exchanges().next().is_none();
+
+        // Capture the new user query (text + submission time) before `request_input` is consumed.
+        let new_prompt = request_input
+            .all_inputs()
+            .find_map(AIAgentInput::user_query)
+            .map(|text| (text, request_input.request_start_ts));
+
         conversation.update_for_new_request_input(
             request_input,
             stream_id,
             terminal_surface_id,
             ctx,
         )?;
+
+        // Append the new user query to the session NLD prompt history so input classification can
+        // match it. Skip shared ambient agent sessions and the synthetic orchestrator prompt.
+        if !is_synthetic_orchestrator_prompt
+            && !self
+                .ambient_agent_terminal_surface_ids
+                .contains(&terminal_surface_id)
+        {
+            if let Some((text, start_ts)) = new_prompt {
+                self.append_session_prompt(text, start_ts);
+            }
+        }
         Ok(())
     }
 
@@ -1076,7 +1130,7 @@ impl BlocklistAIHistoryModel {
             .get(&terminal_surface_id)
             .is_some_and(|conversation_ids| conversation_ids.contains(&conversation_id))
         {
-            log::error!(
+            report_error!(
                 "Attempted to set active conversation ID for a terminal surface that does not contain that conversation."
             );
             return;
@@ -1581,6 +1635,10 @@ impl BlocklistAIHistoryModel {
         let root_task_id = conversation.get_root_task_id().clone();
 
         let mut message_ids_to_retain_by_task: HashMap<TaskId, HashSet<MessageId>> = HashMap::new();
+        // Each task's last retained exchange. Retention keeps a prefix of each
+        // task's exchanges, so only tool calls in this exchange can have been
+        // severed from their results (which land in the next, dropped exchange).
+        let mut fork_point_exchange_by_task: HashMap<TaskId, &AIAgentExchange> = HashMap::new();
         let mut found_from_exchange_id = false;
         'outer: for (task_id, task_exchanges) in exchanges_by_task.into_iter() {
             for exchange in task_exchanges {
@@ -1594,6 +1652,7 @@ impl BlocklistAIHistoryModel {
                     .entry(task_id.clone())
                     .or_default();
                 message_ids_to_retain.extend(exchange.added_message_ids.iter().cloned());
+                fork_point_exchange_by_task.insert(task_id.clone(), exchange);
                 if exchange.id == from_exchange_id {
                     if fork_from_exact_exchange {
                         break 'outer;
@@ -1612,16 +1671,30 @@ impl BlocklistAIHistoryModel {
 
         // Build truncated tasks by retaining only messages whose IDs are in
         // `allowed_message_ids`. Tasks whose message list becomes empty and
-        // which are non-root tasks are dropped.
+        // which are non-root tasks are dropped. Client `tool_call`s in the
+        // fork-point exchange whose `tool_call_result` was truncated away are
+        // reconciled so every `tool_use` stays paired (see
+        // `reconcile_dangling_tool_calls_in_forked_task`).
         let truncated_tasks: Vec<warp_multi_agent_api::Task> = conversation
             .all_tasks()
             .filter_map(|t| {
                 if let Some(message_ids_to_retain) = message_ids_to_retain_by_task.get(t.id()) {
-                    let mut truncated_task = t.source().cloned()?;
+                    let source_task = t.source()?;
+                    let mut truncated_task = source_task.clone();
                     truncated_task
                         .messages
                         .retain(|m| message_ids_to_retain.contains(&MessageId::new(m.id.clone())));
-                    (!truncated_task.messages.is_empty()).then_some(truncated_task)
+                    if truncated_task.messages.is_empty() {
+                        return None;
+                    }
+                    if let Some(fork_point_exchange) = fork_point_exchange_by_task.get(t.id()) {
+                        reconcile_dangling_tool_calls_in_forked_task(
+                            &mut truncated_task,
+                            &source_task.messages,
+                            &fork_point_exchange.added_message_ids,
+                        );
+                    }
+                    Some(truncated_task)
                 } else {
                     None
                 }
@@ -1775,9 +1848,11 @@ impl BlocklistAIHistoryModel {
     ) {
         // Track whether this update changes any state derived by
         // `BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated`
-        // subscribers (e.g. the orchestration credit rollup). We emit the
-        // event only when there's actual data to react to.
-        let emits_usage_event = request_cost.is_some() || usage_metadata.is_some();
+        // subscribers (e.g. the orchestration credit rollup or the TUI
+        // footer's usage entry). We emit the event only when there's actual
+        // data to react to.
+        let emits_usage_event =
+            request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
                 request_cost,
@@ -1924,7 +1999,7 @@ impl BlocklistAIHistoryModel {
 
     /// Handle clearing the blocklist for a terminal surface.
     /// The terminal surface will also cancel the active stream on processing the event emitted here.
-    pub(crate) fn clear_conversations_for_terminal_surface(
+    pub fn clear_conversations_for_terminal_surface(
         &mut self,
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
@@ -1995,12 +2070,14 @@ impl BlocklistAIHistoryModel {
                     if let Err(e) = sender.send(ModelEvent::DeleteAIConversation {
                         conversation_id: conversation_id_string.clone(),
                     }) {
-                        log::error!("Error sending DeleteAIConversation event: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error sending DeleteAIConversation event"));
                     }
                     if let Err(e) = sender.send(ModelEvent::DeleteMultiAgentConversations {
                         conversation_ids: vec![conversation_id_string],
                     }) {
-                        log::error!("Error sending DeleteMultiAgentConversations event: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error sending DeleteMultiAgentConversations event"));
                     }
                 }
             },
@@ -2222,6 +2299,24 @@ impl BlocklistAIHistoryModel {
             .into_iter()
             .chain(cleared_queries_vec)
             .chain(live_queries_vec)
+    }
+
+    /// Appends a single user-query prompt to [`Self::prompt_history`], dropping whitespace-only
+    /// prompts. Session prompts arrive in submission order, so pushing keeps the vec ascending.
+    fn append_session_prompt(&mut self, text: String, start_ts: DateTime<Local>) {
+        if text.trim().is_empty() {
+            return;
+        }
+        self.prompt_history.push(PromptHistoryEntry {
+            text: Arc::from(text),
+            start_ts,
+        });
+    }
+
+    /// Returns the prompt-history candidates for NLD input classification, oldest-first
+    /// (ascending). The matcher reverses this to iterate newest-first.
+    pub(crate) fn prompt_history_candidates(&self) -> Vec<PromptHistoryEntry> {
+        self.prompt_history.clone()
     }
 
     /// Returns the active conversation ID for a terminal surface, if one exists.
@@ -2632,6 +2727,7 @@ impl BlocklistAIHistoryModel {
         self.conversation_transcript_viewer_terminal_surface_ids
             .clear();
         self.persisted_queries.clear();
+        self.prompt_history.clear();
         self.all_conversations_metadata.clear();
         self.agent_id_to_conversation_id.clear();
         self.server_token_to_conversation_id.clear();
@@ -3178,6 +3274,113 @@ impl From<&AIAgentOutputStatus> for AIQueryHistoryOutputStatus {
                 FinishedAIAgentOutput::Success { .. } => Self::Completed,
             },
         }
+    }
+}
+
+/// Mirrors the server's `isClientToolCall`: true for tool calls the client
+/// executes. Server and subagent tool calls are managed by the server's
+/// runtime and must not be reconciled — notably the `RunPrimaryAgent`
+/// bootstrap call at the start of every root task is unresolved by design (it
+/// anchors the primary agent on the server's run stack), and pairing it with a
+/// synthesized `Cancel` would pop the primary agent on the fork's next
+/// request, breaking the conversation.
+fn is_client_tool_call(tool_call: &warp_multi_agent_api::message::ToolCall) -> bool {
+    !matches!(
+        tool_call.tool,
+        None | Some(Tool::Server(_)) | Some(Tool::Subagent(_))
+    )
+}
+
+/// Reconciles client `tool_call`s in the fork-point exchange
+/// (`fork_point_message_ids`, the task's last retained exchange) whose
+/// `tool_call_result` was dropped by the truncation: a call and its result
+/// carry different `request_id`s, so they land in different exchanges and the
+/// fork point separates them. An unpaired `tool_use` fails the fork's next
+/// request with an Anthropic `400 invalid_request_error`.
+///
+/// Each severed call gets its real result pulled forward from
+/// `source_task_messages` (the task's pre-truncation history), or a
+/// synthesized `Cancel` when none exists (a genuinely in-flight call). The
+/// result is inserted immediately after its `tool_call`. Tool calls outside
+/// the fork-point exchange were dangling in the source too, and are left
+/// untouched so the fork reproduces the source history faithfully.
+fn reconcile_dangling_tool_calls_in_forked_task(
+    task: &mut warp_multi_agent_api::Task,
+    source_task_messages: &[warp_multi_agent_api::Message],
+    fork_point_message_ids: &HashSet<MessageId>,
+) {
+    let fork_point_message_ids: HashSet<&str> =
+        fork_point_message_ids.iter().map(|id| &**id).collect();
+    let resolved_tool_call_ids: HashSet<&str> = task
+        .messages
+        .iter()
+        .filter_map(|m| m.tool_call_result().map(|r| r.tool_call_id.as_str()))
+        .collect();
+
+    // Collect each dangling tool_call's position, id, and request_id up front so
+    // we don't mutate the message list while iterating it.
+    let dangling: Vec<(usize, String, String)> = task
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, message)| {
+            if !fork_point_message_ids.contains(message.id.as_str()) {
+                return None;
+            }
+            let tool_call = message.tool_call()?;
+            (is_client_tool_call(tool_call)
+                && !resolved_tool_call_ids.contains(tool_call.tool_call_id.as_str()))
+            .then(|| {
+                (
+                    idx,
+                    tool_call.tool_call_id.clone(),
+                    message.request_id.clone(),
+                )
+            })
+        })
+        .collect();
+
+    // Common case: nothing dangling, so skip scanning the source history.
+    if dangling.is_empty() {
+        return;
+    }
+
+    // Real results from the source history, keyed by tool_call_id, so a dropped
+    // result can be pulled forward.
+    let source_results_by_tool_call_id: HashMap<&str, &warp_multi_agent_api::Message> =
+        source_task_messages
+            .iter()
+            .filter_map(|m| m.tool_call_result().map(|r| (r.tool_call_id.as_str(), m)))
+            .collect();
+
+    // Insert from the back so earlier indices remain valid as we splice.
+    for (idx, tool_call_id, request_id) in dangling.into_iter().rev() {
+        let reconciled = source_results_by_tool_call_id
+            .get(tool_call_id.as_str())
+            .map(|real| (*real).clone())
+            .unwrap_or_else(|| {
+                // Synthesized `Cancel` carries the call's `request_id` so it
+                // groups into the same exchange as its `tool_call` on restore.
+                warp_multi_agent_api::Message {
+                    id: Uuid::new_v4().to_string(),
+                    task_id: task.id.clone(),
+                    server_message_data: String::new(),
+                    citations: vec![],
+                    fetched_memories: vec![],
+                    message: Some(warp_multi_agent_api::message::Message::ToolCallResult(
+                        warp_multi_agent_api::message::ToolCallResult {
+                            tool_call_id: tool_call_id.clone(),
+                            context: None,
+                            result: Some(
+                                warp_multi_agent_api::message::tool_call_result::Result::Cancel(()),
+                            ),
+                        },
+                    )),
+                    request_id: request_id.clone(),
+                    timestamp: None,
+                }
+            });
+        task.messages.insert(idx + 1, reconciled);
     }
 }
 

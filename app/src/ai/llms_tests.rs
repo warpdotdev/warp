@@ -360,6 +360,49 @@ fn removing_endpoint_purges_all_its_models_from_custom_llms() {
     assert_eq!(infos[0].id.as_str(), "uuid-k1");
 }
 
+// -- is_cloud_runnable_oz_model_id tests --
+
+#[test]
+fn is_cloud_runnable_oz_model_id_classifies_ids() {
+    // A custom-endpoint (BYOK) model whose id is a bare `config_key` UUID —
+    // this is the id that triggered the reported handoff failure.
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![model("gpt", None, "52941f14-1b74-4afa-8f02-cdd5243b5aa9")],
+        )],
+        ..Default::default()
+    };
+    let preferences = LLMPreferences {
+        models_by_feature: ModelsByFeature::default(),
+        last_update: None,
+        base_llm_for_terminal_view: HashMap::new(),
+        custom_llms: build_custom_llm_infos(&keys),
+        custom_model_routers: Vec::new(),
+    };
+
+    // Custom-endpoint (BYOK) UUID id — not cloud-runnable.
+    assert!(!preferences
+        .is_cloud_runnable_oz_model_id(&LLMId::from("52941f14-1b74-4afa-8f02-cdd5243b5aa9")));
+    // Local custom router — not cloud-runnable.
+    assert!(
+        !preferences.is_cloud_runnable_oz_model_id(&LLMId::from("custom-router:local:my-router"))
+    );
+    // Cloud/team custom router — cloud-runnable: the server accepts the
+    // `custom-router:cloud:` prefix at spawn and resolves it server-side.
+    assert!(
+        preferences.is_cloud_runnable_oz_model_id(&LLMId::from("custom-router:cloud:team-router"))
+    );
+    // Warp Oz slugs — cloud-runnable.
+    assert!(preferences.is_cloud_runnable_oz_model_id(&LLMId::from("auto")));
+    assert!(preferences.is_cloud_runnable_oz_model_id(&LLMId::from("auto-genius")));
+    // A server-provided (non-custom, non-local-router) id is treated as
+    // runnable; only definitively non-runnable ids are downgraded.
+    assert!(preferences.is_cloud_runnable_oz_model_id(&LLMId::from("claude-4-opus")));
+}
+
 // -- Disable-aware default fallback tests --
 
 fn server_llm(id: &str, disable_reason: Option<DisableReason>) -> LLMInfo {
@@ -389,6 +432,24 @@ fn available(default_id: &str, choices: Vec<LLMInfo>) -> AvailableLLMs {
         choices,
         preferred_codex_model_id: None,
     }
+}
+
+#[test]
+fn deserialized_available_llms_with_missing_default_does_not_panic() {
+    // `AvailableLLMs::new()` guarantees `default_id` is one of `choices`, but
+    // deserialization (e.g. a stale persisted cache or a server payload)
+    // bypasses `new()`. Build such a struct, round-trip it through serde, and
+    // confirm `default_llm_info()` falls back to the first choice instead of
+    // panicking (Sentry: "Default LLM ID must be present in choices").
+    let original = available(
+        "missing-default",
+        vec![server_llm("gpt-x", None), server_llm("gpt-y", None)],
+    );
+    let json = serde_json::to_string(&original).expect("should serialize");
+    let deserialized: AvailableLLMs = serde_json::from_str(&json).expect("should deserialize");
+
+    assert_eq!(deserialized.default_id.as_str(), "missing-default");
+    assert_eq!(deserialized.default_llm_info().id.as_str(), "gpt-x");
 }
 
 #[test]

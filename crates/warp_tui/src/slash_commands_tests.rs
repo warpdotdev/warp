@@ -1,0 +1,106 @@
+use ai::skills::SkillReference;
+use warp::appearance::Appearance;
+use warp::editor::CodeEditorModel;
+use warp::tui_export::{
+    AcceptSlashCommandOrSavedPrompt, DetectedSkillCommand, ParsedSlashCommandInput, SlashCommandId,
+    SlashCommandMixer,
+};
+use warp_search_core::inline_menu::InlineMenuSelection;
+use warpui_core::App;
+
+use super::{
+    menu_query_for_parsed_input, TuiSlashCommandModel, TuiSlashCommandRow, MAX_VISIBLE_ROWS,
+};
+use crate::inline_menu::keep_selected_visible;
+
+fn parsed_skill(argument: Option<&str>) -> ParsedSlashCommandInput {
+    ParsedSlashCommandInput::SkillCommand(DetectedSkillCommand {
+        reference: SkillReference::BundledSkillId("write-product-spec".to_owned()),
+        name: "write-product-spec".to_owned(),
+        argument: argument.map(str::to_owned),
+    })
+}
+
+#[test]
+fn skill_without_argument_remains_searchable() {
+    assert_eq!(
+        menu_query_for_parsed_input(&parsed_skill(None)).as_deref(),
+        Some("write-product-spec")
+    );
+}
+
+#[test]
+fn skill_argument_entry_closes_menu() {
+    assert_eq!(menu_query_for_parsed_input(&parsed_skill(Some(""))), None);
+    assert_eq!(
+        menu_query_for_parsed_input(&parsed_skill(Some("here is my prompt"))),
+        None
+    );
+}
+
+#[test]
+fn best_result_is_selected_and_scrolled_into_view() {
+    let result_count = MAX_VISIBLE_ROWS + 1;
+    let mut selection = InlineMenuSelection::default();
+    let selected_index = selection
+        .reset_to_best(result_count, |_| true)
+        .expect("non-empty results should have a selection");
+    let mut scroll_offset = 0;
+
+    keep_selected_visible(
+        result_count,
+        selected_index,
+        MAX_VISIBLE_ROWS,
+        &mut scroll_offset,
+    );
+
+    assert_eq!(selected_index, result_count - 1);
+    assert_eq!(scroll_offset, 1);
+}
+
+#[test]
+fn completed_empty_results_close_the_menu() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let input_editor = app.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+        let mixer = app.add_model(|_| SlashCommandMixer::new());
+        let model = app
+            .add_model(|_| TuiSlashCommandModel::new_for_test(input_editor, mixer, Vec::new(), 0));
+
+        model.update(&mut app, |model, ctx| model.refresh_rows(ctx));
+
+        model.read(&app, |model, _| {
+            assert!(!model.is_open());
+        });
+    });
+}
+
+#[test]
+fn accepting_a_result_does_not_disable_input_driven_lifecycle() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let input_editor = app.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+        let mixer = app.add_model(|_| SlashCommandMixer::new());
+        let command_id = SlashCommandId::new();
+        let model = app.add_model(|_| {
+            TuiSlashCommandModel::new_for_test(
+                input_editor,
+                mixer,
+                vec![TuiSlashCommandRow {
+                    title: "Test command".to_owned(),
+                    description: None,
+                    action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: command_id },
+                }],
+                0,
+            )
+        });
+
+        model.update(&mut app, |model, ctx| {
+            assert_eq!(
+                model.accept_selected(ctx),
+                Some(AcceptSlashCommandOrSavedPrompt::SlashCommand { id: command_id })
+            );
+            assert!(model.lifecycle.input_changed(false, true));
+        });
+    });
+}

@@ -14,6 +14,8 @@ path = "src/bin/use_computer.rs"
 test-util = []
 
 [dependencies]
+anyhow.workspace = true
+warp_errors.workspace = true
 async-trait.workspace = true
 cfg-if.workspace = true
 clap.workspace = true
@@ -54,7 +56,9 @@ tokio = { workspace = true, features = ["process", "time"] }
 url.workspace = true
 uuid.workspace = true
 warpui_core.workspace = true
-x11rb = { workspace = true, features = ["xtest"] }
+# `xinput` provides the XI2 (MPX) device hierarchy used for background per-window control,
+# `composite` provides off-screen window capture for background window screenshots.
+x11rb = { workspace = true, features = ["composite", "xinput", "xtest"] }
 zbus.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]

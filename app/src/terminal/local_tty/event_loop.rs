@@ -14,6 +14,7 @@ use std::thread::{self, JoinHandle};
 use log::error;
 use mio::{self, Events, Interest};
 use parking_lot::{FairMutex, FairMutexGuard};
+use warp_errors::report_error;
 
 use super::mio_channel::Receiver;
 use crate::terminal::event_listener::ChannelEventListener;
@@ -482,7 +483,7 @@ where
                 if !child_exited {
                     let res = self.pty.kill();
                     if let Err(err) = res {
-                        log::error!("Failed to kill PTY process {err:?}");
+                        report_error!(err.context("Failed to kill PTY process"));
                     }
                 }
                 // Notify the terminal model that the PTY process has exited.

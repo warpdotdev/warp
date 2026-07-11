@@ -3043,6 +3043,7 @@ pub(crate) fn resolve_absolute_file_path(
 pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
+    pub subscribe_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
@@ -3066,6 +3067,15 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             user_display_message,
         } => {
             if let Some(message) = user_display_message {
+                if should_show_subscribe_cta(app) {
+                    return render_out_of_credits_error(
+                        message,
+                        props.subscribe_button_handle,
+                        props.is_ai_input_enabled,
+                        props.icon_right_margin,
+                        app,
+                    );
+                }
                 format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
             } else {
                 let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
@@ -3169,6 +3179,120 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 })
                 .finish(),
             )
+            .finish(),
+        )
+        .finish()
+}
+
+/// Whether to show the out-of-credits CTAs: only for non-paid users. Paid users and the
+/// enterprise spend-limit variant of this message fall back to plain text.
+fn should_show_subscribe_cta(app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app)
+        .current_workspace()
+        .is_none_or(|workspace| !workspace.billing_metadata.is_user_on_paid_plan())
+}
+
+/// Builds an out-of-credits CTA button, styled like the invalid-API-key error's button.
+fn out_of_credits_cta_button(
+    label: &str,
+    state_handle: &MouseStateHandle,
+    app: &AppContext,
+) -> Button {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    appearance
+        .ui_builder()
+        .button(
+            warpui::ui_components::button::ButtonVariant::Outlined,
+            state_handle.clone(),
+        )
+        .with_style(UiComponentStyles {
+            font_size: Some(14.),
+            border_color: Some(internal_colors::neutral_4(theme).into()),
+            ..Default::default()
+        })
+        .with_hovered_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_2(theme).into()),
+            ..Default::default()
+        })
+        .with_clicked_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_3(theme).into()),
+            ..Default::default()
+        })
+        .with_text_label(label.to_string())
+        .with_cursor(Some(Cursor::PointingHand))
+}
+
+/// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
+fn render_out_of_credits_error(
+    message: &str,
+    subscribe_button_handle: &MouseStateHandle,
+    is_ai_input_enabled: bool,
+    icon_right_margin: f32,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+
+    let icon = Container::new(
+        ConstrainedBox::new(
+            warpui::elements::Icon::new(
+                Icon::AlertTriangle.into(),
+                error_color(appearance.theme()),
+            )
+            .finish(),
+        )
+        .with_width(icon_size(app))
+        .with_height(icon_size(app))
+        .finish(),
+    )
+    .with_margin_right(icon_right_margin)
+    .finish();
+
+    let text = Text::new(
+        format!("{ERROR_APOLOGY_TEXT}\n\n{message}"),
+        appearance.monospace_font_family(),
+        appearance.monospace_font_size(),
+    )
+    .with_color(blended_colors::text_sub(
+        appearance.theme(),
+        appearance.theme().surface_1(),
+    ))
+    .with_selection_color(if is_ai_input_enabled {
+        appearance
+            .theme()
+            .text_selection_as_context_color()
+            .into_solid()
+    } else {
+        appearance.theme().text_selection_color().into_solid()
+    })
+    .finish();
+
+    let subscribe_button = out_of_credits_cta_button("Subscribe", subscribe_button_handle, app)
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+        })
+        .finish();
+
+    Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(12.)
+        .with_child(
+            Flex::row()
+                .with_child(icon)
+                .with_child(Shrinkable::new(1., text).finish())
+                .finish(),
+        )
+        .with_child(
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_main_axis_alignment(MainAxisAlignment::Start)
+                    .with_child(subscribe_button)
+                    .finish(),
+            )
+            .with_margin_left(icon_size(app) + icon_right_margin)
             .finish(),
         )
         .finish()

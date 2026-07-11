@@ -5,6 +5,14 @@ Commit ref: `724c54771e2a06766257bc20f0053c6737a7d1b8`
 > This spec documents the **as-built** Milestone 1 implementation. Where the
 > original plan diverged during implementation, this reflects what actually
 > landed.
+>
+> **Partially superseded** by `specs/tui-editor-element/TECH.md`: the rendering
+> internals described below (`TuiInputElement`, the view-held `scroll_offset`,
+> the pure row/cursor helpers, and the "two char-cell layout call sites" risk)
+> were replaced by the shared `TuiEditorElement` + `DisplayLattice` core, with
+> scroll/drag state moved model-side. The keybinding table and the
+> `CodeEditorModel::new_tui` / char-cell `RenderState` foundations remain
+> accurate.
 
 ## Context
 
@@ -55,7 +63,7 @@ pub struct CharCellState {
 
 Construction and APIs:
 - `RenderState::new_internal` gains a `layout_mode` parameter; existing pixel constructors pass `LayoutMode::Pixels`.
-- New `RenderState::new_tui(terminal_width, styles, ctx)` constructs a `CharCell` `RenderState`. Callers supply a stub `RichTextStyles` (the field is never read for char-cell layout).
+- New `RenderState::new_tui(terminal_width, styles, hidden_lines, ctx)` constructs a `CharCell` `RenderState`. Callers supply a stub `RichTextStyles` (the field is never read for char-cell layout) and the owning editor's `HiddenLinesModel`.
 - `RenderState::char_cell() -> Option<&CharCellState>` is the single gateway to char-cell state. It returns `Some` only in `CharCell` mode, so the char-cell ops below are simply unreachable in pixel mode (no implicit "CharCell-only" runtime contract on `RenderState`). On `CharCellState`: `terminal_width()` / `set_terminal_width(u16)` (interior-mutable, so the element can push width during its layout pass with only a shared `&AppContext`) and `update_text(&str)` (rebuilds `line_starts` + per-char `char_widths` from the buffer text, O(n) char scan).
 - Public per-line primitives are the single source of truth for the wrapping rule, shared by both the editor conversions and the `warp_tui` view, and all operate on a line's per-char display widths (`&[u8]`): `char_cell_display_width(char)` (terminal cell width via `unicode-width`, used to build the width slices), `char_cell_line_row_starts(widths, terminal_width)` (char indices where each visual row begins), and `char_cell_line_gap_position(widths, terminal_width, char_in_line)` (`(row, display_col)` of a cursor gap).
 

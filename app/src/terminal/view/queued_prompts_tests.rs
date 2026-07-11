@@ -1474,6 +1474,40 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
     });
 }
 
+#[test]
+fn copying_locked_initial_cloud_mode_prompt_copies_full_prompt_to_clipboard() {
+    // The locked initial cloud-mode prompt can't be edited or deleted, so its row offers a Copy
+    // action instead. Firing it (the same action the Copy button dispatches) puts the full,
+    // untruncated prompt — long, multiline content included — on the clipboard and leaves the row
+    // in the queue.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
+
+        let long_prompt = format!("line one\nline two\n{}", "x".repeat(1000));
+        let long_prompt_for_assert = long_prompt.clone();
+        let initial_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(long_prompt, QueuedQueryOrigin::InitialCloudMode),
+                ctx,
+            )
+        });
+
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(&QueuedPromptsPanelAction::CopyRow(initial_id), ctx);
+        });
+
+        app.update(|ctx| {
+            assert_eq!(ctx.clipboard().read().plain_text, long_prompt_for_assert);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(model.queue(conversation_id).len(), 1);
+        });
+    });
+}
+
 /// Builds a panel keyed to a fresh terminal view with an active conversation, mirroring the
 /// construction the host `Input` performs. Returns the panel, the conversation id, and the
 /// host input.

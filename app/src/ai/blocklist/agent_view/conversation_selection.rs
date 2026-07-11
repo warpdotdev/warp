@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::{AppContext, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
@@ -85,7 +86,8 @@ impl ConversationSelection for AgentViewConversationSelection {
         if let Err(error) = self.agent_view_controller.update(ctx, |controller, ctx| {
             controller.try_enter_agent_view(Some(conversation_id), origin, ctx)
         }) {
-            log::error!("Failed to enter agent view for existing conversation: {error}");
+            report_error!(anyhow::Error::new(error)
+                .context("Failed to enter agent view for existing conversation"));
         }
     }
 
@@ -97,7 +99,8 @@ impl ConversationSelection for AgentViewConversationSelection {
         if let Err(error) = self.agent_view_controller.update(ctx, |controller, ctx| {
             controller.try_enter_agent_view(None, origin, ctx)
         }) {
-            log::error!("Failed to enter agent view for new conversation: {error}");
+            report_error!(anyhow::Error::new(error)
+                .context("Failed to enter agent view for new conversation"));
         }
     }
 

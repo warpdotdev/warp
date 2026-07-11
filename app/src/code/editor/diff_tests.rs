@@ -4,7 +4,7 @@ use rangemap::RangeMap;
 use unindent::Unindent as _;
 use warp_editor::multiline::{MultilineStr, MultilineString};
 
-use super::DiffModel;
+use super::{compute_unified_diff, DiffModel};
 use crate::code::editor::diff::ChangeType;
 
 #[test]
@@ -374,7 +374,7 @@ fn test_diff_count_before_line() {
 fn test_unified_diff() {
     use warpui::App;
     App::test((), |_| async move {
-        let diff = DiffModel::retrieve_unified_diff_internal(
+        let diff = compute_unified_diff(
             MultilineStr::try_new("Hello World\nThis is the second line.\nThis is the third.")
                 .unwrap(),
             MultilineStr::try_new(

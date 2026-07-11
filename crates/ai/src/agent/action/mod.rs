@@ -140,10 +140,12 @@ pub enum AIAgentActionType {
     /// AI requested to start recording a video of the computer-use session.
     /// Capture configuration (frame rate, limits) is server-owned and arrives
     /// on the tool call; the client applies it. `frame_rate` of 0 means unset.
+    /// `summary` is an agent-authored, human-facing title for the recording.
     StartRecording {
         frame_rate: u32,
         max_duration: Option<Duration>,
         max_size_bytes: Option<u64>,
+        summary: Option<String>,
     },
 
     /// AI requested to stop an in-progress recording and publish the video.

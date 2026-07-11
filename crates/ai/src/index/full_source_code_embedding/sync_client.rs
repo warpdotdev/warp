@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use warp_core::sync_queue::{IsTransientError, SyncQueue, SyncQueueTaskTrait};
+use warp_errors::report_error;
 
 use super::changed_files::ChangedFiles;
 use super::codebase_index::{build_fragments_from_metadata, SyncProgress};
@@ -338,7 +339,9 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
             }) {
                 Ok(res) => res,
                 Err(err) => {
-                    log::error!("Failed to generate embeddings: {err:?}");
+                    report_error!(
+                        anyhow::anyhow!("{err:?}").context("Failed to generate embeddings")
+                    );
                     if files_need_resync.is_empty() {
                         return Err(SyncOperationError::ServerSyncError(err));
                     } else {
@@ -415,7 +418,9 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
             }) {
                 Ok(res) => res,
                 Err(err) => {
-                    log::error!("Failed to sync intermediate node: {err:?}");
+                    report_error!(
+                        anyhow::anyhow!("{err:?}").context("Failed to sync intermediate node")
+                    );
                     if files_need_resync.is_empty() {
                         return Err(SyncOperationError::ServerSyncError(err));
                     } else {

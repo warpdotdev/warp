@@ -28,6 +28,7 @@ use session_sharing_protocol::viewer::{
     ViewerRemovedReason,
 };
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_server_client::iap::IapManager;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
@@ -323,7 +324,8 @@ impl Network {
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
-                    log::error!("Got error from shared session viewer websocket: {e}");
+                    report_error!(anyhow::Error::new(e)
+                        .context("Got error from shared session viewer websocket"));
                 }
             },
             |network, ctx| {
@@ -356,7 +358,9 @@ impl Network {
             }
             log::info!("Closing websocket to session sharing server as viewer");
             if let Err(e) = sink.close().await {
-                log::error!("Failed to close session sharing websocket due to {e}");
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to close session sharing websocket")
+                );
             }
         }, |_, _, _| {});
     }
@@ -397,20 +401,23 @@ impl Network {
                         },
                     });
                     if let Err(e) = network.ws_proxy_tx.try_send(initialize_message) {
-                        log::error!("Failed to send initialize message for viewer: {e}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Failed to send initialize message for viewer"));
                         return;
                     }
 
                     network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx)
                 }
                 Err(e) => {
-                    log::error!(
-                        "viewer Network::start_websocket: WS connect FAILED for \
-                         session_id={session_id}: {e:#}; emitting FailedToJoin (no automatic retry)"
-                    );
                     IapManager::handle(ctx).update(ctx, |manager, ctx| {
                         manager.check_ws_connect_error(&e, ctx);
                     });
+                    report_error!(
+                        e.context(
+                            "viewer Network::start_websocket: WS connect failed; emitting FailedToJoin (no automatic retry)"
+                        ),
+                        extra: { "session_id" => %session_id }
+                    );
                     ctx.emit(NetworkEvent::FailedToJoin {
                         reason: FailedToJoinReason::FailedToConnectToServer,
                     });
@@ -434,7 +441,7 @@ impl Network {
         // not abort any in-progress reconnect handle.
         self.close();
         let Some(event_loop) = self.event_loop.clone() else {
-            log::error!("Cannot reconnect to server as viewer when event loop does not exist");
+            report_error!("Cannot reconnect to server as viewer when event loop does not exist");
             return;
         };
         let session_id = self.session_id;
@@ -479,7 +486,8 @@ impl Network {
                     let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
                     network.ws_proxy_tx = ws_proxy_tx;
                     if let Err(e) = network.ws_proxy_tx.try_send(initialize_message) {
-                        log::error!("Failed to send initialize message for viewer when reconnecting: {e}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Failed to send initialize message for viewer when reconnecting"));
                         return;
                     }
 
@@ -614,7 +622,7 @@ impl Network {
                         event_loop.process_ordered_terminal_event(event, ctx);
                     })
                 } else {
-                    log::error!(
+                    report_error!(
                         "Received OrderedTerminalEvent before event_loop was initialized. This can mean events were dropped."
                     );
                 }

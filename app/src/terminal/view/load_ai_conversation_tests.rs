@@ -1,7 +1,12 @@
+use std::collections::HashMap;
+
 use chrono::{Local, TimeZone};
+use warp_multi_agent_api as api;
 use warp_terminal::model::BlockIndex;
 
-use super::find_block_indices_for_exchange_timestamps;
+use super::{find_block_indices_for_exchange_timestamps, ConversationRestorationInNewPaneType};
+use crate::terminal::view::AIConversation;
+use crate::AIConversationId;
 
 /// Helper: create a `DateTime<Local>` from a unix timestamp in seconds.
 fn ts(secs: i64) -> chrono::DateTime<Local> {
@@ -216,4 +221,112 @@ fn single_block_at_same_time_as_exchange() {
     let result = find_block_indices_for_exchange_timestamps(&blocks, &exchanges);
 
     assert_eq!(result, vec![Some(bi(0))]);
+}
+
+// ── Forked conversation startup working directory ──────────────────────
+
+/// Build a user query message that records `pwd` as its directory context, so
+/// the restored exchange picks up that working directory.
+fn user_query_with_pwd(id: &str, request_id: &str, query: &str, pwd: &str) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+            query: query.to_string(),
+            context: Some(api::InputContext {
+                directory: Some(api::input_context::Directory {
+                    pwd: pwd.to_string(),
+                    home: String::new(),
+                    pwd_file_symbols_indexed: false,
+                }),
+                ..Default::default()
+            }),
+            referenced_attachments: HashMap::new(),
+            mode: None,
+            intended_agent: Default::default(),
+        })),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+fn agent_output(id: &str, request_id: &str) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::AgentOutput(
+            api::message::AgentOutput {
+                text: "Done".to_string(),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+/// A restored conversation whose first exchange ran in `initial` and whose
+/// latest exchange ran in `latest` (e.g. after the agent `cd`'d into a worktree).
+fn conversation_with_dirs(initial: &str, latest: &str) -> AIConversation {
+    let messages = vec![
+        user_query_with_pwd("user-0", "request-0", "first", initial),
+        agent_output("agent-0", "request-0"),
+        user_query_with_pwd("user-1", "request-1", "second", latest),
+        agent_output("agent-1", "request-1"),
+    ];
+
+    AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![api::Task {
+            id: "root-task".to_string(),
+            messages,
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        None,
+    )
+    .unwrap()
+}
+
+#[test]
+fn conversation_tracks_initial_and_latest_working_directory() {
+    let conversation = conversation_with_dirs("/home/user/code/warp", "/home/user/code/warp/wt");
+
+    assert_eq!(
+        conversation.initial_working_directory().as_deref(),
+        Some("/home/user/code/warp"),
+    );
+    assert_eq!(
+        conversation.current_working_directory().as_deref(),
+        Some("/home/user/code/warp/wt"),
+    );
+}
+
+#[test]
+fn forked_startup_working_directory_uses_latest_directory() {
+    let conversation = conversation_with_dirs("/home/user/code/warp", "/home/user/code/warp/wt");
+
+    let restoration = ConversationRestorationInNewPaneType::Forked {
+        conversation,
+        has_initial_query: false,
+    };
+
+    // Regression: forking must start the new pane in the conversation's *latest*
+    // working directory, not the directory it was originally started in.
+    assert_eq!(
+        restoration.startup_working_directory().as_deref(),
+        Some("/home/user/code/warp/wt"),
+    );
+    // The initial working directory getter still returns the original directory.
+    assert_eq!(
+        restoration.initial_working_directory().as_deref(),
+        Some("/home/user/code/warp"),
+    );
 }

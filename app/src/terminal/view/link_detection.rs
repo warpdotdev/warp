@@ -26,6 +26,9 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(feature = "local_fs")]
+use warp_errors::report_error;
+
 use super::{FindLinkArg, TerminalEditor};
 
 // "a/" and "b/" are prefixes specific to Git Diff
@@ -499,7 +502,7 @@ impl super::TerminalView {
                         let _ = tx.send(paths);
                     })
                     .map_err(|e| {
-                        log::error!("Unable to spawn thread {e:?}");
+                        report_error!(anyhow::Error::new(e).context("Unable to spawn thread"));
                     })
                     .ok();
 

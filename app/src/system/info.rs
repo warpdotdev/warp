@@ -334,7 +334,7 @@ impl ResourceUsageReporter {
         samples: impl Iterator<Item = &'a Sample>,
         ctx: &mut AppContext,
     ) {
-        let cpu_usage_stats = Self::compute_cpu_usage_stats(samples);
+        let _cpu_usage_stats = Self::compute_cpu_usage_stats(samples);
         let memory_usage_stats = Self::compute_memory_usage_stats(total_application_usage, ctx);
 
         // We send two different events at the moment, as one contains general
@@ -343,13 +343,6 @@ impl ResourceUsageReporter {
         //
         // TODO(vorporeal): Clean up the memory usage one, either eliminating it
         // or merging it into the general resource usage telemetry event.
-        send_telemetry_from_app_ctx!(
-            TelemetryEvent::ResourceUsageStats {
-                cpu: cpu_usage_stats.into(),
-                mem: memory_usage_stats.into(),
-            },
-            ctx
-        );
 
         // Only send detailed memory usage reports in dogfood, for the time being.
         if ChannelState::channel().is_dogfood() {

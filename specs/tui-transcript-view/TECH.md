@@ -49,24 +49,24 @@ The app-side trait bounds are relaxed where TUI surfaces now share production mo
 ### Appearance and color handling
 TUI transcript colors are derived from the same `Appearance::theme()` source of truth used by GUI code. The TUI does not own feature-local fixed color constants or a separate `crates/warp_tui/src/theme.rs` color role module.
 
-The Figma node for `Terminal/Dark/True` defines the relevant dark tokens as `background: #050505`, `foreground: #ffffff`, `cyan: #d0d1fe`, `cyan_overlay_1: #d0d1fe1a`, `white: #f1f1f1`, `green: #b4fa72`, `red: #ff8272`, and `ANSI Bright/ANSI Bright black: #8e8e8e`. The TUI uses Warp's regular bundled dark theme for now rather than introducing a near-duplicate TUI-specific theme for the small background difference.
+The Figma node for `Terminal/Dark/True` defines the relevant dark tokens as `background: #050505`, `foreground: #ffffff`, `cyan: #d0d1fe`, `cyan_overlay_1: #d0d1fe1a`, `white: #f1f1f1`, `green: #b4fa72`, `red: #ff8272`, and `ANSI Bright/ANSI Bright black: #8e8e8e`. Warp's regular bundled dark theme uses that `#050505` background, so the TUI does not need a near-duplicate TUI-specific theme.
 
 TUI render code reads the active `WarpTheme` and chooses base theme tokens at each call site rather than adding transcript-specific theme methods:
 - terminal surface and agent-block background use `theme.surface_1()`
 - submitted prompt text uses `theme.foreground()`
 - submitted prompt row background blends `theme.background()` with `theme.terminal_colors().normal.cyan` at 10% opacity twice, matching the two `cyan_overlay_1` layers in Figma
-- agent plain-text output uses `theme.terminal_colors().normal.white`
-- input border color uses `theme.terminal_colors().normal.cyan`
+- agent plain-text output uses the contrast-adaptive themed foreground at `main_text_opacity`
+- input border color pre-blends `theme.terminal_colors().normal.cyan` at 50% over the probed terminal background because terminal cells cannot preserve alpha
 
 The explicit background blending is required because Ratatui terminal colors are opaque cell colors. The generic conversion from GUI `Fill` to Ratatui `Color` does not invent a background context for translucent fills. Callers must blend overlays against the intended background before converting.
 
 The shared conversion lives in `crates/warpui_core/src/elements/tui/color.rs` as `impl From<warpui_core::elements::Fill> for ratatui::style::Color`. This keeps Ratatui-specific knowledge in the TUI element layer. `warp_tui` call sites first convert theme-layer `warp_core::ui::theme::Fill` values into `warpui_core::elements::Fill`, then into TUI `Color`.
 
-The TUI dark theme's terminal palette also supplies future richer transcript roles. Diff additions/removals should use `theme.terminal_colors().normal.green` and `.normal.red`, and lower-priority status text should use `theme.terminal_colors().bright.black` when matching the Figma terminal token semantics.
+The TUI dark theme's terminal palette also supplies future richer transcript roles. Diff additions/removals should use `theme.terminal_colors().normal.green` and `.normal.red`. Lower-priority status text uses the contrast-adaptive themed foreground at `sub_text_opacity`, rather than a dark-theme ANSI slot that could become unreadable on a light background.
 
 ### Interactive input hookup
 `TuiTerminalSessionView` embeds the editor-backed [`TuiInputView`](../../crates/warp_tui/src/input/view.rs) (a `warp::editor::CodeEditorModel` in char-cell mode) as the fixed bottom child. It subscribes to `TuiInputViewEvent::Submitted`; on submit it trims the text, ignores empty prompts, creates a selected `AgentViewEntryOrigin::Tui` conversation through `TuiConversationSelection` if needed, and sends through `BlocklistAIController`. `TuiInputView::submit` already clears the editor buffer, so the input resets after each send.
-The input box is rendered with a styled `TuiContainer` border using `theme.terminal_colors().normal.cyan`. The input view reports cursor coordinates through the normal `TuiElement::cursor_position` path.
+The input box is rendered with a styled `TuiContainer` border using the 50%-blended cyan recipe above and one cell of horizontal inner padding. The input view reports cursor coordinates through the normal `TuiElement::cursor_position` path.
 The input view drives agent prompts only. Running shell commands from the TUI is future work, so `TuiTerminalSessionEvent` emits no direct PTY intents; terminal-block rendering is exercised by tests that drive `TerminalModel` directly rather than by interactive input. `TuiTerminalSessionView` refreshes on a positive allowlist of terminal model events that affect block, grid, or prompt rendering and relies on the terminal wakeup stream for PTY output redraws.
 
 ### TUI block-list viewport source

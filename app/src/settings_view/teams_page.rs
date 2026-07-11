@@ -12,6 +12,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
@@ -1172,7 +1173,7 @@ impl TeamsPageView {
             }
             UserWorkspacesEvent::FetchDiscoverableTeamsRejected(e) => {
                 // Don't show toast, only log to sentry
-                log::error!("Failed to fetch discoverable teams: {e:?}");
+                report_error!(e);
             }
             UserWorkspacesEvent::TransferTeamOwnershipSuccess => {
                 self.show_success(
@@ -1629,9 +1630,9 @@ impl TeamsPageView {
 
         // Log error to sentry
         if let Some(error) = error {
-            log::error!("{message}: {error:#}");
+            report_error!(error);
         } else {
-            log::error!("{message}");
+            report_error!(anyhow::Error::msg(message.clone()));
         }
     }
 

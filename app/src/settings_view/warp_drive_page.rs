@@ -1,6 +1,6 @@
 use warp_core::features::FeatureFlag;
-use warp_core::report_if_error;
 use warp_core::settings::ToggleableSetting as _;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Container, Element, Flex, MouseStateHandle, ParentElement, Shrinkable, Text,
 };

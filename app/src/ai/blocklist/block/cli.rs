@@ -11,12 +11,12 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
@@ -176,6 +176,7 @@ pub fn init(app: &mut AppContext) {
 #[derive(Default)]
 struct StateHandles {
     invalid_api_key_button_handle: MouseStateHandle,
+    subscribe_button_handle: MouseStateHandle,
     debug_copy_button_handle: MouseStateHandle,
     submit_issue_button_handle: MouseStateHandle,
     query_selection_handle: SelectionHandle,
@@ -1201,6 +1202,7 @@ impl View for CLISubagentView {
                         invalid_api_key_button_handle: &self
                             .state_handles
                             .invalid_api_key_button_handle,
+                        subscribe_button_handle: &self.state_handles.subscribe_button_handle,
                         aws_bedrock_credentials_error_view: None,
                         icon_right_margin: AVATAR_RIGHT_MARGIN,
                     },

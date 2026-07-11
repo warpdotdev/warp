@@ -159,6 +159,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::McpDebuggingIds,
         #[cfg(feature = "markdown_tables")]
         FeatureFlag::MarkdownTables,
+        #[cfg(feature = "jupyter_notebook_rendering")]
+        FeatureFlag::JupyterNotebookRendering,
         #[cfg(feature = "blocklist_markdown_table_rendering")]
         FeatureFlag::BlocklistMarkdownTableRendering,
         #[cfg(feature = "blocklist_markdown_images")]
@@ -507,6 +509,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SuperGrok,
         #[cfg(feature = "gemini_enterprise")]
         FeatureFlag::GeminiEnterprise,
+        #[cfg(feature = "nld_prompt_history_match")]
+        FeatureFlag::NldPromptHistoryMatch,
         #[cfg(feature = "prompt_cache_expiry_warning")]
         FeatureFlag::PromptCacheExpiryWarning,
     ]);

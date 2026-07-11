@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_errors::report_error;
 
 use super::{Fill, Point, ZIndex};
 use crate::event::DispatchedEvent;
@@ -332,7 +333,13 @@ impl Element for Resizable {
         if let Some(bounds_callback) = self.bounds_callback.as_mut() {
             let mut new_bounds = bounds_callback(ctx.window_size);
             if new_bounds.0 > new_bounds.1 {
-                log::error!("Resizable: min bound is greater than max bound");
+                report_error!(
+                    "Resizable: min bound is greater than max bound",
+                    extra: {
+                        "min" => ?new_bounds.0,
+                        "max" => ?new_bounds.1
+                    }
+                );
                 new_bounds = (new_bounds.0, new_bounds.0);
             }
             self.state().bounds = Some(new_bounds);

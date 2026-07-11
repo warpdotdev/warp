@@ -23,6 +23,7 @@ settings_value = ["dep:settings_value"]
 test-util = []
 
 [dependencies]
+warp_errors.workspace = true
 anyhow = "1.0"
 async-broadcast.workspace = true
 async-channel.workspace = true
@@ -96,6 +97,12 @@ simplelog.workspace = true
 # Enable the `test-util` feature for our own package when running tests.
 warpui_core = { path = ".", features = ["test-util"] }
 
+# The TUI terminal color probe (`runtime/terminal_probe.rs`) needs
+# non-blocking, deadline-bounded reads from stdin (fcntl/poll/read): std has
+# no non-blocking stdin API and crossterm never surfaces OSC replies.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 async-io.workspace = true
 ctrlc.workspace = true
@@ -123,8 +130,4 @@ required-features = ["tui"]
 # Interactive manual smoke tests for the TUI backend; tui-only API.
 [[example]]
 name = "tui_file_viewer"
-required-features = ["tui"]
-
-[[example]]
-name = "tui_viewport_demo"
 required-features = ["tui"]

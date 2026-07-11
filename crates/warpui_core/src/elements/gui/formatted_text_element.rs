@@ -12,6 +12,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use string_offset::{ByteOffset, CharOffset};
 use vec1::vec1;
+use warp_errors::report_error;
 
 use super::{Highlight, ListNumbering, Selection};
 use crate::elements::{
@@ -1605,7 +1606,12 @@ fn apply_secret_replacements(
     }
 
     if let Some(msg) = out_of_bound_message {
-        SECRET_REPLACEMENT_OOB_ONCE.call_once(|| log::error!("{msg}"));
+        SECRET_REPLACEMENT_OOB_ONCE.call_once(|| {
+            report_error!(
+                "Secret redaction out of bounds during formatting",
+                extra: { "details" => %msg }
+            )
+        });
     }
 }
 
