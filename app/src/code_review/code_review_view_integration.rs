@@ -7,7 +7,7 @@ use warp_editor::render::model::{
 use warpui::units::Pixels;
 use warpui::{AppContext, ViewContext};
 
-use super::{CodeReviewView, CodeReviewViewState, FILE_HEADER_HEIGHT};
+use super::{CodeReviewView, CodeReviewViewState, ImagePreviewSideState, FILE_HEADER_HEIGHT};
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::line::EditorLineLocation;
 
@@ -353,6 +353,23 @@ impl CodeReviewView {
 
     pub fn all_editors_loaded_for_test(&self) -> bool {
         self.all_editors_loaded()
+    }
+
+    /// Test helper: image-preview presence for a file. Outer `None` means
+    /// diffs aren't loaded or the file isn't in the diff; `Some(None)` means
+    /// the file has no inline image preview (e.g. binary placeholder);
+    /// `Some(Some((old, new)))` reports whether each side renders an image.
+    pub fn image_preview_sides_for_test(&self, path: &str) -> Option<Option<(bool, bool)>> {
+        let CodeReviewViewState::Loaded(state) = self.state() else {
+            return None;
+        };
+        let file_state = state.file_states.get(path)?;
+        Some(file_state.image_preview_state.as_ref().map(|preview| {
+            (
+                matches!(preview.old, Some(ImagePreviewSideState::Image { .. })),
+                matches!(preview.new, Some(ImagePreviewSideState::Image { .. })),
+            )
+        }))
     }
 
     pub fn line_text_for_test(

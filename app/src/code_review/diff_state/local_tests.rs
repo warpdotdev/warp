@@ -351,3 +351,285 @@ async fn num_lines_in_file_if_non_binary_errors_for_directory() {
     let result = LocalDiffStateModel::num_lines_in_file_if_non_binary(dir.path()).await;
     assert!(result.is_err());
 }
+
+// ── Image preview classification and loading ───────────────────────────
+
+fn encoded_image_bytes(format: image::ImageFormat, rgba: [u8; 4]) -> Vec<u8> {
+    let img = image::RgbaImage::from_pixel(2, 3, image::Rgba(rgba));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut std::io::Cursor::new(&mut bytes), format)
+        .expect("encode test image");
+    bytes
+}
+
+fn git(repo: &std::path::Path, args: &[&str]) {
+    let status = command::blocking::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .expect("run git");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn init_repo_with_committed_file(repo: &std::path::Path, file_name: &str, bytes: &[u8]) {
+    git(repo, &["init", "--quiet"]);
+    std::fs::write(repo.join(file_name), bytes).expect("write file");
+    git(repo, &["add", file_name]);
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "add file",
+        ],
+    );
+}
+
+#[test]
+fn classify_image_bytes_accepts_supported_raster_formats() {
+    for (format, mime) in [
+        (image::ImageFormat::Png, "image/png"),
+        (image::ImageFormat::Jpeg, "image/jpeg"),
+        (image::ImageFormat::Gif, "image/gif"),
+        (image::ImageFormat::WebP, "image/webp"),
+    ] {
+        let bytes = encoded_image_bytes(format, [255, 0, 0, 255]);
+        let byte_len = bytes.len() as u64;
+        match LocalDiffStateModel::classify_image_bytes(bytes) {
+            ImageSide::Image {
+                mime: got_mime,
+                width,
+                height,
+                byte_len: got_len,
+                ..
+            } => {
+                assert_eq!(got_mime, mime);
+                assert_eq!((width, height), (2, 3));
+                assert_eq!(got_len, byte_len);
+            }
+            other => panic!("{mime} should classify as Image, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn classify_image_bytes_rejects_non_image_content() {
+    // Content-only classification (product spec §8): none of these may
+    // classify as an image regardless of what a file's extension claims.
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>".to_vec();
+    let plain_text = b"hello, definitely not a png".to_vec();
+    let lfs_pointer = b"version https://git-lfs.github.com/spec/v1\n\
+oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n\
+size 12345\n"
+        .to_vec();
+
+    for bytes in [svg, plain_text, lfs_pointer] {
+        assert_eq!(
+            LocalDiffStateModel::classify_image_bytes(bytes),
+            ImageSide::Rejected
+        );
+    }
+}
+
+#[test]
+fn classify_image_bytes_rejects_truncated_image() {
+    let mut bytes = encoded_image_bytes(image::ImageFormat::Png, [0, 255, 0, 255]);
+    // Keep the magic bytes (so sniffing passes) but cut the data off.
+    bytes.truncate(20);
+    assert_eq!(
+        LocalDiffStateModel::classify_image_bytes(bytes),
+        ImageSide::Rejected
+    );
+}
+
+#[test]
+fn classify_image_bytes_caps_declared_dimensions_without_decoding() {
+    // A tiny GIF whose logical screen descriptor is patched to declare
+    // 65535×65535 (≈4.3 gigapixels; GIF has no checksums). The
+    // decompression-bomb guard must classify it as TooLarge from the header
+    // alone instead of allocating the pixel buffer.
+    let mut bytes = encoded_image_bytes(image::ImageFormat::Gif, [255, 0, 0, 255]);
+    bytes[6..10].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    let byte_len = bytes.len() as u64;
+
+    assert_eq!(
+        LocalDiffStateModel::classify_image_bytes(bytes),
+        ImageSide::TooLarge { byte_len }
+    );
+}
+
+#[tokio::test]
+async fn working_image_side_over_byte_cap_is_too_large() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let byte_len = MAX_IMAGE_PREVIEW_BYTES + 1;
+    let file = std::fs::File::create(dir.path().join("big.png")).expect("create file");
+    file.set_len(byte_len).expect("grow file");
+    drop(file);
+
+    assert_eq!(
+        LocalDiffStateModel::load_working_image_side(dir.path(), "big.png").await,
+        ImageSide::TooLarge { byte_len }
+    );
+}
+
+#[tokio::test]
+async fn working_image_side_missing_file_is_unavailable() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    assert_eq!(
+        LocalDiffStateModel::load_working_image_side(dir.path(), "missing.png").await,
+        ImageSide::Unavailable
+    );
+}
+
+#[tokio::test]
+async fn image_preview_disabled_without_feature_flag() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let png = encoded_image_bytes(image::ImageFormat::Png, [255, 0, 0, 255]);
+    std::fs::write(dir.path().join("new.png"), &png).expect("write png");
+
+    let preview = LocalDiffStateModel::load_image_preview(
+        dir.path(),
+        "new.png",
+        &GitFileStatus::Untracked,
+        "HEAD",
+    )
+    .await;
+    assert_eq!(preview, None);
+}
+
+#[tokio::test]
+async fn image_preview_for_untracked_image_has_new_side_only() {
+    let _flag = FeatureFlag::ImagePreviewInCodeReview.override_enabled(true);
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let png = encoded_image_bytes(image::ImageFormat::Png, [255, 0, 0, 255]);
+    std::fs::write(dir.path().join("new.png"), &png).expect("write png");
+
+    let preview = LocalDiffStateModel::load_image_preview(
+        dir.path(),
+        "new.png",
+        &GitFileStatus::Untracked,
+        "HEAD",
+    )
+    .await
+    .expect("untracked image should preview");
+    assert_eq!(preview.old, None);
+    assert!(matches!(preview.new, Some(ImageSide::Image { .. })));
+}
+
+#[tokio::test]
+async fn image_preview_for_modified_image_has_both_sides() {
+    let _flag = FeatureFlag::ImagePreviewInCodeReview.override_enabled(true);
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let old_png = encoded_image_bytes(image::ImageFormat::Png, [255, 0, 0, 255]);
+    let new_png = encoded_image_bytes(image::ImageFormat::Png, [0, 0, 255, 255]);
+    init_repo_with_committed_file(dir.path(), "img.png", &old_png);
+    std::fs::write(dir.path().join("img.png"), &new_png).expect("overwrite png");
+
+    let preview = LocalDiffStateModel::load_image_preview(
+        dir.path(),
+        "img.png",
+        &GitFileStatus::Modified,
+        "HEAD",
+    )
+    .await
+    .expect("modified image should preview");
+
+    let (Some(ImageSide::Image { bytes: old, .. }), Some(ImageSide::Image { bytes: new, .. })) =
+        (&preview.old, &preview.new)
+    else {
+        panic!("both sides should be images, got {preview:?}");
+    };
+    assert_eq!(**old, old_png);
+    assert_eq!(**new, new_png);
+}
+
+#[tokio::test]
+async fn image_preview_for_deleted_image_has_old_side_only() {
+    let _flag = FeatureFlag::ImagePreviewInCodeReview.override_enabled(true);
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let png = encoded_image_bytes(image::ImageFormat::Png, [255, 0, 0, 255]);
+    init_repo_with_committed_file(dir.path(), "img.png", &png);
+    std::fs::remove_file(dir.path().join("img.png")).expect("delete png");
+
+    let preview = LocalDiffStateModel::load_image_preview(
+        dir.path(),
+        "img.png",
+        &GitFileStatus::Deleted,
+        "HEAD",
+    )
+    .await
+    .expect("deleted image should preview");
+    assert!(matches!(preview.old, Some(ImageSide::Image { .. })));
+    assert_eq!(preview.new, None);
+}
+
+#[tokio::test]
+async fn image_preview_for_unchanged_rename_collapses_to_single_side() {
+    let _flag = FeatureFlag::ImagePreviewInCodeReview.override_enabled(true);
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let png = encoded_image_bytes(image::ImageFormat::Png, [255, 0, 0, 255]);
+    init_repo_with_committed_file(dir.path(), "old.png", &png);
+    std::fs::rename(dir.path().join("old.png"), dir.path().join("new.png")).expect("rename png");
+
+    let preview = LocalDiffStateModel::load_image_preview(
+        dir.path(),
+        "new.png",
+        &GitFileStatus::Renamed {
+            old_path: "old.png".to_string(),
+        },
+        "HEAD",
+    )
+    .await
+    .expect("renamed image should preview");
+    // No content change: single image, not a fake before/after (product §2).
+    assert_eq!(preview.old, None);
+    assert!(matches!(preview.new, Some(ImageSide::Image { .. })));
+}
+
+#[tokio::test]
+async fn image_preview_with_corrupt_working_side_keeps_readable_base() {
+    let _flag = FeatureFlag::ImagePreviewInCodeReview.override_enabled(true);
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let png = encoded_image_bytes(image::ImageFormat::Png, [255, 0, 0, 255]);
+    init_repo_with_committed_file(dir.path(), "img.png", &png);
+    std::fs::write(dir.path().join("img.png"), b"corrupted, not an image").expect("corrupt png");
+
+    let preview = LocalDiffStateModel::load_image_preview(
+        dir.path(),
+        "img.png",
+        &GitFileStatus::Modified,
+        "HEAD",
+    )
+    .await
+    .expect("readable base side should keep the preview");
+    assert!(matches!(preview.old, Some(ImageSide::Image { .. })));
+    assert_eq!(preview.new, Some(ImageSide::Rejected));
+}
+
+#[tokio::test]
+async fn image_preview_with_no_previewable_side_is_none() {
+    let _flag = FeatureFlag::ImagePreviewInCodeReview.override_enabled(true);
+    let dir = tempfile::tempdir().expect("create temp dir");
+    // Untracked non-image binary: the only applicable side is Rejected, so
+    // the file keeps the generic binary placeholder (product §8).
+    std::fs::write(dir.path().join("blob.bin"), [0u8, 159, 146, 150]).expect("write binary file");
+
+    let preview = LocalDiffStateModel::load_image_preview(
+        dir.path(),
+        "blob.bin",
+        &GitFileStatus::Untracked,
+        "HEAD",
+    )
+    .await;
+    assert_eq!(preview, None);
+}

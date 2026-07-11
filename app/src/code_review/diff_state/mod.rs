@@ -204,6 +204,86 @@ impl FileDiff {
     }
 }
 
+/// Byte cap per side for image previews. Bounds the *compressed* input read
+/// into memory; the decoded size is bounded separately by
+/// [`MAX_IMAGE_PREVIEW_PIXELS`] / [`MAX_IMAGE_PREVIEW_DIMENSION`].
+/// Independent of the text diff-size limits in `diff_size_limits`.
+pub const MAX_IMAGE_PREVIEW_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Max decoded pixel count (width × height) for an image preview side.
+/// Together with [`MAX_IMAGE_PREVIEW_DIMENSION`] this is the
+/// decompression-bomb guard: a small buffer can declare huge dimensions and
+/// blow up on decode / texture upload.
+pub const MAX_IMAGE_PREVIEW_PIXELS: u64 = 40_000_000;
+
+/// Max width or height for an image preview side.
+pub const MAX_IMAGE_PREVIEW_DIMENSION: u32 = 16_384;
+
+/// One side (base or working tree) of an image preview for a binary file in
+/// the code review panel.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImageSide {
+    /// The side's bytes were read and classified as a supported raster image.
+    Image {
+        /// Original encoded bytes, shared with the view's asset cache without
+        /// a deep copy.
+        bytes: Arc<Vec<u8>>,
+        /// Sniffed MIME type (`image/png`, `image/jpeg`, `image/gif`,
+        /// `image/webp`).
+        mime: &'static str,
+        width: u32,
+        height: u32,
+        byte_len: u64,
+    },
+    /// The side exceeds [`MAX_IMAGE_PREVIEW_BYTES`] (or the decoded-size
+    /// caps) and was not decoded. Renders a per-side "too large to preview"
+    /// note; it never falls back to the generic binary placeholder on its
+    /// own row side.
+    TooLarge { byte_len: u64 },
+    /// The side is expected for the file's status but its blob/file could
+    /// not be read (missing blob, git error, disk error). Note-only marker:
+    /// renders "other side unavailable" when it accompanies a previewable
+    /// side, and never makes a preview exist on its own.
+    Unavailable,
+    /// The side's bytes were read but are not a supported, decodable raster
+    /// image (corrupt/truncated, Git LFS pointer, non-image, unsupported
+    /// format). Note-only marker, like [`ImageSide::Unavailable`], but with
+    /// "not a valid image" wording.
+    Rejected,
+}
+
+impl ImageSide {
+    /// Whether this side genuinely has something to surface: a rendered
+    /// image or the required per-side too-large note. `Unavailable` /
+    /// `Rejected` are note-only and do not count.
+    pub fn is_previewable(&self) -> bool {
+        matches!(self, ImageSide::Image { .. } | ImageSide::TooLarge { .. })
+    }
+}
+
+/// Image preview for a binary file in the code review panel. `None` on a
+/// side means the side does not apply to the file's status (no base side
+/// for an added file, no working side for a deleted file) — distinct from
+/// [`ImageSide::Unavailable`], which means the side was expected but
+/// unreadable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImagePreviewData {
+    /// Base revision (HEAD or merge-base) side.
+    pub old: Option<ImageSide>,
+    /// Working tree side.
+    pub new: Option<ImageSide>,
+}
+
+impl ImagePreviewData {
+    /// Whether at least one applicable side is previewable. When false, the
+    /// file keeps the generic binary placeholder and this struct should not
+    /// be stored (`image_preview` stays `None`).
+    pub fn has_previewable_side(&self) -> bool {
+        self.old.as_ref().is_some_and(ImageSide::is_previewable)
+            || self.new.as_ref().is_some_and(ImageSide::is_previewable)
+    }
+}
+
 /// IMPORTANT: This struct contains expensive data like the full content of diff files
 /// at base. This should not be cloned at any time.
 #[derive(Debug)]
@@ -221,6 +301,12 @@ pub struct FileDiffAndContent {
     /// that don't exist at the base (the diff correctly renders everything as
     /// additions) or files genuinely empty at the base commit.
     pub content_at_head: Option<String>,
+    /// Inline image preview for binary files that classify as supported
+    /// raster images (feature-flagged, local diffs only). `Some` only when
+    /// at least one applicable side is previewable
+    /// ([`ImagePreviewData::has_previewable_side`]); files with no
+    /// previewable side keep the generic binary placeholder.
+    pub image_preview: Option<ImagePreviewData>,
 }
 
 /// IMPORTANT: This struct contains expensive data like the full content of diff files
@@ -268,6 +354,7 @@ impl From<&GitDiffData> for GitDiffWithBaseContent {
                 .map(|file_diff| FileDiffAndContent {
                     file_diff: file_diff.clone(),
                     content_at_head: None,
+                    image_preview: None,
                 })
                 .collect(),
             total_additions: value.total_additions,

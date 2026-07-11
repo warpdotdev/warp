@@ -33,12 +33,12 @@ Gate the entire feature behind a new `FeatureFlag::ImagePreviewInCodeReview` (ad
 Add `run_git_command_bytes(repo_path, args) -> Result<Vec<u8>>` that mirrors `run_git_command` but returns `output.stdout` without UTF-8 decoding (factor the shared `Command` setup so the existing string variant calls it and decodes). Keep the same exit-code handling.
 
 **2. Image classification + byte loading — `app/src/code_review/diff_state/local.rs`.**
-For a `FileDiff` with `is_binary == true` (flag on, local diffs only), attempt to load preview bytes:
+For a `FileDiff` with `is_binary == true` **or `status == Untracked`** (flag on, local diffs only), attempt to load preview bytes. Untracked files must be included explicitly because they never appear in `git diff --numstat`, so an untracked image is *not* flagged `is_binary` (discovered during implementation); to keep this cheap, the working side reads only the first `MIME_SNIFF_BYTES` and magic-byte sniffs them **before** buffering the whole file, so untracked text files and non-image binaries are rejected without a full read:
 - **Base side** (statuses other than new/untracked): `git show <rev>:<base_path>` via `run_git_command_bytes`, where `<rev>` mirrors the revision `get_file_content_at_head` already uses (HEAD or merge-base for branch mode). For renamed/copied files `<base_path>` is the file's **old path** (the pre-rename path from the diff), not the current `<path>` — otherwise `git show` misses the base-side blob; fall back to `<path>` when the file was not renamed/copied.
 - **Working side** (statuses other than deleted): read `repo_path/<path>` from disk.
 - Enforce the **≈10 MB cap per side** before decoding — use `git cat-file -s <rev>:<path>` for the base and `fs::metadata` for the working file; skip the side if over cap, marking it `TooLarge`.
 - Classify each loaded buffer by its **contents only**, accepting only `image/png|jpeg|gif|webp` (raster only — SVG excluded). Do **not** reuse `infer_mime_type`'s `mime_guess` extension fallback: a text `.png` or a Git LFS pointer would resolve to `image/png` by extension despite not being an image. Acceptance requires magic-byte sniffing via the `infer` crate **and** a successful `image`-crate decode; any side that fails either check is rejected → no preview for that side (satisfying the misclassification guard). The successful decode also yields the dimensions for the metadata line.
-- **Decoded-size cap (decompression-bomb guard).** The ≈10 MB byte cap bounds *compressed* input only; a small buffer can declare huge dimensions and blow up on decode / texture upload. So, before the full decode: read dimensions cheaply from the header (`image::io::Reader::with_guessed_format()?.into_dimensions()`), and reject the side if `width * height` exceeds a **max pixel cap** (≈40 MP) or either dimension exceeds a max-dimension bound. Additionally drive the decode through `image::Limits` (`max_image_width` / `max_image_height` / `max_alloc`) so even the guarded decode cannot over-allocate if the header lies. A side over the pixel/dimension cap is surfaced as `TooLarge` (reusing the §5 "too large to preview" note); a decode that still fails under the limits is `rejected` → placeholder.
+- **Decoded-size cap (decompression-bomb guard).** The ≈10 MB byte cap bounds *compressed* input only; a small buffer can declare huge dimensions and blow up on decode / texture upload. So, before the full decode: read dimensions cheaply from the header (`image::ImageReader::with_guessed_format()?.into_dimensions()`), and reject the side if `width * height` exceeds a **max pixel cap** (40 MP) or either dimension exceeds a max-dimension bound (16 384 px). Additionally drive the decode through `image::Limits` (`max_image_width` / `max_image_height` / `max_alloc`) so even the guarded decode cannot over-allocate if the header lies. A side over the pixel/dimension cap is surfaced as `TooLarge` (reusing the §5 "too large to preview" note); a decode that still fails under the limits is `rejected` → placeholder.
 
 Introduce `ImagePreviewData { old: Option<ImageSide>, new: Option<ImageSide> }` where `ImageSide` is one of:
 - `Image { bytes: Arc<Vec<u8>>, mime, width, height, byte_len }` — a successfully classified image;
@@ -56,7 +56,7 @@ Add `image_preview: Option<ImagePreviewData>` to `FileDiffAndContent` (it alread
 - For a *modified* file with one valid `Image`/`TooLarge` side and one `Rejected` side, `image_preview` is `Some`: the good side renders and the rejected side shows a "not a valid image — can't preview" note, so neither half of the comparison is silently hidden (product §6, without failing the whole row).
 
 **3. View state — `code_review_view.rs`.**
-In `build_view_state_for_file_diffs`, when `file.image_preview.is_some()`, register each `ImageSide::Image`'s bytes once via `AssetCache::insert_raw_asset_bytes::<ImageType>` with a stable id (`code-review-img-{old|new}-{path}@{rev}`), and store an `image_preview_state: Option<ImagePreviewState>` (the `AssetSource::Raw` ids + metadata + status) on `FileState`. No `editor_state` is built for image files.
+In `build_view_state_for_file_diffs`, when `file.image_preview.is_some()`, register each `ImageSide::Image`'s bytes once via `AssetCache::insert_raw_asset_bytes::<ImageType>` with a stable id (`code-review-img-{view_id}-{old|new}-{path}` — no revision component: re-inserting under the same id on a diff reload *replaces* the cached asset, which is exactly what a changed working-tree image needs), and store an `image_preview_state: Option<ImagePreviewState>` (the `AssetSource::Raw` ids + metadata + status) on `FileState`. No `editor_state` is built for any file with an image preview (this needs an explicit skip for untracked images, which aren't `is_binary` and would otherwise get an editor over their raw bytes). Files with an image preview also render no line-based +/- stats in the file header or sidebar (product §3).
 
 In `render_file_content`, add a branch **before** the `is_binary` text placeholder (L5231): if `image_preview_state` is present, render the preview — per-status layout from `product.md` §2 (single image for added/deleted/renamed-unchanged; old + new for modified). Each side is rendered by its `ImageSide` kind, side-specifically:
 - `Image` → an `Image::new(AssetSource::Raw { id }, CacheOption::Original).first_frame_preview()` plus a theme-styled metadata line (dimensions + size) and a status badge, wrapped in the existing `styled_file_content_container`.
@@ -72,24 +72,23 @@ The generic `is_binary` text placeholder is reached whenever the file has **no p
 
 ## Testing and validation
 
-Unit (`cargo nextest run`):
-- `run_command_bytes` round-trips arbitrary binary (PNG fixture bytes in == bytes out), proving §1 doesn't corrupt blobs — foundational to `product.md` §1.
-- Classification helper: PNG/JPEG/GIF/WebP magic bytes accepted; SVG, a text file with `.png` extension, and an LFS pointer rejected → `product.md` §8 (misclassification guard).
-- Cap logic: a >10 MB side yields `TooLarge`; the other side still classifies → `product.md` §5.
-- Decompression-bomb guard: a small buffer declaring dimensions over the pixel/dimension cap yields `TooLarge` (or placeholder if decode still fails) without allocating the full pixel buffer → memory-safety risk mitigation (§Risks).
+Unit (`cargo nextest run`) — `crates/warp_util/src/git_tests.rs` and `app/src/code_review/diff_state/local_tests.rs`:
+- `run_git_command_bytes` round-trips arbitrary binary (bytes in == bytes out, and the string variant demonstrably corrupts the same blob), proving §1 doesn't corrupt blobs — foundational to `product.md` §1.
+- Classification helper: PNG/JPEG/GIF/WebP accepted with correct dims/mime; SVG, plain text, and an LFS pointer rejected → `product.md` §8 (misclassification guard); truncated PNG rejected → §6.
+- Cap logic: a >10 MB working side yields `TooLarge`; a missing file yields `Unavailable`.
+- Decompression-bomb guard: a tiny GIF whose header is patched to declare 65535×65535 yields `TooLarge` from the header alone, without allocating the pixel buffer → memory-safety risk mitigation (§Risks).
+- `load_image_preview` per-status shape: untracked → new side only; modified → both sides; deleted → old side only; unchanged rename → collapsed to a single side (§2); corrupt working side keeps the readable base (`Rejected` note, §6); all-rejected file → `None` (§8); flag off → `None`.
 
-Integration (`crates/integration`, Builder/TestStep — see `warp-integration-test` skill), with PNG fixtures committed to a scratch repo:
-- Added / deleted / modified PNG render previews with the correct per-status content → `product.md` §1, §2; metadata line present, no "0/0" stat → §3.
-- Corrupt/truncated image bytes fall back to the placeholder and the rest of the panel still renders → §6.
-- Modified image with an unreadable base blob renders the new side and notes the old is unavailable → §7.
-- Flag off → identical-to-today binary placeholder (regression guard).
+Integration (`crates/integration/src/test/code_review.rs`, Builder/TestStep, scratch repo with embedded PNG fixtures):
+- `test_code_review_image_preview`: modified PNG previews old+new, deleted previews old only, untracked previews new only → `product.md` §1, §2; a non-image `.png` (binary bytes) keeps the binary placeholder while the rest of the panel loads → §8/§6.
+- `test_code_review_image_preview_flag_off`: flag off → no preview state, identical-to-today placeholder (regression guard).
 
 ## Risks and mitigations
 
 - **Binary corruption via the string git path** — the dedicated `run_git_command_bytes` is the mitigation; never route image blobs through `run_git_command`.
 - **Memory from buffering image bytes in the diff model** — bounded by the per-side ≈10 MB cap and the image-only restriction; `Arc` avoids copies into the view; the existing `TextureCache` evicts GPU textures for off-screen images.
 - **Decompression bomb (decoded/GPU memory)** — the ≈10 MB byte cap bounds only compressed input, so the *decoded* bound is a separate mitigation: the pre-decode max-pixel/max-dimension check plus `image::Limits` on the decoder cap the pixel buffer (and therefore the GPU texture) regardless of how large the header claims the image is. An over-cap side falls back to `TooLarge`; a decode that fails under the limits falls back to the placeholder.
-- **"Open file" zoom assumption** — `product.md` defers full-size zoom on the premise that the existing "Open file" button (L2646) renders the image. This is **unverified**: the button emits `OpenInNewTab`, and it's not confirmed that opening an image file renders it (vs. raw/text). Verify during implementation; if it doesn't render, reopen the zoom decision as a follow-up rather than silently shipping a dead deferral.
+- **"Open file" zoom assumption** — `product.md` defers full-size zoom on the premise that the existing "Open file" button renders the image. **Verified during implementation:** `OpenInNewTab` resolves the target via `resolve_file_target_with_editor_choice`, and binary files (images included) resolve to `FileTarget::SystemGeneric` — the image opens full-size in the system viewer (e.g. Preview on macOS). The deferral holds.
 
 ## Parallelization
 

@@ -39,4 +39,5 @@ gloo.workspace = true
 
 [dev-dependencies]
 futures-lite.workspace = true
+tempfile.workspace = true
 warpui_core.workspace = true

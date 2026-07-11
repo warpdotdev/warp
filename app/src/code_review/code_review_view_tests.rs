@@ -324,6 +324,7 @@ fn create_loaded_state_with_editors(
                     size: DiffSize::Normal,
                 },
                 editor_state: Some(CodeReviewEditorState::new_loaded(editor)),
+                image_preview_state: None,
                 is_expanded: true,
                 sidebar_mouse_state: MouseStateHandle::default(),
                 header_mouse_state: MouseStateHandle::default(),
