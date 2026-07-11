@@ -446,6 +446,7 @@ impl TuiFileEditsView {
                 ghost: builder.diff_removed_style(),
                 gap: builder.dim_text_style(),
                 line_overrides,
+                ..Default::default()
             })
             // A file's conventional trailing newline must not render as a
             // blank numbered row (the body ends at the outermost context line).

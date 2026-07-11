@@ -119,6 +119,29 @@ impl TuiUiBuilder {
             self.warp_theme.terminal_colors().normal.cyan,
         )))
     }
+
+    /// Blue command-name text used by the slash-command menu and recognized
+    /// slash-command prefixes in the input.
+    pub(crate) fn slash_command_text_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
+    }
+
+    /// Solid cyan selection background used by the slash-command menu.
+    pub(crate) fn slash_command_selection_background(&self) -> Color {
+        cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.cyan,
+        ))
+    }
+
+    /// Bold, contrast-derived text over the slash-command selection color.
+    pub(crate) fn slash_command_selection_text_style(&self) -> TuiStyle {
+        let background_fill = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        let foreground = self.warp_theme.font_color(background_fill.into_solid());
+        TuiStyle::default()
+            .fg(cell_color(foreground))
+            .bg(cell_color(background_fill))
+            .add_modifier(Modifier::BOLD)
+    }
     /// Bold accent prompt marker over the submitted-input background.
     pub(crate) fn input_prefix_style(&self) -> TuiStyle {
         self.accent_text_style()

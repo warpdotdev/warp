@@ -1,15 +1,25 @@
 //! Reusable active-menu routing and character-cell presentation for TUI inline menus.
+use std::ops::Range;
 
+use string_offset::CharOffset;
 use warp::tui_export::AcceptSlashCommandOrSavedPrompt;
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext,
-    TuiRect, TuiSize, TuiText,
+    TuiBuffer, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiFlex,
+    TuiLayoutContext, TuiPaintContext, TuiRect, TuiSize, TuiText,
 };
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::{AppContext, ModelAsRef, ModelHandle, UpdateModel};
 
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
+const SLASH_COMMAND_TITLE_COLUMNS: usize = 29;
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TuiInlineMenuRowStyle {
+    Default,
+    SlashCommand,
+}
 
 /// A presentation-only row in a TUI inline menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +27,7 @@ pub(crate) struct TuiInlineMenuRow {
     pub(crate) title: String,
     pub(crate) description: Option<String>,
     pub(crate) is_selectable: bool,
+    pub(crate) style: TuiInlineMenuRowStyle,
 }
 
 /// A presentation-only tab in a TUI inline-menu header.
@@ -77,6 +88,11 @@ impl TuiInlineMenu {
     pub(crate) fn render(&self, ctx: &AppContext) -> Option<Box<dyn TuiElement>> {
         self.snapshot(ctx)
             .map(|snapshot| render_inline_menu(&snapshot, &TuiUiBuilder::from_app(ctx)))
+    }
+    pub(crate) fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
+        match self {
+            Self::SlashCommands(model) => model.as_ref(ctx).highlighted_prefix_range(),
+        }
     }
 
     pub(crate) fn select_previous(&self, ctx: &mut impl UpdateModel) {
@@ -220,18 +236,15 @@ fn build_inline_menu(
         }
     }
 
-    TuiContainer::new(column.finish())
-        .with_border_style(builder.accent_border_style())
-        .finish()
+    column.finish()
 }
 
 fn visible_result_capacity(snapshot: &TuiInlineMenuSnapshot, allocated_height: u16) -> usize {
-    const BORDER_ROWS: usize = 2;
     let header_rows = snapshot.header.as_ref().map_or(0, |header| {
         usize::from(header.title.is_some()) + usize::from(!header.tabs.is_empty())
     });
     usize::from(allocated_height)
-        .saturating_sub(BORDER_ROWS + header_rows)
+        .saturating_sub(header_rows)
         .min(snapshot.max_visible_rows)
 }
 
@@ -275,40 +288,58 @@ fn menu_result_row(
     builder: &TuiUiBuilder,
 ) -> Box<dyn TuiElement> {
     let title_style = if is_selected {
-        builder.input_text_style()
-    } else if row.is_selectable {
-        builder.primary_text_style()
+        builder.slash_command_selection_text_style()
     } else {
-        builder.dim_text_style()
+        match (row.is_selectable, row.style) {
+            (true, TuiInlineMenuRowStyle::SlashCommand) => builder.slash_command_text_style(),
+            (true, TuiInlineMenuRowStyle::Default) => builder.primary_text_style(),
+            (false, TuiInlineMenuRowStyle::Default | TuiInlineMenuRowStyle::SlashCommand) => {
+                builder.dim_text_style()
+            }
+        }
     };
+    let title = match row.style {
+        TuiInlineMenuRowStyle::Default => row.title.clone(),
+        TuiInlineMenuRowStyle::SlashCommand => {
+            format!("{:<SLASH_COMMAND_TITLE_COLUMNS$}", row.title)
+        }
+    };
+    let title = TuiText::new(title)
+        .with_style(title_style)
+        .truncate()
+        .finish();
     let description_style = if is_selected {
-        builder.input_text_style()
+        builder.slash_command_selection_text_style()
     } else {
-        builder.muted_text_style()
+        match row.style {
+            TuiInlineMenuRowStyle::Default => builder.muted_text_style(),
+            TuiInlineMenuRowStyle::SlashCommand => builder.primary_text_style(),
+        }
     };
 
     let mut content = TuiFlex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .child(
-            TuiText::new(row.title.clone())
-                .with_style(title_style)
-                .truncate()
+        .child(match row.style {
+            TuiInlineMenuRowStyle::Default => title,
+            TuiInlineMenuRowStyle::SlashCommand => TuiConstrainedBox::new(title)
+                .with_max_cols(SLASH_COMMAND_TITLE_COLUMNS as u16)
                 .finish(),
-        );
+        });
     if let Some(description) = &row.description {
+        let description = match row.style {
+            TuiInlineMenuRowStyle::Default => format!("  {description}"),
+            TuiInlineMenuRowStyle::SlashCommand => description.clone(),
+        };
         content = content.child(
-            TuiText::new(format!("  {description}"))
+            TuiText::new(description)
                 .with_style(description_style)
                 .truncate()
                 .finish(),
         );
     }
-
-    let mut container = TuiContainer::new(content.finish())
-        .with_padding_left(1)
-        .with_padding_right(1);
+    let mut container = TuiContainer::new(content.finish());
     if is_selected {
-        container = container.with_background(builder.input_background());
+        container = container.with_background(builder.slash_command_selection_background());
     }
     container.finish()
 }

@@ -1,11 +1,11 @@
 use warp::appearance::Appearance;
-use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::App;
 
 use super::{
-    render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuRow, TuiInlineMenuSnapshot,
-    TuiInlineMenuStatus, TuiInlineMenuTab,
+    render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -65,6 +65,7 @@ fn renders_only_the_visible_row_window() {
                 title: format!("Conversation {index}"),
                 description: None,
                 is_selectable: true,
+                style: TuiInlineMenuRowStyle::Default,
             })
             .collect(),
         selected_index: Some(3),
@@ -100,11 +101,13 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
                 title: "Current project".to_owned(),
                 description: Some("2 minutes ago".to_owned()),
                 is_selectable: true,
+                style: TuiInlineMenuRowStyle::Default,
             },
             TuiInlineMenuRow {
                 title: "Archived".to_owned(),
                 description: None,
                 is_selectable: false,
+                style: TuiInlineMenuRowStyle::Default,
             },
         ],
         selected_index: Some(0),
@@ -141,6 +144,7 @@ fn conversation_like_snapshot_keeps_selection_visible_within_production_height()
                     title: format!("Conversation {index}"),
                     description: None,
                     is_selectable: true,
+                    style: TuiInlineMenuRowStyle::Default,
                 })
                 .collect(),
             selected_index: Some(7),
@@ -155,8 +159,74 @@ fn conversation_like_snapshot_keeps_selection_visible_within_production_height()
     let rendered = lines.join("\n");
     assert!(rendered.contains("Conversations"));
     assert!(rendered.contains("[All]  Pinned"));
-    assert!(!rendered.contains("Conversation 0"));
-    assert!(!rendered.contains("Conversation 1"));
-    assert!(rendered.contains("Conversation 2"));
+    assert!(rendered.contains("Conversation 0"));
+    assert!(rendered.contains("Conversation 1"));
     assert!(rendered.contains("Conversation 7"));
+}
+
+#[test]
+fn slash_command_rows_match_figma_layout_and_colors() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let snapshot = TuiInlineMenuSnapshot {
+                header: None,
+                rows: vec![
+                    TuiInlineMenuRow {
+                        title: "/agent".to_owned(),
+                        description: Some("Start a new agent conversation".to_owned()),
+                        is_selectable: true,
+                        style: TuiInlineMenuRowStyle::SlashCommand,
+                    },
+                    TuiInlineMenuRow {
+                        title: "/plan".to_owned(),
+                        description: Some("Create a plan".to_owned()),
+                        is_selectable: true,
+                        style: TuiInlineMenuRowStyle::SlashCommand,
+                    },
+                ],
+                selected_index: Some(0),
+                scroll_offset: 0,
+                max_visible_rows: 8,
+                status: None,
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_inline_menu(&snapshot, &builder),
+                TuiRect::new(0, 0, 50, 2),
+                ctx,
+            );
+            let lines = frame.buffer.to_lines();
+
+            assert!(lines[0].starts_with("/agent                       Start"));
+            assert!(lines[1].starts_with("/plan                        Create"));
+            assert_eq!(
+                frame.buffer[(0, 0)].bg,
+                builder.slash_command_selection_background()
+            );
+            assert_eq!(
+                frame.buffer[(0, 0)].fg,
+                builder
+                    .slash_command_selection_text_style()
+                    .fg
+                    .expect("selected slash-command text has a foreground")
+            );
+            assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+            assert_eq!(
+                frame.buffer[(0, 1)].fg,
+                builder
+                    .slash_command_text_style()
+                    .fg
+                    .expect("slash-command text has a foreground")
+            );
+            assert_eq!(
+                frame.buffer[(29, 1)].fg,
+                builder
+                    .primary_text_style()
+                    .fg
+                    .expect("slash-command descriptions use primary text")
+            );
+        });
+    });
 }

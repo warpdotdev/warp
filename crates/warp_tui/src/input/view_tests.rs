@@ -15,8 +15,8 @@ use warp::tui_export::{
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
-    TuiPoint, TuiRect, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
+    TuiPaintContext, TuiPoint, TuiRect, TuiSize,
 };
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
@@ -34,6 +34,7 @@ use crate::inline_menu::TuiInlineMenu;
 use crate::input_mode_policy::TuiInputModePolicy;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
 use crate::test_fixtures::add_test_semantic_selection;
+use crate::tui_builder::TuiUiBuilder;
 
 const W: u16 = 80;
 
@@ -46,6 +47,46 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
     let open = input_keymap_context(true);
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
+}
+
+fn render_input_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> TuiBuffer {
+    let mut element = view.as_ref(ctx).render_element(ctx);
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(W, 20)),
+        &mut layout_ctx,
+        ctx,
+    );
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    element.render(area, &mut buffer, &mut paint_ctx);
+    buffer
+}
+
+#[test]
+fn recognized_slash_command_prefix_matches_menu_color() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (view, menu_model, _) = build_view_with_inline_menu(ctx);
+            view.update(ctx, |view, ctx| view.set_text("/plan argument", ctx));
+            menu_model.update(ctx, |model, _| {
+                model.set_highlighted_prefix_len_for_test(Some(5));
+            });
+
+            let buffer = render_input_buffer(&view, ctx);
+            let expected = TuiUiBuilder::from_app(ctx)
+                .slash_command_text_style()
+                .fg
+                .expect("slash-command text has a foreground");
+            assert_eq!(buffer[(0, 0)].fg, expected);
+            assert_eq!(buffer[(4, 0)].fg, expected);
+            assert_ne!(buffer[(5, 0)].fg, expected);
+        });
+    });
 }
 
 fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
