@@ -379,12 +379,11 @@ fn test_handle_pty_read_event_while_not_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        // Use a generous tick budget: this is the only test that waits on the real
-        // ~50ms PTY batch timer to fire, and the default assert_eventually! budget
-        // (~100ms) is too tight on Windows, where coarse timer granularity (~15.6ms)
-        // plus loaded single-threaded-executor CI intermittently pushes the flush
-        // past it. The larger budget keeps the real batch-timer path under test while
-        // eliminating the flake.
+        // The test executor uses real (async_io) timers with no mock clock, so this
+        // test relies on the batch timer actually firing. `new_for_test` injects
+        // TEST_PTY_READS_BATCH_THRESHOLD (larger than the ~50ms production value) so the
+        // transient `Batching` state below is reliably observable instead of racing the
+        // timer under coarse scheduler granularity (which flaked on Windows CI).
         assert_eventually!(
             200 =>
             network.read(&app, |network, _ctx| {
@@ -393,13 +392,9 @@ fn test_handle_pty_read_event_while_not_batching() {
             "Batching status should be batching"
         );
 
-        // When the timer is done, the accumulated event should be sent to the server.
-        assert_eventually!(
-            200 =>
-            ws_proxy_rx.len() == 1,
-            "Accumulated event should be sent to the server"
-        );
-
+        // When the batch timer fires, the accumulated event is flushed to the server.
+        // Await the flush directly rather than polling a timeout, so there is no timing
+        // budget to tune and no flush-side flake.
         let item = ws_proxy_rx.recv().await;
         assert!(is_upstream_message_pty_bytes_read(
             item.unwrap(),
