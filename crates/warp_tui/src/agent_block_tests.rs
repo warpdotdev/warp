@@ -20,7 +20,7 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityIdMap, TypedActionView, ViewContext, ViewHandle};
+use warpui_core::{App, AppContext, EntityIdMap, ViewContext, ViewHandle};
 
 use super::{TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection, TuiToolCallView};
 use crate::agent_block_sections::render_fallback_tool_call_section;
@@ -564,13 +564,14 @@ fn thinking_action_records_a_manual_collapse_override() {
             },
         );
         let message_id = MessageId::new("reasoning-1".to_owned());
-        block.update(&mut app, |block, ctx| {
-            block.handle_action(
+        app.update(|ctx| {
+            ctx.dispatch_typed_action_for_view(
+                block.window_id(ctx),
+                block.id(),
                 &TuiAIBlockAction::SetThinkingCollapsed {
                     message_id: message_id.clone(),
                     collapsed: true,
                 },
-                ctx,
             );
         });
         app.read(|app_ctx| {
@@ -656,7 +657,7 @@ fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<Tui
             },
             |_| TestHostView,
         );
-        ctx.add_tui_view(window_id, move |ctx| {
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiAIBlock::new(
                 AIConversationId::new(),
                 AIAgentExchangeId::new(),

@@ -233,7 +233,7 @@ impl TuiTranscriptView {
         let action_model = self.action_model.clone();
         let model_events = self.model_events.clone();
         let terminal_model = self.model.clone();
-        let view = ctx.add_tui_view(|ctx| {
+        let view = ctx.add_typed_action_tui_view(|ctx| {
             TuiAIBlock::new(
                 conversation_id,
                 exchange_id,

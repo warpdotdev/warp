@@ -602,7 +602,7 @@ fn add_agent_block_with(
             },
             |_| TestHostView,
         );
-        ctx.add_tui_view(window_id, move |ctx| {
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiAIBlock::new(
                 AIConversationId::new(),
                 AIAgentExchangeId::new(),
