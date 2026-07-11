@@ -37,6 +37,24 @@ ru:
       redact_secrets: "Скрыть секреты (API-ключи, пароли, IP-адреса, PII и т.п.)"
       show_prompt: "Показать приглашение"
       title_placeholder: "Название (необязательно)"
+    context_menu:
+      copy: "Копировать"
+      copy_prompt: "Копировать запрос"
+      copy_output_as_markdown: "Копировать вывод как Markdown"
+      copy_url: "Копировать URL"
+      copy_path: "Копировать путь"
+      copy_command: "Копировать команду"
+      copy_git_branch: "Копировать ветку Git"
+      save_as_prompt: "Сохранить как промпт"
+      copy_share_link: "Копировать ссылку для общего доступа"
+      share_conversation: "Поделиться разговором"
+      copy_conversation_text: "Копировать текст разговора"
+      copy_debugging_link: "Копировать ссылку отладки"
+      copy_conversation_id: "Копировать ID разговора"
+      copy_debugging_id: "Копировать ID отладки"
+      fork: "Форк"
+      fork_from_here: "Ответвить отсюда"
+      rewind_to_before_here: "Откатить до этого момента"
   workspace:
     settings: "Настройки"
     agent: "Агент"
@@ -922,6 +940,23 @@ ru:
     save: "Сохранить"
     skip: "Пропустить"
     submit: "Отправить"
+    env_vars:
+      command: "Команда"
+      one_password: "1Password"
+      lastpass: "LastPass"
+      edit: "Изменить"
+      clear_secret: "Очистить секрет"
+      split_pane_right: "Разделить панель вправо"
+      split_pane_left: "Разделить панель влево"
+      split_pane_down: "Разделить панель вниз"
+      split_pane_up: "Разделить панель вверх"
+      minimize_pane: "Свернуть панель"
+      maximize_pane: "Развернуть панель"
+      close_pane: "Закрыть панель"
+      copy_link: "Копировать ссылку"
+      duplicate: "Дублировать"
+      trash: "В корзину"
+      export: "Экспорт"
 
   # ── Код ──
   code:
@@ -937,6 +972,15 @@ ru:
   # ── Диск ──
   # ── Блокнот ──
   notebook:
+    context_menu:
+      cut: "Вырезать"
+      copy: "Копировать"
+      paste: "Вставить"
+      split_pane_right: "Разделить панель вправо"
+      split_pane_left: "Разделить панель влево"
+      split_pane_down: "Разделить панель вниз"
+      split_pane_up: "Разделить панель вверх"
+      close_pane: "Закрыть панель"
 
   # ── Onboarding ──
   onboarding:

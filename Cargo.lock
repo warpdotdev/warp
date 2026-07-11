@@ -6532,6 +6532,7 @@ name = "i18n"
 version = "0.1.0"
 dependencies = [
  "log",
+ "regex",
  "serde_yaml 0.8.26",
  "sys-locale",
 ]

@@ -37,6 +37,24 @@ en:
       redact_secrets: "Redact secrets (API keys, passwords, IP addresses, PII etc.)"
       show_prompt: "Show prompt"
       title_placeholder: "Title (optional)"
+    context_menu:
+      copy: "Copy"
+      copy_prompt: "Copy prompt"
+      copy_output_as_markdown: "Copy output as Markdown"
+      copy_url: "Copy URL"
+      copy_path: "Copy path"
+      copy_command: "Copy command"
+      copy_git_branch: "Copy git branch"
+      save_as_prompt: "Save as prompt"
+      copy_share_link: "Copy share link"
+      share_conversation: "Share conversation"
+      copy_conversation_text: "Copy conversation text"
+      copy_debugging_link: "Copy debugging link"
+      copy_conversation_id: "Copy conversation ID"
+      copy_debugging_id: "Copy debugging ID"
+      fork: "Fork"
+      fork_from_here: "Fork from here"
+      rewind_to_before_here: "Rewind to before here"
   workspace:
     settings: "Settings"
     agent: "Agent"
@@ -922,6 +940,23 @@ en:
     save: "Save"
     skip: "Skip"
     submit: "Submit"
+    env_vars:
+      command: "Command"
+      one_password: "1Password"
+      lastpass: "LastPass"
+      edit: "Edit"
+      clear_secret: "Clear secret"
+      split_pane_right: "Split pane right"
+      split_pane_left: "Split pane left"
+      split_pane_down: "Split pane down"
+      split_pane_up: "Split pane up"
+      minimize_pane: "Minimize pane"
+      maximize_pane: "Maximize pane"
+      close_pane: "Close pane"
+      copy_link: "Copy link"
+      duplicate: "Duplicate"
+      trash: "Trash"
+      export: "Export"
 
   # ── Code ──
   code:
@@ -937,6 +972,15 @@ en:
   # ── Drive ──
   # ── Notebook ──
   notebook:
+    context_menu:
+      cut: "Cut"
+      copy: "Copy"
+      paste: "Paste"
+      split_pane_right: "Split pane right"
+      split_pane_left: "Split pane left"
+      split_pane_down: "Split pane down"
+      split_pane_up: "Split pane up"
+      close_pane: "Close pane"
 
   # ── Onboarding ──
   onboarding:

@@ -10,3 +10,6 @@ license.workspace = true
 log = { workspace = true }
 serde_yaml.workspace = true
 sys-locale = "0.3.2"
+
+[dev-dependencies]
+regex.workspace = true
