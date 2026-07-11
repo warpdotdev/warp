@@ -25,8 +25,9 @@ use warp::tui_export::{
     PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
     ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
     SlashCommandSelectionBehavior, StaticCommand, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
-    TuiZeroStateDataSource, COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
+    TerminalSurfaceInit, TranscriptScope,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
+    COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
@@ -219,13 +220,21 @@ impl TuiTerminalSessionView {
             wakeups_rx,
             ..
         } = surface_init;
+        model
+            .lock()
+            .block_list_mut()
+            .set_transcript_scope(TranscriptScope::Unfiltered);
 
         let terminal_surface_id: EntityId = ctx.view_id();
         let active_session =
             ctx.add_model(|ctx| ActiveSession::new(sessions.clone(), model_events.clone(), ctx));
+        let model_for_conversation_selection = model.clone();
         let conversation_selection = ctx.add_model(|ctx| {
-            Box::new(TuiConversationSelection::new(terminal_surface_id, ctx))
-                as Box<dyn ConversationSelection>
+            Box::new(TuiConversationSelection::new(
+                terminal_surface_id,
+                model_for_conversation_selection,
+                ctx,
+            )) as Box<dyn ConversationSelection>
         });
         let context_model = ctx.add_model(|ctx| {
             BlocklistAIContextModel::new(

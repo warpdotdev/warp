@@ -1,13 +1,17 @@
+use std::sync::Arc;
+
+use parking_lot::FairMutex;
 use warp::tui_export::{
     AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, ConversationSelection, ConversationSelectionEvent,
-    EnterAgentViewError, PendingQueryState,
+    EnterAgentViewError, PendingQueryState, TerminalModel,
 };
 use warpui::{AppContext, EntityId, ModelContext, SingletonEntity};
 
 /// TUI-owned next-prompt conversation selection.
 pub(super) struct TuiConversationSelection {
     terminal_surface_id: EntityId,
+    terminal_model: Arc<FairMutex<TerminalModel>>,
     pending_query_state: PendingQueryState,
 }
 
@@ -15,22 +19,73 @@ impl TuiConversationSelection {
     /// Creates TUI conversation selection for a terminal surface.
     pub(super) fn new(
         terminal_surface_id: EntityId,
+        terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) -> Self {
+        let conversation_id = Self::start_new_conversation(terminal_surface_id, true, ctx);
+        terminal_model
+            .lock()
+            .block_list_mut()
+            .set_active_conversation_context(conversation_id, false, false);
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |selection, _, event, ctx| selection.handle_history_event(event, ctx),
         );
-
-        // TODO: Implement actual permissions once settings are in place and there is a UI for permissions requests.
-        // For now, we just always set fast-forward to on.
-        let pending_query_state = PendingQueryState::New {
-            autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
-        };
-
         Self {
             terminal_surface_id,
-            pending_query_state,
+            terminal_model,
+            pending_query_state: PendingQueryState::Existing { conversation_id },
+        }
+    }
+
+    /// Creates an empty conversation for a TUI terminal surface.
+    fn start_new_conversation(
+        terminal_surface_id: EntityId,
+        is_autoexecute_override: bool,
+        ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
+    ) -> AIConversationId {
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.start_new_conversation(
+                terminal_surface_id,
+                is_autoexecute_override,
+                false,
+                false,
+                ctx,
+            )
+        })
+    }
+
+    /// Clears a removed selection and creates a replacement on the next event-loop tick.
+    fn defer_replacement_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
+    ) {
+        self.set_terminal_conversation_context(None);
+        self.set_pending_query_state(
+            PendingQueryState::New {
+                autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
+            },
+            ctx,
+        );
+        Self::emit_deactivated(conversation_id, false, ctx);
+        ctx.spawn(async {}, |selection, _, ctx| {
+            if selection.selected_conversation_id(ctx).is_none() {
+                selection.select_new_conversation(AgentViewEntryOrigin::Tui, ctx);
+            }
+        });
+    }
+
+    /// Updates command provenance for the TUI's selected conversation.
+    fn set_terminal_conversation_context(&self, conversation_id: Option<AIConversationId>) {
+        let mut terminal_model = self.terminal_model.lock();
+        match conversation_id {
+            Some(conversation_id) => terminal_model
+                .block_list_mut()
+                .set_active_conversation_context(conversation_id, false, false),
+            None => terminal_model
+                .block_list_mut()
+                .clear_active_conversation_context(),
         }
     }
 
@@ -109,28 +164,27 @@ impl ConversationSelection for TuiConversationSelection {
         if let Some(previous_conversation_id) = previous_conversation_id {
             Self::emit_deactivated(previous_conversation_id, true, ctx);
         }
+        self.set_terminal_conversation_context(Some(conversation_id));
         self.set_pending_query_state(PendingQueryState::Existing { conversation_id }, ctx);
         Self::emit_activated(origin, ctx);
     }
 
     fn select_new_conversation(
         &mut self,
-        _: AgentViewEntryOrigin,
+        origin: AgentViewEntryOrigin,
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) {
         let previous_conversation_id = self.selected_id();
         // TODO: Implement actual permissions once settings are in place and there is a UI for permissions requests.
         // For now, we just always set fast-forward to on.
-        self.set_pending_query_state(
-            PendingQueryState::New {
-                autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
-            },
-            ctx,
-        );
 
         if let Some(previous_conversation_id) = previous_conversation_id {
-            Self::emit_deactivated(previous_conversation_id, false, ctx);
+            Self::emit_deactivated(previous_conversation_id, true, ctx);
         }
+        let conversation_id = Self::start_new_conversation(self.terminal_surface_id, true, ctx);
+        self.set_terminal_conversation_context(Some(conversation_id));
+        self.set_pending_query_state(PendingQueryState::Existing { conversation_id }, ctx);
+        Self::emit_activated(origin, ctx);
     }
 
     fn try_start_new_conversation(
@@ -138,27 +192,10 @@ impl ConversationSelection for TuiConversationSelection {
         origin: AgentViewEntryOrigin,
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) -> Result<AIConversationId, EnterAgentViewError> {
-        if let Some(previous_conversation_id) = self.selected_id() {
-            Self::emit_deactivated(previous_conversation_id, true, ctx);
-        }
-        let is_autoexecute_override = matches!(
-            self.pending_query_state,
-            PendingQueryState::New {
-                autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
-            }
-        );
-        let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            history.start_new_conversation(
-                self.terminal_surface_id,
-                is_autoexecute_override,
-                false,
-                false,
-                ctx,
-            )
-        });
-        self.set_pending_query_state(PendingQueryState::Existing { conversation_id }, ctx);
-        Self::emit_activated(origin, ctx);
-        Ok(conversation_id)
+        self.select_new_conversation(origin, ctx);
+        Ok(self
+            .selected_id()
+            .expect("TUI new-conversation selection should be eager"))
     }
 
     fn pending_query_autoexecute_override(
@@ -222,7 +259,9 @@ impl ConversationSelection for TuiConversationSelection {
         }
         match event {
             BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. } => {
-                self.select_new_conversation(AgentViewEntryOrigin::Cli, ctx);
+                if let Some(conversation_id) = self.selected_id() {
+                    self.defer_replacement_conversation(conversation_id, ctx);
+                }
             }
             BlocklistAIHistoryEvent::SplitConversation {
                 old_conversation_id,
@@ -245,7 +284,7 @@ impl ConversationSelection for TuiConversationSelection {
                 conversation_id,
                 ..
             } if self.selected_id() == Some(*conversation_id) => {
-                self.select_new_conversation(AgentViewEntryOrigin::Cli, ctx);
+                self.defer_replacement_conversation(*conversation_id, ctx);
             }
             _ => {}
         }

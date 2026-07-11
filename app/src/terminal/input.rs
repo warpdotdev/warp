@@ -4356,10 +4356,7 @@ impl Input {
             && AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx);
         let is_cloud = {
             let terminal_model = self.model.lock();
-            is_in_cloud_context(
-                terminal_model.block_list().agent_view_state(),
-                &terminal_model,
-            )
+            is_in_cloud_context(&terminal_model)
         };
         *edit_origin == EditOrigin::UserTyped
             && AISettings::as_ref(ctx).is_ampersand_handoff_enabled(ctx)

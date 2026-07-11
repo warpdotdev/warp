@@ -86,7 +86,9 @@ pub use crate::terminal::local_tty::{
     TerminalManager as LocalTtyTerminalManager, TerminalManagerInit, TerminalSurfaceInit,
     TerminalSurfaceResult,
 };
-pub use crate::terminal::model::block::{AgentInteractionMetadata, Block, BlockId};
+pub use crate::terminal::model::block::{
+    AgentInteractionMetadata, Block, BlockId, TranscriptScope,
+};
 pub use crate::terminal::model::blockgrid::BlockGrid;
 pub use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
