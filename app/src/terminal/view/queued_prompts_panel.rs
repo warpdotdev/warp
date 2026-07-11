@@ -158,7 +158,6 @@ struct QueuedPromptRowState {
     send_now_button: ViewHandle<ActionButton>,
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
-    /// Copy action shown in place of Delete for the locked initial cloud-mode prompt.
     copy_button: Option<ViewHandle<ActionButton>>,
     draggable_state: DraggableState,
 }
@@ -715,7 +714,6 @@ impl QueuedPromptsPanelView {
             .map(|state| state.send_now_button.as_ref(ctx).is_disabled())
     }
 
-    /// Test accessor: whether the `query_id` row exposes a Copy action.
     pub(super) fn has_copy_button_for_test(&self, query_id: QueuedQueryId) -> Option<bool> {
         self.row_states
             .get(&query_id)
@@ -1318,7 +1316,6 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             if !is_in_edit_mode {
                 buttons.add_child(ChildView::new(&edit_button).finish());
             }
-            // Copy replaces Delete on the locked row, keeping the action count the same.
             if let Some(copy_button) = &copy_button {
                 buttons.add_child(ChildView::new(copy_button).finish());
             } else {

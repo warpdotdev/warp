@@ -1483,7 +1483,6 @@ fn locked_initial_cloud_mode_prompt_shows_copy_action_that_copies_full_prompt() 
 
         let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
 
-        // Long and multiline so Copy is exercised against text the row preview would truncate.
         let long_prompt = format!("line one\nline two\n{}", "x".repeat(1000));
         let long_prompt_for_assert = long_prompt.clone();
         let (initial_id, followup_id) =
