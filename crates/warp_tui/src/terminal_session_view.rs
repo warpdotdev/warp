@@ -19,11 +19,11 @@ use warp::tui_export::{
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CLISubagentEvent,
     CancellationReason, ChangelogModel, ChangelogModelEvent, ChangelogRequestType,
-    CloudConversationData, CommandExecutionSource, ConversationSelection,
+    CloudConversationData, CommandExecutionSource, ConversationFileExport, ConversationSelection,
     ConversationSelectionHandle, ConversationUsageTotals, ExecuteCommandEvent,
-    GetRelevantFilesController, GitRepoModels, GitRepoStatusModel, GitStatusMetadata,
-    LLMPreferences, LLMPreferencesEvent, ModelEvent, ParsedSlashCommandInput, PtyIntent,
-    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
+    GetRelevantFilesController, GitRepoModels, GitRepoStatusModel, GitStatusMetadata, LLMPreferences,
+    LLMPreferencesEvent, ModelEvent, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent,
+    RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
     ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
     SlashCommandSelectionBehavior, StaticCommand, TerminalModel, TerminalSurface,
     TerminalSurfaceInit, TranscriptScope, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
@@ -164,6 +164,14 @@ enum ConversationRestoreState {
     Idle,
     Loading,
     Failed(String),
+}
+fn export_file_success_message(export: &ConversationFileExport) -> String {
+    let path = export.path().display();
+    if export.overwrote_existing() {
+        format!("Conversation exported to {path} (overwrote existing file)")
+    } else {
+        format!("Conversation exported to {path}")
+    }
 }
 
 /// Typed actions handled by [`TuiTerminalSessionView`].
@@ -773,11 +781,14 @@ impl TuiTerminalSessionView {
     }
 
     /// Displays success-colored feedback in the transient footer slot.
-    fn show_copy_hint(&mut self, ctx: &mut ViewContext<Self>) {
+    fn show_success_hint(&mut self, text: String, ctx: &mut ViewContext<Self>) {
         self.transient_hint
-            .show_success(COPY_SELECTION_HINT.to_owned(), ctx, |view| {
-                &mut view.transient_hint
-            });
+            .show_success(text, ctx, |view| &mut view.transient_hint);
+    }
+
+    /// Displays success-colored feedback in the transient footer slot.
+    fn show_copy_hint(&mut self, ctx: &mut ViewContext<Self>) {
+        self.show_success_hint(COPY_SELECTION_HINT.to_owned(), ctx);
     }
 
     /// Handles a ctrl-c press: a second press within [`CTRL_C_EXIT_WINDOW`]
@@ -1281,11 +1292,14 @@ impl TuiTerminalSessionView {
                 .map(|conversation| {
                     conversation.export_to_markdown(Some(self.ai_action_model.as_ref(ctx)))
                 });
-            let message = match export_markdown_to_clipboard(markdown, ctx.clipboard()) {
-                ClipboardExportOutcome::Exported => "Conversation exported to clipboard",
-                ClipboardExportOutcome::NoActiveConversation => "No active conversation to export",
-            };
-            self.show_transient_hint(message.to_owned(), ctx);
+            match export_markdown_to_clipboard(markdown, ctx.clipboard()) {
+                ClipboardExportOutcome::Exported => {
+                    self.show_success_hint("Conversation exported to clipboard".to_owned(), ctx);
+                }
+                ClipboardExportOutcome::NoActiveConversation => {
+                    self.show_transient_hint("No active conversation to export".to_owned(), ctx);
+                }
+            }
             self.input_view.update(ctx, |input, ctx| input.clear(ctx));
             record_static_slash_command_accepted(command.name, true, ctx);
         } else if command.name == slash_commands::EXPORT_TO_FILE.name {
@@ -1312,13 +1326,7 @@ impl TuiTerminalSessionView {
                 &markdown,
             ) {
                 Ok(export) => {
-                    let path = export.path().display();
-                    let message = if export.overwrote_existing() {
-                        format!("Conversation exported to {path} (overwrote existing file)")
-                    } else {
-                        format!("Conversation exported to {path}")
-                    };
-                    self.show_transient_hint(message, ctx);
+                    self.show_success_hint(export_file_success_message(&export), ctx);
                 }
                 Err(error) => {
                     let message = error.user_message();

@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentActionId, AIConversationId, AgentInteractionMetadata, BlockId, TerminalModel,
-    TranscriptScope,
+    export_conversation_markdown, AIAgentActionId, AIConversationId, AgentInteractionMetadata,
+    BlockId, TerminalModel, TranscriptScope,
 };
 use warpui::clipboard::{ClipboardContent, InMemoryClipboard};
 use warpui::{Clipboard, EntityIdMap};
@@ -14,8 +14,8 @@ use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewpor
 use warpui_core::App;
 
 use super::{
-    export_markdown_to_clipboard, hide_agent_requested_command_from_top_level,
-    raw_prompt_if_not_blank, ClipboardExportOutcome,
+    export_file_success_message, export_markdown_to_clipboard,
+    hide_agent_requested_command_from_top_level, raw_prompt_if_not_blank, ClipboardExportOutcome,
 };
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
@@ -213,4 +213,21 @@ fn clipboard_export_without_conversation_does_not_modify_clipboard() {
 
     assert_eq!(outcome, ClipboardExportOutcome::NoActiveConversation);
     assert_eq!(clipboard.read().plain_text, "existing clipboard contents");
+}
+
+#[test]
+fn file_export_success_message_includes_destination_path() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let export = export_conversation_markdown(
+        Some(directory.path().to_str().expect("UTF-8 temp path")),
+        Some("conversation.md"),
+        None,
+        "# Conversation",
+    )
+    .expect("conversation export");
+
+    assert_eq!(
+        export_file_success_message(&export),
+        format!("Conversation exported to {}", export.path().display())
+    );
 }
