@@ -13,6 +13,7 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
@@ -80,13 +81,13 @@ fn build_row_state(
     let is_initial_cloud_mode_prompt = origin == QueuedQueryOrigin::InitialCloudMode;
     // The send-now tooltip is owned by `update_send_now_availability`, which swaps in a
     // "wait for the cloud agent" message while send-now is disabled; "Send now" is the default.
-    let (edit_tooltip, delete_tooltip) = if is_initial_cloud_mode_prompt {
-        (
-            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
-            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
-        )
+    // The locked initial cloud-mode prompt keeps its Edit action disabled (with an explanatory
+    // tooltip) but replaces Delete with a Copy action (built below), so `delete_tooltip` only
+    // matters for the ordinary rows that still render the delete button.
+    let edit_tooltip = if is_initial_cloud_mode_prompt {
+        INITIAL_CLOUD_MODE_PROMPT_TOOLTIP
     } else {
-        ("Edit", "Delete")
+        "Edit"
     };
 
     let send_now_button = ctx.add_typed_action_view(move |_| {
@@ -112,17 +113,33 @@ fn build_row_state(
     let delete_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
             .with_icon(TerminalIcon::Trash)
-            .with_tooltip(delete_tooltip)
+            .with_tooltip("Delete")
             .with_size(ButtonSize::XSmall)
             .with_disabled_theme(NakedTheme)
             .on_click(move |ctx| {
                 ctx.dispatch_typed_action(QueuedPromptsPanelAction::DeleteRow(query_id));
             })
     });
+    // The locked initial cloud-mode prompt can't be edited or deleted, but its original text can
+    // still be recovered: it shows a Copy action in place of Delete that copies the full, original
+    // prompt (including long or multiline content) to the clipboard. No other row gets this button.
+    let copy_button = is_initial_cloud_mode_prompt.then(|| {
+        ctx.add_typed_action_view(move |_| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(TerminalIcon::Copy)
+                .with_tooltip("Copy")
+                .with_size(ButtonSize::XSmall)
+                .with_disabled_theme(NakedTheme)
+                .on_click(move |ctx| {
+                    ctx.dispatch_typed_action(QueuedPromptsPanelAction::CopyRow(query_id));
+                })
+        })
+    });
 
     if is_initial_cloud_mode_prompt {
+        // Only the Edit action is disabled; Delete is not rendered for this row (Copy takes its
+        // place), so there's nothing to disable there.
         edit_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
-        delete_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
     }
 
     QueuedPromptRowState {
@@ -135,6 +152,7 @@ fn build_row_state(
         send_now_button,
         edit_button,
         delete_button,
+        copy_button,
         draggable_state: DraggableState::default(),
     }
 }
@@ -148,6 +166,9 @@ struct QueuedPromptRowState {
     send_now_button: ViewHandle<ActionButton>,
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
+    /// Copy action shown in place of Delete for the locked initial cloud-mode prompt, letting
+    /// users recover the original prompt text. `None` for every other row.
+    copy_button: Option<ViewHandle<ActionButton>>,
     draggable_state: DraggableState,
 }
 
@@ -195,8 +216,13 @@ pub enum QueuedPromptsPanelAction {
     SendNow(QueuedQueryId),
     StartEditingRow(QueuedQueryId),
     DeleteRow(QueuedQueryId),
+    /// Copy a row's full, original prompt text to the clipboard. Used by the locked initial
+    /// cloud-mode prompt's Copy action so users can recover their prompt if setup fails.
+    CopyRow(QueuedQueryId),
     StartDrag(QueuedQueryId),
-    DragMoved { rect: RectF },
+    DragMoved {
+        rect: RectF,
+    },
     DropEnd,
 }
 
@@ -702,6 +728,14 @@ impl QueuedPromptsPanelView {
             .map(|state| state.send_now_button.as_ref(ctx).is_disabled())
     }
 
+    /// Test accessor: whether the `query_id` row exposes a Copy action (shown in place of Delete
+    /// only for the locked initial cloud-mode prompt). `None` when the row has no state.
+    pub(super) fn has_copy_button_for_test(&self, query_id: QueuedQueryId) -> Option<bool> {
+        self.row_states
+            .get(&query_id)
+            .map(|state| state.copy_button.is_some())
+    }
+
     /// Test accessor: whether the header currently shows the "⏎ to send" hint.
     pub(super) fn enter_hint_shown_for_test(&self, ctx: &AppContext) -> bool {
         self.should_show_enter_hint(ctx)
@@ -765,6 +799,19 @@ impl TypedActionView for QueuedPromptsPanelView {
                 QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                     model.enter_edit_mode(conv_id, query_id, ctx);
                 });
+            }
+            QueuedPromptsPanelAction::CopyRow(query_id) => {
+                let query_id = *query_id;
+                // Copy the full, untruncated prompt text straight from the model (not the row's
+                // single-line preview) so long or multiline prompts are recovered verbatim.
+                let text = QueuedQueryModel::as_ref(ctx)
+                    .queue(conv_id)
+                    .iter()
+                    .find(|row| row.id() == query_id)
+                    .map(|row| row.text().to_owned());
+                if let Some(text) = text {
+                    ctx.clipboard().write(ClipboardContent::plain_text(text));
+                }
             }
             QueuedPromptsPanelAction::DeleteRow(query_id) => {
                 let query_id = *query_id;
@@ -1129,6 +1176,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
         send_now_button,
         edit_button,
         delete_button,
+        copy_button,
         draggable_state,
     } = row_state;
 
@@ -1286,7 +1334,14 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             if !is_in_edit_mode {
                 buttons.add_child(ChildView::new(&edit_button).finish());
             }
-            buttons.add_child(ChildView::new(&delete_button).finish());
+            // The locked initial cloud-mode prompt shows a Copy action in place of Delete; every
+            // other row keeps its Delete action. Either way the trailing action count is
+            // unchanged, so the reserved-footprint math below stays correct.
+            if let Some(copy_button) = &copy_button {
+                buttons.add_child(ChildView::new(copy_button).finish());
+            } else {
+                buttons.add_child(ChildView::new(&delete_button).finish());
+            }
             buttons.finish()
         } else {
             let count = if is_in_edit_mode { 2. } else { 3. };

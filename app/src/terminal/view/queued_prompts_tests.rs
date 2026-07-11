@@ -1474,6 +1474,53 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
     });
 }
 
+#[test]
+fn locked_initial_cloud_mode_prompt_shows_copy_action_that_copies_full_prompt() {
+    // The locked initial cloud-mode prompt (shown while the cloud environment is being created)
+    // swaps its Delete action for a Copy action, so users can recover the original prompt if setup
+    // fails. Ordinary queued rows keep their Delete action (no copy button). Copying reads the
+    // full, untruncated prompt text — including long, multiline content — from the model.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
+
+        // A long, multiline prompt whose single-line preview would be truncated, plus an ordinary
+        // follow-up row queued during setup.
+        let long_prompt = format!("line one\nline two\n{}", "x".repeat(1000));
+        let long_prompt_for_assert = long_prompt.clone();
+        let (initial_id, followup_id) =
+            QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+                let initial_id = model.append(
+                    conversation_id,
+                    QueuedQuery::new(long_prompt, QueuedQueryOrigin::InitialCloudMode),
+                    ctx,
+                );
+                let followup_id = model.append(conversation_id, user_query("follow up"), ctx);
+                (initial_id, followup_id)
+            });
+
+        // Only the locked initial cloud-mode row exposes a Copy action; the follow-up keeps Delete.
+        panel.read(&app, |panel, _| {
+            assert_eq!(panel.has_copy_button_for_test(initial_id), Some(true));
+            assert_eq!(panel.has_copy_button_for_test(followup_id), Some(false));
+        });
+
+        // Clicking Copy writes the full, original prompt text to the clipboard verbatim.
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(&QueuedPromptsPanelAction::CopyRow(initial_id), ctx);
+        });
+        app.update(|ctx| {
+            assert_eq!(ctx.clipboard().read().plain_text, long_prompt_for_assert);
+        });
+
+        // The row is left in the queue — copying is non-destructive.
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(model.queue(conversation_id).len(), 2);
+        });
+    });
+}
+
 /// Builds a panel keyed to a fresh terminal view with an active conversation, mirroring the
 /// construction the host `Input` performs. Returns the panel, the conversation id, and the
 /// host input.
