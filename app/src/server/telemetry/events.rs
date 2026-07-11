@@ -5397,7 +5397,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ToggleSettingsSync { .. } => EnablementState::Always,
             Self::AgentTipShown | Self::AgentTipClicked | Self::ToggleShowAgentTips => {
-                EnablementState::Flag(FeatureFlag::AgentTips)
+                EnablementState::Always
             }
             Self::AutosuggestionInserted => EnablementState::Always,
             Self::BlockCompleted => EnablementState::Always,

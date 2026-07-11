@@ -627,7 +627,7 @@ pub fn render_warping_indicator_base(
         text_col = text_col
             .with_child(text_content)
             .with_child(Container::new(sub_element).with_margin_top(1.).finish());
-    } else if FeatureFlag::AgentTips.is_enabled() && *InputSettings::as_ref(app).show_agent_tips {
+    } else if *InputSettings::as_ref(app).show_agent_tips {
         text_col = text_col.with_child(text_content);
     } else {
         text_col = text_col.with_child(
