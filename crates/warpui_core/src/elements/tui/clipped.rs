@@ -31,6 +31,24 @@ impl TuiClipped {
         }
     }
 
+    /// Wraps an already-laid-out child with retained viewport geometry.
+    pub(crate) fn from_laid_out_child(
+        child: Box<dyn TuiElement>,
+        viewport_origin_y: usize,
+        size: TuiSize,
+    ) -> Self {
+        debug_assert!(
+            child.size().is_some(),
+            "TuiClipped child size must be retained before wrapping"
+        );
+        Self {
+            child,
+            viewport_origin_y: viewport_origin_y.min(usize::from(u16::MAX)) as u16,
+            size: Some(size),
+            origin: None,
+        }
+    }
+
     /// Sets the child row rendered at the top of the clipped viewport.
     ///
     /// The child still lays out and renders from its own logical row 0. The
@@ -101,7 +119,7 @@ impl TuiElement for TuiClipped {
         let child_size = self
             .child
             .size()
-            .unwrap_or_else(|| TuiSize::new(area.width, self.child_height(area.height)));
+            .expect("TuiClipped child size must be retained after layout");
         let child_area = TuiRect::new(
             0,
             0,

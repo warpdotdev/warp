@@ -2,9 +2,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::TuiEventHandler;
-use crate::elements::tui::{
-    TuiChildView, TuiElement, TuiEvent, TuiEventContext, TuiPresentationContext,
-};
+use crate::elements::tui::test_support::with_event_context;
+use crate::elements::tui::{TuiChildView, TuiElement, TuiEvent, TuiPresentationContext};
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::{App, EntityId, EntityIdMap};
@@ -32,16 +31,16 @@ fn invokes_callback_on_matching_key_and_reports_handled() {
                     counter.set(counter.get() + 1);
                 });
 
-            let mut event_ctx = TuiEventContext::default();
+            with_event_context(|event_ctx| {
+                let handled = handler.dispatch_event(&key_event("enter"), event_ctx, app_ctx);
+                assert!(handled);
+                assert_eq!(hits.get(), 1);
 
-            let handled = handler.dispatch_event(&key_event("enter"), &mut event_ctx, app_ctx);
-            assert!(handled);
-            assert_eq!(hits.get(), 1);
-
-            // A non-matching key is left unhandled for ancestors, runs no callback.
-            let handled = handler.dispatch_event(&key_event("esc"), &mut event_ctx, app_ctx);
-            assert!(!handled);
-            assert_eq!(hits.get(), 1);
+                // A non-matching key is left unhandled for ancestors, runs no callback.
+                let handled = handler.dispatch_event(&key_event("esc"), event_ctx, app_ctx);
+                assert!(!handled);
+                assert_eq!(hits.get(), 1);
+            });
         });
     });
 }
@@ -62,8 +61,9 @@ fn child_consumes_the_event_before_the_wrapper() {
                 outer_counter.set(outer_counter.get() + 1)
             });
 
-            let mut event_ctx = TuiEventContext::default();
-            let handled = outer.dispatch_event(&key_event("enter"), &mut event_ctx, app_ctx);
+            let handled = with_event_context(|event_ctx| {
+                outer.dispatch_event(&key_event("enter"), event_ctx, app_ctx)
+            });
 
             assert!(handled);
             assert_eq!(inner_hits.get(), 1);

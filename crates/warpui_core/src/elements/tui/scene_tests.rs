@@ -34,6 +34,59 @@ fn higher_hit_layer_covers_lower_points() {
     assert!(!scene.is_covered(TuiScreenPoint::new(4, 4, TuiZIndex::Normal(0))));
 }
 
+/// Verifies that overlay layers occlude every normal layer.
+#[test]
+fn overlay_layer_covers_normal_layer_below_it() {
+    let mut rendered_views = EntityIdMap::default();
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
+    ctx.with_overlay_layer(TuiClipBounds::None, |ctx| {
+        ctx.scene.record_hit_rect(TuiScreenRect::new(
+            TuiScreenPoint::new(0, 0, ctx.scene.z_index()),
+            TuiSize::new(3, 3),
+        ));
+    });
+    let (scene, _, _) = ctx.finish();
+
+    assert!(scene.is_covered(TuiScreenPoint::new(1, 1, TuiZIndex::Normal(0))));
+}
+
+/// Verifies that later overlay layers occlude earlier overlays.
+#[test]
+fn higher_overlay_layer_covers_lower_overlay_layer() {
+    let mut rendered_views = EntityIdMap::default();
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
+    let lower = ctx.with_overlay_layer(TuiClipBounds::None, |ctx| {
+        let lower = TuiScreenPoint::new(1, 1, ctx.scene.z_index());
+        ctx.with_overlay_layer(TuiClipBounds::None, |ctx| {
+            ctx.scene.record_hit_rect(TuiScreenRect::new(
+                TuiScreenPoint::new(0, 0, ctx.scene.z_index()),
+                TuiSize::new(3, 3),
+            ));
+        });
+        lower
+    });
+    let (scene, _, _) = ctx.finish();
+
+    assert!(scene.is_covered(lower));
+}
+
+/// Verifies that click-through overlays leave lower targets exposed.
+#[test]
+fn click_through_overlay_does_not_cover_lower_targets() {
+    let mut rendered_views = EntityIdMap::default();
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
+    ctx.with_overlay_layer(TuiClipBounds::None, |ctx| {
+        ctx.set_active_layer_click_through();
+        ctx.scene.record_hit_rect(TuiScreenRect::new(
+            TuiScreenPoint::new(0, 0, ctx.scene.z_index()),
+            TuiSize::new(3, 3),
+        ));
+    });
+    let (scene, _, _) = ctx.finish();
+
+    assert!(!scene.is_covered(TuiScreenPoint::new(1, 1, TuiZIndex::Normal(0))));
+}
+
 #[test]
 fn disjoint_nested_clip_stays_empty() {
     let mut scene = TuiScene::default();

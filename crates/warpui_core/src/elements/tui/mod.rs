@@ -224,6 +224,23 @@ impl<'a> TuiPaintContext<'a> {
         result
     }
 
+    /// Runs `f` inside a clipped overlay scene layer.
+    pub fn with_overlay_layer<R>(
+        &mut self,
+        bounds: TuiClipBounds,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.scene.start_overlay_layer(bounds);
+        let result = f(self);
+        self.scene.stop_layer();
+        result
+    }
+
+    /// Makes the active scene layer transparent to hit testing.
+    pub fn set_active_layer_click_through(&mut self) {
+        self.scene.set_active_layer_click_through();
+    }
+
     /// Requests a repaint after `delay` (floored to [`MIN_REPAINT_DELAY`]),
     /// keeping the earliest pending deadline.
     pub fn repaint_after(&mut self, delay: Duration) {
@@ -426,8 +443,11 @@ impl TuiViewMapContext for TuiPresentationContext<'_> {
 /// Shared harnesses for TUI element tests.
 #[cfg(test)]
 pub(crate) mod test_support {
+    use std::rc::Rc;
+
     use super::{
-        TuiBufferExt, TuiElement, TuiEvent, TuiEventContext, TuiPaintContext, TuiRect, TuiSize,
+        TuiBufferExt, TuiElement, TuiEvent, TuiEventContext, TuiPaintContext, TuiRect, TuiScene,
+        TuiSize,
     };
     use crate::presenter::tui::{TuiFrame, TuiPresenter};
     use crate::{App, AppContext, EntityId, EntityIdMap};
@@ -437,6 +457,12 @@ pub(crate) mod test_support {
     pub(crate) fn with_paint_context<R>(f: impl FnOnce(&mut TuiPaintContext) -> R) -> R {
         let mut rendered_views = EntityIdMap::default();
         f(&mut TuiPaintContext::new(&mut rendered_views))
+    }
+    /// Runs `f` with dispatch state over an empty scene and view map.
+    pub(crate) fn with_event_context<R>(f: impl FnOnce(&mut TuiEventContext<'_>) -> R) -> R {
+        let mut rendered_views = EntityIdMap::default();
+        let mut ctx = TuiEventContext::new(Rc::new(TuiScene::default()), &mut rendered_views);
+        f(&mut ctx)
     }
 
     /// Renders `element` into a `size` buffer and returns the rows as strings.

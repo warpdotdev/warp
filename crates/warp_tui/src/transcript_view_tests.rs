@@ -390,7 +390,9 @@ fn dispatch_event(
         let mut buffer = TuiBuffer::empty(area);
         let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
         element.render((area.x, area.y).into(), &mut buffer, &mut paint_ctx);
-        let mut event_ctx = TuiEventContext::with_scene(Rc::new(paint_ctx.scene.clone()));
+        let scene = Rc::new(paint_ctx.scene.clone());
+        drop(paint_ctx);
+        let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
         event_ctx.set_origin_view(Some(EntityId::new()));
         element.dispatch_event(event, &mut event_ctx, app)
     })

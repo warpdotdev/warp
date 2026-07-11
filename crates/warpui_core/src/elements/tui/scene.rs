@@ -171,6 +171,19 @@ impl TuiScene {
         }
     }
 
+    /// Starts an overlay layer above every normal layer.
+    pub(crate) fn start_overlay_layer(&mut self, bounds: TuiClipBounds) {
+        let layer = self.layer_for_bounds(bounds);
+        self.overlay_layers.push(layer);
+        self.active_layers
+            .push(TuiZIndex::Overlay(self.overlay_layers.len() - 1));
+    }
+
+    /// Makes the active layer transparent to hit testing.
+    pub fn set_active_layer_click_through(&mut self) {
+        self.active_layer_mut().click_through = true;
+    }
+
     /// Finishes the active layer.
     pub fn stop_layer(&mut self) {
         assert!(

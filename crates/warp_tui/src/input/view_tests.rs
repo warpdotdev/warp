@@ -16,7 +16,7 @@ use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPoint, TuiRect, TuiSize,
+    TuiPaintContext, TuiPoint, TuiRect, TuiScene, TuiSize,
 };
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
@@ -731,13 +731,13 @@ fn laid_out_element(
     (element, TuiRect::new(0, 0, size.width, size.height))
 }
 
-/// Paints `element` and returns dispatch state for its retained scene.
-fn paint_event_context(element: &mut dyn TuiElement, area: TuiRect) -> TuiEventContext<'static> {
+/// Paints `element` and returns its retained scene.
+fn paint_event_scene(element: &mut dyn TuiElement, area: TuiRect) -> Rc<TuiScene> {
     let mut rendered_views = EntityIdMap::default();
     let mut buffer = TuiBuffer::empty(area);
     let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
     element.render(TuiPoint::new(area.x, area.y), &mut buffer, &mut paint_ctx);
-    TuiEventContext::with_scene(Rc::new(paint_ctx.scene.clone()))
+    Rc::new(paint_ctx.scene.clone())
 }
 
 /// Drives the full mouse path for `event`: lay out the element, map the event to
@@ -746,7 +746,9 @@ fn paint_event_context(element: &mut dyn TuiElement, area: TuiRect) -> TuiEventC
 fn mouse(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, event: &TuiEvent) -> bool {
     let action = {
         let (mut element, area) = laid_out_element(view, ctx);
-        let event_ctx = paint_event_context(&mut element, area);
+        let scene = paint_event_scene(&mut element, area);
+        let mut rendered_views = EntityIdMap::default();
+        let event_ctx = TuiEventContext::new(scene, &mut rendered_views);
         element.mouse_action(event, &event_ctx, ctx)
     };
     match action {
@@ -1046,7 +1048,9 @@ fn escape_is_not_consumed_by_the_element() {
             let view = build_view(ctx);
             type_str(&view, ctx, "ab");
             let (mut element, area) = laid_out_element(&view, ctx);
-            let mut event_ctx = paint_event_context(&mut element, area);
+            let scene = paint_event_scene(&mut element, area);
+            let mut rendered_views = EntityIdMap::default();
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
             event_ctx.set_origin_view(Some(view.id()));
             let escape = TuiEvent::KeyDown {
                 keystroke: Keystroke {
@@ -1154,7 +1158,9 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             type_str(&view, ctx, "hello world");
             let action = {
                 let (mut element, area) = laid_out_shell_content_slot(&view, ctx);
-                let event_ctx = paint_event_context(&mut element, area);
+                let scene = paint_event_scene(&mut element, area);
+                let mut rendered_views = EntityIdMap::default();
+                let event_ctx = TuiEventContext::new(scene, &mut rendered_views);
                 element
                     .mouse_action(&left_down(2 + 3, 0, 1, false), &event_ctx, ctx)
                     .map(TuiInputAction::from)
@@ -1169,7 +1175,9 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             // release inside it fires the handler (which moves the cursor to
             // the buffer start); both halves are consumed.
             let (mut row, area) = laid_out_shell_row(&view, ctx);
-            let mut event_ctx = paint_event_context(row.as_mut(), area);
+            let scene = paint_event_scene(row.as_mut(), area);
+            let mut rendered_views = EntityIdMap::default();
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
             event_ctx.set_origin_view(Some(view.id()));
             assert!(
                 row.dispatch_event(&left_down(0, 0, 1, false), &mut event_ctx, ctx),

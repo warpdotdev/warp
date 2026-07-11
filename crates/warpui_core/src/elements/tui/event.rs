@@ -114,10 +114,9 @@ pub struct TuiEventDispatchResult {
     pub handled: bool,
 }
 
-#[derive(Default)]
 pub struct TuiEventContext<'a> {
-    scene: Option<Rc<TuiScene>>,
-    rendered_views: Option<&'a mut EntityIdMap<Box<dyn TuiElement>>>,
+    scene: Rc<TuiScene>,
+    rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
     notified: HashSet<EntityId>,
     typed_actions: Vec<TuiDispatchedAction>,
     origin_view_id: Option<EntityId>,
@@ -132,37 +131,28 @@ pub(crate) struct TuiDispatchedAction {
 }
 
 impl<'a> TuiEventContext<'a> {
-    /// Creates standalone dispatch state for an already-painted scene.
-    pub fn with_scene(scene: Rc<TuiScene>) -> Self {
-        Self {
-            scene: Some(scene),
-            ..Default::default()
-        }
-    }
     /// Creates dispatch state for the last painted element tree and scene.
-    pub(crate) fn new(
+    pub fn new(
         scene: Rc<TuiScene>,
         rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
     ) -> Self {
         Self {
-            scene: Some(scene),
-            rendered_views: Some(rendered_views),
-            ..Default::default()
+            scene,
+            rendered_views,
+            notified: HashSet::new(),
+            typed_actions: Vec::new(),
+            origin_view_id: None,
         }
     }
 
     /// Returns the visible portion of retained element bounds.
     pub fn visible_rect(&self, origin: TuiScreenPoint, size: TuiSize) -> Option<TuiScreenRect> {
-        self.scene
-            .as_ref()
-            .and_then(|scene| scene.visible_rect(origin, size))
+        self.scene.visible_rect(origin, size)
     }
 
     /// Returns whether a higher painted layer covers `point`.
     pub fn is_covered(&self, point: TuiScreenPoint) -> bool {
-        self.scene
-            .as_ref()
-            .is_some_and(|scene| scene.is_covered(point))
+        self.scene.is_covered(point)
     }
 
     /// Converts a terminal pointer position to signed element-local cells.
@@ -224,7 +214,5 @@ impl<'a> TuiEventContext<'a> {
 impl TuiViewMapContext for TuiEventContext<'_> {
     fn rendered_views_mut(&mut self) -> &mut EntityIdMap<Box<dyn TuiElement>> {
         self.rendered_views
-            .as_deref_mut()
-            .expect("child-view dispatch requires the presenter's rendered view map")
     }
 }

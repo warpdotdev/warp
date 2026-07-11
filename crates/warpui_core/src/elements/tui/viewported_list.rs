@@ -343,11 +343,10 @@ fn layout_visible_elements(
             let height = visible_bottom
                 .saturating_sub(visible_top)
                 .min(usize::from(u16::MAX)) as u16;
-            let mut element = TuiClipped::new(element).with_viewport_origin_y(viewport_origin_y);
-            element.layout(
-                TuiConstraint::tight(TuiSize::new(available_width, height)),
-                ctx,
-                app,
+            let element = TuiClipped::from_laid_out_child(
+                element,
+                viewport_origin_y,
+                TuiSize::new(available_width, height),
             );
             Some(VisibleElement {
                 viewport_y,

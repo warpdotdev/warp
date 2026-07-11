@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use string_offset::ByteOffset;
@@ -84,6 +84,66 @@ impl TuiViewportedElement for FakeContent {
         _app: &AppContext,
     ) -> Option<TuiViewportContent> {
         Some(self.content(window, available_width))
+    }
+}
+struct LayoutCountingElement {
+    layout_count: Rc<Cell<usize>>,
+    size: Option<TuiSize>,
+}
+
+impl TuiElement for LayoutCountingElement {
+    /// Retains a height-sensitive size and records each layout pass.
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        self.layout_count.set(self.layout_count.get() + 1);
+        let size = constraint.clamp(TuiSize::new(1, 3));
+        self.size = Some(size);
+        size
+    }
+
+    /// Paints nothing.
+    fn render(
+        &mut self,
+        _buffer_origin: TuiPoint,
+        _buffer: &mut TuiBuffer,
+        _ctx: &mut TuiPaintContext,
+    ) {
+    }
+
+    /// Returns the retained size from the canonical layout pass.
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+}
+
+struct LayoutCountingContent {
+    layout_count: Rc<Cell<usize>>,
+}
+
+impl TuiViewportedElement for LayoutCountingContent {
+    /// Returns one item that extends below a two-row viewport.
+    fn visible_items(
+        &self,
+        _window: TuiViewportWindow,
+        _available_width: u16,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiViewportContent {
+        TuiViewportContent {
+            content_height: 3,
+            items: vec![TuiVisibleViewportItem {
+                origin_y: 0,
+                element: LayoutCountingElement {
+                    layout_count: self.layout_count.clone(),
+                    size: None,
+                }
+                .finish(),
+            }],
+        }
     }
 }
 
@@ -193,6 +253,26 @@ fn wheel_with_notify_count(
         let handled = viewport.dispatch_event(&event, &mut event_ctx, app_ctx);
         (handled, event_ctx.take_notified().len())
     })
+}
+
+/// Keeps the full item layout canonical when its bottom is clipped.
+#[test]
+fn bottom_clipped_item_is_laid_out_once() {
+    App::test((), |app| async move {
+        let layout_count = Rc::new(Cell::new(0));
+        let state = TuiViewportedListState::new_at_end();
+        state.scroll_to_rows_from_top(0);
+        let mut viewport = TuiViewportedList::new(
+            state,
+            LayoutCountingContent {
+                layout_count: layout_count.clone(),
+            },
+        );
+
+        render_viewport(&app, &mut viewport, TuiSize::new(8, 2));
+
+        assert_eq!(layout_count.get(), 1);
+    });
 }
 
 #[test]

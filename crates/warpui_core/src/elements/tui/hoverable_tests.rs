@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::TuiHoverable;
-use crate::elements::tui::test_support::dispatch_presented_event;
+use crate::elements::tui::test_support::{dispatch_presented_event, with_event_context};
 use crate::elements::tui::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPaintContext, TuiPoint, TuiScreenPoint, TuiSize, TuiText,
@@ -43,9 +43,9 @@ fn pointer_dispatch_before_paint_is_unhandled() {
             let mut hoverable =
                 TuiHoverable::new(MouseStateHandle::default(), TuiText::new("hello").finish())
                     .on_click(|_, _| panic!("unpainted hoverable must not click"));
-            let mut event_ctx = TuiEventContext::default();
-
-            assert!(!hoverable.dispatch_event(&left_mouse_down(0, 0), &mut event_ctx, app_ctx,));
+            with_event_context(|event_ctx| {
+                assert!(!hoverable.dispatch_event(&left_mouse_down(0, 0), event_ctx, app_ctx,));
+            });
         });
     });
 }

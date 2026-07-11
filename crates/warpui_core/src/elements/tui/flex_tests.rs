@@ -4,11 +4,11 @@ use std::rc::Rc;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiFlex;
-use crate::elements::tui::test_support::{render_to_lines, with_paint_context};
+use crate::elements::tui::test_support::{render_to_lines, with_event_context, with_paint_context};
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiEventHandler, TuiLayoutContext, TuiParentElement, TuiPoint, TuiPresentationContext, TuiRect,
-    TuiSize, TuiText,
+    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventHandler,
+    TuiLayoutContext, TuiParentElement, TuiPoint, TuiPresentationContext, TuiRect, TuiSize,
+    TuiText,
 };
 use crate::elements::CrossAxisAlignment;
 use crate::event::KeyEventDetails;
@@ -367,8 +367,9 @@ fn dispatch_event_broadcasts_to_all_children() {
                         }),
                 ));
 
-            let mut event_ctx = TuiEventContext::default();
-            let handled = column.dispatch_event(&key_event("x"), &mut event_ctx, app_ctx);
+            let handled = with_event_context(|event_ctx| {
+                column.dispatch_event(&key_event("x"), event_ctx, app_ctx)
+            });
 
             assert!(handled);
             assert_eq!(first_hits.get(), 1);

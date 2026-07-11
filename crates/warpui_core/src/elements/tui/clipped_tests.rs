@@ -11,6 +11,38 @@ use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
 use crate::{App, AppContext, EntityIdMap};
+struct MissingRetainedSize;
+
+impl TuiElement for MissingRetainedSize {
+    /// Returns a non-empty layout without retaining it.
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        constraint.clamp(TuiSize::new(1, 1))
+    }
+
+    /// Paints nothing.
+    fn render(
+        &mut self,
+        _buffer_origin: TuiPoint,
+        _buffer: &mut TuiBuffer,
+        _ctx: &mut TuiPaintContext,
+    ) {
+    }
+}
+
+/// Rejects children that violate the retained-size contract.
+#[test]
+#[should_panic(expected = "TuiClipped child size must be retained after layout")]
+fn render_requires_the_child_to_retain_its_layout_size() {
+    render_to_lines(
+        TuiClipped::new(MissingRetainedSize.finish()),
+        TuiSize::new(1, 1),
+    );
+}
 
 #[test]
 fn renders_from_the_requested_logical_row() {

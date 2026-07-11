@@ -4,9 +4,9 @@ use std::rc::Rc;
 use ratatui::style::Color;
 
 use super::TuiContainer;
-use crate::elements::tui::test_support::render_to_lines;
+use crate::elements::tui::test_support::{render_to_lines, with_event_context};
 use crate::elements::tui::{
-    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiEventHandler,
+    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventHandler,
     TuiLayoutContext, TuiPaintContext, TuiPoint, TuiPresentationContext, TuiRect, TuiScreenPoint,
     TuiSize, TuiText,
 };
@@ -142,8 +142,9 @@ fn dispatch_event_forwards_to_the_child_inside_the_inset() {
                 details: KeyEventDetails::default(),
                 is_composing: false,
             };
-            let mut event_ctx = TuiEventContext::default();
-            let handled = container.dispatch_event(&event, &mut event_ctx, app_ctx);
+            let handled = with_event_context(|event_ctx| {
+                container.dispatch_event(&event, event_ctx, app_ctx)
+            });
 
             assert!(handled);
             assert_eq!(hits.get(), 1);
