@@ -33,13 +33,11 @@ ru:
       title_placeholder: "Название (необязательно)"
   workspace:
     settings: "Настройки"
-    new_tab: "Новая вкладка"
     agent: "Агент"
     terminal: "Терминал"
     local_docker_sandbox: "Локальная песочница Docker"
     whats_new: "Что нового"
     keyboard_shortcuts: "Горячие клавиши"
-    tab_configs: "Конфигурации вкладок"
     new_worktree_config: "Новая конфигурация рабочего дерева"
     new_tab_config: "Новая конфигурация вкладки"
     reopen_closed_session: "Открыть закрытую сессию"
@@ -56,7 +54,6 @@ ru:
     invite_a_friend: "Пригласить друга"
     log_out: "Выйти"
     cloud_agent: "Облачный Agent"
-    install_update: "Установить обновление ({version})"
     install_update_tab: "Установить обновление"
     reset_pane_name: "Сбросить имя панели"
     reset_active_pane_name: "Сбросить имя активной панели"
@@ -72,11 +69,9 @@ ru:
     view: "Просмотр"
     undo: "Отменить"
     open_file: "Открыть файл"
-    open: "Открыть: %s"
     rename_pane: "Переименовать панель"
     rename_active_pane: "Переименовать активную панель"
     tab_configs_chip: "Доступ к конфигурациям вкладок здесь."
-    failed_load_conversation: "Не удалось загрузить разговор."
     failed_delete_conversation: "Не удалось удалить разговор. Выйдите из вида агента и попробуйте снова."
     update_warp: "Обновить Warp"
     version_deprecation: "Ваше приложение устарело, некоторые функции могут работать некорректно. Пожалуйста, обновитесь немедленно."
@@ -111,13 +106,9 @@ ru:
 
   # ── Workspace Conversation List ──
   workspace.conversation_list:
-    no_conversations: "Пока нет бесед"
-    no_conversations_hint: "Ваши активные и прошлые беседы с локальными и облачными агентами будут отображаться здесь."
-    new_conversation: "Новая беседа"
 
   # ── Workspace Global Search ──
   workspace.global_search:
-    search_in_files: "Поиск в файлах"
 
   # ── Привязки рабочей области ──
   workspace.binding:
@@ -182,7 +173,6 @@ ru:
     turn_notifications_off: "Выключить уведомления"
     launch_configuration_palette: "Палитра конфигураций запуска"
     toggle_files_palette: "Переключить палитру файлов"
-    save_new_launch_configuration_editable: "Сохранить новую конфигурацию запуска"
     search_warp_drive: "Поиск в Warp Drive"
     install_update_and_relaunch: "Установить обновление и перезапустить"
     check_for_updates: "Проверить обновления"
@@ -196,7 +186,6 @@ ru:
     toggle_mouse_reporting: "Переключить отчёты мыши"
     activate_previous_pane: "Активировать предыдущую панель"
     activate_next_pane: "Активировать следующую панель"
-    switch_to_nth_tab: "Переключиться на вкладку {n}"
     switch_to_last_tab: "Переключиться на последнюю вкладку"
     activate_previous_tab: "Активировать предыдущую вкладку"
     activate_next_tab: "Активировать следующую вкладку"
@@ -280,7 +269,6 @@ ru:
   # ── Отладка рабочей области ──
   workspace.debug:
     dump_debug_info: "Дамп отладочной информации"
-    crash: "Уронить приложение (для тестирования sentry)"
     log_review_comment_send_status: "[Debug] Логировать статус отправки комментария ревью"
     trigger_panic: "Вызвать панику (для тестирования sentry-rust)"
     open_view_tree_debugger: "Открыть отладчик дерева видов"
@@ -303,9 +291,6 @@ ru:
 
   # ── Внешний вид ──
   appearance:
-    create_custom_theme: "Создать свою тему"
-    line_height: "Высота строки"
-    zoom: "Масштаб"
 
   # ── Диалоги ──
   # ── Provider Keys ──
@@ -325,7 +310,6 @@ ru:
     execution_profile:
       apply_code_diffs: "Применять изменения кода:"
       ask_questions: "Задавать вопросы:"
-      auto: "Авто"
       autosync_plans_to_warp_drive: "Автосинхронизация планов с Warp Drive:"
       base_model: "Базовая модель:"
       call_mcp_servers: "Вызывать MCP-серверы:"
@@ -376,7 +360,6 @@ ru:
       add_custom_endpoint: "Добавить свой endpoint"
       agent:
         git_operations_autogen_description: "Генерирует сообщение коммита на основе текущих изменений в вашем git-репозитории"
-      title: "ИИ"
     appearance:
       category:
         blocks: "Блоки"
@@ -411,7 +394,6 @@ ru:
         tab_indicators: "индикаторы вкладок"
         themes_sync_os: "темы: синхронизация с ОС"
         zen_mode: "режим дзен"
-    code: "Код"
     features:
       asynchronous_find: "Асинхронный поиск"
       clipboard_osc52: "Доступ к буферу обмена (OSC 52)"
@@ -419,7 +401,6 @@ ru:
       code_editor_line_numbers: "Номера строк в редакторе кода:"
       preserve_input_focus_on_block_selection: "Сохранять фокус ввода при выделении блока"
       press_new_shortcut: "Нажмите новую комбинацию клавиш"
-      title: "Функции"
       toggle:
         agent_task_completed_notifications: "уведомления о завершении задач агентом"
         alias_expansion: "раскрытие алиасов"
@@ -498,7 +479,6 @@ ru:
       team_full_title: "Ваша команда заполнена"
       team_member_count_one: "1 участник команды"
       teammate_count_one: "1 коллега"
-      title: "Команды"
     update_environment_form:
       auth_with_github: "Войти через GitHub"
       authenticate: "Авторизоваться"
@@ -545,8 +525,6 @@ ru:
       suggest_image_tooltip: "Warp подберёт Docker-образ на основе выбранных репозиториев."
       suggest_image_unknown_response: "Неизвестный ответ от suggestCloudEnvironmentImage"
 
-    ssh: "SSH"
-    warp_drive: "Warp Drive"
     warp_agent: "Warp Агент"
     mcp_servers_page:
       title: "Серверы MCP"
@@ -580,17 +558,6 @@ ru:
       scope_team: "Командный"
       search_api_keys: "Поиск по ключам API"
   settings.shared_blocks:
-    executed_on: "Выполнено:"
-    unshare_block_title: "Отменить доступ к блоку"
-    unshare_failed: "Не удалось отозвать доступ к блоку. Пожалуйста, попробуйте снова."
-    unshare_success: "Блок успешно отозван из общего доступа."
-    link_copied: "Ссылка скопирована."
-    unshare: "Отменить доступ"
-    failed_to_load: "Не удалось загрузить блоки. Пожалуйста, попробуйте снова."
-    getting_blocks: "Получение блоков..."
-    no_blocks_yet: "У вас пока нет общих блоков."
-    deleting: "Удаление..."
-    copy_link: "Копировать ссылку"
   settings.code_page:
     code: "Код"
     initialization_settings_header: "Настройки инициализации"
@@ -606,27 +573,6 @@ ru:
     indexing_subpage_title: "Индексация кодовой базы"
     editor_subpage_title: "Редактор и Code Review"
     index_new_folder: "Индексировать новую папку"
-    initialized_indexed_folders: "Инициализированные / проиндексированные папки"
-    no_folders_initialized: "Папки ещё не были инициализированы."
-    indexing_label: "ИНДЕКСАЦИЯ"
-    no_index_created: "Индекс не создан"
-    open_project_rules: "Открыть правила проекта"
-    index_limit_reached: "Достигнут лимит индексов"
-    unavailable: "Недоступно"
-    indexing_discovered: "Обнаружено {total_nodes} фрагментов"
-    indexing_syncing: "Синхронизация - {completed_nodes} / {total_nodes}"
-    indexing_syncing_generic: "Синхронизация..."
-    indexing_synced: "Синхронизировано"
-    indexing_too_large: "Кодовая база слишком велика"
-    indexing_stale: "Устарело"
-    indexing_failed: "Ошибка"
-    no_index_built: "Индекс не построен"
-    indexing_disabled: "Отключено"
-    indexing_queued: "В очереди"
-    indexing_remote_syncing: "Индексация - {completed} / {total}"
-    indexing_remote_syncing_partial: "Индексация - {completed}"
-    indexing_remote_syncing_zero: "Индексация - 0 / {total}"
-    indexing_remote_generic: "Индексация..."
     lsp_status_installed: "Установлено"
     lsp_status_installing: "Установка..."
     lsp_status_checking: "Проверка..."
@@ -811,37 +757,11 @@ ru:
     balance_remaining: "осталось"
 
   settings.category:
-    themes: "Темы"
-    icon: "Значок"
-    window: "Окно"
-    input: "Ввод"
-    panes: "Панели"
-    blocks: "Блоки"
-    text: "Текст"
-    language: "Язык"
-    cursor: "Курсор"
-    tabs: "Вкладки"
-    fullscreen_apps: "Полноэкранные приложения"
-    general: "Общие"
-    session: "Сессия"
-    keys: "Клавиши"
-    text_editing: "Редактирование"
-    terminal_input: "Ввод в терминале"
-    terminal: "Терминал"
-    notifications: "Уведомления"
-    workflows: "Рабочие процессы"
-    system: "Система"
 
   settings.keybindings:
-    search_placeholder: 'Поиск по имени или клавишам (например, "cmd d")'
-    conflict_warning: "Это сочетание конфликтует с другими комбинациями"
     reset: "По умолчанию"
     press_new: "Нажмите новую комбинацию клавиш"
-    add_custom: "Добавьте свои комбинации клавиш к действиям ниже."
-    use_prefix: "Используйте"
-    reference_suffix: "чтобы посмотреть эти комбинации на боковой панели в любое время."
     configure: "Настройка горячих клавиш"
-    not_synced: "Горячие клавиши не синхронизируются с облаком"
     command_column: "Команда"
 
   settings.features:
@@ -867,13 +787,10 @@ ru:
     new_tab_after_all: "После всех вкладок"
     new_tab_after_current: "После текущей вкладки"
     change_keybinding: "Изменить комбинацию"
-    ssh_wrapper: "Warp SSH обёртка"
     link_tooltip: "Показывать подсказку при клике на ссылки"
     quit_warning_modal: "Показывать предупреждение перед выходом"
     alias_expansion: "Раскрывать алиасы при вводе"
     middle_click_paste: "Вставка по средней кнопке мыши"
-    code_as_default_editor: "Использовать VS Code как редактор по умолчанию"
-    input_hint_text: "Показывать подсказки ввода"
     vim_keybindings: "Редактировать код и команды с раскладкой Vim"
     vim_unnamed_register: "Использовать безымянный регистр как системный буфер обмена"
     vim_status_bar: "Показать строку состояния Vim"
@@ -888,9 +805,7 @@ ru:
     one_million: "1 миллион"
     block_max_rows_warning: "Установка лимита выше 100 тыс. строк может повлиять на производительность. Максимально поддерживается {max_rows} строк."
     open_links_desktop: "Открывать ссылки в десктопном приложении"
-    open_links_desktop_tooltip: "Автоматически открывать ссылки в десктопном приложении, когда возможно."
     restore_session: "Восстанавливать окна, вкладки и панели при запуске"
-    wayland_no_restore: "Позиции окон не будут восстановлены в Wayland. "
     sticky_command_header: "Показать закреплённый заголовок команд"
     start_at_login_macos: "Запускать Warp при входе (требуется macOS 13+)"
     start_at_login: "Запускать Warp при входе"
@@ -903,8 +818,6 @@ ru:
     auto_open_code_review_description: "Когда эта настройка включена, панель code review откроется при первом принятом диффе в разговоре"
     warp_is_default: "Warp является терминалом по умолчанию"
     max_block_rows: "Максимальное количество строк в блоке"
-    ssh_wrapper_label: "Warp SSH обёртка"
-    change_takes_effect_new_sessions: "Изменения вступят в силу в новых сессиях"
     receive_desktop_notifications: "Получать уведомления на рабочий стол от Warp"
     notify_agent_completes: "Уведомлять, когда агент завершает задачу"
     notify_needs_attention: "Уведомлять, когда команда или агент требует внимания"
@@ -960,9 +873,6 @@ ru:
     accepts_autosuggestions: "{} принимает автопредложения."
     completions_open_typing_or: "Автодополнение открывается при вводе (или {})."
     opens_completion_menu: "{} открывает меню автодополнения."
-    quake_keybinding: "Комбинация Quake"
-    quake_pin_position: "Позиция закрепления Quake"
-    quake_pin_screen: "Экран закрепления Quake"
     at_context_menu_terminal: "Включить контекстное меню '@' в режиме терминала"
 
     toggle:
@@ -1022,7 +932,6 @@ ru:
   # ── Диск ──
   # ── Блокнот ──
   notebook:
-    edit: "Редактировать"
 
   # ── Onboarding ──
   onboarding:
@@ -1097,9 +1006,7 @@ ru:
     suggested_code_banners_description: "Позволяет AI предлагать диффы кода и запросы в виде баннеров в списке блоков на основе последних команд и их выводов."
     natural_language_autosuggestions_description: "Позволяет AI предлагать автоподсказки на естественном языке на основе последних команд и их выводов."
     shared_block_title_generation_description: "Позволяет AI генерировать заголовок для общего блока на основе команды и вывода."
-    git_operations_autogen_description: "Позволяет AI генерировать сообщения коммитов и заголовки и описания pull request'ов."
 
-    ai: "AI"
     active_ai: "Активный AI"
     next_command: "Следующая команда"
     prompt_suggestions: "Подсказки"
@@ -1116,7 +1023,6 @@ ru:
     profiles: "Профили"
     input: "Ввод"
     voice: "Голос"
-    other: "Другое"
     agents: "Агенты"
     knowledge: "Знания"
     mcp_servers: "MCP-серверы"
@@ -1129,9 +1035,6 @@ ru:
       supervised: "Под наблюдением"
       ask_on_first_write: "Спрашивать при первой записи"
       allow_in_specific_directories: "Разрешить в указанных папках"
-      never: "Никогда"
-      never_ask: "Никогда не спрашивать"
-      ask_unless_auto_approve: "Спрашивать, кроме авто-одобрения"
 
     restricted_due_to_billing: "Ограничено из-за проблем с оплатой"
     unlimited: "Безлимитно"
@@ -1151,14 +1054,11 @@ ru:
     hide_agent_tips: "Скрывать подсказки агента"
     show_oz_changelog: "Показывать изменения Oz в новом представлении агента"
     hide_oz_changelog: "Скрывать изменения Oz в новом представлении агента"
-    show_use_agent_footer: 'Показывать футер "Использовать агента"'
-    hide_use_agent_footer: 'Скрывать футер "Использовать агента"'
 
     natural_language_detection: "Обнаружение естественного языка"
     autodetect_agent_prompts: "Автоопределение агентских подсказок в вводе терминала"
     autodetect_terminal_commands: "Автоопределение терминальных команд в вводе агента"
     show_input_hint_text: "Показывать текст подсказки ввода"
-    show_agent_tips_toggle: "Показывать подсказки агента"
     include_agent_commands_in_history: "Включать команды агента в историю"
     natural_language_denylist: "Чёрный список естественного языка"
     natural_language_denylist_description: "Команды из этого списка никогда не будут вызывать обнаружение естественного языка."
@@ -1178,7 +1078,6 @@ ru:
     placeholder_command_allowlist: "напр. ls .*"
     placeholder_command_denylist: "напр. rm .*"
     placeholder_directory_allowlist: "напр. ~/code-repos/repo"
-    placeholder_profile_name: 'напр. "YOLO code"'
     placeholder_cli_command: "команда (поддерживает regex)"
     base_model: "Базовая модель"
     apply_code_diffs: "Применять диффы кода"
@@ -1189,8 +1088,6 @@ ru:
     auto_spawn_servers: "Автозапуск серверов от сторонних агентов"
     show_model_picker_in_prompt: "Показывать выбор модели в подсказке"
     show_conversation_history: "Показывать историю разговоров в панели инструментов"
-    enable_builtin_feedback_skill: "Включить встроенный навык обратной связи"
-    feedback_bundled_skill_description: "Позволяет Oz использовать встроенный навык Warp для превращения отзывов о продукте в задачи на GitHub."
     agent_thinking_display: "Отображение размышлений агента"
     preferred_layout_open_conversation: "Предпочитаемый макет при открытии существующих разговоров"
 
@@ -1203,9 +1100,7 @@ ru:
     remote_session_org_policy: "Ваша организация запрещает AI, когда активная панель содержит контент из удалённой сессии"
 
     commands_comma_separated: "Команды, через запятую"
-    this_is_limit_of_ai_credits: "Это {duration} лимит AI кредитов для вашего аккаунта."
 
-    resets: "Сброс {time}"
 
     agents_description: "Установите границы того, как работает ваш Агент. Выберите, к чему он имеет доступ, насколько он автономен и когда он должен запрашивать ваше разрешение. Вы также можете настроить поведение в отношении ввода на естественном языке, осведомлённости о кодовой базе и многого другого."
     profiles_description: "Профили позволяют вам определить, как работает ваш Агент — от действий, которые он может выполнять и когда ему нужно разрешение, до моделей, которые он использует для задач, таких как кодирование и планирование. Вы также можете ограничить их отдельными проектами."
@@ -1219,15 +1114,8 @@ ru:
     mcp_denylist_description: "Агент Warp всегда будет запрашивать разрешение перед вызовом любых MCP-серверов из этого списка."
 
     base_model_description: "Эта модель служит основным движком Агента Warp. Она обеспечивает большинство взаимодействий и вызывает другие модели для задач, таких как планирование или генерация кода, когда это необходимо. Warp может автоматически переключаться на альтернативные модели в зависимости от доступности модели или для вспомогательных задач, таких как суммирование разговоров."
-    full_terminal_use_model_description: "Модель, используемая, когда агент работает в интерактивных терминальных приложениях, таких как оболочки баз данных, отладчики, REPL или серверы разработки — читая живой вывод и записывая команды в PTY."
-    computer_use_model_description: "Модель, используемая, когда агент берет на себя управление вашим компьютером для взаимодействия с графическими приложениями через движения мыши, клики и ввод с клавиатуры."
-    context_window_description: "Рабочая память базовой модели — сколько токенов вашего разговора, кода и документов она может учитывать одновременно. Большие окна обеспечивают более длинные разговоры и более связные ответы на больших кодовых базах ценой более высокой задержки и использования вычислений."
-    plan_auto_sync_description: "Планы, создаваемые этим агентом, будут автоматически добавлены и синхронизированы с Warp Drive."
-    call_web_tools_description: "Агент может использовать веб-поиск, когда это полезно для выполнения задач."
-    upgrade_footer: "Продвинутые модели недоступны на бесплатных тарифах. Улучшить"
     thinking_display_description: "Управляет отображением следов размышлений/рассуждений."
 
-    show_hint_description: 'Показывает подсказку использовать агента с "Full Terminal Use" в длительных командах.'
     rule_suggestions_description: "Позволяет AI предлагать правила для сохранения на основе ваших взаимодействий."
     warp_drive_context_description: "Агент Warp может использовать содержимое вашего Warp Drive для адаптации ответов к вашим личным и командным рабочим процессам и средам разработки. Это включает любые Workflows, Notebooks и переменные окружения."
 
@@ -1238,12 +1126,8 @@ ru:
     contact_support: "Связаться с поддержкой"
 
     learn_more: "Узнать больше"
-    let_us_know: "Сообщите нам"
     refresh: "Обновить"
 
-    codebase_context_description: "Позволяет Агенту Warp генерировать структуру вашей кодовой базы, которая может использоваться для контекста. Никакой код не хранится на наших серверах."
-    mcp_description: "Добавьте MCP-серверы для расширения возможностей Агента Warp. MCP-серверы предоставляют источники данных или инструменты агентам через стандартизированный интерфейс, действуя как плагины."
-    mcp_zero_state: "Вы ещё не добавили ни одного MCP-сервера. После добавления вы сможете контролировать, насколько автономным будет Агент Warp при взаимодействии с ними."
     add_mcp_server: "Добавить сервер"
 
     show_coding_agent_toolbar: "Показывать панель инструментов агента кодирования"
@@ -1261,15 +1145,6 @@ ru:
     agent_attribution_description: "Oz может добавлять атрибуцию к сообщениям коммитов и создаваемым pull request'ам"
 
     experimental: "Экспериментально"
-    computer_use: "Управление компьютером"
-    ask_questions: "Задавать вопросы"
-    full_terminal_use_model: "Модель для работы в терминале"
-    computer_use_model: "Модель для управления компьютером"
-    context_window: "Контекстное окно"
-    plan_auto_sync: "Автосинхронизация планов"
-    call_web_tools: "Веб-инструменты"
-    section_models: "МОДЕЛИ"
-    section_permissions: "РАЗРЕШЕНИЯ"
     computer_use_in_cloud_agents: "Computer Use в облачных агентах"
     computer_use_description: "Включить computer use в разговорах облачного агента, запущенных из приложения Warp."
 
@@ -1381,87 +1256,15 @@ ru:
 
   # ── Настройки биллинга ──
   settings.billing:
-    overage_usage_link: "Подробнее о перерасходе"
-    overage_toggle_admin_header: "Включить перерасход для премиум-моделей"
-    overage_toggle_user_header_enabled: "Перерасход для премиум-моделей включён"
-    overage_toggle_user_header_disabled: "Перерасход для премиум-моделей отключён"
-    overage_toggle_description: "Продолжайте использовать премиум-модели сверх лимитов вашего плана. Использование оплачивается с шагом $20 до вашего лимита расходов, остаток списывается в дату планового платежа."
-    overage_toggle_user_description: "Попросите администратора команды включить перерасход для большего использования AI."
 
-    sort_a_to_z: "От A до Z"
-    sort_z_to_a: "От Z до A"
-    sort_usage_ascending: "По использованию (возр.)"
-    sort_usage_descending: "По использованию (убыв.)"
 
-    auto_reload_exceed_limit: "Автопополнение отключено, так как следующее пополнение превысит ваш месячный лимит расходов. Увеличьте лимит для использования автопополнения."
-    auto_reload_delinquent: "Ограничено из-за проблем с оплатой. Обновите способ оплаты для покупки дополнительных кредитов."
-    restricted_billing_usage: "Автопополнение отключено из-за недавней неудачной попытки пополнения. Пожалуйста, обновите способ оплаты и попробуйте снова."
 
-    overview_tab: "Обзор"
-    usage_history_tab: "История использования"
 
-    enterprise_usage_callout_header: "Отчётность по использованию временно ограничена"
-    enterprise_usage_callout_body_admin_prefix: "Использование корпоративных кредитов пока не полностью доступно в этом представлении. Для наиболее точного отслеживания расходов "
-    enterprise_usage_callout_body_admin_link: "посетите панель администратора"
-    enterprise_usage_callout_body_admin_suffix: "."
-    enterprise_usage_callout_body_non_admin: "Использование корпоративных кредитов пока не полностью доступно в этом представлении. Обратитесь к администратору команды для подробной отчётности."
 
-    addon_credits_description: "Дополнительные кредиты приобретаются предоплаченными пакетами, которые переносятся на следующий расчётный цикл и истекают через год. Чем больше покупаете, тем выгоднее цена за кредит. После использования кредитов базового плана будут расходоваться дополнительные кредиты."
-    additional_addon_credits_description_for_team: "Приобретённые дополнительные кредиты распределяются между членами команды."
 
-    cloud_agent_trial: "Пробный период облачного агента"
 
-    overage_spending_limit: "Лимит расходов на перерасход"
-    monthly_spending_limit: "Месячный лимит расходов"
-    load_more: "Загрузить ещё"
 
-    failed_update_workspace_settings: "Не удалось обновить настройки рабочего пространства"
-    successfully_purchased_addon_credits: "Дополнительные кредиты успешно приобретены"
 
-    not_set: "Не задано"
-    monthly_overage_spending_limit: "Месячный лимит расходов на перерасход"
-    sets_monthly_overage_limit: "Устанавливает месячный лимит расходов на перерасход сверх суммы плана"
-    add_on_credits: "Дополнительные кредиты"
-    switch_to_build: "Перейти на план Build"
-    upgrade_to_build: "Улучшить до плана Build"
-    contact_account_executive: "Свяжитесь с вашим аккаунт-менеджером для получения дополнительных кредитов."
-    contact_team_admin: "Обратитесь к администратору команды для покупки дополнительных кредитов."
-    sets_monthly_limit_spent: "Устанавливает месячный лимит расходов на дополнительные кредиты"
-    monthly_spend_limit: "Месячный лимит расходов"
-    purchased_this_month: "Приобретено в этом месяце"
-    auto_reload: "Автопополнение"
-    auto_reload_description: "При включении автопополнение будет автоматически приобретать {amount} кредитов, когда баланс дополнительных кредитов достигнет 100 оставшихся кредитов."
-    buying: "Покупка…"
-    buy: "Купить"
-    one_time_purchase: "Разовая покупка"
-    reloading_would_exceed: "Пополнение превысит ваш месячный лимит. "
-    increase_your_limit: "Увеличьте лимит"
-    total_overages: "Общий перерасход"
-    usage_resets_on: "Использование сбрасывается {date}"
-    credit_limit_prorated_self: "Ваш кредитный лимит пропорционален, потому что вы присоединились в середине расчётного цикла."
-    credit_limit_prorated_other: "Этот кредитный лимит пропорционален, потому что этот пользователь присоединился в середине расчётного цикла."
-    usage_section: "Использование"
-    credits_header: "Кредиты"
-    credit_limit_description: "Это {duration} лимит AI кредитов для вашего аккаунта."
-    last_30_days: "Последние 30 дней"
-    no_usage_history: "Нет истории использования"
-    kick_off_agent_task: "Запустите задачу агента, чтобы увидеть историю использования."
-    sort_by: "Сортировать"
-    team_total: "Всего по команде"
-    manage_billing: "Управление оплатой"
-    contact_team_admin_billing: "Обратитесь к администратору команды для решения проблем с оплатой."
-    upgrade_to_turbo: "Улучшить до плана Turbo"
-    upgrade_to_lightspeed: "Улучшить до плана Lightspeed"
-    upgrade_plan: "Улучшить"
-    upgrade_to_max: "Улучшить до Max"
-    switch_to_business: "Перейти на Business"
-    upgrade_to_enterprise: "Улучшить до Enterprise"
-    plan: "План"
-    open_admin_panel: "Открыть панель администратора"
-    free: "Бесплатный"
-    new_agent: "Новый агент"
-    buy_more: "Купить ещё"
-    billing_and_usage: "Биллинг и использование"
 
   # ── Запуск OpenWarp ──
   # ── Настройки конфиденциальности ──
@@ -1473,11 +1276,9 @@ ru:
     help_improve_warp: "Помочь улучшить Warp"
     help_improve_warp_description: "Аналитика приложения помогает нам сделать продукт лучше для вас. Мы можем собирать определённые взаимодействия с консолью для улучшения возможностей AI Warp."
     help_improve_warp_description_enterprise: "Аналитика приложения помогает нам сделать продукт лучше для вас. Мы собираем только метаданные использования приложения, никогда не собираем ввод или вывод консоли."
-    free_tier_analytics_note: "На бесплатном тарифе аналитика должна быть включена для использования функций AI."
     manage_your_data: "Управление вашими данными"
     manage_your_data_description: "В любое время вы можете безвозвратно удалить свой аккаунт Warp. Вы больше не сможете использовать Warp."
     visit_data_management_page: "Посетить страницу управления данными"
-    manage_privacy_settings: "Управление настройками конфиденциальности"
     privacy_policy_title: "Политика конфиденциальности"
     read_privacy_policy: "Прочитать политику конфиденциальности Warp"
     add_regex_pattern: "Добавить regex-шаблон"
@@ -1529,14 +1330,6 @@ ru:
     team_members: "Участники команды"
     reset_links: "Сбросить ссылки"
     remove_domain: "Удалить домен"
-    remove: "Удалить"
-    approve_domains: "Подтвердить домены"
-    send_email_invites: "Отправить приглашения"
-    invite_link_prefix: "warp.dev/join/"
-    copy_link: "Копировать ссылку"
-    link_copied: "Ссылка скопирована"
-    leave_team_confirmation: "Вы уверены, что хотите покинуть эту команду?"
-    delete_team_confirmation: "Вы уверены, что хотите удалить эту команду? Это действие нельзя отменить."
     transfer_team_ownership: "Передать владение командой?"
     transfer_ownership: "Передать владение"
     failed_to_send_invite: "Не удалось отправить приглашение"
@@ -1561,7 +1354,6 @@ ru:
     error_leaving_team: "Ошибка при выходе из команды"
     successfully_left_team: "Вы успешно покинули команду"
     your_new_team_name: "Название вашей новой команды"
-    new_team_name: "Название вашей новой команды"
     seat_cap_reached: "Вы достигли лимита участников вашего плана."
     seat_cap_exceeded: "Вы превысили лимит участников вашего плана. Существующие участники сохраняют доступ, но вы не сможете добавлять новых."
     payment_past_due: "Платёж просрочен"
@@ -1575,7 +1367,6 @@ ru:
     update_payment_to_restore: "Обновите платёжную информацию для восстановления доступа."
     contact_support_to_restore: "Свяжитесь с поддержкой для восстановления доступа."
     upgrade: "Улучшить"
-    contact_sales: "Связаться с продажами"
     update_billing: "Обновить оплату"
     contact_support: "Связаться с поддержкой"
     upgrade_to_build: "Улучшить до Build"
@@ -1586,8 +1377,6 @@ ru:
     plan_usage_limits: "Лимиты плана"
     shared_notebooks: "Общие записные книжки"
     shared_workflows: "Общие рабочие процессы"
-    want_to_grow_your_team: "Хотите расширить команду?"
-    grow_team: "Хотите расширить команду? "
     manage_plan: "Управление планом"
     manage_billing: "Управление оплатой"
     open_admin_panel: "Открыть панель администратора"
@@ -1613,51 +1402,9 @@ ru:
 
   # ── Настройки окружений ──
   settings.environments:
-    environments: "Окружения"
-    environments_description: "Окружения определяют, где запускаются ваши фоновые агенты. Настройте за несколько минут через GitHub (рекомендуется), ассистированную настройку Warp или ручную конфигурацию."
-    search_environments: "Поиск окружений..."
-    no_environments_match: "Нет окружений, соответствующих поиску."
-    personal: "Личное"
-    no_environments_yet: "У вас пока нет настроенных окружений."
-    choose_setup_method: "Выберите способ настройки окружения:"
-    quick_setup: "Быстрая настройка"
-    suggested: "Рекомендуется"
-    quick_setup_description: "Выберите репозитории GitHub, с которыми вы хотите работать, и мы предложим базовый образ и конфигурацию"
-    use_the_agent: "Использовать агента"
-    use_the_agent_description: "Выберите локально настроенный проект, и мы поможем вам настроить окружение на его основе"
-    launch_agent: "Запустить агента"
-    get_started: "Начать"
-    authorize: "Авторизоваться"
-    retry: "Повторить"
-    loading: "Загрузка..."
-    last_edited: "Последнее изменение: {timestamp}"
-    last_used: "Последнее использование: {timestamp}"
-    last_used_never: "Последнее использование: никогда"
-    view_my_runs: "Мои запуски"
-    share: "Поделиться"
-    edit: "Редактировать"
-    env_id: "ID окружения: {id}"
-    image: "Образ: {image}"
-    repos: "Репозитории: {repos}"
-    setup_commands: "Команды настройки: {commands}"
-    shared_by_warp_and_team: "Предоставлено Warp и вашей командой"
-    shared_by_warp_and: "Предоставлено Warp и {team}"
-    successfully_updated_environment: "Окружение успешно обновлено"
-    successfully_created_environment: "Окружение успешно создано"
-    environment_deleted_successfully: "Окружение успешно удалено"
-    successfully_shared_environment: "Окружение успешно опубликовано"
-    failed_to_share_environment: "Не удалось опубликовать окружение для команды"
-    unable_to_create_not_logged_in: "Не удалось создать окружение: вы не вошли в систему."
-    unable_to_save_no_longer_exists: "Не удалось сохранить: окружение больше не существует."
-    unable_to_share_not_on_team: "Не удалось опубликовать окружение: вы не состоите в команде."
-    unable_to_share_not_synced: "Не удалось опубликовать окружение: окружение ещё не синхронизировано."
 
   # ── Настройки Warp Drive ──
   settings.drive:
-    warp_drive: "Warp Drive"
-    sign_up: "Регистрация"
-    to_use_warp_drive_create_account: "Чтобы использовать Warp Drive, создайте аккаунт."
-    warp_drive_description: "Warp Drive — это рабочее пространство в вашем терминале, где вы можете сохранять Workflows, Notebooks, Prompts и переменные окружения для личного использования или для обмена с командой."
 
   # ── Настройки «О программе» ──
   settings.about:
@@ -1700,221 +1447,52 @@ ru:
   # ── Ввод терминала ──
   terminal.input:
     a11y:
-      label: "Ввод команды."
-      helper: "Введите команду оболочки, нажмите Enter для выполнения. Нажмите Cmd-Up для навигации к выводу предыдущих команд. Нажмите Cmd-L для перефокусировки ввода."
     placeholder:
-      tell_agent: "Опишите, что должен создать агент..."
-      cloud_agent: "Запустить облачного агента"
-      search_queries: "Поиск запросов"
-      search_queries_rewind: "Поиск запросов для возврата"
-      search_conversations: "Поиск разговоров"
-      search_skills: "Поиск навыков"
-      search_models: "Поиск моделей"
-      search_profiles: "Поиск профилей"
-      search_commands: "Поиск команд"
-      search_prompts: "Поиск подсказок"
-      search_indexed_repos: "Поиск индексированных репозиториев"
-      search_plans: "Поиск планов"
-      enter_prompt_for: "Введите запрос для {}..."
     hint:
-      run_commands: "Выполнение команд"
-      ai_command_search: "Введите '#' для предложений AI-команд"
-      steer_agent: "Управление запущенным агентом"
-      steer_agent_classic: "Управление запущенным агентом или Backspace для выхода"
-      follow_up: "Задать уточняющий вопрос"
-      follow_up_classic: "Задать уточняющий вопрос или Backspace для выхода"
-      warp_anything_0: "Warp что угодно, напр. Разверни моё React-приложение на Vercel и настрой переменные окружения"
-      warp_anything_1: "Warp что угодно, напр. Помоги отладить, почему мои Python-тесты падают в CI"
-      warp_anything_2: "Warp что угодно, напр. Настрой новый микросервис с Docker и создай пайплайн развёртывания"
-      warp_anything_3: "Warp что угодно, напр. Найди и исправь утечку памяти в моём Node.js-приложении"
-      warp_anything_4: "Warp что угодно, напр. Создай скрипт резервного копирования для PostgreSQL и запланируй его"
-      warp_anything_5: "Warp что угодно, напр. Помоги мигрировать данные из MySQL в PostgreSQL"
-      warp_anything_6: "Warp что угодно, напр. Настрой мониторинг и оповещения для моей AWS-инфраструктуры"
-      warp_anything_7: "Warp что угодно, напр. Построй REST API для мобильного приложения с помощью FastAPI"
-      warp_anything_8: "Warp что угодно, напр. Помоги оптимизировать медленные SQL-запросы"
-      warp_anything_9: "Warp что угодно, напр. Создай рабочий процесс GitHub Actions для автоматического деплоя при merge"
-      warp_anything_10: "Warp что угодно, напр. Настрой кэширование Redis для веб-приложения"
-      warp_anything_11: "Warp что угодно, напр. Помоги выяснить, почему падают поды Kubernetes"
-      warp_anything_12: "Warp что угодно, напр. Построй пайплайн данных для обработки CSV и загрузки в BigQuery"
-      warp_anything_13: "Warp что угодно, напр. Настрой SSL-сертификаты и HTTPS для домена"
-      warp_anything_14: "Warp что угодно, напр. Помоги отрефакторить устаревший код с современными паттернами"
-      warp_anything_15: "Warp что угодно, напр. Создай модульные тесты для сервиса аутентификации"
-      warp_anything_16: "Warp что угодно, напр. Настрой агрегацию логов с ELK-стеком для распределённой системы"
-      warp_anything_17: "Warp что угодно, напр. Помоги реализовать OAuth2-аутентификацию в Express.js"
-      warp_anything_18: "Warp что угодно, напр. Оптимизируй Docker-образы для уменьшения времени сборки и размера"
-      warp_anything_19: "Warp что угодно, напр. Настрой инфраструктуру A/B-тестирования для веб-приложения"
     dynamic_enum:
-      generate: "Выполните следующую команду для генерации вариантов:"
-      run: "Выполнить команду"
-      pending: "Команда выполняется..."
-      failure: "Команда завершилась с ошибкой"
-      no_results: "Команда не вернула результатов"
     keybinding:
-      show_history: "Показать историю"
-      network_log: "Показать сетевой журнал Warp"
-      clear_screen: "Очистить экран"
-      scroll_up: "Прокрутить вывод терминала на страницу вверх"
-      scroll_down: "Прокрутить вывод терминала на страницу вниз"
-      edit_prompt: "Редактировать приглашение"
-      toggle_classic_completions: "(Экспериментально) Переключить классический режим автодополнения"
-      command_search: "Поиск команд"
-      history_search: "Поиск по истории"
-      open_completions: "Открыть меню автодополнения"
-      workflows: "Рабочие процессы"
-      ai_command_suggestions: "Открыть предложения AI-команд"
-      new_agent_conversation: "Новый разговор с агентом"
-      trigger_auto_detection: "Включить автоопределение"
-      clear_ai_context_menu: "Очистить и сбросить контекстное меню AI"
     toast:
-      no_active_conversation: "Нет активного разговора для экспорта"
-      cannot_start_conversation: "Нельзя начать новый разговор, пока агент отслеживает команду."
-    handoff_to_cloud: "Передать в облако"
-    handoff_to_env: "Передать в {}"
 
   # ── Уведомления терминала ──
   terminal.notifications:
     discovery:
-      long_running: "Warp может уведомить вас о завершении длительных команд."
-      agent_task_completed: "Warp может уведомить вас об окончании ответа агента."
-      needs_attention: "Warp может уведомить вас, когда команде или агенту требуется внимание."
-      password_prompt: "Warp может уведомить вас о запросе пароля."
-    a11y_enable_palette: "Вы можете включить уведомления через палитру команд."
-    a11y_enable_preferences: "Убедитесь, что вы предоставили доступ для уведомлений Warp в системных настройках."
-    error_sending: "Ошибка отправки уведомления"
-    dismissed: "Мы больше не покажем этот баннер, но вы всегда можете включить уведомления в Настройках."
-    disabled: "Уведомления были отключены, но вы всегда можете включить их в Настройках."
-    enable: "Включить"
-    learn_more: "Узнать больше"
-    troubleshoot: "Диагностика"
-    configure: "Настроить уведомления"
-    permissions_accepted: "Готово! Теперь вы можете получать уведомления на рабочий стол."
-    permissions_denied: "Warp было отказано в разрешении отправлять уведомления."
-    permissions_error: "Что-то пошло не так при запросе разрешений."
-    allow_permissions: "Не забудьте 'Разрешить' запрос разрешений для завершения настройки уведомлений."
   terminal.notification:
-    default_title: "Уведомление"
-    finished: " завершена"
-    failed: " провалена"
-    finished_after: " завершена через {duration}с"
-    failed_after: " провалена через {duration}с"
-    latest_output: "Последний вывод: "
-    error_prefix: "Ошибка: "
-    blocked: " заблокирована"
-    waiting_for_password: " ожидает ввода пароля"
 
   # ── Контекстное меню терминала ──
   terminal.context_menu:
-    copy: "Копировать"
-    copy_url: "Копировать URL"
-    copy_path: "Копировать путь"
-    copy_command: "Копировать команду"
-    copy_commands: "Копировать команды"
-    copy_output: "Копировать вывод"
-    copy_filtered_output: "Копировать отфильтрованный вывод"
-    copy_prompt: "Копировать приглашение"
-    copy_right_prompt: "Копировать правое приглашение"
-    copy_working_directory: "Копировать рабочую директорию"
-    copy_git_branch: "Копировать ветку git"
-    cut: "Вырезать"
-    paste: "Вставить"
-    select_all: "Выделить всё"
-    insert_into_input: "Вставить в поле ввода"
-    find_within_block: "Искать в блоке"
-    find_within_blocks: "Искать в блоках"
-    scroll_to_top_of_block: "Прокрутить к началу блока"
-    scroll_to_top_of_blocks: "Прокрутить к началу блоков"
-    scroll_to_bottom_of_block: "Прокрутить к концу блока"
-    scroll_to_bottom_of_blocks: "Прокрутить к концу блоков"
-    save_as_workflow: "Сохранить как рабочий процесс"
-    ask_warp_ai: "Спросить Warp AI"
-    toggle_block_filter: "Переключить фильтр блока"
-    toggle_bookmark: "Переключить закладку"
-    rewind_to_before_here: "Откатить до этого места"
-    clear_blocks: "Очистить блоки"
-    split_pane_right: "Разделить панель вправо"
-    split_pane_left: "Разделить панель влево"
-    split_pane_down: "Разделить панель вниз"
-    split_pane_up: "Разделить панель вверх"
-    close_pane: "Закрыть панель"
-    edit_cli_agent_toolbelt: "Редактировать инструменты CLI-агента"
-    edit_agent_toolbelt: "Редактировать инструменты агента"
-    edit_prompt: "Редактировать приглашение"
-    command_search: "Поиск команд"
-    ai_command_search: "AI-поиск команд"
-    hide: "Скрыть"
-    show: "Показать"
-    input_hint_text: "текст подсказки ввода"
-    share_block_ellipsis: "Поделиться блоком..."
-    share_ellipsis: "Поделиться..."
-    show_in_finder: "Показать в Finder"
-    show_containing_folder: "Показать содержащую папку"
-    open_in_warp: "Открыть в Warp"
-    open_in_editor: "Открыть в редакторе"
-    fork_from_here_dev: "Форкнуть отсюда (для разработчиков)"
 
   # ── Подсказки терминала ──
   terminal.tooltip:
-    filter_block_output: "Фильтровать вывод блока"
-    bookmark_block: "Добавить этот блок в закладки для быстрого перехода"
-    lock_scrolling: "Зафиксировать прокрутку внизу блока"
-    jump_to_bottom: "Перейти к концу этого блока"
 
   # ── Блок терминала ──
   terminal.block:
-    show_init_block: "Показать блок инициализации"
-    more_info: "Подробнее"
 
   # ── Terminal Zero State ──
   terminal.zero_state:
-    new_session: "Новая сессия терминала"
-    start_agent_conversation: "начать новую беседу с агентом"
-    start_cloud_conversation: "начать новую беседу с облачным агентом"
-    cycle_past: "листать прошлые команды и беседы"
-    open_code_review: "открыть code review"
 
   # ── Terminal Shared Session ──
   terminal.shared_session:
-    reconnecting: "Нет сети, переподключение..."
 
   # ── Terminal SSH ──
   terminal.ssh:
-    file_uploads: "Загрузки файлов"
 
   # ── Оболочка терминала ──
   terminal.shell:
-    bootstrap_slow: "Похоже, ваша оболочка долго запускается...  "
-    incompatible_config: "Ваша конфигурация оболочки несовместима с Warp...  "
-    completions_not_working: "Похоже, ваши автодополнения не работают ("
-    completions_suffix: "). Включение tmux warpification в "
-    may_resolve_issue: " может решить эту проблему."
-    settings: "настройках"
-    subshell: "Подоболочка"
 
   # ── Доступность терминала ──
   terminal.a11y:
-    press_right_arrow: "Нажмите стрелку вправо для вставки или продолжайте редактировать для игнорирования"
-    command_waiting_password: "Команда ожидает ввода пароля"
 
   # ── Агент терминала ──
   terminal.agent:
-    execute_this_plan: "Выполнить этот план"
-    fork_from_last_query: "Форкнуть с последнего запроса"
 
   # ── Окружение терминала ──
   terminal.environment:
-    create_with_repo: "Создать окружение, используя текущую рабочую директорию как репо"
-    create_without_repo: "Создать окружение без репозиториев"
 
   # ── Проект терминала ──
   terminal.project:
-    setup: "Настройка проекта"
-    use_file_picker: "Используйте выбор файла для указания git-репозитория"
 
   # ── Навыки терминала ──
   terminal.skills:
-    bundled_cannot_edit: "Встроенные навыки нельзя редактировать"
-    editing_not_supported: "Редактирование навыков не поддерживается в этой сборке"
-    no_skills: "Навыки не найдены"
 
   # ── Терминал OSC 52 (буфер обмена) ──
   terminal.osc52:
@@ -1970,34 +1548,18 @@ ru:
     copied_branch_name: "Название ветки скопировано"
   # ── Agent Message Bar ──
   agent.message_bar:
-    starting_shell: "Запуск оболочки..."
 
   # ── Agent Output ──
   agent.output:
-    always_allow_file_access: "Всегда разрешать доступ к файлам для этого репо"
-    grep_for: "Поиск grep: "
-    search_files: "Поиск файлов по шаблону: "
 
   # ── Agent Search Codebase ──
   agent.search_codebase:
-    no_results: "Результатов не найдено"
 
   # ── Agent Usage ──
   agent.usage:
-    credits_total: "Кредитов потрачено (всего)"
-    credits_spent: "Кредитов потрачено"
-    tool_calls: "Вызовов инструментов"
-    context_window: "Использовано контекстного окна"
-    files_changed: "Файлов изменено"
-    diffs_applied: "Диффов применено"
-    commands_executed: "Команд выполнено"
-    time_to_first_token: "Время до первого токена"
-    total_response_time: "Общее время ответа агента"
 
   # ── Agent Zero State ──
   agent.zero_state:
-    send_prompt: "Отправьте запрос ниже, чтобы начать новую беседу"
-    new_conversation: "Новая беседа с Oz-агентом"
 # --- deleted sections ---
   # ── CLI ──
       # Buttons

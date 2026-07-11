@@ -33,13 +33,11 @@ en:
       title_placeholder: "Title (optional)"
   workspace:
     settings: "Settings"
-    new_tab: "New Tab"
     agent: "Agent"
     terminal: "Terminal"
     local_docker_sandbox: "Local Docker Sandbox"
     whats_new: "What's new"
     keyboard_shortcuts: "Keyboard shortcuts"
-    tab_configs: "Tab configs"
     new_worktree_config: "New worktree config"
     new_tab_config: "New tab config"
     reopen_closed_session: "Reopen closed session"
@@ -56,7 +54,6 @@ en:
     invite_a_friend: "Invite a friend"
     log_out: "Log out"
     cloud_agent: "Cloud Agent"
-    install_update: "Install update ({version})"
     install_update_tab: "Install Update"
     reset_pane_name: "Reset pane name"
     reset_active_pane_name: "Reset active pane name"
@@ -72,11 +69,9 @@ en:
     view: "View"
     undo: "Undo"
     open_file: "Open file"
-    open: "Open: %s"
     rename_pane: "Rename pane"
     rename_active_pane: "Rename active pane"
     tab_configs_chip: "Access your tab configs here."
-    failed_load_conversation: "Failed to load conversation."
     failed_delete_conversation: "Failed to delete conversation. Please exit the agent view and try again."
     update_warp: "Update Warp"
     version_deprecation: "Your app is out of date and some features may not work as expected. Please update immediately."
@@ -111,13 +106,9 @@ en:
 
   # ── Workspace Conversation List ──
   workspace.conversation_list:
-    no_conversations: "No conversations yet"
-    no_conversations_hint: "Your active and past conversations with local and ambient agents will appear here."
-    new_conversation: "New conversation"
 
   # ── Workspace Global Search ──
   workspace.global_search:
-    search_in_files: "Search in files"
 
   # ── Workspace Bindings ──
   workspace.binding:
@@ -182,7 +173,6 @@ en:
     turn_notifications_off: "Turn notifications off"
     launch_configuration_palette: "Launch configuration palette"
     toggle_files_palette: "Toggle Files Palette"
-    save_new_launch_configuration_editable: "Save new launch configuration"
     search_warp_drive: "Search Warp Drive"
     install_update_and_relaunch: "Install update and relaunch"
     check_for_updates: "Check for updates"
@@ -196,7 +186,6 @@ en:
     toggle_mouse_reporting: "Toggle Mouse Reporting"
     activate_previous_pane: "Activate previous pane"
     activate_next_pane: "Activate next pane"
-    switch_to_nth_tab: "Switch to {n} tab"
     switch_to_last_tab: "Switch to last tab"
     activate_previous_tab: "Activate previous tab"
     activate_next_tab: "Activate next tab"
@@ -280,7 +269,6 @@ en:
   # ── Workspace Debug ──
   workspace.debug:
     dump_debug_info: "Dump debug info"
-    crash: "Crash the app (for testing sentry)"
     log_review_comment_send_status: "[Debug] Log review comment send status for active tab"
     trigger_panic: "Trigger a panic (for testing sentry-rust)"
     open_view_tree_debugger: "Open view tree debugger"
@@ -303,9 +291,6 @@ en:
 
   # ── Appearance ──
   appearance:
-    create_custom_theme: "Create your own custom theme"
-    line_height: "Line height"
-    zoom: "Zoom"
 
   # ── Dialogs ──
   # ── Provider Keys ──
@@ -325,7 +310,6 @@ en:
     execution_profile:
       apply_code_diffs: "Apply code diffs:"
       ask_questions: "Ask questions:"
-      auto: "Auto"
       autosync_plans_to_warp_drive: "Auto-sync plans to Warp Drive:"
       base_model: "Base model:"
       call_mcp_servers: "Call MCP servers:"
@@ -376,7 +360,6 @@ en:
       add_custom_endpoint: "Add custom endpoint"
       agent:
         git_operations_autogen_description: "Generates a commit message based on your current changes to your git repo"
-      title: "AI"
     appearance:
       category:
         blocks: "Blocks"
@@ -411,7 +394,6 @@ en:
         tab_indicators: "tab indicators"
         themes_sync_os: "themes: sync with OS"
         zen_mode: "zen mode"
-    code: "Code"
     features:
       asynchronous_find: "Asynchronous find"
       clipboard_osc52: "Clipboard access (OSC 52)"
@@ -419,7 +401,6 @@ en:
       code_editor_line_numbers: "Code editor line numbers:"
       preserve_input_focus_on_block_selection: "Preserve input focus on block selection"
       press_new_shortcut: "Press new keyboard shortcut"
-      title: "Features"
       toggle:
         agent_task_completed_notifications: "agent task completion notifications"
         alias_expansion: "alias expansion"
@@ -498,7 +479,6 @@ en:
       team_full_title: "Your team is full"
       team_member_count_one: "1 team member"
       teammate_count_one: "1 teammate"
-      title: "Teams"
     update_environment_form:
       auth_with_github: "Auth with GitHub"
       authenticate: "Authenticate"
@@ -545,8 +525,6 @@ en:
       suggest_image_tooltip: "Warp will suggest a Docker image based on your selected repositories."
       suggest_image_unknown_response: "Unknown response from suggestCloudEnvironmentImage"
 
-    ssh: "SSH"
-    warp_drive: "Warp Drive"
     warp_agent: "Warp Agent"
     mcp_servers_page:
       title: "MCP Servers"
@@ -580,17 +558,6 @@ en:
       scope_team: "Team"
       search_api_keys: "Search API keys"
   settings.shared_blocks:
-    executed_on: "Executed on:"
-    unshare_block_title: "Unshare block"
-    unshare_failed: "Failed to unshare block. Please try again."
-    unshare_success: "Block was successfully unshared."
-    link_copied: "Link copied."
-    unshare: "Unshare"
-    failed_to_load: "Failed to load blocks. Please try again."
-    getting_blocks: "Getting blocks..."
-    no_blocks_yet: "You don't have any shared blocks yet."
-    deleting: "Deleting..."
-    copy_link: "Copy link"
   settings.code_page:
     code: "Code"
     initialization_settings_header: "Initialization Settings"
@@ -606,27 +573,6 @@ en:
     indexing_subpage_title: "Codebase Indexing"
     editor_subpage_title: "Editor and Code Review"
     index_new_folder: "Index new folder"
-    initialized_indexed_folders: "Initialized / indexed folders"
-    no_folders_initialized: "No folders have been initialized yet."
-    indexing_label: "INDEXING"
-    no_index_created: "No index created"
-    open_project_rules: "Open project rules"
-    index_limit_reached: "Index limit reached"
-    unavailable: "Unavailable"
-    indexing_discovered: "Discovered {total_nodes} chunks"
-    indexing_syncing: "Syncing - {completed_nodes} / {total_nodes}"
-    indexing_syncing_generic: "Syncing..."
-    indexing_synced: "Synced"
-    indexing_too_large: "Codebase too large"
-    indexing_stale: "Stale"
-    indexing_failed: "Failed"
-    no_index_built: "No index built"
-    indexing_disabled: "Disabled"
-    indexing_queued: "Queued"
-    indexing_remote_syncing: "Indexing - {completed} / {total}"
-    indexing_remote_syncing_partial: "Indexing - {completed}"
-    indexing_remote_syncing_zero: "Indexing - 0 / {total}"
-    indexing_remote_generic: "Indexing..."
     lsp_status_installed: "Installed"
     lsp_status_installing: "Installing..."
     lsp_status_checking: "Checking..."
@@ -811,37 +757,11 @@ en:
     balance_remaining: "remaining"
 
   settings.category:
-    themes: "Themes"
-    icon: "Icon"
-    window: "Window"
-    input: "Input"
-    panes: "Panes"
-    blocks: "Blocks"
-    text: "Text"
-    language: "Language"
-    cursor: "Cursor"
-    tabs: "Tabs"
-    fullscreen_apps: "Full-screen Apps"
-    general: "General"
-    session: "Session"
-    keys: "Keys"
-    text_editing: "Text Editing"
-    terminal_input: "Terminal Input"
-    terminal: "Terminal"
-    notifications: "Notifications"
-    workflows: "Workflows"
-    system: "System"
 
   settings.keybindings:
-    search_placeholder: 'Search by name or by keys (ex. "cmd d")'
-    conflict_warning: "This shortcut conflicts with other keybinds"
     reset: "Default"
     press_new: "Press new keyboard shortcut"
-    add_custom: "Add your own custom keybindings to existing actions below."
-    use_prefix: "Use"
-    reference_suffix: "to reference these keybindings in a side pane at anytime."
     configure: "Configure keyboard shortcuts"
-    not_synced: "Keyboard shortcuts are not synced to the cloud"
     command_column: "Command"
 
   settings.features:
@@ -867,13 +787,10 @@ en:
     new_tab_after_all: "After all tabs"
     new_tab_after_current: "After current tab"
     change_keybinding: "Change keybinding"
-    ssh_wrapper: "Warp SSH wrapper"
     link_tooltip: "Show tooltip on click on links"
     quit_warning_modal: "Show warning before quitting/logging out"
     alias_expansion: "Expand aliases as you type"
     middle_click_paste: "Middle-click to paste"
-    code_as_default_editor: "Use VS Code as default editor"
-    input_hint_text: "Show input hint text"
     vim_keybindings: "Edit code and commands with Vim keybindings"
     vim_unnamed_register: "Set unnamed register as system clipboard"
     vim_status_bar: "Show Vim status bar"
@@ -888,9 +805,7 @@ en:
     one_million: "1 million"
     block_max_rows_warning: "Setting the limit above 100k lines may impact performance. Maximum rows supported is {max_rows}."
     open_links_desktop: "Open links in desktop app"
-    open_links_desktop_tooltip: "Automatically open links in desktop app whenever possible."
     restore_session: "Restore windows, tabs, and panes on startup"
-    wayland_no_restore: "Window positions won't be restored on Wayland. "
     sticky_command_header: "Show sticky command header"
     start_at_login_macos: "Start Warp at login (requires macOS 13+)"
     start_at_login: "Start Warp at login"
@@ -903,8 +818,6 @@ en:
     auto_open_code_review_description: "When this setting is on, the code review panel will open on the first accepted diff of a conversation"
     warp_is_default: "Warp is the default terminal"
     max_block_rows: "Maximum rows in a block"
-    ssh_wrapper_label: "Warp SSH Wrapper"
-    change_takes_effect_new_sessions: "This change will take effect in new sessions"
     receive_desktop_notifications: "Receive desktop notifications from Warp"
     notify_agent_completes: "Notify when an agent completes a task"
     notify_needs_attention: "Notify when a command or agent needs your attention to continue"
@@ -960,9 +873,6 @@ en:
     accepts_autosuggestions: "{} accepts autosuggestions."
     completions_open_typing_or: "Completions open as you type (or {})."
     opens_completion_menu: "{} opens completion menu."
-    quake_keybinding: "Quake keybinding"
-    quake_pin_position: "Quake pin position"
-    quake_pin_screen: "Quake pin screen"
     at_context_menu_terminal: "Enable '@' context menu in terminal mode"
 
     toggle:
@@ -1022,7 +932,6 @@ en:
   # ── Drive ──
   # ── Notebook ──
   notebook:
-    edit: "Edit"
 
   # ── Onboarding ──
   onboarding:
@@ -1097,9 +1006,7 @@ en:
     suggested_code_banners_description: "Let AI suggest code diffs and queries as inline banners in the blocklist, based on recent commands and their outputs."
     natural_language_autosuggestions_description: "Let AI suggest natural language autosuggestions, based on recent commands and their outputs."
     shared_block_title_generation_description: "Let AI generate a title for your shared block based on the command and output."
-    git_operations_autogen_description: "Let AI generate commit messages and pull request titles and descriptions."
 
-    ai: "AI"
     active_ai: "Active AI"
     next_command: "Next Command"
     prompt_suggestions: "Prompt Suggestions"
@@ -1116,7 +1023,6 @@ en:
     profiles: "Profiles"
     input: "Input"
     voice: "Voice"
-    other: "Other"
     agents: "Agents"
     knowledge: "Knowledge"
     mcp_servers: "MCP Servers"
@@ -1129,9 +1035,6 @@ en:
       supervised: "Supervised"
       ask_on_first_write: "Ask on first write"
       allow_in_specific_directories: "Allow in specific directories"
-      never: "Never"
-      never_ask: "Never ask"
-      ask_unless_auto_approve: "Ask unless auto-approve"
 
     restricted_due_to_billing: "Restricted due to billing issue"
     unlimited: "Unlimited"
@@ -1151,14 +1054,11 @@ en:
     hide_agent_tips: "Hide agent tips"
     show_oz_changelog: "Show Oz changelog in new agent conversation view"
     hide_oz_changelog: "Hide Oz changelog in new agent conversation view"
-    show_use_agent_footer: 'Show "Use Agent" footer'
-    hide_use_agent_footer: 'Hide "Use Agent" footer'
 
     natural_language_detection: "Natural language detection"
     autodetect_agent_prompts: "Autodetect agent prompts in terminal input"
     autodetect_terminal_commands: "Autodetect terminal commands in agent input"
     show_input_hint_text: "Show input hint text"
-    show_agent_tips_toggle: "Show agent tips"
     include_agent_commands_in_history: "Include agent-executed commands in history"
     natural_language_denylist: "Natural language denylist"
     natural_language_denylist_description: "Commands listed here will never trigger natural language detection."
@@ -1178,7 +1078,6 @@ en:
     placeholder_command_allowlist: "e.g. ls .*"
     placeholder_command_denylist: "e.g. rm .*"
     placeholder_directory_allowlist: "e.g. ~/code-repos/repo"
-    placeholder_profile_name: 'e.g. "YOLO code"'
     placeholder_cli_command: "command (supports regex)"
     base_model: "Base model"
     apply_code_diffs: "Apply code diffs"
@@ -1189,8 +1088,6 @@ en:
     auto_spawn_servers: "Auto-spawn servers from third-party agents"
     show_model_picker_in_prompt: "Show model picker in prompt"
     show_conversation_history: "Show conversation history in tools panel"
-    enable_builtin_feedback_skill: "Enable built-in feedback skill"
-    feedback_bundled_skill_description: "Let Oz use Warp's built-in skill for turning Warp product feedback into GitHub issues."
     agent_thinking_display: "Agent thinking display"
     preferred_layout_open_conversation: "Preferred layout when opening existing agent conversations"
 
@@ -1203,9 +1100,7 @@ en:
     remote_session_org_policy: "Your organization disallows AI when the active pane contains content from a remote session"
 
     commands_comma_separated: "Commands, comma separated"
-    this_is_limit_of_ai_credits: "This is the {duration} limit of AI credits for your account."
 
-    resets: "Resets {time}"
 
     agents_description: "Set the boundaries for how your Agent operates. Choose what it can access, how much autonomy it has, and when it must ask for your approval. You can also fine-tune behavior around natural language input, codebase awareness, and more."
     profiles_description: "Profiles let you define how your Agent operates — from the actions it can take and when it needs approval, to the models it uses for tasks like coding and planning. You can also scope them to individual projects."
@@ -1219,15 +1114,8 @@ en:
     mcp_denylist_description: "The Warp Agent will always ask for permission before calling any MCP servers on this list."
 
     base_model_description: "This model serves as the primary engine behind the Warp Agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization."
-    full_terminal_use_model_description: "The model used when the agent operates inside interactive terminal applications like database shells, debuggers, REPLs, or dev servers—reading live output and writing commands to the PTY."
-    computer_use_model_description: "The model used when the agent takes control of your computer to interact with graphical applications through mouse movements, clicks, and keyboard input."
-    context_window_description: "The base model's working memory — how many tokens of your conversation, code, and documents it can consider at once. Larger windows enable longer conversations and more coherent responses over bigger codebases, at the cost of higher latency and compute usage."
-    plan_auto_sync_description: "The plans this agent creates will be automatically added and synced to Warp Drive."
-    call_web_tools_description: "The agent may use web search when helpful for completing tasks."
-    upgrade_footer: "Frontier models are unavailable on free plans. Upgrade"
     thinking_display_description: "Controls how reasoning/thinking traces are displayed."
 
-    show_hint_description: 'Shows hint to use the "Full Terminal Use"-enabled agent in long running commands.'
     rule_suggestions_description: "Let AI suggest rules to save based on your interactions."
     warp_drive_context_description: "The Warp Agent can leverage your Warp Drive Contents to tailor responses to your personal and team developer workflows and environments. This includes any Workflows, Notebooks, and Environment Variables."
 
@@ -1238,12 +1126,8 @@ en:
     contact_support: "Contact support"
 
     learn_more: "Learn more"
-    let_us_know: "Let us know"
     refresh: "Refresh"
 
-    codebase_context_description: "Allow the Warp Agent to generate an outline of your codebase that can be used for context. No code is ever stored on our servers."
-    mcp_description: "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins."
-    mcp_zero_state: "You haven't added any MCP servers yet. Once you do, you'll be able to control how much autonomy the Warp Agent has when interacting with them."
     add_mcp_server: "Add a server"
 
     show_coding_agent_toolbar: "Show coding agent toolbar"
@@ -1261,15 +1145,6 @@ en:
     agent_attribution_description: "Oz can add attribution to commit messages and pull requests it creates"
 
     experimental: "Experimental"
-    computer_use: "Computer use"
-    ask_questions: "Ask questions"
-    full_terminal_use_model: "Full terminal use model"
-    computer_use_model: "Computer use model"
-    context_window: "Context window"
-    plan_auto_sync: "Plan auto-sync"
-    call_web_tools: "Call web tools"
-    section_models: "MODELS"
-    section_permissions: "PERMISSIONS"
     computer_use_in_cloud_agents: "Computer use in Cloud Agents"
     computer_use_description: "Enable computer use in cloud agent conversations started from the Warp app."
 
@@ -1381,87 +1256,15 @@ en:
 
   # ── Billing Settings ──
   settings.billing:
-    overage_usage_link: "View details on overage usage"
-    overage_toggle_admin_header: "Enable premium model usage overages"
-    overage_toggle_user_header_enabled: "Premium model usage overages are enabled"
-    overage_toggle_user_header_disabled: "Premium model usage overages are not enabled"
-    overage_toggle_description: "Continue using premium models beyond your plan's limits. Usage is charged in $20 increments up to your spending limit, with any remaining balance charged on your scheduled billing date."
-    overage_toggle_user_description: "Ask a team admin to enable overages for more AI usage."
 
-    sort_a_to_z: "A to Z"
-    sort_z_to_a: "Z to A"
-    sort_usage_ascending: "Usage ascending"
-    sort_usage_descending: "Usage descending"
 
-    auto_reload_exceed_limit: "Auto reload is disabled, as the next reload would exceed your monthly spend limit. Increase your limit to use auto reload."
-    auto_reload_delinquent: "Restricted due to billing issue. Update your payment method to purchase add-on credits."
-    restricted_billing_usage: "Auto reload is disabled due to recent failed reload. Please update your payment method and try again."
 
-    overview_tab: "Overview"
-    usage_history_tab: "Usage History"
 
-    enterprise_usage_callout_header: "Usage reporting is currently limited"
-    enterprise_usage_callout_body_admin_prefix: "Enterprise credit usage isn't fully available in this view yet. For the most accurate spend tracking, "
-    enterprise_usage_callout_body_admin_link: "visit the admin panel"
-    enterprise_usage_callout_body_admin_suffix: "."
-    enterprise_usage_callout_body_non_admin: "Enterprise credit usage isn't fully available in this view yet. Contact a team admin for detailed usage reporting."
 
-    addon_credits_description: "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed."
-    additional_addon_credits_description_for_team: "Purchased add-on credits are shared across your team."
 
-    cloud_agent_trial: "Cloud agent trial"
 
-    overage_spending_limit: "Overage spending limit"
-    monthly_spending_limit: "Monthly spending limit"
-    load_more: "Load more"
 
-    failed_update_workspace_settings: "Failed to update workspace settings"
-    successfully_purchased_addon_credits: "Successfully purchased add-on credits"
 
-    not_set: "Not set"
-    monthly_overage_spending_limit: "Monthly overage spending limit"
-    sets_monthly_overage_limit: "Sets the monthly overage spending limit beyond the plan amount"
-    add_on_credits: "Add-on credits"
-    switch_to_build: "Switch to the Build plan"
-    upgrade_to_build: "Upgrade to the Build plan"
-    contact_account_executive: "Contact your Account Executive for more add-on credits."
-    contact_team_admin: "Contact a team admin to purchase add-on credits."
-    sets_monthly_limit_spent: "Sets the monthly limit spent on add-on credits"
-    monthly_spend_limit: "Monthly spend limit"
-    purchased_this_month: "Purchased this month"
-    auto_reload: "Auto reload"
-    auto_reload_description: "When enabled, auto reload will automatically purchase {amount} credits when your add-on credit balance reaches 100 credits remaining."
-    buying: "Buying…"
-    buy: "Buy"
-    one_time_purchase: "One-time purchase"
-    reloading_would_exceed: "Reloading would exceed your monthly limit. "
-    increase_your_limit: "Increase your limit"
-    total_overages: "Total overages"
-    usage_resets_on: "Usage resets on {date}"
-    credit_limit_prorated_self: "Your credit limit is prorated because you joined midway through the billing cycle."
-    credit_limit_prorated_other: "This credit limit is prorated because this user joined midway through the billing cycle."
-    usage_section: "Usage"
-    credits_header: "Credits"
-    credit_limit_description: "This is the {duration} limit of AI credits for your account."
-    last_30_days: "Last 30 days"
-    no_usage_history: "No usage history"
-    kick_off_agent_task: "Kick off an agent task to view usage history here."
-    sort_by: "Sort by"
-    team_total: "Team total"
-    manage_billing: "Manage billing"
-    contact_team_admin_billing: "Contact your team admin to resolve billing issues."
-    upgrade_to_turbo: "Upgrade to Turbo plan"
-    upgrade_to_lightspeed: "Upgrade to Lightspeed plan"
-    upgrade_plan: "Upgrade"
-    upgrade_to_max: "Upgrade to Max"
-    switch_to_business: "Switch to Business"
-    upgrade_to_enterprise: "Upgrade to Enterprise"
-    plan: "Plan"
-    open_admin_panel: "Open admin panel"
-    free: "Free"
-    new_agent: "New agent"
-    buy_more: "Buy more"
-    billing_and_usage: "Billing and usage"
 
   # ── OpenWarp Launch ──
   # ── Privacy Settings ──
@@ -1473,11 +1276,9 @@ en:
     help_improve_warp: "Help improve Warp"
     help_improve_warp_description: "App analytics help us make the product better for you. We may collect certain console interactions to improve Warp's AI capabilities."
     help_improve_warp_description_enterprise: "App analytics help us make the product better for you. We only collect app usage metadata, never console input or output."
-    free_tier_analytics_note: "On the free tier, analytics must be enabled to use AI features."
     manage_your_data: "Manage your data"
     manage_your_data_description: "At any time, you may choose to delete your Warp account permanently. You will no longer be able to use Warp."
     visit_data_management_page: "Visit data management page"
-    manage_privacy_settings: "Manage privacy settings"
     privacy_policy_title: "Privacy Policy"
     read_privacy_policy: "Read Warp's privacy policy"
     add_regex_pattern: "Add regex pattern"
@@ -1529,14 +1330,6 @@ en:
     team_members: "Team members"
     reset_links: "Reset links"
     remove_domain: "Remove domain"
-    remove: "Remove"
-    approve_domains: "Approve domains"
-    send_email_invites: "Send email invites"
-    invite_link_prefix: "warp.dev/join/"
-    copy_link: "Copy link"
-    link_copied: "Link copied"
-    leave_team_confirmation: "Are you sure you want to leave this team?"
-    delete_team_confirmation: "Are you sure you want to delete this team? This action cannot be undone."
     transfer_team_ownership: "Transfer team ownership?"
     transfer_ownership: "Transfer ownership"
     failed_to_send_invite: "Failed to send invite"
@@ -1561,7 +1354,6 @@ en:
     error_leaving_team: "Error leaving team"
     successfully_left_team: "Successfully left team"
     your_new_team_name: "Your new team name"
-    new_team_name: "Your new team name"
     seat_cap_reached: "You've reached your plan's member limit."
     seat_cap_exceeded: "You've exceeded your plan's member limit. Existing team members keep their access, but you won't be able to add new members."
     payment_past_due: "Payment past due"
@@ -1575,7 +1367,6 @@ en:
     update_payment_to_restore: "Update your payment information to restore access."
     contact_support_to_restore: "Contact support to restore access."
     upgrade: "Upgrade"
-    contact_sales: "Contact sales"
     update_billing: "Update billing"
     contact_support: "Contact support"
     upgrade_to_build: "Upgrade to Build"
@@ -1586,8 +1377,6 @@ en:
     plan_usage_limits: "Plan usage limits"
     shared_notebooks: "Shared Notebooks"
     shared_workflows: "Shared Workflows"
-    want_to_grow_your_team: "Want to grow your team?"
-    grow_team: "Want to grow your team? "
     manage_plan: "Manage plan"
     manage_billing: "Manage billing"
     open_admin_panel: "Open admin panel"
@@ -1613,51 +1402,9 @@ en:
 
   # ── Environments Settings ──
   settings.environments:
-    environments: "Environments"
-    environments_description: "Environments define where your ambient agents run. Set one up in minutes via GitHub (recommended), Warp-assisted setup, or manual configuration."
-    search_environments: "Search environments..."
-    no_environments_match: "No environments match your search."
-    personal: "Personal"
-    no_environments_yet: "You haven't set up any environments yet."
-    choose_setup_method: "Choose how you'd like to set up your environment:"
-    quick_setup: "Quick setup"
-    suggested: "Suggested"
-    quick_setup_description: "Select the GitHub repositories you'd like to work with and we'll suggest a base image and config"
-    use_the_agent: "Use the agent"
-    use_the_agent_description: "Choose a locally set up project and we'll help you set up an environment based on it"
-    launch_agent: "Launch agent"
-    get_started: "Get started"
-    authorize: "Authorize"
-    retry: "Retry"
-    loading: "Loading..."
-    last_edited: "Last edited: {timestamp}"
-    last_used: "Last used: {timestamp}"
-    last_used_never: "Last used: never"
-    view_my_runs: "View my runs"
-    share: "Share"
-    edit: "Edit"
-    env_id: "Env ID: {id}"
-    image: "Image: {image}"
-    repos: "Repos: {repos}"
-    setup_commands: "Setup commands: {commands}"
-    shared_by_warp_and_team: "Shared by Warp and your team"
-    shared_by_warp_and: "Shared by Warp and {team}"
-    successfully_updated_environment: "Successfully updated environment"
-    successfully_created_environment: "Successfully created environment"
-    environment_deleted_successfully: "Environment deleted successfully"
-    successfully_shared_environment: "Successfully shared environment"
-    failed_to_share_environment: "Failed to share environment with team"
-    unable_to_create_not_logged_in: "Unable to create environment: not logged in."
-    unable_to_save_no_longer_exists: "Unable to save: environment no longer exists."
-    unable_to_share_not_on_team: "Unable to share environment: you are not currently on a team."
-    unable_to_share_not_synced: "Unable to share environment: environment is not yet synced."
 
   # ── Warp Drive Settings ──
   settings.drive:
-    warp_drive: "Warp Drive"
-    sign_up: "Sign up"
-    to_use_warp_drive_create_account: "To use Warp Drive, please create an account."
-    warp_drive_description: "Warp Drive is a workspace in your terminal where you can save Workflows, Notebooks, Prompts, and Environment Variables for personal use or to share with a team."
 
   # ── About Settings ──
   settings.about:
@@ -1700,221 +1447,52 @@ en:
   # ── Terminal Input ──
   terminal.input:
     a11y:
-      label: "Command Input."
-      helper: "Input your shell command, press enter to execute. Press cmd-up to navigate to output of previously executed commands. Press cmd-l to re-focus command input."
     placeholder:
-      tell_agent: "Tell the agent what to build..."
-      cloud_agent: "Kick off a cloud agent"
-      search_queries: "Search queries"
-      search_queries_rewind: "Search queries to rewind to"
-      search_conversations: "Search conversations"
-      search_skills: "Search skills"
-      search_models: "Search models"
-      search_profiles: "Search profiles"
-      search_commands: "Search commands"
-      search_prompts: "Search prompts"
-      search_indexed_repos: "Search indexed repos"
-      search_plans: "Search plans"
-      enter_prompt_for: "Enter prompt for {}..."
     hint:
-      run_commands: "Run commands"
-      ai_command_search: "Type '#' for AI command suggestions"
-      steer_agent: "Steer the running agent"
-      steer_agent_classic: "Steer the running agent, or backspace to exit"
-      follow_up: "Ask a follow up"
-      follow_up_classic: "Ask a follow up, or backspace to exit"
-      warp_anything_0: "Warp anything e.g. Deploy my React app to Vercel and set up environment variables"
-      warp_anything_1: "Warp anything e.g. Help me debug why my Python tests are failing in CI"
-      warp_anything_2: "Warp anything e.g. Set up a new microservice with Docker and create the deployment pipeline"
-      warp_anything_3: "Warp anything e.g. Find and fix the memory leak in my Node.js application"
-      warp_anything_4: "Warp anything e.g. Create a backup script for my PostgreSQL database and schedule it"
-      warp_anything_5: "Warp anything e.g. Help me migrate my data from MySQL to PostgreSQL"
-      warp_anything_6: "Warp anything e.g. Set up monitoring and alerts for my AWS infrastructure"
-      warp_anything_7: "Warp anything e.g. Build a REST API for my mobile app using FastAPI"
-      warp_anything_8: "Warp anything e.g. Help me optimize my SQL queries that are running slowly"
-      warp_anything_9: "Warp anything e.g. Create a GitHub Actions workflow to automatically deploy on merge"
-      warp_anything_10: "Warp anything e.g. Set up Redis caching for my web application"
-      warp_anything_11: "Warp anything e.g. Help me troubleshoot why my Kubernetes pods keep crashing"
-      warp_anything_12: "Warp anything e.g. Build a data pipeline to process CSV files and load them into BigQuery"
-      warp_anything_13: "Warp anything e.g. Set up SSL certificates and configure HTTPS for my domain"
-      warp_anything_14: "Warp anything e.g. Help me refactor this legacy code to use modern design patterns"
-      warp_anything_15: "Warp anything e.g. Create unit tests for my authentication service"
-      warp_anything_16: "Warp anything e.g. Set up log aggregation with ELK stack for my distributed system"
-      warp_anything_17: "Warp anything e.g. Help me implement OAuth2 authentication in my Express.js app"
-      warp_anything_18: "Warp anything e.g. Optimize my Docker images to reduce build times and size"
-      warp_anything_19: "Warp anything e.g. Set up A/B testing infrastructure for my web application"
     dynamic_enum:
-      generate: "Run the following command to generate variants:"
-      run: "Run command"
-      pending: "Command pending..."
-      failure: "Command failed"
-      no_results: "Command returned no results"
     keybinding:
-      show_history: "Show History"
-      network_log: "Show Warp network log"
-      clear_screen: "Clear screen"
-      scroll_up: "Scroll terminal output up one page"
-      scroll_down: "Scroll terminal output down one page"
-      edit_prompt: "Edit Prompt"
-      toggle_classic_completions: "(Experimental) Toggle classic completions mode"
-      command_search: "Command Search"
-      history_search: "History Search"
-      open_completions: "Open completions menu"
-      workflows: "Workflows"
-      ai_command_suggestions: "Open AI Command Suggestions"
-      new_agent_conversation: "New agent conversation"
-      trigger_auto_detection: "Trigger Auto Detection"
-      clear_ai_context_menu: "Clear and reset AI context menu query"
     toast:
-      no_active_conversation: "No active conversation to export"
-      cannot_start_conversation: "Cannot start a new conversation while agent is monitoring a command."
-    handoff_to_cloud: "Handoff to cloud"
-    handoff_to_env: "Hand off to {}"
 
   # ── Terminal Notifications ──
   terminal.notifications:
     discovery:
-      long_running: "Warp can notify you when long-running commands finish."
-      agent_task_completed: "Warp can notify you when an agent finishes responding."
-      needs_attention: "Warp can notify you when a command or agent needs your attention."
-      password_prompt: "Warp can notify you when you're prompted to enter a password."
-    a11y_enable_palette: "You can enable notifications through the command palette."
-    a11y_enable_preferences: "Make sure you have enabled access for Warp notifications in System Preferences."
-    error_sending: "Error sending notification"
-    dismissed: "We won't show this banner again, but you can always go to Settings to enable notifications."
-    disabled: "Notifications were turned off, but you can always go to Settings to enable notifications."
-    enable: "Enable"
-    learn_more: "Learn more"
-    troubleshoot: "Troubleshoot"
-    configure: "Configure notifications"
-    permissions_accepted: "Success! You are now ready to receive desktop notifications."
-    permissions_denied: "Warp was denied permissions to send you notifications."
-    permissions_error: "Something went wrong while requesting permissions."
-    allow_permissions: "Don't forget to 'Allow' the permissions request to finish setting up notifications."
   terminal.notification:
-    default_title: "Notification"
-    finished: " finished"
-    failed: " failed"
-    finished_after: " finished after {duration}s"
-    failed_after: " failed after {duration}s"
-    latest_output: "Latest output: "
-    error_prefix: "Error: "
-    blocked: " blocked"
-    waiting_for_password: " is waiting for a password"
 
   # ── Terminal Context Menu ──
   terminal.context_menu:
-    copy: "Copy"
-    copy_url: "Copy URL"
-    copy_path: "Copy path"
-    copy_command: "Copy command"
-    copy_commands: "Copy commands"
-    copy_output: "Copy output"
-    copy_filtered_output: "Copy filtered output"
-    copy_prompt: "Copy prompt"
-    copy_right_prompt: "Copy right prompt"
-    copy_working_directory: "Copy working directory"
-    copy_git_branch: "Copy git branch"
-    cut: "Cut"
-    paste: "Paste"
-    select_all: "Select all"
-    insert_into_input: "Insert into input"
-    find_within_block: "Find within block"
-    find_within_blocks: "Find within blocks"
-    scroll_to_top_of_block: "Scroll to top of block"
-    scroll_to_top_of_blocks: "Scroll to top of blocks"
-    scroll_to_bottom_of_block: "Scroll to bottom of block"
-    scroll_to_bottom_of_blocks: "Scroll to bottom of blocks"
-    save_as_workflow: "Save as workflow"
-    ask_warp_ai: "Ask Warp AI"
-    toggle_block_filter: "Toggle block filter"
-    toggle_bookmark: "Toggle bookmark"
-    rewind_to_before_here: "Rewind to before here"
-    clear_blocks: "Clear Blocks"
-    split_pane_right: "Split pane right"
-    split_pane_left: "Split pane left"
-    split_pane_down: "Split pane down"
-    split_pane_up: "Split pane up"
-    close_pane: "Close pane"
-    edit_cli_agent_toolbelt: "Edit CLI agent toolbelt"
-    edit_agent_toolbelt: "Edit agent toolbelt"
-    edit_prompt: "Edit prompt"
-    command_search: "Command search"
-    ai_command_search: "AI command search"
-    hide: "Hide"
-    show: "Show"
-    input_hint_text: "input hint text"
-    share_block_ellipsis: "Share block..."
-    share_ellipsis: "Share..."
-    show_in_finder: "Show in Finder"
-    show_containing_folder: "Show containing folder"
-    open_in_warp: "Open in Warp"
-    open_in_editor: "Open in editor"
-    fork_from_here_dev: "Fork from here (dev only)"
 
   # ── Terminal Tooltips ──
   terminal.tooltip:
-    filter_block_output: "Filter block output"
-    bookmark_block: "Bookmark this block to quickly scroll to it"
-    lock_scrolling: "Lock scrolling at bottom of block"
-    jump_to_bottom: "Jump to the bottom of this block"
 
   # ── Terminal Block ──
   terminal.block:
-    show_init_block: "Show initialization block"
-    more_info: "More info"
 
   # ── Terminal Zero State ──
   terminal.zero_state:
-    new_session: "New terminal session"
-    start_agent_conversation: "start a new agent conversation"
-    start_cloud_conversation: "start a new cloud agent conversation"
-    cycle_past: "cycle past commands and conversations"
-    open_code_review: "open code review"
 
   # ── Terminal Shared Session ──
   terminal.shared_session:
-    reconnecting: "Offline, trying to reconnect..."
 
   # ── Terminal SSH ──
   terminal.ssh:
-    file_uploads: "File Uploads"
 
   # ── Terminal Shell ──
   terminal.shell:
-    bootstrap_slow: "Seems like your shell is taking a while to start...  "
-    incompatible_config: "Your shell configuration is incompatible with Warp...  "
-    completions_not_working: "Seems like your completions are not working ("
-    completions_suffix: "). Enabling tmux warpification in "
-    may_resolve_issue: " may resolve this issue."
-    settings: "settings"
-    subshell: "Subshell"
 
   # ── Terminal A11y ──
   terminal.a11y:
-    press_right_arrow: "Press right arrow to insert or keep editing to ignore"
-    command_waiting_password: "Command is waiting for a password"
 
   # ── Terminal Agent ──
   terminal.agent:
-    execute_this_plan: "Execute this plan"
-    fork_from_last_query: "Fork from last query"
 
   # ── Terminal Environment ──
   terminal.environment:
-    create_with_repo: "Create environment using the current working dir as repo"
-    create_without_repo: "Create environment without any repos"
 
   # ── Terminal Project ──
   terminal.project:
-    setup: "Project setup"
-    use_file_picker: "Use file picker to select a git repository"
 
   # ── Terminal Skills ──
   terminal.skills:
-    bundled_cannot_edit: "Bundled skills cannot be edited"
-    editing_not_supported: "Editing skills is not supported in this build"
-    no_skills: "No skills found"
 
   # ── Terminal OSC 52 (Clipboard) ──
   terminal.osc52:
@@ -1970,34 +1548,18 @@ en:
     copied_branch_name: "Copied branch name"
   # ── Agent Message Bar ──
   agent.message_bar:
-    starting_shell: "Starting shell..."
 
   # ── Agent Output ──
   agent.output:
-    always_allow_file_access: "Always allow file access for this repo"
-    grep_for: "Grep for "
-    search_files: "Search for files that match "
 
   # ── Agent Search Codebase ──
   agent.search_codebase:
-    no_results: "No results found"
 
   # ── Agent Usage ──
   agent.usage:
-    credits_total: "Credits spent (total)"
-    credits_spent: "Credits spent"
-    tool_calls: "Tool calls"
-    context_window: "Context window used"
-    files_changed: "Files changed"
-    diffs_applied: "Diffs applied"
-    commands_executed: "Commands executed"
-    time_to_first_token: "Time to first token"
-    total_response_time: "Total agent response time"
 
   # ── Agent Zero State ──
   agent.zero_state:
-    send_prompt: "Send a prompt below to start a new conversation"
-    new_conversation: "New Oz agent conversation"
 # --- deleted sections ---
   # ── CLI ──
       # Buttons
