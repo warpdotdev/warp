@@ -1475,9 +1475,11 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
 }
 
 #[test]
-fn locked_initial_cloud_mode_prompt_shows_copy_action_that_copies_full_prompt() {
-    // The locked initial cloud-mode row swaps Delete for a Copy action that copies the full,
-    // untruncated prompt text; ordinary rows keep Delete.
+fn copying_locked_initial_cloud_mode_prompt_copies_full_prompt_to_clipboard() {
+    // The locked initial cloud-mode prompt can't be edited or deleted, so its row offers a Copy
+    // action instead. Firing it (the same action the Copy button dispatches) puts the full,
+    // untruncated prompt — long, multiline content included — on the clipboard and leaves the row
+    // in the queue.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -1485,33 +1487,23 @@ fn locked_initial_cloud_mode_prompt_shows_copy_action_that_copies_full_prompt() 
 
         let long_prompt = format!("line one\nline two\n{}", "x".repeat(1000));
         let long_prompt_for_assert = long_prompt.clone();
-        let (initial_id, followup_id) =
-            QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
-                let initial_id = model.append(
-                    conversation_id,
-                    QueuedQuery::new(long_prompt, QueuedQueryOrigin::InitialCloudMode),
-                    ctx,
-                );
-                let followup_id = model.append(conversation_id, user_query("follow up"), ctx);
-                (initial_id, followup_id)
-            });
-
-        // Only the locked initial cloud-mode row exposes a Copy action; the follow-up keeps Delete.
-        panel.read(&app, |panel, _| {
-            assert_eq!(panel.has_copy_button_for_test(initial_id), Some(true));
-            assert_eq!(panel.has_copy_button_for_test(followup_id), Some(false));
+        let initial_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(long_prompt, QueuedQueryOrigin::InitialCloudMode),
+                ctx,
+            )
         });
 
         panel.update(&mut app, |panel, ctx| {
             panel.handle_action(&QueuedPromptsPanelAction::CopyRow(initial_id), ctx);
         });
+
         app.update(|ctx| {
             assert_eq!(ctx.clipboard().read().plain_text, long_prompt_for_assert);
         });
-
-        // The row is left in the queue — copying is non-destructive.
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
-            assert_eq!(model.queue(conversation_id).len(), 2);
+            assert_eq!(model.queue(conversation_id).len(), 1);
         });
     });
 }

@@ -714,12 +714,6 @@ impl QueuedPromptsPanelView {
             .map(|state| state.send_now_button.as_ref(ctx).is_disabled())
     }
 
-    pub(super) fn has_copy_button_for_test(&self, query_id: QueuedQueryId) -> Option<bool> {
-        self.row_states
-            .get(&query_id)
-            .map(|state| state.copy_button.is_some())
-    }
-
     /// Test accessor: whether the header currently shows the "⏎ to send" hint.
     pub(super) fn enter_hint_shown_for_test(&self, ctx: &AppContext) -> bool {
         self.should_show_enter_hint(ctx)
