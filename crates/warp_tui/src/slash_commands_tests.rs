@@ -2,8 +2,8 @@ use ai::skills::SkillReference;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, DetectedSkillCommand, ParsedSlashCommandInput, SlashCommandId,
-    SlashCommandMixer,
+    slash_commands, AcceptSlashCommandOrSavedPrompt, DetectedCommand, DetectedSkillCommand,
+    ParsedSlashCommandInput, SlashCommandId, SlashCommandMixer,
 };
 use warp_search_core::inline_menu::InlineMenuSelection;
 use warpui_core::App;
@@ -21,19 +21,85 @@ fn parsed_skill(argument: Option<&str>) -> ParsedSlashCommandInput {
     })
 }
 
+fn parsed_static_command(argument: Option<&str>) -> ParsedSlashCommandInput {
+    ParsedSlashCommandInput::SlashCommand(DetectedCommand {
+        command: slash_commands::COMPACT.clone(),
+        argument: argument.map(str::to_owned),
+    })
+}
+
 #[test]
-fn skill_without_argument_remains_searchable() {
+fn exact_static_command_stays_open_when_multiple_results_were_visible() {
     assert_eq!(
-        menu_query_for_parsed_input(&parsed_skill(None)).as_deref(),
+        menu_query_for_parsed_input(&parsed_static_command(None), true, 2).as_deref(),
+        Some("compact")
+    );
+}
+
+#[test]
+fn exact_static_command_does_not_open_a_closed_menu() {
+    assert_eq!(
+        menu_query_for_parsed_input(&parsed_static_command(None), false, 2),
+        None
+    );
+}
+
+#[test]
+fn unique_exact_static_command_closes_an_open_menu() {
+    assert_eq!(
+        menu_query_for_parsed_input(&parsed_static_command(None), true, 1),
+        None
+    );
+}
+
+#[test]
+fn static_command_argument_entry_closes_menu() {
+    assert_eq!(
+        menu_query_for_parsed_input(&parsed_static_command(Some("")), true, 2),
+        None
+    );
+    assert_eq!(
+        menu_query_for_parsed_input(
+            &parsed_static_command(Some("unexpected trailing input")),
+            true,
+            2,
+        ),
+        None
+    );
+}
+
+#[test]
+fn exact_skill_stays_open_when_multiple_results_were_visible() {
+    assert_eq!(
+        menu_query_for_parsed_input(&parsed_skill(None), true, 2).as_deref(),
         Some("write-product-spec")
     );
 }
 
 #[test]
-fn skill_argument_entry_closes_menu() {
-    assert_eq!(menu_query_for_parsed_input(&parsed_skill(Some(""))), None);
+fn exact_skill_does_not_open_a_closed_menu() {
     assert_eq!(
-        menu_query_for_parsed_input(&parsed_skill(Some("here is my prompt"))),
+        menu_query_for_parsed_input(&parsed_skill(None), false, 2),
+        None
+    );
+}
+
+#[test]
+fn unique_exact_skill_closes_an_open_menu() {
+    assert_eq!(
+        menu_query_for_parsed_input(&parsed_skill(None), true, 1),
+        None
+    );
+}
+
+#[test]
+fn skill_argument_entry_closes_menu() {
+    assert_eq!(
+        menu_query_for_parsed_input(&parsed_skill(Some("")), true, 2),
+        None
+    );
+    assert_eq!(
+        menu_query_for_parsed_input(&parsed_skill(Some("here is my prompt")), true, 2),
         None
     );
 }

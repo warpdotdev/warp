@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::skills::SkillPathOrigin;
+use ai::skills::{ParsedSkill, SkillPathOrigin, SkillReference};
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
 use input_context::{input_context_for_request, parse_context_attachments};
@@ -59,6 +59,7 @@ use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::skills::{ActiveSkillLookupError, SkillManager};
 use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::features::FeatureFlag;
@@ -1367,6 +1368,48 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         slash_command.send_request(self, None, None, ctx);
+    }
+
+    /// Resolves a skill reference against this controller's active execution host.
+    pub(crate) fn resolve_skill_for_invocation(
+        &self,
+        reference: &SkillReference,
+        ctx: &AppContext,
+    ) -> Result<ParsedSkill, ActiveSkillLookupError> {
+        let path_origin = self.skill_path_origin(ctx);
+        SkillManager::handle(ctx)
+            .as_ref(ctx)
+            .active_skill_by_reference_with_origin(reference, &path_origin, ctx)
+            .cloned()
+    }
+
+    /// Sends an already-resolved skill invocation through the shared slash-command request path.
+    pub(crate) fn send_resolved_skill_invocation(
+        &mut self,
+        skill: ParsedSkill,
+        user_query: Option<String>,
+        queued_query_id: Option<QueuedQueryId>,
+        conversation_id: Option<AIConversationId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let request = SlashCommandRequest::InvokeSkill { skill, user_query };
+        if let Some(query_id) = queued_query_id {
+            self.send_queued_slash_command_request(request, query_id, conversation_id, ctx);
+        } else {
+            self.send_slash_command_request(request, ctx);
+        }
+    }
+
+    /// Resolves and sends a skill invocation for surfaces that do not need intermediate UI work.
+    pub fn send_invoke_skill_request(
+        &mut self,
+        reference: SkillReference,
+        user_query: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), ActiveSkillLookupError> {
+        let skill = self.resolve_skill_for_invocation(&reference, ctx)?;
+        self.send_resolved_skill_invocation(skill, user_query, None, None, ctx);
+        Ok(())
     }
 
     /// Same as [`Self::send_slash_command_request`] but marks the emitted `SentRequest`

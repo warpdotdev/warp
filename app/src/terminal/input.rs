@@ -196,7 +196,7 @@ use crate::ai::predict::prompt_suggestions::{
     has_pending_code_or_unit_test_prompt_suggestion,
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
-use crate::ai::skills::{SkillManager, SkillOpenOrigin, SkillTelemetryEvent};
+use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
 use crate::ai::AIRequestUsageModel;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::appearance::{Appearance, AppearanceEvent};
@@ -5816,14 +5816,12 @@ impl Input {
         }
 
         let is_queued_prompt = queued_query_id.is_some();
-        // Resolve the skill from the catalog selected by the active session's host,
-        // so remote sessions invoke the host-rendered bundled skill.
-        let path_origin = self.ai_controller.as_ref(ctx).skill_path_origin(ctx);
-        let skill = match SkillManager::handle(ctx)
+        let skill = match self
+            .ai_controller
             .as_ref(ctx)
-            .active_skill_by_reference_with_origin(&reference, &path_origin, ctx)
+            .resolve_skill_for_invocation(&reference, ctx)
         {
-            Ok(skill) => skill.clone(),
+            Ok(skill) => skill,
             Err(error) => {
                 // Show error toast if skill not found
                 let window_id = ctx.window_id();
@@ -5861,19 +5859,14 @@ impl Input {
             });
         }
 
-        // Send the skill invocation request
-        let request = SlashCommandRequest::InvokeSkill { skill, user_query };
         self.ai_controller.update(ctx, move |controller, ctx| {
-            if let Some(query_id) = queued_query_id {
-                controller.send_queued_slash_command_request(
-                    request,
-                    query_id,
-                    conversation_id_override,
-                    ctx,
-                );
-            } else {
-                controller.send_slash_command_request(request, ctx);
-            }
+            controller.send_resolved_skill_invocation(
+                skill,
+                user_query,
+                queued_query_id,
+                conversation_id_override,
+                ctx,
+            );
         });
 
         true

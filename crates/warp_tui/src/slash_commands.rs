@@ -9,9 +9,9 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
 use warp::tui_export::{
-    slash_command_query, slash_command_selection_behavior, AcceptSlashCommandOrSavedPrompt,
-    ParsedSlashCommandInput, SlashCommandDataSource as _, SlashCommandMixer,
-    SlashCommandSelectionBehavior, TuiSlashCommandDataSource, UpdatedActiveCommands,
+    should_close_slash_command_menu_for_exact_match, slash_command_query,
+    AcceptSlashCommandOrSavedPrompt, ParsedSlashCommandInput, SlashCommandDataSource as _,
+    SlashCommandMixer, TuiSlashCommandDataSource, UpdatedActiveCommands,
 };
 use warp_editor::model::CoreEditorModel;
 use warp_search_core::inline_menu::{
@@ -243,7 +243,10 @@ impl TuiSlashCommandModel {
             return;
         };
         let parsed_input = slash_commands_source.as_ref(ctx).parse_input(&input, ctx);
-        let Some(query) = menu_query_for_parsed_input(&parsed_input) else {
+        let menu_was_open = self.is_open();
+        let result_count = self.mixer.as_ref(ctx).results().len();
+        let Some(query) = menu_query_for_parsed_input(&parsed_input, menu_was_open, result_count)
+        else {
             self.close(ctx);
             return;
         };
@@ -346,17 +349,21 @@ fn input_text(input_editor: &ModelHandle<CodeEditorModel>, ctx: &AppContext) -> 
     }
 }
 
-fn menu_query_for_parsed_input(parsed_input: &ParsedSlashCommandInput) -> Option<String> {
+fn menu_query_for_parsed_input(
+    parsed_input: &ParsedSlashCommandInput,
+    menu_was_open: bool,
+    result_count: usize,
+) -> Option<String> {
     match parsed_input {
         ParsedSlashCommandInput::None => None,
         ParsedSlashCommandInput::Composing { filter } => Some(filter.clone()),
         ParsedSlashCommandInput::SlashCommand(detected_command) => {
-            let is_argument_entry = detected_command.argument.is_some();
-            let executes_on_selection = matches!(
-                slash_command_selection_behavior(&detected_command.command),
-                SlashCommandSelectionBehavior::Execute
-            );
-            if is_argument_entry || executes_on_selection {
+            if !menu_was_open
+                || should_close_slash_command_menu_for_exact_match(
+                    result_count,
+                    detected_command.argument.is_some(),
+                )
+            {
                 None
             } else {
                 Some(
@@ -369,10 +376,18 @@ fn menu_query_for_parsed_input(parsed_input: &ParsedSlashCommandInput) -> Option
                 )
             }
         }
-        ParsedSlashCommandInput::SkillCommand(detected_skill) => detected_skill
-            .argument
-            .is_none()
-            .then(|| detected_skill.name.clone()),
+        ParsedSlashCommandInput::SkillCommand(detected_skill) => {
+            if !menu_was_open
+                || should_close_slash_command_menu_for_exact_match(
+                    result_count,
+                    detected_skill.argument.is_some(),
+                )
+            {
+                None
+            } else {
+                Some(detected_skill.name.clone())
+            }
+        }
     }
 }
 

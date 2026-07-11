@@ -111,6 +111,18 @@ pub fn slash_command_selection_behavior(command: &StaticCommand) -> SlashCommand
         SlashCommandSelectionBehavior::Execute
     }
 }
+
+/// Whether an already-open slash command menu should close after the input becomes an exact
+/// static-command or skill match.
+///
+/// This preserves the GUI's existing behavior: exact input stays visible while multiple prior
+/// results remain, but a unique match or the start of argument entry closes the menu.
+pub fn should_close_slash_command_menu_for_exact_match(
+    result_count: usize,
+    argument_started: bool,
+) -> bool {
+    result_count < 2 || argument_started
+}
 /// Returns whether TUI can execute or otherwise handle the static slash command today.
 ///
 /// GUI-only actions such as opening settings panes or inline menus should stay hidden until the
@@ -120,6 +132,33 @@ pub fn slash_command_is_supported_in_tui(command: &StaticCommand) -> bool {
         || command.name == commands::NEW.name
         || command.name == commands::COMPACT.name
         || command.name == commands::PLAN.name
+}
+/// Records a static slash command accepted from either the GUI or TUI surface.
+pub fn record_static_slash_command_accepted(
+    command_name: &str,
+    is_in_agent_view: bool,
+    ctx: &mut AppContext,
+) {
+    send_telemetry_from_ctx!(
+        TelemetryEvent::SlashCommandAccepted {
+            command_details: SlashCommandAcceptedDetails::StaticCommand {
+                command_name: command_name.to_owned(),
+            },
+            is_in_agent_view,
+        },
+        ctx
+    );
+}
+
+/// Records a saved prompt accepted from either the GUI or TUI slash menu.
+pub fn record_saved_prompt_accepted(is_in_agent_view: bool, ctx: &mut AppContext) {
+    send_telemetry_from_ctx!(
+        TelemetryEvent::SlashCommandAccepted {
+            command_details: SlashCommandAcceptedDetails::SavedPrompt,
+            is_in_agent_view,
+        },
+        ctx
+    );
 }
 
 pub fn saved_prompt_text_for_id(id: &SyncId, ctx: &AppContext) -> Option<String> {
@@ -292,12 +331,12 @@ impl Input {
                 // a valid command in the input) OR if the user has started typing arguments, hide
                 // the menu.
                 if self.suggestions_mode_model.as_ref(ctx).is_slash_commands()
-                    && (self
-                        .inline_slash_commands_view
-                        .as_ref(ctx)
-                        .result_count(ctx)
-                        < 2
-                        || detected_command.argument.is_some())
+                    && should_close_slash_command_menu_for_exact_match(
+                        self.inline_slash_commands_view
+                            .as_ref(ctx)
+                            .result_count(ctx),
+                        detected_command.argument.is_some(),
+                    )
                 {
                     self.close_slash_commands_menu(ctx);
                 }
@@ -321,12 +360,12 @@ impl Input {
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 // Hide the menu once the user has started typing the prompt
                 if self.suggestions_mode_model.as_ref(ctx).is_slash_commands()
-                    && (self
-                        .inline_slash_commands_view
-                        .as_ref(ctx)
-                        .result_count(ctx)
-                        < 2
-                        || detected_skill.argument.is_some())
+                    && should_close_slash_command_menu_for_exact_match(
+                        self.inline_slash_commands_view
+                            .as_ref(ctx)
+                            .result_count(ctx),
+                        detected_skill.argument.is_some(),
+                    )
                 {
                     self.close_slash_commands_menu(ctx);
                 }
@@ -362,13 +401,7 @@ impl Input {
                 };
                 let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
                     && self.agent_view_controller.as_ref(ctx).is_fullscreen();
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::SlashCommandAccepted {
-                        command_details: SlashCommandAcceptedDetails::SavedPrompt,
-                        is_in_agent_view,
-                    },
-                    ctx
-                );
+                record_saved_prompt_accepted(is_in_agent_view, ctx);
 
                 self.show_workflows_info_box_on_workflow_selection(
                     WorkflowType::Cloud(Box::new(workflow)),
@@ -1272,15 +1305,7 @@ impl Input {
 
         let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
             && self.agent_view_controller.as_ref(ctx).is_active();
-        send_telemetry_from_ctx!(
-            TelemetryEvent::SlashCommandAccepted {
-                command_details: SlashCommandAcceptedDetails::StaticCommand {
-                    command_name: command.name.to_owned(),
-                },
-                is_in_agent_view,
-            },
-            ctx
-        );
+        record_static_slash_command_accepted(command.name, is_in_agent_view, ctx);
         true
     }
 
