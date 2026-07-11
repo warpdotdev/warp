@@ -579,6 +579,48 @@ fn cursor_accounts_for_zero_width_chars() {
         });
     });
 }
+#[test]
+fn cursor_accounts_for_multi_char_graphemes() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+
+            type_str(&view, ctx, "\u{2328}\u{fe0f}");
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((2, 0)),
+                "VS16 emoji occupies two columns"
+            );
+
+            type_str(&view, ctx, "👨‍👩‍👧‍👦");
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((4, 0)),
+                "ZWJ family adds two columns"
+            );
+
+            type_str(&view, ctx, "🇺🇸");
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((6, 0)),
+                "regional-indicator flag adds two columns"
+            );
+        });
+    });
+}
+
+#[test]
+fn multi_char_grapheme_wraps_as_one_unit() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
+            type_str(&view, ctx, "\u{2328}\u{fe0f}");
+
+            assert_eq!(cursor_and_height(&view, ctx), (Some((2, 1)), 2));
+        });
+    });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Soft-wrap growth
@@ -716,6 +758,31 @@ fn single_click_places_cursor() {
     });
 }
 
+#[test]
+fn clicks_map_around_wide_grapheme() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "a\u{2328}\u{fe0f}b");
+
+            mouse(&view, ctx, &left_down(2, 0, 1, false));
+            mouse(&view, ctx, &left_up(2, 0));
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((1, 0)),
+                "clicking inside the wide grapheme places the cursor before it"
+            );
+
+            mouse(&view, ctx, &left_down(3, 0, 1, false));
+            mouse(&view, ctx, &left_up(3, 0));
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((3, 0)),
+                "clicking after the wide grapheme places the cursor after it"
+            );
+        });
+    });
+}
 /// Clicking the phantom deferred-wrap row (rendered when a logical line
 /// exactly fills the width) must resolve to the end-of-buffer gap — where the
 /// cursor visibly sits — not clamp into the preceding full row and teleport

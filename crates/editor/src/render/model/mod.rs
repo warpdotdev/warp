@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 use string_offset::{CharOffset, impl_offset};
 use sum_tree::{SeekBias, SumTree};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 use vec1::Vec1;
 use vim::vim::{MotionType, VimMode};
 use warp_core::channel::ChannelState;
@@ -461,13 +463,11 @@ pub struct CharCellState {
     /// never empty — it always holds at least `[0]` (logical line 0 starts at char
     /// 0), even before the first edit, so the soft-wrap helpers can index it safely.
     pub(crate) line_starts: RefCell<Vec<usize>>,
-    /// The terminal display width (in cells) of each character of the buffer
-    /// text, indexed in parallel with char offsets. This is **derived layout
-    /// metadata, not a copy of the text**: char-cell wrapping only needs each
-    /// char's width, and the render-state query methods are `&self` with no
-    /// `AppContext`, so they can't read the `Buffer` model at query time. One
-    /// byte per char (0 for zero-width/combining marks, 2 for wide CJK/emoji, 1
-    /// otherwise). Rebuilt via [`CharCellState::update_text`].
+    /// The terminal display width metadata for each character of the buffer,
+    /// indexed in parallel with char offsets. The first character of a grapheme
+    /// carries its full width and the remaining characters carry zero. This is
+    /// derived layout metadata, not a copy of the text. Rebuilt via
+    /// [`CharCellState::update_text`].
     pub(crate) char_widths: RefCell<Vec<u8>>,
     /// Diff ghost lines (deleted/replaced content) to interleave at their
     /// `insert_before` line positions when rendering. Replaced wholesale on
@@ -696,14 +696,12 @@ impl CharCellState {
         char_widths.clear();
         // Logical line 0 starts at char index 0.
         starts.push(0_usize);
-        for ch in text.chars() {
-            // Store only the derived display width, never the character itself.
-            char_widths.push(char_cell_display_width(ch) as u8);
+        append_char_cell_display_widths(text, &mut char_widths, |ch, next_offset| {
             if ch == '\n' {
                 // The next logical line starts at the char index after this '\n'.
-                starts.push(char_widths.len());
+                starts.push(next_offset);
             }
-        }
+        });
     }
 }
 
@@ -5409,6 +5407,29 @@ impl LaidOutEmbeddedItem for BrokenBlockEmbedding {
 /// no defined width and are treated as 0.
 pub fn char_cell_display_width(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
+/// Appends one width per character and reports each character's following
+/// offset without allocating intermediate metadata.
+fn append_char_cell_display_widths(
+    text: &str,
+    widths: &mut Vec<u8>,
+    mut visit: impl FnMut(char, usize),
+) {
+    for grapheme in text.graphemes(true) {
+        let width = grapheme.width().min(usize::from(u8::MAX)) as u8;
+        for (index, ch) in grapheme.chars().enumerate() {
+            widths.push(if index == 0 { width } else { 0 });
+            visit(ch, widths.len());
+        }
+    }
+}
+
+/// Returns one width entry per character, charging each grapheme's width to
+/// its first character and zero to the remaining characters.
+pub fn char_cell_display_widths(text: &str) -> Vec<u8> {
+    let mut widths = Vec::with_capacity(text.len());
+    append_char_cell_display_widths(text, &mut widths, |_, _| {});
+    widths
 }
 
 /// For one logical line, given the display width (in cells) of each of its

@@ -26,7 +26,7 @@ use string_offset::CharOffset;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
 use warp_editor::render::model::{
-    char_cell_display_width, CharCellTemporaryBlock, DisplayRow, DisplayRowKind,
+    CharCellTemporaryBlock, DisplayLattice, DisplayRow, DisplayRowKind,
 };
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
@@ -322,7 +322,7 @@ impl TuiEditorElement {
             let mut column = TuiFlex::column();
             for (vis_idx, row) in visible_slice.iter().enumerate() {
                 column.add_child(self.render_row(row, &chars, lattice.ghosts()));
-                if let Some((start_col, end_col)) = self.selection_span_in_row(row, &chars) {
+                if let Some((start_col, end_col)) = self.selection_span_in_row(row, &lattice) {
                     selected_spans.push((
                         vis_idx as u16,
                         start_col + self.gutter_cols,
@@ -433,8 +433,12 @@ impl TuiEditorElement {
 
     /// The selection's display-column span within `row`, if the selection
     /// overlaps it. Selection offsets are char indices; terminal highlighting
-    /// works in display columns, so convert via each char's display width.
-    fn selection_span_in_row(&self, row: &DisplayRow, chars: &[char]) -> Option<(u16, u16)> {
+    /// works in display columns, so query the lattice's retained widths.
+    fn selection_span_in_row(
+        &self,
+        row: &DisplayRow,
+        lattice: &DisplayLattice<'_>,
+    ) -> Option<(u16, u16)> {
         let selection = self.sel_char_range.clone()?;
         if !matches!(row.kind, DisplayRowKind::Buffer { .. }) {
             return None;
@@ -444,15 +448,8 @@ impl TuiEditorElement {
         }
         let start_offset = selection.start.max(row.char_range.start);
         let end_offset = selection.end.min(row.char_range.end);
-        let row_start = row.char_range.start.as_usize();
-        let display_col = |offset: CharOffset| -> u16 {
-            chars[row_start..offset.as_usize()]
-                .iter()
-                .map(|&c| char_cell_display_width(c) as u16)
-                .sum()
-        };
-        let start_col = display_col(start_offset);
-        let end_col = display_col(end_offset);
+        let start_col = lattice.display_width(row.char_range.start..start_offset);
+        let end_col = lattice.display_width(row.char_range.start..end_offset);
         (end_col > start_col).then_some((start_col, end_col))
     }
 

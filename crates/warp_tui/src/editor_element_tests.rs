@@ -5,8 +5,8 @@ use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect,
-    TuiSize,
+    Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext,
+    TuiPaintContext, TuiRect, TuiSize,
 };
 use warpui_core::{App, AppContext, ModelHandle};
 
@@ -20,15 +20,31 @@ fn model(ctx: &mut AppContext, text: &str) -> ModelHandle<CodeEditorModel> {
         model
     })
 }
+#[test]
+fn selection_span_uses_grapheme_width() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let model = model(ctx, "a\u{2328}\u{fe0f}b");
+            let mut element = TuiEditorElement::new(&model, ctx);
+            element.sel_char_range = Some(CharOffset::range(1..3));
+            let buffer = render_buffer(ctx, element, 10, 1);
 
-/// Lays out and renders `element` into an `area`-sized buffer, returning its
-/// rows trimmed of trailing spaces (blank rows become empty strings).
-fn render_lines(
+            assert!(!buffer[(0, 0)].modifier.contains(Modifier::REVERSED));
+            assert!(buffer[(1, 0)].modifier.contains(Modifier::REVERSED));
+            assert!(buffer[(2, 0)].modifier.contains(Modifier::REVERSED));
+            assert!(!buffer[(3, 0)].modifier.contains(Modifier::REVERSED));
+        });
+    });
+}
+
+/// Lays out and renders `element` into a buffer.
+fn render_buffer(
     ctx: &AppContext,
     mut element: TuiEditorElement,
     width: u16,
     height: u16,
-) -> Vec<String> {
+) -> TuiBuffer {
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -43,6 +59,16 @@ fn render_lines(
     let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
     element.render(area, &mut buffer, &mut paint_ctx);
     buffer
+}
+
+/// Returns rendered rows with trailing spaces removed.
+fn render_lines(
+    ctx: &AppContext,
+    element: TuiEditorElement,
+    width: u16,
+    height: u16,
+) -> Vec<String> {
+    render_buffer(ctx, element, width, height)
         .to_lines()
         .into_iter()
         .map(|line| line.trim_end().to_string())

@@ -1480,8 +1480,9 @@ mod char_cell {
     use string_offset::CharOffset;
 
     use crate::render::model::{
-        ColumnUnit, LineCount, SoftWrapPoint, char_cell_display_width, char_cell_line_row_starts,
-        char_cell_max_line, char_cell_offset_to_softwrap_point, char_cell_softwrap_point_to_offset,
+        ColumnUnit, LineCount, SoftWrapPoint, char_cell_display_width, char_cell_display_widths,
+        char_cell_line_row_starts, char_cell_max_line, char_cell_offset_to_softwrap_point,
+        char_cell_softwrap_point_to_offset,
     };
 
     /// Build the `(line_starts, char_widths)` pair from a text string (mirrors
@@ -1489,10 +1490,7 @@ mod char_cell {
     /// char-cell layout inputs without a full `RenderState`. `char_widths` holds
     /// the per-char display width (the derived data the layout actually needs).
     fn line_starts_for(text: &str) -> (Vec<usize>, Vec<u8>) {
-        let char_widths: Vec<u8> = text
-            .chars()
-            .map(|c| char_cell_display_width(c) as u8)
-            .collect();
+        let char_widths = char_cell_display_widths(text);
         let mut starts = vec![0_usize];
         for (i, ch) in text.chars().enumerate() {
             if ch == '\n' {
@@ -1661,6 +1659,24 @@ mod char_cell {
     }
 
     #[test]
+    fn display_widths_preserve_char_offsets_for_graphemes() {
+        assert_eq!(char_cell_display_widths("\u{2328}\u{fe0f}"), vec![2, 0]);
+        assert_eq!(char_cell_display_widths("👨‍👩‍👧‍👦"), vec![2, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(char_cell_display_widths("🇺🇸"), vec![2, 0]);
+    }
+
+    #[test]
+    fn grapheme_wraps_as_one_display_unit() {
+        let (starts, widths) = line_starts_for("abc\u{2328}\u{fe0f}");
+        let before_emoji =
+            char_cell_offset_to_softwrap_point(CharOffset::from(3), &starts, &widths, 4);
+        let after_emoji =
+            char_cell_offset_to_softwrap_point(CharOffset::from(5), &starts, &widths, 4);
+        assert_eq!(before_emoji, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
+        assert_eq!(after_emoji, SoftWrapPoint::new(1, ColumnUnit::Chars(2)));
+    }
+
+    #[test]
     fn wide_char_occupies_two_columns() {
         // "你好world": 你(2) 好(2) w o r l d. Index 2 ('w') sits at display col 4.
         let text = "你好world";
@@ -1705,10 +1721,7 @@ mod char_cell {
     #[test]
     fn line_row_starts_breaks_on_wide_chars() {
         // width 4, "你好你好": two wide chars per row → break before index 2.
-        let widths: Vec<u8> = "你好你好"
-            .chars()
-            .map(|c| char_cell_display_width(c) as u8)
-            .collect();
+        let widths = char_cell_display_widths("你好你好");
         assert_eq!(char_cell_line_row_starts(&widths, 4), vec![0, 2]);
         // width 0 disables wrapping.
         assert_eq!(char_cell_line_row_starts(&widths, 0), vec![0]);
