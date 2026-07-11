@@ -265,6 +265,44 @@ fn escape_dismisses_menu_and_closed_menu_submit_falls_through() {
     });
 }
 
+#[test]
+fn multiline_paste_inserts_without_submitting_until_enter() {
+    App::test((), |mut app| async move {
+        let (view, submitted) = app.update(|ctx| {
+            let view = build_view(ctx);
+            let submitted = Rc::new(RefCell::new(Vec::new()));
+            let submitted_for_subscription = submitted.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiInputViewEvent::Submitted(text) = event {
+                    submitted_for_subscription.borrow_mut().push(text.clone());
+                }
+            });
+            (view, submitted)
+        });
+        let payload = "USER:\nhello\n\nAGENT:\nHi!\n";
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::InsertText(payload.to_owned())],
+            );
+        });
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), payload);
+            assert!(
+                submitted.borrow().is_empty(),
+                "paste must not emit a submission"
+            );
+        });
+
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+        });
+        assert_eq!(submitted.borrow().as_slice(), &[payload]);
+    });
+}
+
 fn dispatch(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, actions: &[TuiInputAction]) {
     view.update(ctx, |v, vctx| {
         for action in actions {

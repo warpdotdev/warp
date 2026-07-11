@@ -478,6 +478,8 @@ pub enum TuiInputViewEvent {
 pub enum TuiInputAction {
     /// Insert a character (`Char(c)` key events).
     InsertChar(char),
+    /// Insert one complete bracketed-paste payload without submitting it.
+    InsertText(String),
     /// Insert a hard newline (`Shift+Enter`, `Ctrl+J`, `Alt+Enter`).
     InsertNewline,
     /// Submit the current input (`Enter`).
@@ -752,6 +754,7 @@ impl From<TuiEditorAction> for TuiInputAction {
     fn from(action: TuiEditorAction) -> Self {
         match action {
             TuiEditorAction::InsertChar(c) => Self::InsertChar(c),
+            TuiEditorAction::InsertText(text) => Self::InsertText(text),
             TuiEditorAction::SelectionStartAt { offset } => Self::SelectionStartAt { offset },
             TuiEditorAction::SelectionExtendTo { offset } => Self::SelectionExtendTo { offset },
             TuiEditorAction::SelectWordAt { offset } => Self::SelectWordAt { offset },
@@ -788,6 +791,9 @@ impl TypedActionView for TuiInputView {
                     let s = c.to_string();
                     self.model.update(ctx, |m, ctx| m.user_insert(&s, ctx));
                 }
+            }
+            TuiInputAction::InsertText(text) => {
+                self.model.update(ctx, |m, ctx| m.user_insert(text, ctx));
             }
             TuiInputAction::InsertNewline => {
                 self.model.update(ctx, |m, ctx| m.user_insert("\n", ctx));

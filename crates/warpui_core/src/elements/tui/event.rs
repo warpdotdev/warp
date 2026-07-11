@@ -28,6 +28,9 @@ pub enum TuiEvent {
         details: KeyEventDetails,
         is_composing: bool,
     },
+    Paste {
+        text: String,
+    },
     ScrollWheel {
         position: TuiPoint,
         delta: TuiScrollDelta,
@@ -76,7 +79,7 @@ impl TuiEvent {
             | Self::MiddleMouseDown { position, .. }
             | Self::RightMouseDown { position, .. }
             | Self::MouseMoved { position, .. } => Some(*position),
-            Self::KeyDown { .. } => None,
+            Self::KeyDown { .. } | Self::Paste { .. } => None,
         }
     }
 

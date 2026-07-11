@@ -49,6 +49,9 @@ pub(crate) enum TuiEditorAction {
     /// Insert a printable character (only emitted when the element is
     /// [`editable`](TuiEditorElement::editable)).
     InsertChar(char),
+    /// Insert one complete paste payload (only emitted when the element is
+    /// [`editable`](TuiEditorElement::editable)).
+    InsertText(String),
     /// Place the cursor / begin a character selection at `offset` (single click).
     SelectionStartAt { offset: CharOffset },
     /// Extend the active selection's head to `offset` (shift-click).
@@ -717,20 +720,32 @@ impl TuiElement for TuiEditorElement {
         }
 
         if self.editable {
-            if let TuiEvent::KeyDown {
-                keystroke, chars, ..
-            } = event
-            {
-                // Chorded editing commands are dispatched by the keymap pass
-                // (consumer keybindings) before the element pass ever sees the
-                // key. Only printable-character insertion stays element-level —
-                // text insertion is not a keybinding, matching the GUI.
-                if !keystroke.ctrl && !keystroke.alt && !chars.is_empty() {
-                    if let Some(char) = chars.chars().next() {
-                        handler(TuiEditorAction::InsertChar(char), event_ctx);
-                        return true;
+            match event {
+                TuiEvent::KeyDown {
+                    keystroke, chars, ..
+                } => {
+                    // Chorded editing commands are dispatched by the keymap pass
+                    // (consumer keybindings) before the element pass ever sees the
+                    // key. Only printable-character insertion stays element-level —
+                    // text insertion is not a keybinding, matching the GUI.
+                    if !keystroke.ctrl && !keystroke.alt && !chars.is_empty() {
+                        if let Some(char) = chars.chars().next() {
+                            handler(TuiEditorAction::InsertChar(char), event_ctx);
+                            return true;
+                        }
                     }
                 }
+                TuiEvent::Paste { text } => {
+                    handler(TuiEditorAction::InsertText(text.clone()), event_ctx);
+                    return true;
+                }
+                TuiEvent::ScrollWheel { .. }
+                | TuiEvent::LeftMouseDown { .. }
+                | TuiEvent::LeftMouseUp { .. }
+                | TuiEvent::LeftMouseDragged { .. }
+                | TuiEvent::MiddleMouseDown { .. }
+                | TuiEvent::RightMouseDown { .. }
+                | TuiEvent::MouseMoved { .. } => {}
             }
         }
 
