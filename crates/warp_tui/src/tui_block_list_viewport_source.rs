@@ -13,8 +13,8 @@ use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiElement, TuiLayoutContext, TuiRowResize, TuiViewportContent, TuiViewportWindow,
-    TuiViewportedElement, TuiVisibleViewportItem,
+    TuiChildView, TuiElement, TuiLayoutContext, TuiRowResize, TuiViewportContent,
+    TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
 };
 use warpui_core::{AppContext, TuiView};
 
@@ -413,7 +413,7 @@ impl TuiBlockListVisibleItem {
                 TerminalBlockElement::visible_rows(model.clone(), block_id, visible_rows, width)
                     .finish()
             }
-            TuiBlockListVisibleItemKind::AgentBlock(view) => view.as_ref(app).render(app),
+            TuiBlockListVisibleItemKind::AgentBlock(view) => TuiChildView::new(&view).finish(),
         }
     }
 }
