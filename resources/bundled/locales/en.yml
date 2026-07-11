@@ -557,7 +557,6 @@ en:
       scope_personal: "Personal"
       scope_team: "Team"
       search_api_keys: "Search API keys"
-  settings.shared_blocks:
   settings.code_page:
     code: "Code"
     initialization_settings_header: "Initialization Settings"
@@ -1401,10 +1400,8 @@ en:
     you_exceeded_member_limit: "You've exceeded your member limit"
 
   # ── Environments Settings ──
-  settings.environments:
 
   # ── Warp Drive Settings ──
-  settings.drive:
 
   # ── About Settings ──
   settings.about:

@@ -557,7 +557,6 @@ ru:
       scope_personal: "Личный"
       scope_team: "Командный"
       search_api_keys: "Поиск по ключам API"
-  settings.shared_blocks:
   settings.code_page:
     code: "Код"
     initialization_settings_header: "Настройки инициализации"
@@ -1401,10 +1400,8 @@ ru:
     you_exceeded_member_limit: "Вы превысили лимит участников"
 
   # ── Настройки окружений ──
-  settings.environments:
 
   # ── Настройки Warp Drive ──
-  settings.drive:
 
   # ── Настройки «О программе» ──
   settings.about:

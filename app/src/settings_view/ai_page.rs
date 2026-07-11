@@ -8986,7 +8986,7 @@ impl SettingsWidget for ApiKeysWidget {
 
         let mut column = Flex::column().with_child(render_separator(appearance));
 
-if visibility.show_section() {
+        if visibility.show_section() {
             // Header row: crate::menu_label("settings.ai.custom_inference", "Custom inference") + info icon on left, crate::menu_label("settings.ai.add_custom_model", "+ Add custom model") on right
             let header_left = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
