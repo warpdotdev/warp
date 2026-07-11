@@ -83,10 +83,9 @@ impl TuiFrameRenderer {
                 .expect("previous buffer present when not repainting")
         };
 
-        // Ratatui emits explicit trailing-cell clears after VS16 emoji. Send
-        // those clears before the wide grapheme: sending them afterward either
-        // shifts the following run or erases the grapheme, depending on how the
-        // terminal handles writes into a continuation column. Keeping the wide
+        // Paint continuation cells before each changed wide grapheme. Ratatui
+        // omits style-only continuation diffs, while painting them afterward
+        // can shift following cells or erase the grapheme. Keeping the wide
         // grapheme in its own batch also gives following cells a fresh MoveTo.
         let diff: Vec<_> = baseline.diff(buffer);
         let mut batch_start = 0;
@@ -103,18 +102,24 @@ impl TuiFrameRenderer {
                 backend.draw(diff[batch_start..index].iter().copied())?;
             }
 
-            let trailing_end = index
+            let trailing_diff_end = index
                 + 1
                 + diff[index + 1..]
                     .iter()
                     .take_while(|(x, y, _)| *y == wide_y && *x < wide_x.saturating_add(wide_width))
                     .count();
-            if index + 1 < trailing_end {
-                backend.draw(diff[index + 1..trailing_end].iter().copied())?;
+            let trailing_cell_end = wide_x
+                .saturating_add(wide_width)
+                .min(buffer.area.x.saturating_add(buffer.area.width));
+            if wide_x.saturating_add(1) < trailing_cell_end {
+                backend.draw(
+                    (wide_x.saturating_add(1)..trailing_cell_end)
+                        .map(|x| (x, wide_y, &buffer[(x, wide_y)])),
+                )?;
             }
             backend.draw(diff[index..=index].iter().copied())?;
 
-            index = trailing_end;
+            index = trailing_diff_end;
             batch_start = index;
         }
         if batch_start < diff.len() {

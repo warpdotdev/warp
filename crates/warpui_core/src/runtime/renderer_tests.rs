@@ -1,5 +1,5 @@
 use ratatui::buffer::CellWidth;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 
 use super::TuiFrameRenderer;
 use crate::elements::tui::{TuiBuffer, TuiBufferExt, TuiRect, TuiStyle};
@@ -231,6 +231,31 @@ fn wide_grapheme_does_not_shift_following_cells() {
         Some(2),
         "the glyph after a wide VS16 emoji must stay on column 2, not shift right; rendered screen: {:?}",
         screen.to_lines(),
+    );
+}
+#[test]
+fn wide_grapheme_styles_continuation_before_glyph() {
+    let mut renderer = TuiFrameRenderer::new();
+    let mut unselected = TuiBuffer::empty(TuiRect::new(0, 0, 5, 1));
+    unselected.set_stringn(0, 0, "\u{2328}\u{fe0f}gYZ", 5, TuiStyle::default());
+    let _ = draw_to_string(&mut renderer, &unselected);
+
+    let mut selected = unselected.clone();
+    selected.set_style(
+        TuiRect::new(0, 0, 2, 1),
+        TuiStyle::default().add_modifier(Modifier::REVERSED),
+    );
+    let output = draw_to_string(&mut renderer, &selected);
+
+    let continuation_move = output
+        .find(&move_to(1, 0))
+        .expect("selection must style the wide grapheme's continuation cell");
+    let grapheme = output
+        .find("\u{2328}\u{fe0f}")
+        .expect("selection must redraw the wide grapheme");
+    assert!(
+        continuation_move < grapheme,
+        "the continuation style must be emitted before the wide grapheme"
     );
 }
 

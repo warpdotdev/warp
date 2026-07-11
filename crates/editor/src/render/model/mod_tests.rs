@@ -1480,9 +1480,8 @@ mod char_cell {
     use string_offset::CharOffset;
 
     use crate::render::model::{
-        ColumnUnit, LineCount, SoftWrapPoint, char_cell_display_width, char_cell_display_widths,
-        char_cell_line_row_starts, char_cell_max_line, char_cell_offset_to_softwrap_point,
-        char_cell_softwrap_point_to_offset,
+        ColumnUnit, LineCount, SoftWrapPoint, char_cell_display_widths, char_cell_line_row_starts,
+        char_cell_max_line, char_cell_offset_to_softwrap_point, char_cell_softwrap_point_to_offset,
     };
 
     /// Build the `(line_starts, char_widths)` pair from a text string (mirrors
@@ -1651,11 +1650,9 @@ mod char_cell {
 
     #[test]
     fn display_width_basic() {
-        assert_eq!(char_cell_display_width('a'), 1);
-        // CJK ideographs are double-width.
-        assert_eq!(char_cell_display_width('你'), 2);
-        // A combining acute accent is zero-width.
-        assert_eq!(char_cell_display_width('\u{0301}'), 0);
+        assert_eq!(char_cell_display_widths("a"), vec![1]);
+        assert_eq!(char_cell_display_widths("你"), vec![2]);
+        assert_eq!(char_cell_display_widths("\u{0301}"), vec![0]);
     }
 
     #[test]

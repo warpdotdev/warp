@@ -123,6 +123,7 @@ impl<'a> DisplayLattice<'a> {
     pub fn ghosts(&self) -> &[CharCellTemporaryBlock] {
         &self.ghosts
     }
+
     /// The display columns occupied by the clamped buffer character `range`.
     pub fn display_width(&self, range: Range<CharOffset>) -> u16 {
         let start = range.start.as_usize().min(self.char_widths.len());

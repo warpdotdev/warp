@@ -5402,12 +5402,6 @@ impl LaidOutEmbeddedItem for BrokenBlockEmbedding {
 // Char-cell (TUI) layout helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// The terminal display width of a character, in cells: 0 for zero-width /
-/// combining marks, 2 for wide CJK/emoji, 1 otherwise. Control characters have
-/// no defined width and are treated as 0.
-pub fn char_cell_display_width(c: char) -> usize {
-    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
-}
 /// Appends one width per character and reports each character's following
 /// offset without allocating intermediate metadata.
 fn append_char_cell_display_widths(
@@ -5426,7 +5420,7 @@ fn append_char_cell_display_widths(
 
 /// Returns one width entry per character, charging each grapheme's width to
 /// its first character and zero to the remaining characters.
-pub fn char_cell_display_widths(text: &str) -> Vec<u8> {
+fn char_cell_display_widths(text: &str) -> Vec<u8> {
     let mut widths = Vec::with_capacity(text.len());
     append_char_cell_display_widths(text, &mut widths, |_, _| {});
     widths
