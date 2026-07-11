@@ -1476,17 +1476,14 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
 
 #[test]
 fn locked_initial_cloud_mode_prompt_shows_copy_action_that_copies_full_prompt() {
-    // The locked initial cloud-mode prompt (shown while the cloud environment is being created)
-    // swaps its Delete action for a Copy action, so users can recover the original prompt if setup
-    // fails. Ordinary queued rows keep their Delete action (no copy button). Copying reads the
-    // full, untruncated prompt text — including long, multiline content — from the model.
+    // The locked initial cloud-mode row swaps Delete for a Copy action that copies the full,
+    // untruncated prompt text; ordinary rows keep Delete.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
         let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
 
-        // A long, multiline prompt whose single-line preview would be truncated, plus an ordinary
-        // follow-up row queued during setup.
+        // Long and multiline so Copy is exercised against text the row preview would truncate.
         let long_prompt = format!("line one\nline two\n{}", "x".repeat(1000));
         let long_prompt_for_assert = long_prompt.clone();
         let (initial_id, followup_id) =
@@ -1506,7 +1503,6 @@ fn locked_initial_cloud_mode_prompt_shows_copy_action_that_copies_full_prompt() 
             assert_eq!(panel.has_copy_button_for_test(followup_id), Some(false));
         });
 
-        // Clicking Copy writes the full, original prompt text to the clipboard verbatim.
         panel.update(&mut app, |panel, ctx| {
             panel.handle_action(&QueuedPromptsPanelAction::CopyRow(initial_id), ctx);
         });
