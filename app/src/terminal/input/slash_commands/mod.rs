@@ -24,7 +24,7 @@ use warp_util::path::{CleanPathResult, LineAndColumnArg};
 use warpui::clipboard::ClipboardContent;
 use warpui::{AppContext, SingletonEntity, ViewContext};
 
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 #[cfg(not(target_family = "wasm"))]
@@ -132,6 +132,10 @@ pub fn slash_command_is_supported_in_tui(command: &StaticCommand) -> bool {
         || command.name == commands::NEW.name
         || command.name == commands::COMPACT.name
         || command.name == commands::PLAN.name
+        || command.name == commands::CREATE_NEW_PROJECT.name
+        || command.name == commands::EXPORT_TO_CLIPBOARD.name
+        || command.name == commands::EXPORT_TO_FILE.name
+        || command.name == commands::COST.name
 }
 /// Records a static slash command accepted from either the GUI or TUI surface.
 pub fn record_static_slash_command_accepted(
@@ -150,6 +154,31 @@ pub fn record_static_slash_command_accepted(
     );
 }
 
+/// Returns the user-facing validation error for `/cost`, shared by GUI and TUI.
+pub fn conversation_cost_validation_error(
+    conversation: Option<&AIConversation>,
+) -> Option<&'static str> {
+    let Some(conversation) = conversation else {
+        return Some("Cannot show conversation cost: no active conversation");
+    };
+    conversation_cost_validation_error_for_state(
+        conversation.is_empty(),
+        conversation.status().is_done(),
+    )
+}
+
+fn conversation_cost_validation_error_for_state(
+    conversation_is_empty: bool,
+    conversation_is_done: bool,
+) -> Option<&'static str> {
+    if conversation_is_empty {
+        Some("Cannot show conversation cost: conversation is empty")
+    } else if !conversation_is_done {
+        Some("Cannot show conversation cost: conversation is in progress")
+    } else {
+        None
+    }
+}
 /// Records a saved prompt accepted from either the GUI or TUI slash menu.
 pub fn record_saved_prompt_accepted(is_in_agent_view: bool, ctx: &mut AppContext) {
     send_telemetry_from_ctx!(
@@ -970,21 +999,8 @@ impl Input {
                 let conversation = history
                     .as_ref(ctx)
                     .active_conversation(self.terminal_view_id);
-                if conversation.is_none() {
-                    show_error_toast(
-                        "Cannot show conversation cost: no active conversation".to_owned(),
-                        ctx,
-                    );
-                } else if conversation.is_some_and(|c| c.is_empty()) {
-                    show_error_toast(
-                        "Cannot show conversation cost: conversation is empty".to_owned(),
-                        ctx,
-                    );
-                } else if conversation.is_some_and(|c| !c.status().is_done()) {
-                    show_error_toast(
-                        "Cannot show conversation cost: conversation is in progress".to_owned(),
-                        ctx,
-                    );
+                if let Some(error) = conversation_cost_validation_error(conversation) {
+                    show_error_toast(error.to_owned(), ctx);
                 } else {
                     ctx.dispatch_typed_action(&TerminalAction::ToggleUsageFooter);
                 }

@@ -46,7 +46,7 @@ fn renders_the_indicator_row_and_requests_a_repaint() {
             ctx.add_singleton_model(|_| Appearance::mock());
         });
         app.read(|app_ctx| {
-            let element = render_warping_indicator(Duration::ZERO, app_ctx);
+            let element = render_warping_indicator("Warping...", Duration::ZERO, app_ctx);
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(element, TuiRect::new(0, 0, 20, 1), app_ctx);
 
@@ -80,7 +80,7 @@ fn shimmer_only_applies_to_the_warping_label() {
         });
         app.read(|app_ctx| {
             let config = ShimmerConfig::default();
-            let element = render_warping_indicator(config.period / 2, app_ctx);
+            let element = render_warping_indicator("Warping...", config.period / 2, app_ctx);
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(element, TuiRect::new(0, 0, 20, 1), app_ctx);
 
@@ -88,6 +88,28 @@ fn shimmer_only_applies_to_the_warping_label() {
             let base = Color::Rgb(base.r, base.g, base.b);
             assert_eq!(frame.buffer[(0, 0)].fg, base);
             assert_ne!(frame.buffer[(5, 0)].fg, base);
+        });
+    });
+}
+
+#[test]
+fn renders_a_custom_progress_label() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        app.read(|app_ctx| {
+            let element =
+                render_warping_indicator("Summarizing conversation...", Duration::ZERO, app_ctx);
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(element, TuiRect::new(0, 0, 40, 1), app_ctx);
+
+            assert!(
+                frame.buffer.to_lines()[0].contains(" Summarizing conversation... (0s)"),
+                "unexpected indicator row: {:?}",
+                frame.buffer.to_lines()[0]
+            );
+            assert!(frame.repaint_at.is_some());
         });
     });
 }

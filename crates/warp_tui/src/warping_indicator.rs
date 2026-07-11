@@ -78,10 +78,13 @@ pub(crate) fn render_spinner(clock: AnimationClock, style: TuiStyle) -> Box<dyn 
     })
     .finish()
 }
-
-/// Renders the `⋮ Warping... (Ns)` row for an exchange that has been running for
-/// `elapsed`.
-pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> Box<dyn TuiElement> {
+/// Renders the animated progress row for an exchange that has been running
+/// for `elapsed`.
+pub(crate) fn render_warping_indicator(
+    label: impl Into<String>,
+    elapsed: Duration,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     // One clock, already `elapsed` into the exchange, drives all three parts
     // so they stay phase-locked; each repaint reads its current elapsed time.
@@ -92,7 +95,7 @@ pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> B
     let spinner = render_spinner(clock, builder.warping_spinner_style());
 
     let label = TuiShimmeringText::new(
-        "Warping...",
+        label,
         builder.warping_base_color(),
         builder.warping_shimmer_color(),
         ShimmerConfig::default(),

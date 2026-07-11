@@ -152,15 +152,56 @@ pub(crate) fn render_thinking_section(
         Some(duration) => format!("Thought for {}", format_elapsed_seconds(duration)),
         None => "Thinking...".to_owned(),
     };
-    // Indent the reasoning body so every wrapped line aligns beneath the header.
+    render_collapsible_message_section(
+        states,
+        message_id,
+        header,
+        finished_duration.is_some(),
+        body,
+        builder.muted_text_style(),
+        app,
+    )
+}
+
+/// Renders a streamed conversation summary with the same persistent
+/// collapse/hover behavior as a reasoning section.
+pub(crate) fn render_summarization_section(
+    states: &ThinkingBlockStates,
+    message_id: &MessageId,
+    finished: bool,
+    body: &str,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
+    render_collapsible_message_section(
+        states,
+        message_id,
+        "Conversation summarized".to_owned(),
+        finished,
+        body,
+        TuiUiBuilder::from_app(app).primary_text_style(),
+        app,
+    )
+}
+
+fn render_collapsible_message_section(
+    states: &ThinkingBlockStates,
+    message_id: &MessageId,
+    header: String,
+    finished: bool,
+    body: &str,
+    body_style: TuiStyle,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
+    let builder = TuiUiBuilder::from_app(app);
+    // Indent the body so every wrapped line aligns beneath the header.
     let body_element = TuiContainer::new(
         TuiText::new(body.to_owned())
-            .with_style(builder.muted_text_style())
+            .with_style(body_style)
             .finish(),
     )
     .with_padding_left(4);
 
-    let collapsed = states.is_collapsed(message_id, finished_duration.is_some());
+    let collapsed = states.is_collapsed(message_id, finished);
     let toggle_message_id = message_id.clone();
     builder.collapsible(
         collapsed,

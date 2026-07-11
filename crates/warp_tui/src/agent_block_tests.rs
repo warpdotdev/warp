@@ -9,7 +9,8 @@ use warp::tui_export::{
     AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIBlockModel, AIBlockOutputStatus,
     AIConversationId, AIRequestType, Appearance, LLMId, MessageId, OutputStatusUpdateCallback,
-    RequestCommandOutputResult, ServerOutputId, Shared, TaskId, TerminalModel, UserQueryMode,
+    RequestCommandOutputResult, ServerOutputId, Shared, SummarizationType, TaskId, TerminalModel,
+    UserQueryMode,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -614,6 +615,98 @@ fn reasoning_interleaves_with_plain_text_in_message_order() {
 }
 
 #[test]
+fn completed_conversation_summary_renders_collapsed_in_message_order() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    summarization_message(
+                        "summary-1",
+                        Some(Duration::from_secs(3)),
+                        SummarizationType::ConversationSummary,
+                        "condensed context",
+                    ),
+                    plain_text_message("m2", "after"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    TuiAIBlockSection::Summarization {
+                        message_id: MessageId::new("summary-1".to_owned()),
+                        finished: true,
+                        body: "condensed context".to_owned(),
+                    },
+                    TuiAIBlockSection::PlainText("after".to_owned()),
+                ]
+            );
+            assert_eq!(
+                render_block_lines(block, 40, app_ctx),
+                vec!["before", "Conversation summarized ▸", "after"]
+            );
+        });
+    });
+}
+
+#[test]
+fn expanded_conversation_summary_shows_its_body() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![summarization_message(
+                    "summary-1",
+                    Some(Duration::from_secs(3)),
+                    SummarizationType::ConversationSummary,
+                    "condensed context",
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            block
+                .thinking_states
+                .set_collapsed(MessageId::new("summary-1".to_owned()), false);
+            assert_eq!(
+                render_block_lines(block, 40, app_ctx),
+                vec!["Conversation summarized ▾", "    condensed context"]
+            );
+        });
+    });
+}
+
+#[test]
+fn tool_call_result_summaries_remain_hidden() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![summarization_message(
+                    "summary-1",
+                    Some(Duration::from_secs(3)),
+                    SummarizationType::ToolCallResultSummary,
+                    "tool output",
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            assert!(block.as_ref(app_ctx).sections(app_ctx).is_empty());
+        });
+    });
+}
+
+#[test]
 fn multiple_reasoning_blocks_render_independent_collapse_state() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -816,6 +909,28 @@ fn reasoning_message(
                 }],
             },
             finished_duration,
+        },
+        citations: Vec::new(),
+    }
+}
+
+fn summarization_message(
+    id: &str,
+    finished_duration: Option<Duration>,
+    summarization_type: SummarizationType,
+    body: &str,
+) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::Summarization {
+            text: AIAgentText {
+                sections: vec![AIAgentTextSection::PlainText {
+                    text: body.to_owned().into(),
+                }],
+            },
+            finished_duration,
+            summarization_type,
+            token_count: None,
         },
         citations: Vec::new(),
     }

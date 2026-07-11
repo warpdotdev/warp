@@ -8,11 +8,15 @@ use warp::tui_export::{
     AIAgentActionId, AIConversationId, AgentInteractionMetadata, BlockId, TerminalModel,
     TranscriptScope,
 };
-use warpui::EntityIdMap;
+use warpui::clipboard::{ClipboardContent, InMemoryClipboard};
+use warpui::{Clipboard, EntityIdMap};
 use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
 use warpui_core::App;
 
-use super::{hide_agent_requested_command_from_top_level, raw_prompt_if_not_blank};
+use super::{
+    export_markdown_to_clipboard, hide_agent_requested_command_from_top_level,
+    raw_prompt_if_not_blank, ClipboardExportOutcome,
+};
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
 fn model_with_finished_block(command: &str) -> (TerminalModel, BlockId) {
@@ -185,4 +189,28 @@ fn non_command_prompt_preserves_leading_whitespace() {
 #[test]
 fn whitespace_only_prompt_is_ignored() {
     assert_eq!(raw_prompt_if_not_blank(" \t\n"), None);
+}
+
+#[test]
+fn clipboard_export_writes_exact_markdown() {
+    let mut clipboard = InMemoryClipboard::default();
+
+    let outcome =
+        export_markdown_to_clipboard(Some("# Conversation\n\nHello".to_owned()), &mut clipboard);
+
+    assert_eq!(outcome, ClipboardExportOutcome::Exported);
+    assert_eq!(clipboard.read().plain_text, "# Conversation\n\nHello");
+}
+
+#[test]
+fn clipboard_export_without_conversation_does_not_modify_clipboard() {
+    let mut clipboard = InMemoryClipboard::default();
+    clipboard.write(ClipboardContent::plain_text(
+        "existing clipboard contents".to_owned(),
+    ));
+
+    let outcome = export_markdown_to_clipboard(None, &mut clipboard);
+
+    assert_eq!(outcome, ClipboardExportOutcome::NoActiveConversation);
+    assert_eq!(clipboard.read().plain_text, "existing clipboard contents");
 }
