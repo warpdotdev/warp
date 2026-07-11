@@ -83,28 +83,42 @@ impl TuiFrameRenderer {
                 .expect("previous buffer present when not repainting")
         };
 
-        // Emit the per-cell diff in runs that never span a wide grapheme.
-        //
-        // `CrosstermBackend::draw` suppresses the cursor `MoveTo` for a cell
-        // whose column is exactly one past the previously written cell, assuming
-        // every printed cell advances the cursor by a single column. A width-2
-        // grapheme advances it by two, so the cell the diff emits at
-        // `wide_x + 1` (the trailing-clear cell it writes after an emoji that
-        // carries a VS16 variation selector, e.g. `⚠️`) would be printed one
-        // column too far right — shifting it and the rest of the run and leaving
-        // stray glyphs behind that later partial diffs never repair. Ending the
-        // current `draw` batch after each wide grapheme resets the backend's
-        // cursor tracking, so the following cell gets a fresh, correct `MoveTo`.
-        // `Buffer::diff` returns a `Vec` (the lazy iterator variant is
-        // `diff_iter`), so it can be indexed and sliced directly below.
+        // Ratatui emits explicit trailing-cell clears after VS16 emoji. Send
+        // those clears before the wide grapheme: sending them afterward either
+        // shifts the following run or erases the grapheme, depending on how the
+        // terminal handles writes into a continuation column. Keeping the wide
+        // grapheme in its own batch also gives following cells a fresh MoveTo.
         let diff: Vec<_> = baseline.diff(buffer);
         let mut batch_start = 0;
-        for index in 0..diff.len() {
-            let is_wide = diff[index].2.cell_width() > 1;
-            if is_wide || index + 1 == diff.len() {
-                backend.draw(diff[batch_start..=index].iter().copied())?;
-                batch_start = index + 1;
+        let mut index = 0;
+        while index < diff.len() {
+            let (wide_x, wide_y, cell) = diff[index];
+            let wide_width = cell.cell_width();
+            if wide_width <= 1 {
+                index += 1;
+                continue;
             }
+
+            if batch_start < index {
+                backend.draw(diff[batch_start..index].iter().copied())?;
+            }
+
+            let trailing_end = index
+                + 1
+                + diff[index + 1..]
+                    .iter()
+                    .take_while(|(x, y, _)| *y == wide_y && *x < wide_x.saturating_add(wide_width))
+                    .count();
+            if index + 1 < trailing_end {
+                backend.draw(diff[index + 1..trailing_end].iter().copied())?;
+            }
+            backend.draw(diff[index..=index].iter().copied())?;
+
+            index = trailing_end;
+            batch_start = index;
+        }
+        if batch_start < diff.len() {
+            backend.draw(diff[batch_start..].iter().copied())?;
         }
 
         match cursor_position {

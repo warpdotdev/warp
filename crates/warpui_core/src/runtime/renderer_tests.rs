@@ -1,3 +1,4 @@
+use ratatui::buffer::CellWidth;
 use ratatui::style::Color;
 
 use super::TuiFrameRenderer;
@@ -118,13 +119,22 @@ fn styled_run_changes_byte_stream() {
     );
 }
 
-/// Replays the CSI byte stream `output` onto a fresh single-row screen buffer so
-/// a test can assert what a terminal would actually display. Only the sequences
-/// `TuiFrameRenderer` emits that affect glyph placement are interpreted — cursor
-/// `MoveTo` (`ESC [ y ; x H`) and full-screen clear (`ESC [ 2 J`); styling and
-/// synchronized-update sequences are skipped. Printed runs are written with
-/// `set_stringn`, which applies ratatui's own grapheme/width handling, so a wide
-/// grapheme occupies the correct number of columns.
+/// Clears a wide grapheme when a write starts in one of its occupied columns.
+fn clear_wide_grapheme_covering(screen: &mut TuiBuffer, x: u16, y: u16) {
+    let area = screen.area;
+    for column in (area.x..x).rev() {
+        let cell = &screen[(column, y)];
+        if column.saturating_add(cell.cell_width()) > x {
+            screen[(column, y)].reset();
+            break;
+        }
+    }
+}
+
+/// Replays the glyph-placement CSI emitted by `TuiFrameRenderer`.
+///
+/// Writing into a wide grapheme's continuation column clears the grapheme,
+/// matching terminals that expose the continuation-cell ordering bug.
 fn render_to_screen(output: &str, width: u16) -> TuiBuffer {
     let mut screen = TuiBuffer::empty(TuiRect::new(0, 0, width, 1));
     let (mut cx, mut cy) = (0u16, 0u16);
@@ -133,6 +143,7 @@ fn render_to_screen(output: &str, width: u16) -> TuiBuffer {
     let mut i = 0;
     let flush = |screen: &mut TuiBuffer, run: &mut String, cx: u16, cy: u16| {
         if !run.is_empty() {
+            clear_wide_grapheme_covering(screen, cx, cy);
             let max_width = usize::from(width.saturating_sub(cx));
             screen.set_stringn(cx, cy, run.as_str(), max_width, TuiStyle::default());
             run.clear();
@@ -209,6 +220,12 @@ fn wide_grapheme_does_not_shift_following_cells() {
     let output = draw_to_string(&mut renderer, &next);
 
     let screen = render_to_screen(&output, 5);
+    assert_eq!(
+        column_of(&screen, "\u{2328}\u{fe0f}"),
+        Some(0),
+        "the trailing clear must not erase the wide grapheme; rendered screen: {:?}",
+        screen.to_lines(),
+    );
     assert_eq!(
         column_of(&screen, "g"),
         Some(2),
