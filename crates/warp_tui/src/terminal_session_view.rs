@@ -33,7 +33,6 @@ use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::clipboard::ClipboardContent;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiText,
@@ -102,6 +101,7 @@ const NEW_CONVERSATION_COMMAND_RUNNING_HINT: &str =
 /// Footer hint shown while the input is in `!` shell mode.
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
+const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
 /// Keeps an agent-requested command's canonical block out of the TUI's
 /// top-level transcript. The shell-command action embeds the block's terminal
 /// content inside its own disclosure, so the canonical block must have zero
@@ -119,22 +119,6 @@ fn hide_agent_requested_command_from_top_level(
         .block_list_mut()
         .set_visibility_of_block_for_ai_action(action_id, false);
     true
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClipboardExportOutcome {
-    Exported,
-    NoActiveConversation,
-}
-
-fn export_markdown_to_clipboard(
-    markdown: Option<String>,
-    clipboard: &mut dyn warpui::Clipboard,
-) -> ClipboardExportOutcome {
-    let Some(markdown) = markdown else {
-        return ClipboardExportOutcome::NoActiveConversation;
-    };
-    clipboard.write(ClipboardContent::plain_text(markdown));
-    ClipboardExportOutcome::Exported
 }
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
@@ -418,10 +402,13 @@ impl TuiTerminalSessionView {
                 view.input_view
                     .update(ctx, |input, ctx| input.clear_selection(ctx));
             }
-            TuiTranscriptViewEvent::SelectionEnded(text) => {
-                copy_to_clipboard(text);
-                view.show_copy_hint(ctx);
-            }
+            TuiTranscriptViewEvent::SelectionEnded(text) => match copy_to_clipboard(text) {
+                Ok(()) => view.show_copy_hint(ctx),
+                Err(error) => {
+                    log::warn!("Failed to copy TUI selection via OSC 52: {error}");
+                    view.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
+                }
+            },
         });
 
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
@@ -1285,20 +1272,27 @@ impl TuiTerminalSessionView {
             self.input_view.update(ctx, |input, ctx| input.clear(ctx));
             record_static_slash_command_accepted(command.name, true, ctx);
         } else if command.name == slash_commands::EXPORT_TO_CLIPBOARD.name {
-            let markdown = self
+            if let Some(conversation) = self
                 .conversation_selection
                 .as_ref(ctx)
                 .selected_conversation(ctx)
-                .map(|conversation| {
-                    conversation.export_to_markdown(Some(self.ai_action_model.as_ref(ctx)))
-                });
-            match export_markdown_to_clipboard(markdown, ctx.clipboard()) {
-                ClipboardExportOutcome::Exported => {
-                    self.show_success_hint("Conversation exported to clipboard".to_owned(), ctx);
+            {
+                let markdown =
+                    conversation.export_to_markdown(Some(self.ai_action_model.as_ref(ctx)));
+                match copy_to_clipboard(&markdown) {
+                    Ok(()) => {
+                        self.show_success_hint(
+                            "Conversation sent to terminal clipboard".to_owned(),
+                            ctx,
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!("Failed to export TUI conversation via OSC 52: {error}");
+                        self.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
+                    }
                 }
-                ClipboardExportOutcome::NoActiveConversation => {
-                    self.show_transient_hint("No active conversation to export".to_owned(), ctx);
-                }
+            } else {
+                self.show_transient_hint("No active conversation to export".to_owned(), ctx);
             }
             self.input_view.update(ctx, |input, ctx| input.clear(ctx));
             record_static_slash_command_accepted(command.name, true, ctx);

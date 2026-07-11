@@ -9,43 +9,6 @@ use super::event_loop::AppEvent;
 use crate::clipboard::InMemoryClipboard;
 use crate::notification::{NotificationSendError, RequestPermissionsOutcome};
 use crate::platform::{self, Cursor};
-fn create_clipboard() -> Box<dyn crate::Clipboard> {
-    cfg_if::cfg_if! {
-        if #[cfg(target_os = "macos")] {
-            match crate::platform::mac::clipboard::Clipboard::new() {
-                Ok(clipboard) => return Box::new(clipboard),
-                Err(error) => {
-                    log::warn!(
-                        "Unable to create the macOS clipboard for the headless platform; \
-                         using an in-memory clipboard: {error:#}"
-                    );
-                }
-            }
-        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            match crate::windowing::winit::linux::LinuxClipboard::new() {
-                Ok(clipboard) => return Box::new(clipboard),
-                Err(error) => {
-                    log::warn!(
-                        "Unable to create the Linux clipboard for the headless platform; \
-                         using an in-memory clipboard: {error:#}"
-                    );
-                }
-            }
-        } else if #[cfg(target_os = "windows")] {
-            match crate::windowing::winit::windows::WindowsClipboard::new() {
-                Ok(clipboard) => return Box::new(clipboard),
-                Err(error) => {
-                    log::warn!(
-                        "Unable to create the Windows clipboard for the headless platform; \
-                         using an in-memory clipboard: {error:#}"
-                    );
-                }
-            }
-        }
-    }
-
-    Box::<InMemoryClipboard>::default()
-}
 
 /// Stores the ID of the application's main thread, which we can reference
 /// to determine if a given thread is the main thread or not.
@@ -61,7 +24,7 @@ pub(super) fn mark_current_thread_as_main() {
 }
 
 pub struct AppDelegate {
-    clipboard: Box<dyn crate::Clipboard>,
+    clipboard: InMemoryClipboard,
     cursor_shape: Mutex<Cursor>,
     event_sender: Sender<AppEvent>,
 }
@@ -69,7 +32,7 @@ pub struct AppDelegate {
 impl AppDelegate {
     pub(super) fn new(event_sender: Sender<AppEvent>) -> Self {
         Self {
-            clipboard: create_clipboard(),
+            clipboard: InMemoryClipboard::default(),
             cursor_shape: Mutex::new(Cursor::Arrow),
             event_sender,
         }
@@ -94,7 +57,7 @@ impl platform::Delegate for AppDelegate {
     }
 
     fn clipboard(&mut self) -> &mut dyn crate::Clipboard {
-        self.clipboard.as_mut()
+        &mut self.clipboard
     }
 
     fn system_theme(&self) -> platform::SystemTheme {

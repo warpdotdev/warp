@@ -9,15 +9,15 @@ const ESC: char = '\x1b';
 const BEL: char = '\x07';
 
 /// Copies `text` through the terminal, including Linux's PRIMARY selection.
-pub(crate) fn copy_to_clipboard(text: &str) {
-    let sequence = osc52_sequences(text, std::env::var_os("TMUX").is_some());
+pub(crate) fn copy_to_clipboard(text: &str) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
-    if let Err(error) = stdout
-        .write_all(sequence.as_bytes())
-        .and_then(|_| stdout.flush())
-    {
-        log::warn!("Failed to copy TUI selection via OSC 52: {error}");
-    }
+    write_osc52_sequences(text, std::env::var_os("TMUX").is_some(), &mut stdout)
+}
+
+fn write_osc52_sequences(text: &str, in_tmux: bool, writer: &mut impl Write) -> io::Result<()> {
+    let sequence = osc52_sequences(text, in_tmux);
+    writer.write_all(sequence.as_bytes())?;
+    writer.flush()
 }
 
 /// Encodes `text` as OSC 52 writes to clipboard (`c`) and PRIMARY (`p`).
