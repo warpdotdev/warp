@@ -22,8 +22,7 @@ use warp::tui_export::{
     ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
     GitRepoStatusModel, GitStatusMetadata, LLMPreferences, LLMPreferencesEvent, ModelEvent,
     ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
-    RepoDetectionSource,
-    ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
+    RepoDetectionSource, ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
     SlashCommandSelectionBehavior, StaticCommand, TerminalModel, TerminalSurface,
     TerminalSurfaceInit, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
     TuiZeroStateDataSource, COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
@@ -116,6 +115,10 @@ fn hide_agent_requested_command_from_top_level(
         .block_list_mut()
         .set_visibility_of_block_for_ai_action(action_id, false);
     true
+}
+
+fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
+    (!input.trim().is_empty()).then_some(input)
 }
 
 /// Typed actions handled by [`TuiTerminalSessionView`].
@@ -941,11 +944,11 @@ impl TuiTerminalSessionView {
                 self.execute_skill_command(detected_skill.reference, detected_skill.argument, ctx);
             }
             ParsedSlashCommandInput::None | ParsedSlashCommandInput::Composing { .. } => {
-                let prompt = input.trim();
+                let prompt = raw_prompt_if_not_blank(input);
                 self.input_view.update(ctx, |input_view, ctx| {
                     input_view.clear(ctx);
                 });
-                if !prompt.is_empty() {
+                if let Some(prompt) = prompt {
                     self.send_prompt(prompt.to_owned(), ctx);
                 }
             }

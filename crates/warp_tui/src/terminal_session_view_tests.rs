@@ -11,7 +11,7 @@ use warpui::EntityIdMap;
 use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
 use warpui_core::App;
 
-use super::hide_agent_requested_command_from_top_level;
+use super::{hide_agent_requested_command_from_top_level, raw_prompt_if_not_blank};
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
 fn model_with_finished_block(command: &str) -> (TerminalModel, BlockId) {
@@ -171,4 +171,14 @@ fn hidden_agent_requested_command_leaves_no_viewport_gap() {
             assert_eq!(content.items[0].origin_y, 0);
         });
     });
+}
+
+#[test]
+fn non_command_prompt_preserves_leading_whitespace() {
+    assert_eq!(raw_prompt_if_not_blank("  /compact"), Some("  /compact"));
+}
+
+#[test]
+fn whitespace_only_prompt_is_ignored() {
+    assert_eq!(raw_prompt_if_not_blank(" \t\n"), None);
 }
