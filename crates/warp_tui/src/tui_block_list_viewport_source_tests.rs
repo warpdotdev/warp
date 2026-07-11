@@ -114,16 +114,13 @@ fn read_only_content_does_not_remeasure_agent_blocks() {
         app.add_singleton_model(|_| Appearance::mock());
         let (source, model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
 
-        app.read(|app| {
-            source.read_only_content(
-                TuiViewportWindow {
-                    scroll_top: 0,
-                    viewport_height: 10,
-                },
-                80,
-                app,
-            );
-        });
+        source.read_only_content(
+            TuiViewportWindow {
+                scroll_top: 0,
+                viewport_height: 10,
+            },
+            80,
+        );
 
         assert_eq!(rich_content_height(&model, agent_block.id()), Some(99.0));
     });

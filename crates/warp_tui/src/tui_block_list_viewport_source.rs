@@ -16,7 +16,7 @@ use warpui_core::elements::tui::{
     TuiChildView, TuiElement, TuiLayoutContext, TuiRowResize, TuiViewportContent,
     TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
 };
-use warpui_core::{AppContext, TuiView};
+use warpui_core::AppContext;
 
 use super::agent_block::TuiAIBlock;
 use super::terminal_block::{should_render_terminal_block, TerminalBlockElement};
@@ -280,12 +280,11 @@ impl TuiBlockListViewportSource {
         &self,
         window: TuiViewportWindow,
         available_width: u16,
-        app: &AppContext,
     ) -> TuiViewportContent {
         let (content_height, visible_items) = self.visible_items_in_window(window);
         let items = visible_items
             .into_iter()
-            .map(|item| item.render(&self.model, window, available_width, app))
+            .map(|item| item.render(&self.model, window, available_width))
             .collect();
         TuiViewportContent {
             content_height,
@@ -348,16 +347,16 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         let heights = self.measured_agent_heights(view_ids_to_measure, available_width, ctx, app);
         self.write_line_heights(&heights);
 
-        self.read_only_content(window, available_width, app)
+        self.read_only_content(window, available_width)
     }
 
     fn selection_content(
         &self,
         window: TuiViewportWindow,
         available_width: u16,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Option<TuiViewportContent> {
-        Some(self.read_only_content(window, available_width, app))
+        Some(self.read_only_content(window, available_width))
     }
 
     fn take_selection_row_resizes(&self) -> Vec<TuiRowResize> {
@@ -383,7 +382,6 @@ impl TuiBlockListVisibleItem {
         model: &Arc<FairMutex<TerminalModel>>,
         window: TuiViewportWindow,
         available_width: u16,
-        app: &AppContext,
     ) -> TuiVisibleViewportItem {
         let visible_rows = self.visible_rows(window);
         // Terminal blocks get pre-sliced below; rich content stays whole and lets `TuiClipped`
@@ -396,7 +394,7 @@ impl TuiBlockListVisibleItem {
         };
         TuiVisibleViewportItem {
             origin_y,
-            element: self.render_element(model, visible_rows, available_width, app),
+            element: self.render_element(model, visible_rows, available_width),
         }
     }
 
@@ -405,7 +403,6 @@ impl TuiBlockListVisibleItem {
         model: &Arc<FairMutex<TerminalModel>>,
         visible_rows: Range<usize>,
         width: u16,
-        app: &AppContext,
     ) -> Box<dyn TuiElement> {
         match self.kind {
             TuiBlockListVisibleItemKind::TerminalBlock(block_id) => {

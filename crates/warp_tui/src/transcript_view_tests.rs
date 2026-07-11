@@ -287,6 +287,10 @@ fn presenter_draw_resolves_agent_blocks_from_cached_elements() {
             text.contains("hello agent"),
             "agent block content should render through the presenter cache:\n{text}"
         );
+        assert_eq!(
+            app.read(|ctx| ctx.view_ancestors(window_id, agent_block_id)),
+            vec![transcript.id(), agent_block_id],
+        );
     });
 }
 
