@@ -181,7 +181,16 @@ fn render_block_rows(
 
 /// Returns whether the TUI transcript should include this terminal block.
 pub(super) fn should_render_terminal_block(block: &Block, block_list: &BlockList) -> bool {
-    block.is_visible(block_list.agent_view_state()) && (block.started() || block.finished())
+    // Agent-requested command blocks are rendered inline inside their agent
+    // block's shell-command view (see `TuiShellCommandView`), so they must not
+    // also appear as a standalone terminal block in the transcript. Their
+    // interaction mode normally hides them, but once a long-running agent
+    // command becomes agent-monitored that hide flag flips off
+    // (`InteractionMode::to_agent_monitored`), which would otherwise surface the
+    // block a second time.
+    !block.is_agent_requested_command()
+        && block.is_visible(block_list.agent_view_state())
+        && (block.started() || block.finished())
 }
 
 /// Paints consecutive displayed rows of one grid starting at `*y`, advancing
@@ -311,3 +320,7 @@ fn sanitized_symbol(cell: &Cell) -> String {
         content
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_block_tests.rs"]
+mod tests;
