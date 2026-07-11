@@ -1,5 +1,6 @@
 //! Public app APIs used by the `warp_tui` frontend.
 
+pub use crate::menu_label;
 pub use repo_metadata::repositories::RepoDetectionSource;
 
 pub use crate::ai::agent::api::ServerConversationToken;

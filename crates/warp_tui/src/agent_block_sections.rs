@@ -7,7 +7,9 @@
 
 use std::time::Duration;
 
-use warp::tui_export::{format_elapsed_seconds, AIActionStatus, AIAgentAction, MessageId};
+use warp::tui_export::{
+    format_elapsed_seconds, menu_label, AIActionStatus, AIAgentAction, MessageId,
+};
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiStyle, TuiText};
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::AppContext;
@@ -149,8 +151,12 @@ pub(crate) fn render_thinking_section(
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let header = match finished_duration {
-        Some(duration) => format!("Thought for {}", format_elapsed_seconds(duration)),
-        None => "Thinking...".to_owned(),
+        Some(duration) => menu_label(
+            "tui.agent_block.thinking_finished",
+            "Thought for {duration}",
+        )
+        .replace("{duration}", &format_elapsed_seconds(duration)),
+        None => menu_label("tui.agent_block.thinking_running", "Thinking...").to_owned(),
     };
     // Indent the reasoning body so every wrapped line aligns beneath the header.
     let body_element = TuiContainer::new(

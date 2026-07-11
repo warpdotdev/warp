@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use warp::tui_export::{
-    AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
+    menu_label, AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
     AskUserQuestionResult, FileGlobV2Result, GrepResult, RequestCommandOutputResult,
     RunAgentsAgentOutcomeKind, RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult,
     StartAgentExecutionMode, SuggestNewConversationResult,
@@ -136,7 +136,10 @@ pub(crate) fn tool_call_label(
         .map(|result| &result.result);
     let label = label_for_action(&action.action, state, result, block);
     match state {
-        State::AwaitingApproval => format!("{label} (awaiting approval)"),
+        State::AwaitingApproval => format!(
+            "{label}{}",
+            menu_label("tui.common.awaiting_approval_suffix", " (awaiting approval)")
+        ),
         State::Constructing
         | State::Pending
         | State::Running
@@ -170,67 +173,161 @@ fn label_for_action(
                 .or_else(|| block.and_then(|block| block.command.as_deref()));
             let cmd = single_line(executed.unwrap_or(command));
             match state {
-                State::Constructing => "Generating command…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Run `{cmd}`"),
-                State::Running => format!("Running `{cmd}`"),
+                State::Constructing => {
+                    menu_label("tui.request_command_output.constructing", "Generating command…")
+                        .to_owned()
+                }
+                State::Pending | State::AwaitingApproval => menu_label(
+                    "tui.request_command_output.pending",
+                    "Run `{cmd}`",
+                )
+                .replace("{cmd}", &cmd),
+                State::Running => menu_label(
+                    "tui.request_command_output.running",
+                    "Running `{cmd}`",
+                )
+                .replace("{cmd}", &cmd),
                 State::Succeeded => match block_state {
-                    Some(CommandBlockState::Finished { .. }) => format!("Ran `{cmd}`"),
+                    Some(CommandBlockState::Finished { .. }) => menu_label(
+                        "tui.request_command_output.succeeded",
+                        "Ran `{cmd}`",
+                    )
+                    .replace("{cmd}", &cmd),
                     // No local block: fall back to the stored result. A
                     // snapshot result means the command was still running at
                     // the last point we could observe it.
                     Some(CommandBlockState::Running) | None => match result {
                         Some(AIAgentActionResultType::RequestCommandOutput(
                             RequestCommandOutputResult::LongRunningCommandSnapshot { .. },
-                        )) => format!("`{cmd}` is still running"),
-                        _ => format!("Ran `{cmd}`"),
+                        )) => menu_label(
+                            "tui.request_command_output.still_running",
+                            "`{cmd}` is still running",
+                        )
+                        .replace("{cmd}", &cmd),
+                        _ => menu_label(
+                            "tui.request_command_output.succeeded",
+                            "Ran `{cmd}`",
+                        )
+                        .replace("{cmd}", &cmd),
                     },
                 },
                 State::Failed => match block_state {
-                    Some(CommandBlockState::Finished { exit_code }) => {
-                        format!("`{cmd}` exited with code {}", exit_code.value())
-                    }
+                    Some(CommandBlockState::Finished { exit_code }) => menu_label(
+                        "tui.request_command_output.exited",
+                        "`{cmd}` exited with code {code}",
+                    )
+                    .replace("{cmd}", &cmd)
+                    .replace("{code}", &exit_code.value().to_string()),
                     Some(CommandBlockState::Running) | None => match result {
                         Some(AIAgentActionResultType::RequestCommandOutput(
                             RequestCommandOutputResult::Completed { exit_code, .. },
-                        )) => format!("`{cmd}` exited with code {}", exit_code.value()),
+                        )) => menu_label(
+                            "tui.request_command_output.exited",
+                            "`{cmd}` exited with code {code}",
+                        )
+                        .replace("{cmd}", &cmd)
+                        .replace("{code}", &exit_code.value().to_string()),
                         Some(AIAgentActionResultType::RequestCommandOutput(
                             RequestCommandOutputResult::Denylisted { .. },
-                        )) => format!("`{cmd}` denied (denylisted)"),
-                        _ => format!("`{cmd}` failed"),
+                        )) => menu_label(
+                            "tui.request_command_output.denied_denylisted",
+                            "`{cmd}` denied (denylisted)",
+                        )
+                        .replace("{cmd}", &cmd),
+                        _ => menu_label(
+                            "tui.request_command_output.failed",
+                            "`{cmd}` failed",
+                        )
+                        .replace("{cmd}", &cmd),
                     },
                 },
-                State::Cancelled => format!("Cancelled `{cmd}`"),
+                State::Cancelled => menu_label(
+                    "tui.request_command_output.cancelled",
+                    "Cancelled `{cmd}`",
+                )
+                .replace("{cmd}", &cmd),
             }
         }
         AIAgentActionType::WriteToLongRunningShellCommand { .. } => match state {
-            State::Constructing => "Writing command input…".to_owned(),
-            State::Pending | State::AwaitingApproval => "Write input to running command".to_owned(),
-            State::Running => "Writing input to running command…".to_owned(),
-            State::Succeeded => "Wrote input to running command".to_owned(),
-            State::Failed => "Failed to write to running command".to_owned(),
-            State::Cancelled => "Write to running command cancelled".to_owned(),
+            State::Constructing => menu_label(
+                "tui.write_to_long_running_shell_command.constructing",
+                "Writing command input…",
+            )
+            .to_owned(),
+            State::Pending | State::AwaitingApproval => menu_label(
+                "tui.write_to_long_running_shell_command.pending",
+                "Write input to running command",
+            )
+            .to_owned(),
+            State::Running => menu_label(
+                "tui.write_to_long_running_shell_command.running",
+                "Writing input to running command…",
+            )
+            .to_owned(),
+            State::Succeeded => menu_label(
+                "tui.write_to_long_running_shell_command.succeeded",
+                "Wrote input to running command",
+            )
+            .to_owned(),
+            State::Failed => menu_label(
+                "tui.write_to_long_running_shell_command.failed",
+                "Failed to write to running command",
+            )
+            .to_owned(),
+            State::Cancelled => menu_label(
+                "tui.write_to_long_running_shell_command.cancelled",
+                "Write to running command cancelled",
+            )
+            .to_owned(),
         },
         AIAgentActionType::ReadFiles(request) => {
             let files = files_summary(request.locations.iter().map(|location| &location.name));
             match state {
-                State::Constructing => "Reading files…".to_owned(),
-                State::Pending | State::AwaitingApproval | State::Succeeded => {
-                    format!("Read {files}")
+                State::Constructing => {
+                    menu_label("tui.read_files.constructing", "Reading files…").to_owned()
                 }
-                State::Running => format!("Reading {files}"),
-                State::Failed => format!("Failed to read {files}"),
-                State::Cancelled => format!("Cancelled reading {files}"),
+                State::Pending | State::AwaitingApproval | State::Succeeded => menu_label(
+                    "tui.read_files.succeeded",
+                    "Read {files}",
+                )
+                .replace("{files}", &files),
+                State::Running => menu_label("tui.read_files.running", "Reading {files}")
+                    .replace("{files}", &files),
+                State::Failed => menu_label("tui.read_files.failed", "Failed to read {files}")
+                    .replace("{files}", &files),
+                State::Cancelled => {
+                    menu_label("tui.read_files.cancelled", "Cancelled reading {files}")
+                        .replace("{files}", &files)
+                }
             }
         }
         AIAgentActionType::UploadArtifact(request) => {
             let file = single_line(&request.file_path);
             match state {
-                State::Constructing => "Preparing upload…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Upload {file}"),
-                State::Running => format!("Uploading {file}"),
-                State::Succeeded => format!("Uploaded {file}"),
-                State::Failed => format!("Upload of {file} failed"),
-                State::Cancelled => format!("Upload of {file} cancelled"),
+                State::Constructing => menu_label(
+                    "tui.upload_artifact.constructing",
+                    "Preparing upload…",
+                )
+                .to_owned(),
+                State::Pending | State::AwaitingApproval => menu_label(
+                    "tui.upload_artifact.pending",
+                    "Upload {file}",
+                )
+                .replace("{file}", &file),
+                State::Running => menu_label("tui.upload_artifact.running", "Uploading {file}")
+                    .replace("{file}", &file),
+                State::Succeeded => menu_label("tui.upload_artifact.succeeded", "Uploaded {file}")
+                    .replace("{file}", &file),
+                State::Failed => menu_label(
+                    "tui.upload_artifact.failed",
+                    "Upload of {file} failed",
+                )
+                .replace("{file}", &file),
+                State::Cancelled => menu_label(
+                    "tui.upload_artifact.cancelled",
+                    "Upload of {file} cancelled",
+                )
+                .replace("{file}", &file),
             }
         }
         AIAgentActionType::SearchCodebase(request) => {
@@ -241,24 +338,50 @@ fn label_for_action(
                 .map(|path| format!(" in {}", base_name(path)))
                 .unwrap_or_default();
             match state {
-                State::Constructing => "Searching codebase…".to_owned(),
-                State::Pending | State::AwaitingApproval => {
-                    format!("Search for \"{query}\"{scope}")
-                }
-                State::Running => format!("Searching for \"{query}\"{scope}"),
+                State::Constructing => menu_label(
+                    "tui.search_codebase.constructing",
+                    "Searching codebase…",
+                )
+                .to_owned(),
+                State::Pending | State::AwaitingApproval => menu_label(
+                    "tui.search_codebase.pending",
+                    "Search for \"{query}\"{scope}",
+                )
+                .replace("{query}", &query)
+                .replace("{scope}", &scope),
+                State::Running => menu_label(
+                    "tui.search_codebase.running",
+                    "Searching for \"{query}\"{scope}",
+                )
+                .replace("{query}", &query)
+                .replace("{scope}", &scope),
                 State::Succeeded => match result {
                     Some(AIAgentActionResultType::SearchCodebase(
                         SearchCodebaseResult::Success { files },
-                    )) if files.is_empty() => {
-                        format!("Searched for \"{query}\"{scope}, no results")
-                    }
+                    )) if files.is_empty() => menu_label(
+                        "tui.search_codebase.succeeded_no_results",
+                        "Searched for \"{query}\"{scope}, no results",
+                    )
+                    .replace("{query}", &query)
+                    .replace("{scope}", &scope),
                     Some(AIAgentActionResultType::SearchCodebase(
                         SearchCodebaseResult::Success { files },
-                    )) => format!(
-                        "Searched for \"{query}\"{scope}, {}",
-                        count_label(files.len(), "result", "results")
-                    ),
-                    _ => format!("Searched for \"{query}\"{scope}"),
+                    )) => {
+                        let count_noun = count_label(files.len(), "result", "results");
+                        menu_label(
+                            "tui.search_codebase.succeeded_with_count",
+                            "Searched for \"{query}\"{scope}, {count} {noun}",
+                        )
+                        .replace("{query}", &query)
+                        .replace("{scope}", &scope)
+                        .replace("{count} {noun}", &count_noun)
+                    }
+                    _ => menu_label(
+                        "tui.search_codebase.succeeded_generic",
+                        "Searched for \"{query}\"{scope}",
+                    )
+                    .replace("{query}", &query)
+                    .replace("{scope}", &scope),
                 },
                 State::Failed => match result {
                     Some(AIAgentActionResultType::SearchCodebase(
@@ -266,12 +389,22 @@ fn label_for_action(
                             reason: SearchCodebaseFailureReason::CodebaseNotIndexed,
                             ..
                         },
-                    )) => format!(
-                        "Search for \"{query}\"{scope} failed because the codebase isn't indexed"
-                    ),
-                    _ => format!("Search for \"{query}\"{scope} failed"),
+                    )) => menu_label(
+                        "tui.search_codebase.failed_not_indexed",
+                        "Search for \"{query}\"{scope} failed because the codebase isn't indexed",
+                    )
+                    .replace("{query}", &query)
+                    .replace("{scope}", &scope),
+                    _ => menu_label("tui.search_codebase.failed", "Search for \"{query}\"{scope} failed")
+                        .replace("{query}", &query)
+                        .replace("{scope}", &scope),
                 },
-                State::Cancelled => format!("Search for \"{query}\"{scope} cancelled"),
+                State::Cancelled => menu_label(
+                    "tui.search_codebase.cancelled",
+                    "Search for \"{query}\"{scope} cancelled",
+                )
+                .replace("{query}", &query)
+                .replace("{scope}", &scope),
             }
         }
         // Rendered by its own stateful child view (`TuiFileEditsView`); the
@@ -284,22 +417,41 @@ fn label_for_action(
             let queries = single_line(&queries.join(", "));
             let path = display_path(path);
             match state {
-                State::Constructing => "Grepping…".to_owned(),
-                State::Pending | State::AwaitingApproval => {
-                    format!("Grep for {queries} in {path}")
+                State::Constructing => {
+                    menu_label("tui.grep.constructing", "Grepping…").to_owned()
                 }
-                State::Running => format!("Grepping for {queries} in {path}"),
+                State::Pending | State::AwaitingApproval => menu_label(
+                    "tui.grep.pending",
+                    "Grep for {queries} in {path}",
+                )
+                .replace("{queries}", &queries)
+                .replace("{path}", &path),
+                State::Running => menu_label("tui.grep.running", "Grepping for {queries} in {path}")
+                    .replace("{queries}", &queries)
+                    .replace("{path}", &path),
                 State::Succeeded => match result {
                     Some(AIAgentActionResultType::Grep(GrepResult::Success { matched_files })) => {
-                        format!(
-                            "Grepped for {queries} in {path}, {}",
-                            count_label(matched_files.len(), "matching file", "matching files")
+                        let count_noun =
+                            count_label(matched_files.len(), "matching file", "matching files");
+                        menu_label(
+                            "tui.grep.succeeded_with_count",
+                            "Grepped for {queries} in {path}, {count} {noun}",
                         )
+                        .replace("{queries}", &queries)
+                        .replace("{path}", &path)
+                        .replace("{count} {noun}", &count_noun)
                     }
-                    _ => format!("Grepped for {queries} in {path}"),
+                    _ => menu_label(
+                        "tui.grep.succeeded_generic",
+                        "Grepped for {queries} in {path}",
+                    )
+                    .replace("{queries}", &queries)
+                    .replace("{path}", &path),
                 },
-                State::Failed => format!("Grep for {queries} failed"),
-                State::Cancelled => format!("Grep for {queries} cancelled"),
+                State::Failed => menu_label("tui.grep.failed", "Grep for {queries} failed")
+                    .replace("{queries}", &queries),
+                State::Cancelled => menu_label("tui.grep.cancelled", "Grep for {queries} cancelled")
+                    .replace("{queries}", &queries),
             }
         }
         AIAgentActionType::FileGlob { patterns, path } => {
@@ -324,14 +476,36 @@ fn label_for_action(
                 // The resource name arrives with the tool-call header (not
                 // the streamed args), so include it when present, like the
                 // GUI's "Reading \"{name}\" MCP resource..." loading text.
-                State::Constructing if name.is_empty() => "Reading MCP resource…".to_owned(),
-                State::Constructing => format!("Reading \"{name}\" MCP resource…"),
-                State::Pending | State::AwaitingApproval | State::Succeeded => {
-                    format!("Read MCP resource {resource}")
-                }
-                State::Running => format!("Reading MCP resource {resource}"),
-                State::Failed => format!("MCP resource {resource} failed"),
-                State::Cancelled => format!("MCP resource {resource} cancelled"),
+                State::Constructing if name.is_empty() => menu_label(
+                    "tui.read_mcp_resource.constructing_no_name",
+                    "Reading MCP resource…",
+                )
+                .to_owned(),
+                State::Constructing => menu_label(
+                    "tui.read_mcp_resource.constructing",
+                    "Reading \"{name}\" MCP resource…",
+                )
+                .replace("{name}", name),
+                State::Pending | State::AwaitingApproval | State::Succeeded => menu_label(
+                    "tui.read_mcp_resource.succeeded",
+                    "Read MCP resource {resource}",
+                )
+                .replace("{resource}", &resource),
+                State::Running => menu_label(
+                    "tui.read_mcp_resource.running",
+                    "Reading MCP resource {resource}",
+                )
+                .replace("{resource}", &resource),
+                State::Failed => menu_label(
+                    "tui.read_mcp_resource.failed",
+                    "MCP resource {resource} failed",
+                )
+                .replace("{resource}", &resource),
+                State::Cancelled => menu_label(
+                    "tui.read_mcp_resource.cancelled",
+                    "MCP resource {resource} cancelled",
+                )
+                .replace("{resource}", &resource),
             }
         }
         AIAgentActionType::CallMCPTool { name, .. } => {
@@ -339,27 +513,69 @@ fn label_for_action(
             match state {
                 // Like the GUI's "Calling \"{name}\" MCP tool..." loading
                 // text; the tool name is available before its args finish.
-                State::Constructing if name.is_empty() => "Calling MCP tool…".to_owned(),
-                State::Constructing => format!("Calling \"{name}\" MCP tool…"),
-                State::Pending | State::AwaitingApproval => format!("Call MCP tool {name}"),
-                State::Running => format!("Calling MCP tool {name}"),
-                State::Succeeded => format!("Called MCP tool {name}"),
-                State::Failed => format!("MCP tool {name} failed"),
-                State::Cancelled => format!("MCP tool {name} cancelled"),
+                State::Constructing if name.is_empty() => menu_label(
+                    "tui.call_mcp_tool.constructing_no_name",
+                    "Calling MCP tool…",
+                )
+                .to_owned(),
+                State::Constructing => menu_label(
+                    "tui.call_mcp_tool.constructing",
+                    "Calling \"{name}\" MCP tool…",
+                )
+                .replace("{name}", &name),
+                State::Pending | State::AwaitingApproval => menu_label(
+                    "tui.call_mcp_tool.pending",
+                    "Call MCP tool {name}",
+                )
+                .replace("{name}", &name),
+                State::Running => menu_label("tui.call_mcp_tool.running", "Calling MCP tool {name}")
+                    .replace("{name}", &name),
+                State::Succeeded => menu_label(
+                    "tui.call_mcp_tool.succeeded",
+                    "Called MCP tool {name}",
+                )
+                .replace("{name}", &name),
+                State::Failed => menu_label("tui.call_mcp_tool.failed", "MCP tool {name} failed")
+                    .replace("{name}", &name),
+                State::Cancelled => menu_label(
+                    "tui.call_mcp_tool.cancelled",
+                    "MCP tool {name} cancelled",
+                )
+                .replace("{name}", &name),
             }
         }
         AIAgentActionType::SuggestNewConversation { .. } => match state {
-            State::Constructing => "Suggesting a new conversation…".to_owned(),
+            State::Constructing => menu_label(
+                "tui.suggest_new_conversation.constructing",
+                "Suggesting a new conversation…",
+            )
+            .to_owned(),
             State::Pending | State::AwaitingApproval | State::Running | State::Failed => {
-                "Suggested starting a new conversation".to_owned()
+                menu_label(
+                    "tui.suggest_new_conversation.pending",
+                    "Suggested starting a new conversation",
+                )
+                .to_owned()
             }
             State::Succeeded => match result {
                 Some(AIAgentActionResultType::SuggestNewConversation(
                     SuggestNewConversationResult::Rejected,
-                )) => "Continuing current conversation".to_owned(),
-                _ => "New conversation started".to_owned(),
+                )) => menu_label(
+                    "tui.suggest_new_conversation.succeeded_rejected",
+                    "Continuing current conversation",
+                )
+                .to_owned(),
+                _ => menu_label(
+                    "tui.suggest_new_conversation.succeeded",
+                    "New conversation started",
+                )
+                .to_owned(),
             },
-            State::Cancelled => "New conversation suggestion cancelled".to_owned(),
+            State::Cancelled => menu_label(
+                "tui.suggest_new_conversation.cancelled",
+                "New conversation suggestion cancelled",
+            )
+            .to_owned(),
         },
         AIAgentActionType::SuggestPrompt(_)
         | AIAgentActionType::InitProject
@@ -367,112 +583,283 @@ fn label_for_action(
         AIAgentActionType::ReadDocuments(request) => {
             let documents = count_label(request.document_ids.len(), "document", "documents");
             match state {
-                State::Constructing => "Reading documents…".to_owned(),
-                State::Pending | State::AwaitingApproval | State::Succeeded => {
-                    format!("Read {documents}")
-                }
-                State::Running => format!("Reading {documents}"),
-                State::Failed => "Failed to read documents".to_owned(),
-                State::Cancelled => "Cancelled reading documents".to_owned(),
+                State::Constructing => menu_label(
+                    "tui.read_documents.constructing",
+                    "Reading documents…",
+                )
+                .to_owned(),
+                State::Pending | State::AwaitingApproval | State::Succeeded => menu_label(
+                    "tui.read_documents.succeeded",
+                    "Read {documents}",
+                )
+                .replace("{documents}", &documents),
+                State::Running => menu_label("tui.read_documents.running", "Reading {documents}")
+                    .replace("{documents}", &documents),
+                State::Failed => menu_label(
+                    "tui.read_documents.failed",
+                    "Failed to read documents",
+                )
+                .to_owned(),
+                State::Cancelled => menu_label(
+                    "tui.read_documents.cancelled",
+                    "Cancelled reading documents",
+                )
+                .to_owned(),
             }
         }
         AIAgentActionType::EditDocuments(request) => match state {
-            State::Pending | State::AwaitingApproval => "Update plan".to_owned(),
-            State::Constructing | State::Running => "Updating plan…".to_owned(),
-            State::Succeeded => format!(
-                "Updated plan ({})",
-                count_label(request.diffs.len(), "edit", "edits")
-            ),
-            State::Failed => "Failed to update plan".to_owned(),
-            State::Cancelled => "Update plan cancelled".to_owned(),
+            State::Pending | State::AwaitingApproval => {
+                menu_label("tui.edit_documents.pending", "Update plan").to_owned()
+            }
+            State::Constructing | State::Running => {
+                menu_label("tui.edit_documents.running", "Updating plan…").to_owned()
+            }
+            State::Succeeded => {
+                let count_noun = count_label(request.diffs.len(), "edit", "edits");
+                menu_label(
+                    "tui.edit_documents.succeeded",
+                    "Updated plan ({count} {noun})",
+                )
+                .replace("{count} {noun}", &count_noun)
+            }
+            State::Failed => menu_label("tui.edit_documents.failed", "Failed to update plan")
+                .to_owned(),
+            State::Cancelled => menu_label("tui.edit_documents.cancelled", "Update plan cancelled")
+                .to_owned(),
         },
         AIAgentActionType::CreateDocuments(request) => match state {
-            State::Pending | State::AwaitingApproval => "Create plan".to_owned(),
-            State::Constructing | State::Running => "Generating plan…".to_owned(),
+            State::Pending | State::AwaitingApproval => menu_label(
+                "tui.create_documents.pending",
+                "Create plan",
+            )
+            .to_owned(),
+            State::Constructing | State::Running => menu_label(
+                "tui.create_documents.running",
+                "Generating plan…",
+            )
+            .to_owned(),
             State::Succeeded => {
                 let count = request.documents.len();
                 if count > 1 {
-                    format!("Created {count} documents")
+                    menu_label(
+                        "tui.create_documents.succeeded_multi",
+                        "Created {count} documents",
+                    )
+                    .replace("{count}", &count.to_string())
                 } else {
-                    "Created plan".to_owned()
+                    menu_label(
+                        "tui.create_documents.succeeded_single",
+                        "Created plan",
+                    )
+                    .to_owned()
                 }
             }
-            State::Failed => "Failed to create plan".to_owned(),
-            State::Cancelled => "Create plan cancelled".to_owned(),
+            State::Failed => menu_label("tui.create_documents.failed", "Failed to create plan")
+                .to_owned(),
+            State::Cancelled => menu_label(
+                "tui.create_documents.cancelled",
+                "Create plan cancelled",
+            )
+            .to_owned(),
         },
         AIAgentActionType::ReadShellCommandOutput { .. } => match state {
-            State::Pending | State::AwaitingApproval | State::Succeeded => {
-                "Read command output".to_owned()
-            }
-            State::Constructing | State::Running => "Reading command output…".to_owned(),
-            State::Failed => "Failed to read command output".to_owned(),
-            State::Cancelled => "Read command output cancelled".to_owned(),
+            State::Pending | State::AwaitingApproval | State::Succeeded => menu_label(
+                "tui.read_shell_command_output.succeeded",
+                "Read command output",
+            )
+            .to_owned(),
+            State::Constructing | State::Running => menu_label(
+                "tui.read_shell_command_output.running",
+                "Reading command output…",
+            )
+            .to_owned(),
+            State::Failed => menu_label(
+                "tui.read_shell_command_output.failed",
+                "Failed to read command output",
+            )
+            .to_owned(),
+            State::Cancelled => menu_label(
+                "tui.read_shell_command_output.cancelled",
+                "Read command output cancelled",
+            )
+            .to_owned(),
         },
         AIAgentActionType::UseComputer(request) => summary_label(&request.action_summary, state),
         AIAgentActionType::InsertCodeReviewComments { comments, .. } => {
-            let comments = count_label(comments.len(), "review comment", "review comments");
+            let comments_count = count_label(comments.len(), "review comment", "review comments");
             match state {
-                State::Constructing => "Preparing review comments…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Insert {comments}"),
-                State::Running => format!("Inserting {comments}…"),
-                State::Succeeded => format!("Inserted {comments}"),
-                State::Failed => "Failed to insert review comments".to_owned(),
-                State::Cancelled => "Insert review comments cancelled".to_owned(),
+                State::Constructing => menu_label(
+                    "tui.insert_code_review_comments.constructing",
+                    "Preparing review comments…",
+                )
+                .to_owned(),
+                State::Pending | State::AwaitingApproval => menu_label(
+                    "tui.insert_code_review_comments.pending",
+                    "Insert {comments}",
+                )
+                .replace("{comments}", &comments_count),
+                State::Running => menu_label(
+                    "tui.insert_code_review_comments.running",
+                    "Inserting {comments}…",
+                )
+                .replace("{comments}", &comments_count),
+                State::Succeeded => menu_label(
+                    "tui.insert_code_review_comments.succeeded",
+                    "Inserted {comments}",
+                )
+                .replace("{comments}", &comments_count),
+                State::Failed => menu_label(
+                    "tui.insert_code_review_comments.failed",
+                    "Failed to insert review comments",
+                )
+                .to_owned(),
+                State::Cancelled => menu_label(
+                    "tui.insert_code_review_comments.cancelled",
+                    "Insert review comments cancelled",
+                )
+                .to_owned(),
             }
         }
         AIAgentActionType::RequestComputerUse(request) => {
             summary_label(&request.task_summary, state)
         }
         AIAgentActionType::StartRecording { .. } => match state {
-            State::Pending | State::AwaitingApproval => "Start recording".to_owned(),
-            State::Constructing | State::Running => "Starting recording…".to_owned(),
-            State::Succeeded => "Started screen recording".to_owned(),
-            State::Failed => "Recording failed to start".to_owned(),
-            State::Cancelled => "Start recording cancelled".to_owned(),
+            State::Pending | State::AwaitingApproval => {
+                menu_label("tui.start_recording.pending", "Start recording").to_owned()
+            }
+            State::Constructing | State::Running => {
+                menu_label("tui.start_recording.running", "Starting recording…").to_owned()
+            }
+            State::Succeeded => menu_label(
+                "tui.start_recording.succeeded",
+                "Started screen recording",
+            )
+            .to_owned(),
+            State::Failed => menu_label(
+                "tui.start_recording.failed",
+                "Recording failed to start",
+            )
+            .to_owned(),
+            State::Cancelled => menu_label(
+                "tui.start_recording.cancelled",
+                "Start recording cancelled",
+            )
+            .to_owned(),
         },
         AIAgentActionType::StopRecording { .. } => match state {
-            State::Pending | State::AwaitingApproval => "Stop recording".to_owned(),
-            State::Constructing | State::Running => "Stopping recording…".to_owned(),
-            State::Succeeded => "Saved screen recording".to_owned(),
-            State::Failed => "Failed to save recording".to_owned(),
-            State::Cancelled => "Stop recording cancelled".to_owned(),
+            State::Pending | State::AwaitingApproval => {
+                menu_label("tui.stop_recording.pending", "Stop recording").to_owned()
+            }
+            State::Constructing | State::Running => {
+                menu_label("tui.stop_recording.running", "Stopping recording…").to_owned()
+            }
+            State::Succeeded => menu_label(
+                "tui.stop_recording.succeeded",
+                "Saved screen recording",
+            )
+            .to_owned(),
+            State::Failed => menu_label("tui.stop_recording.failed", "Failed to save recording")
+                .to_owned(),
+            State::Cancelled => menu_label(
+                "tui.stop_recording.cancelled",
+                "Stop recording cancelled",
+            )
+            .to_owned(),
         },
         AIAgentActionType::ReadSkill(request) => {
             let skill = single_line(&request.skill.display_label());
             match state {
-                State::Constructing => "Reading skill…".to_owned(),
-                State::Pending | State::AwaitingApproval | State::Succeeded => {
-                    format!("Read skill {skill}")
+                State::Constructing => {
+                    menu_label("tui.read_skill.constructing", "Reading skill…").to_owned()
                 }
-                State::Running => format!("Reading skill {skill}"),
-                State::Failed => format!("Failed to read skill {skill}"),
-                State::Cancelled => format!("Cancelled reading skill {skill}"),
+                State::Pending | State::AwaitingApproval | State::Succeeded => menu_label(
+                    "tui.read_skill.succeeded",
+                    "Read skill {skill}",
+                )
+                .replace("{skill}", &skill),
+                State::Running => menu_label("tui.read_skill.running", "Reading skill {skill}")
+                    .replace("{skill}", &skill),
+                State::Failed => menu_label("tui.read_skill.failed", "Failed to read skill {skill}")
+                    .replace("{skill}", &skill),
+                State::Cancelled => menu_label(
+                    "tui.read_skill.cancelled",
+                    "Cancelled reading skill {skill}",
+                )
+                .replace("{skill}", &skill),
             }
         }
         AIAgentActionType::FetchConversation { .. } => match state {
-            State::Pending | State::AwaitingApproval => "Fetch conversation".to_owned(),
-            State::Constructing | State::Running => "Fetching conversation…".to_owned(),
-            State::Succeeded => "Fetched conversation".to_owned(),
-            State::Failed => "Fetch conversation failed".to_owned(),
-            State::Cancelled => "Fetch conversation cancelled".to_owned(),
+            State::Pending | State::AwaitingApproval => {
+                menu_label("tui.fetch_conversation.pending", "Fetch conversation").to_owned()
+            }
+            State::Constructing | State::Running => menu_label(
+                "tui.fetch_conversation.running",
+                "Fetching conversation…",
+            )
+            .to_owned(),
+            State::Succeeded => {
+                menu_label("tui.fetch_conversation.succeeded", "Fetched conversation").to_owned()
+            }
+            State::Failed => menu_label(
+                "tui.fetch_conversation.failed",
+                "Fetch conversation failed",
+            )
+            .to_owned(),
+            State::Cancelled => menu_label(
+                "tui.fetch_conversation.cancelled",
+                "Fetch conversation cancelled",
+            )
+            .to_owned(),
         },
         AIAgentActionType::StartAgent {
             name,
             execution_mode,
             ..
         } => {
-            let agent = if matches!(execution_mode, StartAgentExecutionMode::Remote { .. }) {
-                format!("remote agent {name}")
+            let agent_label = if matches!(execution_mode, StartAgentExecutionMode::Remote { .. }) {
+                menu_label(
+                    "tui.start_agent.remote_agent_label",
+                    "remote agent {name}",
+                )
+                .replace("{name}", name)
             } else {
-                format!("agent {name}")
+                menu_label(
+                    "tui.start_agent.local_agent_label",
+                    "agent {name}",
+                )
+                .replace("{name}", name)
             };
             match state {
-                State::Constructing => "Configuring agent…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Start {agent}"),
-                State::Running => format!("Starting {agent}…"),
-                State::Succeeded => format!("Started agent {name}"),
-                State::Failed => format!("Failed to start agent {name}"),
-                State::Cancelled => format!("Start agent {name} cancelled"),
+                State::Constructing => menu_label(
+                    "tui.start_agent.constructing",
+                    "Configuring agent…",
+                )
+                .to_owned(),
+                State::Pending | State::AwaitingApproval => menu_label(
+                    "tui.start_agent.pending",
+                    "Start {agent}",
+                )
+                .replace("{agent}", &agent_label),
+                State::Running => menu_label(
+                    "tui.start_agent.running",
+                    "Starting {agent}…",
+                )
+                .replace("{agent}", &agent_label),
+                State::Succeeded => menu_label(
+                    "tui.start_agent.succeeded",
+                    "Started agent {name}",
+                )
+                .replace("{name}", name),
+                State::Failed => menu_label(
+                    "tui.start_agent.failed",
+                    "Failed to start agent {name}",
+                )
+                .replace("{name}", name),
+                State::Cancelled => menu_label(
+                    "tui.start_agent.cancelled",
+                    "Start agent {name} cancelled",
+                )
+                .replace("{name}", name),
             }
         }
         AIAgentActionType::SendMessageToAgent {
@@ -480,65 +867,155 @@ fn label_for_action(
         } => {
             let subject = single_line(subject);
             match state {
-                State::Constructing => "Composing message…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Send message: {subject}"),
-                State::Running => format!(
-                    "Sending message to {}: {subject}",
-                    count_label(addresses.len(), "agent", "agents")
-                ),
-                State::Succeeded => format!("Sent message: {subject}"),
-                State::Failed => format!("Failed to send message: {subject}"),
-                State::Cancelled => "Send message cancelled".to_owned(),
+                State::Constructing => menu_label(
+                    "tui.send_message_to_agent.constructing",
+                    "Composing message…",
+                )
+                .to_owned(),
+                State::Pending | State::AwaitingApproval => menu_label(
+                    "tui.send_message_to_agent.pending",
+                    "Send message: {subject}",
+                )
+                .replace("{subject}", &subject),
+                State::Running => {
+                    let count_noun = count_label(addresses.len(), "agent", "agents");
+                    menu_label(
+                        "tui.send_message_to_agent.running",
+                        "Sending message to {count} {noun}: {subject}",
+                    )
+                    .replace("{count} {noun}", &count_noun)
+                    .replace("{subject}", &subject)
+                }
+                State::Succeeded => menu_label(
+                    "tui.send_message_to_agent.succeeded",
+                    "Sent message: {subject}",
+                )
+                .replace("{subject}", &subject),
+                State::Failed => menu_label(
+                    "tui.send_message_to_agent.failed",
+                    "Failed to send message: {subject}",
+                )
+                .replace("{subject}", &subject),
+                State::Cancelled => menu_label(
+                    "tui.send_message_to_agent.cancelled",
+                    "Send message cancelled",
+                )
+                .to_owned(),
             }
         }
         AIAgentActionType::TransferShellCommandControlToUser { reason } => match state {
-            State::Constructing => "Handing control to you…".to_owned(),
-            State::Pending | State::AwaitingApproval | State::Running => {
-                format!("Handing control to you: {}", single_line(reason))
-            }
-            State::Succeeded => "You are in control".to_owned(),
-            State::Failed => "Control transfer failed".to_owned(),
-            State::Cancelled => "Control transfer cancelled".to_owned(),
+            State::Constructing => menu_label(
+                "tui.transfer_shell_command_control_to_user.constructing",
+                "Handing control to you…",
+            )
+            .to_owned(),
+            State::Pending | State::AwaitingApproval | State::Running => menu_label(
+                "tui.transfer_shell_command_control_to_user.running",
+                "Handing control to you: {reason}",
+            )
+            .replace("{reason}", &single_line(reason)),
+            State::Succeeded => menu_label(
+                "tui.transfer_shell_command_control_to_user.succeeded",
+                "You are in control",
+            )
+            .to_owned(),
+            State::Failed => menu_label(
+                "tui.transfer_shell_command_control_to_user.failed",
+                "Control transfer failed",
+            )
+            .to_owned(),
+            State::Cancelled => menu_label(
+                "tui.transfer_shell_command_control_to_user.cancelled",
+                "Control transfer cancelled",
+            )
+            .to_owned(),
         },
-        AIAgentActionType::AskUserQuestion { questions } => match state {
-            State::Constructing => "Preparing question…".to_owned(),
-            State::Pending | State::AwaitingApproval | State::Running => format!(
-                "Asking {}",
-                count_label(questions.len(), "question", "questions")
-            ),
-            State::Succeeded => match result {
-                Some(AIAgentActionResultType::AskUserQuestion(
-                    AskUserQuestionResult::Success { answers },
-                )) => {
-                    let total = answers.len();
-                    let answered = answers.iter().filter(|answer| !answer.is_skipped()).count();
-                    if answered == 0 {
-                        "Questions skipped".to_owned()
-                    } else if answered == total && total == 1 {
-                        "Answered question".to_owned()
-                    } else if answered == total {
-                        format!("Answered all {total} questions")
-                    } else {
-                        format!("Answered {answered} of {total} questions")
-                    }
+        AIAgentActionType::AskUserQuestion { questions } => {
+            let total = questions.len();
+            match state {
+                State::Constructing => menu_label(
+                    "tui.ask_user_question.constructing",
+                    "Preparing question…",
+                )
+                .to_owned(),
+                State::Pending | State::AwaitingApproval | State::Running => {
+                    let count_noun = count_label(total, "question", "questions");
+                    menu_label(
+                        "tui.ask_user_question.running",
+                        "Asking {count} {noun}",
+                    )
+                    .replace("{count} {noun}", &count_noun)
                 }
-                Some(AIAgentActionResultType::AskUserQuestion(
-                    AskUserQuestionResult::SkippedByAutoApprove { .. },
-                )) => "Questions skipped".to_owned(),
-                _ => "Answered questions".to_owned(),
-            },
-            State::Failed => "Questions failed".to_owned(),
-            State::Cancelled => "Questions cancelled".to_owned(),
-        },
+                State::Succeeded => match result {
+                    Some(AIAgentActionResultType::AskUserQuestion(
+                        AskUserQuestionResult::Success { answers },
+                    )) => {
+                        let total = answers.len();
+                        let answered =
+                            answers.iter().filter(|answer| !answer.is_skipped()).count();
+                        if answered == 0 {
+                            menu_label(
+                                "tui.ask_user_question.skipped",
+                                "Questions skipped",
+                            )
+                            .to_owned()
+                        } else if answered == total && total == 1 {
+                            menu_label(
+                                "tui.ask_user_question.single_answered",
+                                "Answered question",
+                            )
+                            .to_owned()
+                        } else if answered == total {
+                            menu_label(
+                                "tui.ask_user_question.all_answered",
+                                "Answered all {total} questions",
+                            )
+                            .replace("{total}", &total.to_string())
+                        } else {
+                            menu_label(
+                                "tui.ask_user_question.partial_answered",
+                                "Answered {answered} of {total} questions",
+                            )
+                            .replace("{answered}", &answered.to_string())
+                            .replace("{total}", &total.to_string())
+                        }
+                    }
+                    Some(AIAgentActionResultType::AskUserQuestion(
+                        AskUserQuestionResult::SkippedByAutoApprove { .. },
+                    )) => menu_label(
+                        "tui.ask_user_question.skipped",
+                        "Questions skipped",
+                    )
+                    .to_owned(),
+                    _ => menu_label(
+                        "tui.ask_user_question.answered_generic",
+                        "Answered questions",
+                    )
+                    .to_owned(),
+                },
+                State::Failed => menu_label("tui.ask_user_question.failed", "Questions failed")
+                    .to_owned(),
+                State::Cancelled => menu_label(
+                    "tui.ask_user_question.cancelled",
+                    "Questions cancelled",
+                )
+                .to_owned(),
+            }
+        }
         AIAgentActionType::RunAgents(request) => {
             let total = request.agent_run_configs.len();
+            let count_noun = count_label(total, "agent", "agents");
             match state {
-                State::Constructing | State::Pending | State::AwaitingApproval => {
-                    "Configuring agents…".to_owned()
-                }
-                State::Running => {
-                    format!("Spawning {}…", count_label(total, "agent", "agents"))
-                }
+                State::Constructing | State::Pending | State::AwaitingApproval => menu_label(
+                    "tui.run_agents.constructing",
+                    "Configuring agents…",
+                )
+                .to_owned(),
+                State::Running => menu_label(
+                    "tui.run_agents.running",
+                    "Spawning {count} {noun}…",
+                )
+                .replace("{count} {noun}", &count_noun),
                 State::Succeeded => match result {
                     Some(AIAgentActionResultType::RunAgents(RunAgentsResult::Launched {
                         agents,
@@ -552,36 +1029,86 @@ fn label_for_action(
                             .count();
                         let total = agents.len();
                         if launched == total {
-                            format!("Spawned {}", count_label(total, "agent", "agents"))
+                            menu_label(
+                                "tui.run_agents.succeeded_all",
+                                "Spawned {count} {noun}",
+                            )
+                            .replace(
+                                "{count} {noun}",
+                                &count_label(total, "agent", "agents"),
+                            )
                         } else if launched == 0 {
-                            format!("Failed to spawn {}", count_label(total, "agent", "agents"))
+                            menu_label(
+                                "tui.run_agents.failed_spawn",
+                                "Failed to spawn {count} {noun}",
+                            )
+                            .replace(
+                                "{count} {noun}",
+                                &count_label(total, "agent", "agents"),
+                            )
                         } else {
-                            format!("Spawned {launched} of {total} agents")
+                            menu_label(
+                                "tui.run_agents.succeeded_partial",
+                                "Spawned {launched} of {total} agents",
+                            )
+                            .replace("{launched}", &launched.to_string())
+                            .replace("{total}", &total.to_string())
                         }
                     }
-                    _ => format!("Spawned {}", count_label(total, "agent", "agents")),
+                    _ => menu_label(
+                        "tui.run_agents.succeeded_all",
+                        "Spawned {count} {noun}",
+                    )
+                    .replace("{count} {noun}", &count_noun),
                 },
                 State::Failed => match result {
                     Some(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
                         ..
-                    })) => "Orchestration disabled — agents not launched".to_owned(),
+                    })) => menu_label(
+                        "tui.run_agents.denied",
+                        "Orchestration disabled — agents not launched",
+                    )
+                    .to_owned(),
                     Some(AIAgentActionResultType::RunAgents(RunAgentsResult::Failure {
                         error,
-                    })) if !error.is_empty() => {
-                        format!("Failed to start orchestration: {}", single_line(error))
-                    }
-                    _ => "Failed to start orchestration".to_owned(),
+                    })) if !error.is_empty() => menu_label(
+                        "tui.run_agents.failed_with_error",
+                        "Failed to start orchestration: {error}",
+                    )
+                    .replace("{error}", &single_line(error)),
+                    _ => menu_label(
+                        "tui.run_agents.failed_generic",
+                        "Failed to start orchestration",
+                    )
+                    .to_owned(),
                 },
-                State::Cancelled => "Spawn agents cancelled".to_owned(),
+                State::Cancelled => menu_label("tui.run_agents.cancelled", "Spawn agents cancelled")
+                    .to_owned(),
             }
         }
         AIAgentActionType::WaitForEvents { .. } => match state {
             State::Constructing | State::Pending | State::AwaitingApproval | State::Running => {
-                "Waiting for agent events…".to_owned()
+                menu_label(
+                    "tui.wait_for_events.running",
+                    "Waiting for agent events…",
+                )
+                .to_owned()
             }
-            State::Succeeded => "Done waiting for agent events".to_owned(),
-            State::Failed => "Waiting for agent events failed".to_owned(),
-            State::Cancelled => "Wait for events cancelled".to_owned(),
+            State::Succeeded => menu_label(
+                "tui.wait_for_events.succeeded",
+                "Done waiting for agent events",
+            )
+            .to_owned(),
+            State::Failed => menu_label(
+                "tui.wait_for_events.failed",
+                "Waiting for agent events failed",
+            )
+            .to_owned(),
+            State::Cancelled => menu_label(
+                "tui.wait_for_events.cancelled",
+                "Wait for events cancelled",
+            )
+            .to_owned(),
         },
     }
 }
@@ -597,20 +1124,47 @@ fn file_glob_label(
     let patterns = single_line(&patterns.join(", "));
     let path = display_path(path.unwrap_or("."));
     match state {
-        State::Constructing => "Finding files…".to_owned(),
-        State::Pending | State::AwaitingApproval => {
-            format!("Find files matching {patterns} in {path}")
+        State::Constructing => {
+            menu_label("tui.file_glob.constructing", "Finding files…").to_owned()
         }
-        State::Running => format!("Finding files matching {patterns} in {path}"),
+        State::Pending | State::AwaitingApproval => menu_label(
+            "tui.file_glob.pending",
+            "Find files matching {patterns} in {path}",
+        )
+        .replace("{patterns}", &patterns)
+        .replace("{path}", &path),
+        State::Running => menu_label(
+            "tui.file_glob.running",
+            "Finding files matching {patterns} in {path}",
+        )
+        .replace("{patterns}", &patterns)
+        .replace("{path}", &path),
         State::Succeeded => match matched_count {
-            Some(count) => format!(
-                "Found {} matching {patterns}",
-                count_label(count, "file", "files")
-            ),
-            None => format!("Found files matching {patterns}"),
+            Some(count) => {
+                let count_noun = count_label(count, "file", "files");
+                menu_label(
+                    "tui.file_glob.succeeded_with_count",
+                    "Found {count} {noun} matching {patterns}",
+                )
+                .replace("{count} {noun}", &count_noun)
+                .replace("{patterns}", &patterns)
+            }
+            None => menu_label(
+                "tui.file_glob.succeeded_generic",
+                "Found files matching {patterns}",
+            )
+            .replace("{patterns}", &patterns),
         },
-        State::Failed => format!("File search for {patterns} failed"),
-        State::Cancelled => format!("File search for {patterns} cancelled"),
+        State::Failed => menu_label(
+            "tui.file_glob.failed",
+            "File search for {patterns} failed",
+        )
+        .replace("{patterns}", &patterns),
+        State::Cancelled => menu_label(
+            "tui.file_glob.cancelled",
+            "File search for {patterns} cancelled",
+        )
+        .replace("{patterns}", &patterns),
     }
 }
 
@@ -620,10 +1174,18 @@ fn file_glob_label(
 fn summary_label(summary: &str, state: ToolCallDisplayState) -> String {
     let summary = single_line(summary);
     match state {
-        State::Constructing => "Preparing computer use…".to_owned(),
-        State::Pending | State::AwaitingApproval | State::Running | State::Succeeded => summary,
-        State::Failed => format!("{summary} — failed"),
-        State::Cancelled => format!("{summary} — cancelled"),
+        State::Constructing => menu_label(
+            "tui.summary.constructing",
+            "Preparing computer use…",
+        )
+        .to_owned(),
+        State::Pending | State::AwaitingApproval | State::Running | State::Succeeded => {
+            menu_label("tui.summary.succeeded", "{summary}").replace("{summary}", &summary)
+        }
+        State::Failed => menu_label("tui.summary.failed", "{summary} — failed")
+            .replace("{summary}", &summary),
+        State::Cancelled => menu_label("tui.summary.cancelled", "{summary} — cancelled")
+            .replace("{summary}", &summary),
     }
 }
 
@@ -632,11 +1194,18 @@ fn summary_label(summary: &str, state: ToolCallDisplayState) -> String {
 fn fallback_label(action: &AIAgentActionType, state: ToolCallDisplayState) -> String {
     let name = action.user_friendly_name();
     match state {
-        State::Pending | State::AwaitingApproval => name,
-        State::Constructing | State::Running => format!("{name}…"),
-        State::Succeeded => format!("{name} — done"),
-        State::Failed => format!("{name} — failed"),
-        State::Cancelled => format!("{name} — cancelled"),
+        State::Pending | State::AwaitingApproval => {
+            menu_label("tui.fallback.pending", "{name}").replace("{name}", &name)
+        }
+        State::Constructing | State::Running => {
+            menu_label("tui.fallback.running", "{name}…").replace("{name}", &name)
+        }
+        State::Succeeded => menu_label("tui.fallback.succeeded", "{name} — done")
+            .replace("{name}", &name),
+        State::Failed => menu_label("tui.fallback.failed", "{name} — failed")
+            .replace("{name}", &name),
+        State::Cancelled => menu_label("tui.fallback.cancelled", "{name} — cancelled")
+            .replace("{name}", &name),
     }
 }
 
@@ -654,7 +1223,7 @@ fn single_line(text: &str) -> String {
 /// Renders a search path for display, mirroring the GUI's treatment of `.`.
 fn display_path(path: &str) -> String {
     if path == "." {
-        "the current directory".to_owned()
+        menu_label("tui.helper.current_directory_label", "the current directory").to_owned()
     } else {
         single_line(path)
     }
@@ -675,7 +1244,7 @@ fn files_summary<'a>(paths: impl ExactSizeIterator<Item = &'a String>) -> String
     }
     let names: Vec<String> = paths.map(|path| base_name(path)).collect();
     if names.is_empty() {
-        "files".to_owned()
+        menu_label("tui.helper.empty_files_fallback", "files").to_owned()
     } else {
         names.join(", ")
     }

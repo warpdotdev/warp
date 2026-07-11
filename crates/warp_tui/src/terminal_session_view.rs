@@ -10,7 +10,7 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    build_slash_command_mixer, detect_possible_git_repo, saved_prompt_text_for_id,
+    build_slash_command_mixer, detect_possible_git_repo, menu_label, saved_prompt_text_for_id,
     slash_command_is_submitted_as_prompt, slash_command_selection_behavior, slash_commands,
     throttle, AIAgentActionId, AIAgentPtyWriteMode, AcceptSlashCommandOrSavedPrompt, ActiveSession,
     ActiveSessionEvent, AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
@@ -64,9 +64,6 @@ const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 const MAX_INLINE_MENU_ROWS: u16 = 10;
 
-/// The footer hint shown while the ctrl-c exit confirmation is armed.
-const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
-
 /// Events emitted by the TUI terminal session surface.
 pub(crate) enum TuiTerminalSessionEvent {
     ExecuteCommand(Box<ExecuteCommandEvent>),
@@ -88,15 +85,6 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
     }
 }
 
-/// Transient hint shown when a shell command is rejected because the PTY is
-/// already running a command.
-const COMMAND_ALREADY_RUNNING_HINT: &str = "cannot run — command already running";
-const NEW_CONVERSATION_COMMAND_RUNNING_HINT: &str =
-    "cannot start new conversation while terminal command is running";
-
-/// Footer hint shown while the input is in `!` shell mode.
-const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
-const COPY_SELECTION_HINT: &str = "copied to clipboard";
 /// Keeps an agent-requested command's canonical block out of the TUI's
 /// top-level transcript. The shell-command action embeds the block's terminal
 /// content inside its own disclosure, so the canonical block must have zero
@@ -146,7 +134,7 @@ pub(crate) struct TuiTerminalSessionView {
     /// the same way the request path does.
     terminal_surface_id: EntityId,
     /// Armed by a ctrl-c press; a second press while armed exits the TUI.
-    /// The footer shows [`CTRL_C_EXIT_HINT`] while armed.
+    /// The footer shows the localized ctrl-c exit hint while armed.
     exit_confirmation: ExitConfirmation,
     /// Credits⇄cost display state for the footer's clickable usage entry.
     usage_toggle: UsageToggle,
@@ -568,7 +556,10 @@ impl TuiTerminalSessionView {
     /// Displays success-colored feedback in the transient footer slot.
     fn show_copy_hint(&mut self, ctx: &mut ViewContext<Self>) {
         self.transient_hint
-            .show_success(COPY_SELECTION_HINT.to_owned(), ctx, |view| {
+            .show_success(
+                menu_label("tui.footer.copied_hint", "copied to clipboard").to_owned(),
+                ctx,
+                |view| {
                 &mut view.transient_hint
             });
     }
@@ -576,7 +567,7 @@ impl TuiTerminalSessionView {
     /// Handles a ctrl-c press: a second press within [`CTRL_C_EXIT_WINDOW`]
     /// exits the TUI; otherwise one contextual action runs — cancel the running
     /// conversation if there is one, else clear the input — and the exit
-    /// confirmation is (re-)armed, surfacing [`CTRL_C_EXIT_HINT`] in the footer.
+    /// confirmation is (re-)armed, surfacing the localized ctrl-c exit hint in the footer.
     fn handle_interrupt(&mut self, ctx: &mut ViewContext<Self>) {
         let now = Instant::now();
         if self.exit_confirmation.should_exit(now) {
@@ -639,7 +630,10 @@ impl TuiTerminalSessionView {
         // Left slot, highest priority first: while armed, the ctrl-c hint
         // replaces the other hints in place.
         let hint = if self.exit_confirmation.is_armed() {
-            Some((CTRL_C_EXIT_HINT.to_owned(), muted))
+            Some((
+                menu_label("tui.footer.ctrl_c_exit_hint", "ctrl-c again to exit").to_owned(),
+                muted,
+            ))
         } else if let Some((transient, tone)) = self.transient_hint.current() {
             let style = match tone {
                 TransientHintTone::Muted => muted,
@@ -648,7 +642,7 @@ impl TuiTerminalSessionView {
             Some((transient.to_owned(), style))
         } else if self.is_shell_mode(ctx) {
             Some((
-                SHELL_MODE_HINT.to_owned(),
+                menu_label("tui.footer.shell_mode_hint", "shell mode · esc to exit").to_owned(),
                 builder.shell_mode_accent_style(),
             ))
         } else {
@@ -857,7 +851,14 @@ impl TuiTerminalSessionView {
             return;
         };
         if is_pty_busy {
-            self.show_transient_hint(COMMAND_ALREADY_RUNNING_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.terminal.cannot_run_command",
+                    "cannot run — command already running",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
 
@@ -1003,7 +1004,14 @@ impl TuiTerminalSessionView {
                 .as_ref(ctx)
                 .can_start_new_conversation()
             {
-                self.show_transient_hint(NEW_CONVERSATION_COMMAND_RUNNING_HINT.to_owned(), ctx);
+                self.show_transient_hint(
+                    menu_label(
+                        "tui.terminal.new_conversation_blocked",
+                        "cannot start new conversation while terminal command is running",
+                    )
+                    .to_owned(),
+                    ctx,
+                );
                 return;
             }
             self.cancel_active_conversation(ctx);

@@ -9,9 +9,10 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
 use warp::tui_export::{
-    slash_command_query, slash_command_selection_behavior, AcceptSlashCommandOrSavedPrompt,
-    ParsedSlashCommandInput, SlashCommandDataSource as _, SlashCommandMixer,
-    SlashCommandSelectionBehavior, TuiSlashCommandDataSource, UpdatedActiveCommands,
+    menu_label, slash_command_query, slash_command_selection_behavior,
+    AcceptSlashCommandOrSavedPrompt, ParsedSlashCommandInput, SlashCommandDataSource as _,
+    SlashCommandMixer, SlashCommandSelectionBehavior, TuiSlashCommandDataSource,
+    UpdatedActiveCommands,
 };
 use warp_editor::model::CoreEditorModel;
 use warp_search_core::inline_menu::{
@@ -206,9 +207,13 @@ impl TuiSlashCommandModel {
         };
         let status = if rows.is_empty() {
             Some(if *is_loading {
-                TuiInlineMenuStatus::Loading("Loading slash commands…".to_owned())
+                TuiInlineMenuStatus::Loading(
+                    menu_label("tui.inline_menu.loading", "Loading slash commands…").to_owned(),
+                )
             } else {
-                TuiInlineMenuStatus::Empty("No slash commands found".to_owned())
+                TuiInlineMenuStatus::Empty(
+                    menu_label("tui.inline_menu.empty", "No slash commands found").to_owned(),
+                )
             })
         } else {
             None

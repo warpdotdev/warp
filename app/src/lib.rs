@@ -1278,7 +1278,7 @@ fn menu_label_cache() -> &'static Mutex<HashMap<(String, String), &'static str>>
 ///
 /// Results are memoized per `(locale, key)` (see [`menu_label_cache`]) so repeated
 /// calls from render/menu-update paths don't leak unboundedly.
-pub(crate) fn menu_label(key: &str, fallback: &str) -> &'static str {
+pub fn menu_label(key: &str, fallback: &str) -> &'static str {
     let locale = i18n::current_locale();
     let cache_key = (locale.to_string(), key.to_string());
 

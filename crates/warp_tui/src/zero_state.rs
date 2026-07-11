@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use ai::project_context::model::ProjectContextModel;
-use warp::tui_export::{ChangelogModel, ChangelogState, SkillManager};
+use warp::tui_export::{menu_label, ChangelogModel, ChangelogState, SkillManager};
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
@@ -44,7 +44,7 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
 
     let mut column = TuiFlex::column()
         .child(
-            TuiText::new("Warp Agent")
+            TuiText::new(menu_label("tui.zero_state.title", "Warp Agent"))
                 .with_style(title_style)
                 .truncate()
                 .finish(),
@@ -54,7 +54,7 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
     let bullets = changelog_bullets(app);
     if !bullets.is_empty() {
         column = column.child(blank_row()).child(
-            TuiText::new("What's new")
+            TuiText::new(menu_label("tui.zero_state.whats_new", "What's new"))
                 .with_style(header_style)
                 .truncate()
                 .finish(),
@@ -85,20 +85,32 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
 fn render_version_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiElement> {
     let muted = builder.muted_text_style();
     let Some(version) = ChannelState::app_version() else {
-        return TuiText::new("dev build")
+        return TuiText::new(menu_label("tui.zero_state.version.dev_build", "dev build"))
             .with_style(muted)
             .truncate()
             .finish();
     };
     let suffix = match TuiAutoupdater::as_ref(app).status() {
         TuiAutoupdateStatus::Idle => None,
-        TuiAutoupdateStatus::Checking => Some(("checking for updates…", muted)),
-        TuiAutoupdateStatus::Updating => Some(("updating…", muted)),
-        TuiAutoupdateStatus::UpToDate => Some(("up to date", muted)),
+        TuiAutoupdateStatus::Checking => Some((
+            menu_label("tui.zero_state.version.checking", "checking for updates…"),
+            muted,
+        )),
+        TuiAutoupdateStatus::Updating => Some((
+            menu_label("tui.zero_state.version.updating", "updating…"),
+            muted,
+        )),
+        TuiAutoupdateStatus::UpToDate => Some((
+            menu_label("tui.zero_state.version.up_to_date", "up to date"),
+            muted,
+        )),
         // The one state worth drawing attention to: an update is staged and
         // a restart picks it up.
         TuiAutoupdateStatus::PendingRestart => Some((
-            "update installed, restart to apply",
+            menu_label(
+                "tui.zero_state.version.pending_restart",
+                "update installed, restart to apply",
+            ),
             builder.success_glyph_style(),
         )),
     };
@@ -173,10 +185,13 @@ fn render_project_section(
         // nothing may be known yet; this also covers projects with no
         // context at all.
         return column.child(
-            TuiText::new("Discovering project context…")
-                .with_style(builder.dim_text_style())
-                .truncate()
-                .finish(),
+            TuiText::new(menu_label(
+                "tui.zero_state.project.discovering",
+                "Discovering project context…",
+            ))
+            .with_style(builder.dim_text_style())
+            .truncate()
+            .finish(),
         );
     }
 
