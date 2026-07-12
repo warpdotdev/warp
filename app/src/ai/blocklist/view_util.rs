@@ -23,8 +23,12 @@ const PROVIDER_BUTTON_ICON_TEXT_GAP: f32 = 8.;
 
 /// Text to use as a label throughout the app for user interactions that will attach selected
 /// block(s) or text selections to a new AI query.
-pub static ATTACH_AS_AGENT_MODE_CONTEXT_TEXT: LazyLock<&'static str> =
-    LazyLock::new(|| "Attach as agent context");
+pub fn attach_as_agent_mode_context_text() -> &'static str {
+    crate::menu_label(
+        "terminal.context_menu.attach_as_agent_context",
+        "Attach as agent context",
+    )
+}
 
 /// Label we use for the the command palette action to create a new local Oz agent pane.
 pub static NEW_AGENT_PANE_LABEL: LazyLock<&'static str> = LazyLock::new(|| "New Agent Pane");

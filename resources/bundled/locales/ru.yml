@@ -89,6 +89,45 @@ ru:
       fork: "Форк"
       fork_from_here: "Ответвить отсюда"
       rewind_to_before_here: "Откатить до этого момента"
+      ai_command_search: Поиск команд с ИИ
+      ask_warp_ai: Спросить Warp AI
+      attach_as_agent_context: Прикрепить как контекст для агента
+      clear_blocks: Очистить блоки
+      close_pane: Закрыть панель
+      command_search: Поиск команд
+      copy_commands: Копировать команды
+      copy_filtered_output: Копировать отфильтрованный вывод
+      copy_output: Копировать вывод
+      copy_right_prompt: Копировать правый промпт
+      copy_working_directory: Копировать рабочую директорию
+      cut: Вырезать
+      edit_agent_toolbelt: Редактировать панель инструментов агента
+      edit_cli_agent_toolbelt: Редактировать панель инструментов CLI-агента
+      edit_prompt: Редактировать промпт
+      find_within_block_one: Найти в блоке
+      find_within_block_other: Найти в блоках
+      fork_from_here_dev_only: Ответвить отсюда (только для разработки)
+      fork_from_last_query: Ответвить из последнего запроса
+      insert_into_input: Вставить во ввод
+      open_in_editor: Открыть в редакторе
+      open_in_warp: Открыть в Warp
+      paste: Вставить
+      save_as_workflow: Сохранить как рабочий процесс
+      scroll_to_bottom_of_block_one: Прокрутить к концу блока
+      scroll_to_bottom_of_block_other: Прокрутить к концу блоков
+      scroll_to_top_of_block_one: Прокрутить к началу блока
+      scroll_to_top_of_block_other: Прокрутить к началу блоков
+      select_all: Выделить всё
+      share_block_dots: Поделиться блоком...
+      share_dots: Поделиться...
+      show_containing_folder: Открыть папку с файлом
+      show_in_finder: Показать в Finder
+      split_pane_down: Разделить панель вниз
+      split_pane_left: Разделить панель влево
+      split_pane_right: Разделить панель вправо
+      split_pane_up: Разделить панель вверх
+      toggle_block_filter: Переключить фильтр для блока
+      toggle_bookmark: Переключить закладку
     auto_reload_settings_updated: Настройки автопополнения обновлены
     auto_reload_enable_failed: Не удалось включить автопополнение. Попробуйте обновить настройки в Биллинг и использование.
     auto_reload_when_enabled_prefix: 'Когда включено, '
@@ -100,6 +139,46 @@ ru:
     enable: Включить
     team_data_not_found: Ой, что-то пошло не так; данные вашей команды не найдены.
     enable_auto_reload_title: Включить автопополнение?
+    banner:
+      more_info: Подробнее
+      more_info_lowercase: подробнее
+      learn_more: Узнать больше
+      slow_bootstrap_text: 'Похоже, ваш shell запускается долго...  '
+      slow_bootstrap_show_init: Показать блок инициализации
+      controlmaster_part1: Похоже, автодополнение не работает (
+      controlmaster_part2: '). Включение SSH-расширения в '
+      controlmaster_settings: настройках
+      controlmaster_part3: ' может решить эту проблему.'
+      incompatible_config_text: 'Конфигурация вашего shell несовместима с Warp...  '
+      p10k_part1: 'Powerlevel10k теперь поддерживает Warp!  '
+      p10k_part2: 'У вас, похоже, установлена старая (неподдерживаемая) версия, следуйте '
+      p10k_instructions: этим инструкциям
+      p10k_part3: ', чтобы обновиться до последней версии.'
+      pure_text: 'Pure пока не поддерживается в Warp. Вы можете рассмотреть один из поддерживаемых промптов в качестве альтернативы.  '
+    dialog:
+      emacs_intent: 'Вы хотели использовать '
+      emacs_move_cursor: ', чтобы переместить курсор?'
+      emacs_yes: Да, использовать привязки в стиле Emacs
+      emacs_no: Нет, оставить привязки IDE
+    notification:
+      latest_output: 'Последний вывод: '
+      error_prefix: 'Ошибка: '
+      waiting_for_password: ' ожидает ввода пароля'
+      discovery_long_running: Warp может уведомить вас о завершении долгих команд.
+      discovery_agent_finished: Warp может уведомить вас, когда агент завершит ответ.
+      discovery_needs_attention: Warp может уведомить вас, когда команда или агент требует внимания.
+      discovery_password_prompt: Warp может уведомить вас, когда нужно ввести пароль.
+      discovery_a11y: Вы можете включить уведомления через палитру команд.
+      default_title: Уведомление
+      password_body: Команда ожидает ввода пароля
+      ai_perm_read_files: Oz запрашивает разрешение на чтение файлов
+      ai_perm_search_codebase: Oz запрашивает разрешение на поиск по кодовой базе
+      ai_perm_edit_file: Oz запрашивает разрешение на редактирование файла
+      ai_perm_interact_shell: Oz запрашивает разрешение на взаимодействие с запущенной командой shell
+      ai_confirmation_continue: Oz запрашивает подтверждение для продолжения
+      ai_unknown_error: Произошла неизвестная ошибка
+    ai:
+      default_ask_suggestion: Что здесь произошло?
   workspace:
     settings: "Настройки"
     agent: "Агент"
