@@ -66,16 +66,35 @@ while (( "$#" )); do
   esac
 done
 
+# Build with the `standalone` feature so `bundled_resources_dir()` resolves the
+# sibling `resources/` directory next to the executable at runtime (matching how
+# the packaged TUI is built in script/macos/bundle). Without it, the app can't
+# locate its bundled skills when run outside a `.app` bundle.
+CARGO_ARGS+=(--features standalone)
+
+# Resolve Cargo's actual target directory rather than assuming ./target
+# (honors CARGO_TARGET_DIR / build.target-dir).
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
+  TARGET_DIR="${REPO_ROOT}/target"
+fi
+
+# Stage bundled skills next to the binary so the standalone TUI can resolve them
+# at runtime. License generation and the settings schema are skipped to keep dev
+# runs fast (mirroring script/macos/run); the vast majority of bundled skills are
+# always active and don't depend on the schema.
+prepare_tui_bundled_resources() {
+  echo "Preparing bundled resources at ${TARGET_DIR}/${PROFILE_DIR}/resources (channel: ${CHANNEL})..."
+  NO_LICENSES=1 SKIP_SETTINGS_SCHEMA=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
+    "${TARGET_DIR}/${PROFILE_DIR}/resources" "${CHANNEL}"
+}
+
 if [[ "$(uname -s)" = "Darwin" ]]; then
   echo "Building cargo build -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
   cargo build -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
 
-  # Resolve Cargo's actual target directory rather than assuming ./target
-  # (honors CARGO_TARGET_DIR / build.target-dir).
-  TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
-  if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
-    TARGET_DIR="${REPO_ROOT}/target"
-  fi
+  prepare_tui_bundled_resources
+
   TUI_BIN_PATH="${TARGET_DIR}/${PROFILE_DIR}/${BIN}"
 
   SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
@@ -88,10 +107,12 @@ if [[ "$(uname -s)" = "Darwin" ]]; then
 
   exec "$TUI_BIN_PATH" "${BIN_ARGS[@]}"
 else
-  echo "Running cargo run -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
-  if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}" -- "${BIN_ARGS[@]}"
-  else
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
-  fi
+  echo "Building cargo build -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
+  cargo build -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
+
+  prepare_tui_bundled_resources
+
+  TUI_BIN_PATH="${TARGET_DIR}/${PROFILE_DIR}/${BIN}"
+  echo "Running ${TUI_BIN_PATH}"
+  exec "${TUI_BIN_PATH}" "${BIN_ARGS[@]}"
 fi
