@@ -81,10 +81,10 @@ use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::{
     AnonymousUserSignupEntrypoint, SharingDialogSource, TelemetryEvent,
 };
+use crate::settings::SharedObjectLimitBannerSettings;
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
-use crate::settings::SharedObjectLimitBannerSettings;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::{highlight, icon_button};
 use crate::ui_components::icons::{ICON_DIMENSIONS, Icon};
@@ -4261,8 +4261,12 @@ impl DriveIndex {
             ObjectType::Notebook => SharedObjectLimitBannerKind::Notebook,
             ObjectType::Workflow => SharedObjectLimitBannerKind::Workflow,
             // No other object type renders this banner (see the visibility gate
-            // in `render`); fall back to the workflow variant defensively.
-            _ => SharedObjectLimitBannerKind::Workflow,
+            // in `render`); fall back to the workflow variant defensively. Matched
+            // explicitly so a future `ObjectType` addition surfaces here at compile
+            // time instead of being silently treated as a workflow banner.
+            ObjectType::Folder | ObjectType::GenericStringObject(_) => {
+                SharedObjectLimitBannerKind::Workflow
+            }
         };
 
         let close_button = Hoverable::new(
