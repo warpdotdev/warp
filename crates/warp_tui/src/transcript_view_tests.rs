@@ -5,7 +5,7 @@ use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentExchangeId, AIAgentInput, AIBlockModel, AIBlockOutputStatus, AIConversationId,
     AIRequestType, Appearance, BlockHeightItem, LLMId, OutputStatusUpdateCallback, RichContentItem,
-    RichContentType, ServerOutputId, TerminalModel, UserQueryMode,
+    RichContentType, ServerOutputId, TerminalModel, UserQueryMode, BlocklistAIHistoryEvent,
 };
 use warpui::event::ModifiersState;
 use warpui::platform::WindowStyle;
@@ -61,6 +61,72 @@ fn transcript_view_renders_terminal_blocks_from_canonical_order() {
             text.contains('1'),
             "transcript should render command output:\n{text}"
         );
+    });
+}
+
+#[test]
+fn transcript_clear_event_removes_only_named_conversations() {
+    App::test((), |mut app| async move {
+        let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let model_for_view = terminal_model.clone();
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
+        let terminal_surface_id = EntityId::new();
+        let (_, transcript) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |ctx| {
+                    TuiTranscriptView::new(
+                        terminal_surface_id,
+                        model_for_view,
+                        action_model,
+                        &model_events,
+                        ctx,
+                    )
+                },
+            )
+        });
+        let provisional_conversation_id = AIConversationId::new();
+        let restored_conversation_id = AIConversationId::new();
+
+        insert_test_agent_block(
+            &mut app,
+            &transcript,
+            provisional_conversation_id,
+            AIAgentExchangeId::new(),
+            vec![query_input("provisional")],
+        );
+        insert_test_agent_block(
+            &mut app,
+            &transcript,
+            restored_conversation_id,
+            AIAgentExchangeId::new(),
+            vec![query_input("restored")],
+        );
+
+        transcript.update(&mut app, |view, ctx| {
+            view.handle_history_event(
+                &BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                    terminal_surface_id,
+                    active_conversation_id: Some(provisional_conversation_id),
+                    cleared_conversation_ids: vec![provisional_conversation_id],
+                },
+                ctx,
+            );
+        });
+
+        transcript.read(&app, |view, app| {
+            let conversation_ids = view
+                .agent_blocks
+                .borrow()
+                .values()
+                .map(|block| block.as_ref(app).conversation_id())
+                .collect::<Vec<_>>();
+            assert_eq!(conversation_ids, vec![restored_conversation_id]);
+        });
+        assert_eq!(rich_content_count(&terminal_model), 1);
     });
 }
 

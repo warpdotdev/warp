@@ -1082,25 +1082,15 @@ impl TuiTerminalSessionView {
         });
     }
 
-    /// Sends a prompt to the selected conversation, creating one if needed.
+    /// Sends a prompt to the TUI session's eagerly selected conversation.
     fn send_prompt(&mut self, prompt: String, ctx: &mut ViewContext<Self>) {
-        let conversation_id = match self
+        let Some(conversation_id) = self
             .conversation_selection
             .as_ref(ctx)
             .selected_conversation_id(ctx)
-        {
-            Some(conversation_id) => conversation_id,
-            None => match self.conversation_selection.update(ctx, |selection, ctx| {
-                selection.try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
-            }) {
-                Ok(conversation_id) => conversation_id,
-                Err(error) => {
-                    report_error!(
-                        anyhow::Error::new(error).context("Failed to create TUI conversation")
-                    );
-                    return;
-                }
-            },
+        else {
+            report_error!("TUI prompt submitted without an eagerly selected conversation");
+            return;
         };
         self.ai_controller.update(ctx, |controller, ctx| {
             controller.send_user_query_in_conversation(prompt, conversation_id, None, ctx);

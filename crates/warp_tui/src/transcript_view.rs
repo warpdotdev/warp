@@ -156,8 +156,20 @@ impl TuiTranscriptView {
                 conversation_id,
                 ..
             } => self.remove_conversation(*conversation_id, ctx),
-            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. } => {
-                self.clear_agent_blocks(ctx);
+            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                active_conversation_id,
+                cleared_conversation_ids,
+                ..
+            } => {
+                let mut conversation_ids = cleared_conversation_ids.clone();
+                if let Some(active_conversation_id) = active_conversation_id {
+                    if !conversation_ids.contains(active_conversation_id) {
+                        conversation_ids.push(*active_conversation_id);
+                    }
+                }
+                for conversation_id in conversation_ids {
+                    self.remove_conversation(conversation_id, ctx);
+                }
             }
             BlocklistAIHistoryEvent::StartedNewConversation { .. }
             | BlocklistAIHistoryEvent::CreatedSubtask { .. }

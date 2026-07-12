@@ -1839,10 +1839,9 @@ fn unfiltered_transcript_scope_shows_restored_conversation_command_blocks() {
     serialized_block.agent_view_visibility =
         Some(AgentViewVisibility::new_from_conversation(conversation_id).into());
     let block_id = serialized_block.id.clone();
-
     block_list.set_transcript_scope(TranscriptScope::Unfiltered);
-    block_list.insert_restored_block(&serialized_block);
 
+    block_list.insert_restored_block(&serialized_block);
     let restored_block = block_list
         .block_with_id(&block_id)
         .expect("restored command block should exist");

@@ -59,6 +59,12 @@ fn tui_selection_eagerly_owns_session_conversation() {
             assert!(history.conversation(&conversation_id).is_some());
             assert_eq!(
                 history
+                    .active_conversation(terminal_surface_id)
+                    .map(|conversation| conversation.id()),
+                Some(conversation_id)
+            );
+            assert_eq!(
+                history
                     .all_live_conversations_for_terminal_surface(terminal_surface_id)
                     .map(|conversation| conversation.id())
                     .collect::<Vec<_>>(),
@@ -97,6 +103,14 @@ fn tui_selection_eagerly_owns_session_conversation() {
             })
             .expect("TUI /new should eagerly create its replacement conversation");
         assert_ne!(new_conversation_id, conversation_id);
+        history.read(&app, |history, _| {
+            assert_eq!(
+                history
+                    .active_conversation(terminal_surface_id)
+                    .map(|conversation| conversation.id()),
+                Some(new_conversation_id)
+            );
+        });
         assert_eq!(
             terminal_model.lock().block_list().active_conversation_id(),
             Some(new_conversation_id)
@@ -179,7 +193,14 @@ fn tui_selection_reconciles_split_and_removed_selection() {
         selection.read(&app, |selection, ctx| {
             assert_eq!(selection.selected_conversation_id(ctx), None);
         });
-        futures_lite::future::yield_now().await;
+        for _ in 0..100 {
+            if selection.read(&app, |selection, ctx| {
+                selection.selected_conversation_id(ctx).is_some()
+            }) {
+                break;
+            }
+            futures_lite::future::yield_now().await;
+        }
         selection.read(&app, |selection, ctx| {
             assert!(selection.selected_conversation_id(ctx).is_some());
             assert!(selection.is_conversation_active(ctx));
@@ -192,23 +213,29 @@ fn tui_selection_reconciles_split_and_removed_selection() {
 fn tui_restoration_wins_over_deferred_replacement() {
     App::test((), |mut app| async move {
         let (history, selection, terminal_surface_id, _) = build_tui_selection(&mut app);
+        let provisional_conversation_id = selection
+            .read(&app, |selection, ctx| {
+                selection.selected_conversation_id(ctx)
+            })
+            .expect("TUI should have a provisional conversation");
         let restored_conversation_id = AIConversationId::new();
-
-        history.update(&mut app, |_, ctx| {
-            ctx.emit(
-                BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
-                    terminal_surface_id,
-                    active_conversation_id: None,
-                    cleared_conversation_ids: Vec::new(),
-                },
-            );
-        });
-        selection.update(&mut app, |selection, ctx| {
-            selection.select_existing_conversation(
-                restored_conversation_id,
-                AgentViewEntryOrigin::RestoreExistingConversation,
-                ctx,
-            );
+        app.update(|ctx| {
+            history.update(ctx, |_, ctx| {
+                ctx.emit(
+                    BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                        terminal_surface_id,
+                        active_conversation_id: Some(provisional_conversation_id),
+                        cleared_conversation_ids: vec![provisional_conversation_id],
+                    },
+                );
+            });
+            selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    restored_conversation_id,
+                    AgentViewEntryOrigin::RestoreExistingConversation,
+                    ctx,
+                );
+            });
         });
         futures_lite::future::yield_now().await;
 

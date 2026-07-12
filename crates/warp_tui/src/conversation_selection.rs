@@ -45,13 +45,15 @@ impl TuiConversationSelection {
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) -> AIConversationId {
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            history.start_new_conversation(
+            let conversation_id = history.start_new_conversation(
                 terminal_surface_id,
                 is_autoexecute_override,
                 false,
                 false,
                 ctx,
-            )
+            );
+            history.set_active_conversation_id(conversation_id, terminal_surface_id, ctx);
+            conversation_id
         })
     }
 
@@ -258,9 +260,23 @@ impl ConversationSelection for TuiConversationSelection {
             return;
         }
         match event {
-            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. } => {
-                if let Some(conversation_id) = self.selected_id() {
-                    self.defer_replacement_conversation(conversation_id, ctx);
+            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                active_conversation_id,
+                cleared_conversation_ids,
+                ..
+            } => {
+                let selected_conversation_id = self.selected_id();
+                let selected_conversation_was_cleared =
+                    selected_conversation_id.is_some_and(|conversation_id| {
+                        active_conversation_id == &Some(conversation_id)
+                            || cleared_conversation_ids.contains(&conversation_id)
+                    });
+                if selected_conversation_was_cleared {
+                    self.defer_replacement_conversation(
+                        selected_conversation_id
+                            .expect("cleared selection should have a conversation ID"),
+                        ctx,
+                    );
                 }
             }
             BlocklistAIHistoryEvent::SplitConversation {
