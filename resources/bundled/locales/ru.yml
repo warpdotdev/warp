@@ -1654,6 +1654,85 @@ ru:
   # ── LSP ──
   # ── Code Review ──
   codereview:
+    tooltip:
+      view_changes: "Просмотреть изменения"
+      hide_file_navigation: "Скрыть навигацию по файлам"
+      show_file_navigation: "Показать навигацию по файлам"
+      discard_blocked_git_operation: "Невозможно отменить изменения во время операции Git (merge, rebase и т.д.)"
+      discard_no_changes: "Нет изменений для отмены"
+      initialize_codebase: "Включает индексирование кодовой базы и WARP.md"
+      open_repository: "Перейти к репозиторию и инициализировать его для работы с кодом"
+    discard_dialog:
+      title:
+        uncommitted_all: "Отменить незафиксированные изменения?"
+        uncommitted_file: "Отменить все незафиксированные изменения в файле?"
+        branch_all: "Отменить все изменения?"
+        branch_file: "Отменить все изменения в файле?"
+      description:
+        uncommitted_all: "Вы собираетесь отменить все локальные изменения, которые ещё не зафиксированы."
+        uncommitted_file: "Файл будет восстановлен до последней зафиксированной версии, локальные правки будут отменены."
+        branch_all: "Вы собираетесь отменить все зафиксированные и незафиксированные изменения."
+        branch_file_main: "Файл будет восстановлен до версии из основной ветки, все зафиксированные и незафиксированные правки будут отменены."
+      button:
+        discard: "Сбросить изменения"
+        cancel: "Отмена"
+      no_file_selected: "Файл не выбран"
+      no_files: "Нет файлов для отмены"
+      stash_checkbox: "Спрятать изменения в stash"
+    git_action:
+      commit_label: "Коммит"
+      commit_tooltip_disabled: "Нет изменений для коммита"
+      commit_tooltip: "Закоммитить изменения локально"
+      chevron_tooltip_disabled: "Нет доступных действий с Git"
+      push_label: "Запушить"
+      push_tooltip: "Запушить коммиты в удалённый репозиторий"
+      create_pr_label: "Создать PR"
+      create_pr_tooltip: "Создать pull request"
+      view_pr_tooltip_refreshing: "Обновление информации о PR"
+      view_pr_tooltip: "Открыть pull request на GitHub"
+      publish_label: "Опубликовать"
+      publish_tooltip: "Опубликовать ветку в удалённый репозиторий"
+    empty_state:
+      remote_workspace: "Сравнение работает только в локальных рабочих областях."
+      no_git_repo: "Сравнение работает только в git-репозиториях."
+      wsl_unsupported: "Сравнение в WSL пока не поддерживается."
+      initialize_codebase_button: "Инициализировать кодовую базу"
+      open_repository_button: "Открыть репозиторий"
+      no_repo_title: "Не удалось определить изменения для этой папки"
+      no_changes_title: "Нет открытых изменений"
+      no_changes_subtitle: "Здесь будут видны изменения, внесённые вами или Агентом."
+    file:
+      tooltip:
+        discard_changes: "Отменить изменения"
+        open_file: "Открыть файл"
+        add_diff_as_context: "Добавить изменения файла в контекст"
+      binary_no_diff: "Бинарный файл — сравнение недоступно"
+      renamed_no_changes: "Файл переименован без изменений"
+      new_empty: "Новый пустой файл"
+      unable_to_load: "Не удалось загрузить содержимое файла"
+    toast:
+      comments_sent: "Комментарии отправлены агенту"
+      comments_send_failed: "Не удалось отправить комментарии агенту"
+      diff_removed: "Изменения удалены"
+      attach_context_terminal_running: "Нельзя добавить контекст, пока терминал выполняет команду"
+      attach_diff_input_unavailable: "Нельзя добавить изменения: поле ввода недоступно"
+    header_menu:
+      add_diff_as_context: "Добавить набор изменений в контекст"
+      show_saved_comment: "Показать сохранённый комментарий"
+      add_comment: "Добавить комментарий"
+      discard_all: "Отменить все"
+    pane_header:
+      title: "Просмотр изменений кода"
+      maximize: "Развернуть"
+      undo_button: "Отменить"
+      restore_button: "Восстановить"
+    diff_selector:
+      uncommitted_changes: "Незафиксированные изменения"
+    sub_header:
+      loading_open_changes: "Загрузка открытых изменений…"
+      error_loading_diffs: "Ошибка загрузки изменений"
+    error:
+      retry_button: " Повторить"
     git_dialog:
       branch_label: "Ветка"
       button:

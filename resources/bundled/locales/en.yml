@@ -1654,6 +1654,85 @@ en:
   # ── LSP ──
   # ── Code Review ──
   codereview:
+    tooltip:
+      view_changes: "View changes"
+      hide_file_navigation: "Hide file navigation"
+      show_file_navigation: "Show file navigation"
+      discard_blocked_git_operation: "Cannot discard changes while a git operation (merge, rebase, etc.) is in progress"
+      discard_no_changes: "No changes to discard"
+      initialize_codebase: "Enables codebase indexing and WARP.md"
+      open_repository: "Navigate to a repo and initialize it for coding"
+    discard_dialog:
+      title:
+        uncommitted_all: "Discard uncommitted changes?"
+        uncommitted_file: "Discard all uncommitted changes to file?"
+        branch_all: "Discard all changes?"
+        branch_file: "Discard all changes to file?"
+      description:
+        uncommitted_all: "You're about to discard all local changes that haven't been committed."
+        uncommitted_file: "This will restore this file to the last committed version and discard local edits."
+        branch_all: "You're about to discard all committed and uncommitted changes."
+        branch_file_main: "This will restore this file to the main branch version and discard all committed and uncommitted edits."
+      button:
+        discard: "Discard changes"
+        cancel: "Cancel"
+      no_file_selected: "No file selected"
+      no_files: "No files to discard"
+      stash_checkbox: "Stash changes"
+    git_action:
+      commit_label: "Commit"
+      commit_tooltip_disabled: "No changes to commit"
+      commit_tooltip: "Commit changes locally"
+      chevron_tooltip_disabled: "No git actions available"
+      push_label: "Push"
+      push_tooltip: "Push commits to remote"
+      create_pr_label: "Create PR"
+      create_pr_tooltip: "Create a pull request"
+      view_pr_tooltip_refreshing: "Refreshing PR info"
+      view_pr_tooltip: "View pull request on GitHub"
+      publish_label: "Publish"
+      publish_tooltip: "Publish branch to remote"
+    empty_state:
+      remote_workspace: "Diffs only work for local workspaces."
+      no_git_repo: "Diffs only work for git repositories."
+      wsl_unsupported: "Diffs don't currently work in WSL."
+      initialize_codebase_button: "Initialize codebase"
+      open_repository_button: "Open repository"
+      no_repo_title: "Cannot detect diffs for this folder"
+      no_changes_title: "No open changes"
+      no_changes_subtitle: "As you or the Agent make changes, you'll be able to track them here."
+    file:
+      tooltip:
+        discard_changes: "Discard changes"
+        open_file: "Open file"
+        add_diff_as_context: "Add file diff as context"
+      binary_no_diff: "Binary file - no diff available"
+      renamed_no_changes: "File renamed without changes"
+      new_empty: "New empty file"
+      unable_to_load: "Unable to load file content"
+    toast:
+      comments_sent: "Comments sent to agent"
+      comments_send_failed: "Could not submit comments to the agent"
+      diff_removed: "Diff removed"
+      attach_context_terminal_running: "Cannot attach context when terminal is running"
+      attach_diff_input_unavailable: "Cannot attach diff while input is not available"
+    header_menu:
+      add_diff_as_context: "Add diff set as context"
+      show_saved_comment: "Show saved comment"
+      add_comment: "Add comment"
+      discard_all: "Discard all"
+    pane_header:
+      title: "Reviewing code changes"
+      maximize: "Maximize"
+      undo_button: "Undo"
+      restore_button: "Restore"
+    diff_selector:
+      uncommitted_changes: "Uncommitted changes"
+    sub_header:
+      loading_open_changes: "Loading open changes..."
+      error_loading_diffs: "Error loading diffs"
+    error:
+      retry_button: " Retry"
     git_dialog:
       branch_label: "Branch"
       button:
