@@ -98,8 +98,6 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::WorkspaceUid;
 use crate::{send_telemetry_from_ctx, ObjectActions};
 
-const WARP_DRIVE_TITLE: &str = "Warp Drive";
-
 // Team zero state consts
 const HINT_HORIZONTAL_PADDING: f32 = 18.;
 const ITEM_INTERNAL_PADDING: f32 = 4.;
@@ -146,7 +144,6 @@ const HOVER_PREVIEW_Y_OFFSET: f32 = 0.;
 
 const CREATE_TEAM_ICON_WIDTH: f32 = 16.;
 const CREATE_TEAM_ICON_HEIGHT: f32 = 16.;
-const CREATE_TEAM_TEXT: &str = "Share commands & knowledge with your teammates.";
 
 const LOADING_ICON_WIDTH: f32 = 16.;
 const LOADING_ICON_HEIGHT: f32 = 16.;
@@ -157,34 +154,12 @@ const OFFLINE_BANNER_ICON_SPACING: f32 = 8.;
 const OFFLINE_BANNER_PADDING_HORIZONTAL: f32 = 16.;
 const OFFLINE_BANNER_PADDING_VERTICAL: f32 = 4.;
 
-const FOLDER_LABEL: &str = "Folder";
-const NOTEBOOK_LABEL: &str = "Notebook";
-const WORKFLOW_LABEL: &str = "Workflow";
-const AGENT_MODE_WORKFLOW_LABEL: &str = "Prompt";
-const ENV_VAR_COLLECTION_LABEL: &str = "Environment variables";
-const INDEX_FOLDER_LABEL: &str = "New folder";
-const INDEX_NOTEBOOK_LABEL: &str = "New notebook";
-const INDEX_WORKFLOW_LABEL: &str = "New workflow";
-const INDEX_AGENT_MODE_WORKFLOW_LABEL: &str = "New prompt";
-const INDEX_ENV_VAR_COLLECTION_LABEL: &str = "New environment variables";
-
-const IMPORT_LABEL: &str = "Import";
-const REMOVE_LABEL: &str = "Remove";
-const OFFLINE_BANNER_TEXT: &str = "You are offline. Some files will be read only.";
-
 pub const DRIVE_INDEX_VIEW_POSITION_ID: &str = "drive_index_view_id";
 
 // Sets the speed of the autoscroll that occurs when you drag an item near the Warp Drive border.
 pub const AUTOSCROLL_SPEED_MULTIPLIER: f32 = 10.;
 // Sets the distance from a border at which scroll events start to occur.
 pub const AUTOSCROLL_DETECTION_DISTANCE: f32 = 30.0;
-
-const ZERO_STATE_WORKFLOW_LABEL: &str = "Workflow";
-const ZERO_STATE_NOTEBOOK_LABEL: &str = "Notebook";
-
-const SORTING_BUTTON_TOOLTIP_LABEL: &str = "Sort by";
-
-const RETRY_BUTTON_TOOLTIP_LABEL: &str = "Retry sync";
 
 const SHARED_OBJECT_LIMIT_HIT_BANNER_LINE: &str =
     "Upgrade for access to more notebooks, workflows, shared sessions, and AI credits.";
@@ -926,7 +901,10 @@ impl DriveIndex {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Untitled", ctx);
+            editor.set_placeholder_text(
+                crate::menu_label("drive.placeholder.untitled", "Untitled"),
+                ctx,
+            );
             editor
         });
 
@@ -1593,7 +1571,7 @@ impl DriveIndex {
                 Some(empty_trash_hover_style),
                 Some(empty_trash_disabled_style),
             )
-            .with_text_label("Empty trash".to_string());
+            .with_text_label(crate::menu_label("drive.trash.empty", "Empty trash").to_string());
 
         // Only show Empty Trash button when online, do not show for Shared space
         if self.is_online(app) && space != &Space::Shared {
@@ -1715,7 +1693,16 @@ impl DriveIndex {
             }
             (DriveIndexVariant::MainIndex, DriveIndexSection::CreateATeam) => {
                 if self.is_online(app) {
-                    Some(self.render_team_section_header(CREATE_TEAM_TEXT.to_owned(), appearance))
+                    Some(
+                        self.render_team_section_header(
+                            crate::menu_label(
+                                "drive.team.create_hint",
+                                "Share commands & knowledge with your teammates.",
+                            )
+                            .to_owned(),
+                            appearance,
+                        ),
+                    )
                 } else {
                     None
                 }
@@ -1806,7 +1793,10 @@ impl DriveIndex {
         let title = Container::new(
             appearance
                 .ui_builder()
-                .wrappable_text("TRASH".to_string(), false)
+                .wrappable_text(
+                    crate::menu_label("drive.trash.title_upper", "TRASH").to_string(),
+                    false,
+                )
                 .with_style(UiComponentStyles {
                     font_family_id: Some(appearance.ui_font_family()),
                     font_size: Some(SECTION_HEADER_FONT_SIZE),
@@ -2077,8 +2067,10 @@ impl DriveIndex {
     }
 
     fn render_team_space_zero_state(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let hint_text =
-            "Drag or move a personal workflow or notebook here to share it with your team.";
+        let hint_text = crate::menu_label(
+            "drive.team.zero_state_hint",
+            "Drag or move a personal workflow or notebook here to share it with your team.",
+        );
         let zero_state_info = Container::new(
             appearance
                 .ui_builder()
@@ -2098,10 +2090,26 @@ impl DriveIndex {
 
         let zero_state_contents = Flex::column().with_children([
             zero_state_info,
-            self.render_team_zero_state_hint(Icon::Workflow, ZERO_STATE_WORKFLOW_LABEL, appearance),
-            self.render_team_zero_state_hint(Icon::Workflow, ZERO_STATE_WORKFLOW_LABEL, appearance),
-            self.render_team_zero_state_hint(Icon::Notebook, ZERO_STATE_NOTEBOOK_LABEL, appearance),
-            self.render_team_zero_state_hint(Icon::Notebook, ZERO_STATE_NOTEBOOK_LABEL, appearance),
+            self.render_team_zero_state_hint(
+                Icon::Workflow,
+                crate::menu_label("drive.type.workflow", "Workflow"),
+                appearance,
+            ),
+            self.render_team_zero_state_hint(
+                Icon::Workflow,
+                crate::menu_label("drive.type.workflow", "Workflow"),
+                appearance,
+            ),
+            self.render_team_zero_state_hint(
+                Icon::Notebook,
+                crate::menu_label("drive.type.notebook", "Notebook"),
+                appearance,
+            ),
+            self.render_team_zero_state_hint(
+                Icon::Notebook,
+                crate::menu_label("drive.type.notebook", "Notebook"),
+                appearance,
+            ),
         ]);
 
         Container::new(zero_state_contents.finish())
@@ -2129,7 +2137,7 @@ impl DriveIndex {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let button_text = "Create team".to_owned();
+        let button_text = crate::menu_label("drive.team.create_button", "Create team").to_owned();
         let create_button = if UserWorkspaces::as_ref(app).total_teammates_in_joinable_teams() == 0
         {
             appearance
@@ -2197,9 +2205,9 @@ impl DriveIndex {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let text = if UserWorkspaces::as_ref(app).num_joinable_teams() > 1 {
-            "View teams to join"
+            crate::menu_label("drive.team.view_teams_join", "View teams to join")
         } else {
-            "View team to join"
+            crate::menu_label("drive.team.view_team_join", "View team to join")
         };
 
         let join_button = Container::new(
@@ -2235,10 +2243,14 @@ impl DriveIndex {
         .finish();
 
         let or_text = Container::new(
-            Text::new_inline("Or", appearance.ui_font_family(), ITEM_FONT_SIZE)
-                .with_color(appearance.theme().nonactive_ui_text_color().into())
-                .with_style(Properties::default().weight(Weight::Medium))
-                .finish(),
+            Text::new_inline(
+                crate::menu_label("drive.separator.or", "Or"),
+                appearance.ui_font_family(),
+                ITEM_FONT_SIZE,
+            )
+            .with_color(appearance.theme().nonactive_ui_text_color().into())
+            .with_style(Properties::default().weight(Weight::Medium))
+            .finish(),
         )
         .with_margin_top(14.)
         .finish();
@@ -2397,7 +2409,10 @@ impl DriveIndex {
                     Shrinkable::new(
                         1.,
                         Text::new_inline(
-                            OFFLINE_BANNER_TEXT,
+                            crate::menu_label(
+                                "drive.banner.offline",
+                                "You are offline. Some files will be read only.",
+                            ),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -2479,7 +2494,7 @@ impl DriveIndex {
         let text = Container::new(
             appearance
                 .ui_builder()
-                .span(WARP_DRIVE_TITLE.to_string())
+                .span(crate::menu_label("drive.title", "Warp Drive").to_string())
                 .with_style(UiComponentStyles {
                     font_family_id: Some(appearance.ui_font_family()),
                     font_size: Some(TITLE_FONT_SIZE),
@@ -2541,7 +2556,7 @@ impl DriveIndex {
         let text = Container::new(
             appearance
                 .ui_builder()
-                .span("Trash".to_string())
+                .span(crate::menu_label("drive.trash.name", "Trash").to_string())
                 .with_style(UiComponentStyles {
                     font_family_id: Some(appearance.ui_font_family()),
                     font_size: Some(TITLE_FONT_SIZE),
@@ -2611,8 +2626,11 @@ impl DriveIndex {
                         appearance
                             .ui_builder()
                             .wrappable_text(
-                                "Items in the trash will be deleted forever after 30 days."
-                                    .to_string(),
+                                crate::menu_label(
+                                    "drive.trash.deletion_warning",
+                                    "Items in the trash will be deleted forever after 30 days.",
+                                )
+                                .to_string(),
                                 true,
                             )
                             .with_style(UiComponentStyles {
@@ -2969,9 +2987,10 @@ impl DriveIndex {
             |mouse_state| {
                 let mut stack = Stack::new().with_child(loading_icon);
                 if mouse_state.is_hovered() {
-                    let tooltip = appearance
-                        .ui_builder()
-                        .tool_tip(String::from("Syncing Warp Drive"));
+                    let tooltip = appearance.ui_builder().tool_tip(
+                        crate::menu_label("drive.tooltip.syncing", "Syncing Warp Drive")
+                            .to_string(),
+                    );
 
                     stack.add_positioned_overlay_child(
                         tooltip.build().finish(),
@@ -3007,9 +3026,9 @@ impl DriveIndex {
             self.mouse_state_handles.sorting_button_mouse_state.clone(),
             |mouse_state| {
                 if mouse_state.is_hovered() {
-                    let tooltip = appearance
-                        .ui_builder()
-                        .tool_tip(SORTING_BUTTON_TOOLTIP_LABEL.to_string());
+                    let tooltip = appearance.ui_builder().tool_tip(
+                        crate::menu_label("drive.tooltip.sort_by", "Sort by").to_string(),
+                    );
 
                     button.add_positioned_overlay_child(
                         tooltip.build().finish(),
@@ -3039,7 +3058,7 @@ impl DriveIndex {
         )
         .with_tooltip(move || {
             ui_builder
-                .tool_tip(RETRY_BUTTON_TOOLTIP_LABEL.to_string())
+                .tool_tip(crate::menu_label("drive.tooltip.retry_sync", "Retry sync").to_string())
                 .build()
                 .finish()
         })
@@ -3691,7 +3710,7 @@ impl DriveIndex {
 
             if is_online {
                 menu_items.push(
-                    MenuItemFields::new(FOLDER_LABEL)
+                    MenuItemFields::new(crate::menu_label("drive.type.folder", "Folder"))
                         .with_on_select_action(DriveIndexAction::create_object(
                             DriveObjectType::Folder,
                             *space,
@@ -3703,7 +3722,7 @@ impl DriveIndex {
             }
 
             menu_items.push(
-                MenuItemFields::new(WORKFLOW_LABEL)
+                MenuItemFields::new(crate::menu_label("drive.type.workflow", "Workflow"))
                     .with_on_select_action(DriveIndexAction::create_object(
                         DriveObjectType::Workflow,
                         *space,
@@ -3715,7 +3734,7 @@ impl DriveIndex {
 
             if FeatureFlag::AgentModeWorkflows.is_enabled() {
                 menu_items.push(
-                    MenuItemFields::new(AGENT_MODE_WORKFLOW_LABEL)
+                    MenuItemFields::new(crate::menu_label("drive.type.prompt", "Prompt"))
                         .with_on_select_action(DriveIndexAction::create_object(
                             DriveObjectType::AgentModeWorkflow,
                             *space,
@@ -3727,7 +3746,7 @@ impl DriveIndex {
             }
 
             menu_items.push(
-                MenuItemFields::new(NOTEBOOK_LABEL)
+                MenuItemFields::new(crate::menu_label("drive.type.notebook", "Notebook"))
                     .with_on_select_action(DriveIndexAction::create_object(
                         DriveObjectType::Notebook {
                             is_ai_document: false,
@@ -3740,18 +3759,21 @@ impl DriveIndex {
             );
 
             menu_items.push(
-                MenuItemFields::new(ENV_VAR_COLLECTION_LABEL)
-                    .with_on_select_action(DriveIndexAction::create_object(
-                        DriveObjectType::EnvVarCollection,
-                        *space,
-                        None,
-                    ))
-                    .with_icon(Icon::EnvVarCollection)
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "drive.type.env_vars",
+                    "Environment variables",
+                ))
+                .with_on_select_action(DriveIndexAction::create_object(
+                    DriveObjectType::EnvVarCollection,
+                    *space,
+                    None,
+                ))
+                .with_icon(Icon::EnvVarCollection)
+                .into_item(),
             );
 
             menu_items.push(
-                MenuItemFields::new(IMPORT_LABEL)
+                MenuItemFields::new(crate::menu_label("drive.action.import", "Import"))
                     .with_on_select_action(DriveIndexAction::OpenImportModal {
                         space: *space,
                         initial_folder_id: None,
@@ -3953,20 +3975,26 @@ impl DriveIndex {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(
-                Text::new_inline("Warp Drive".to_string(), appearance.ui_font_family(), 14.)
-                    .with_color(theme.main_text_color(background_color).into())
-                    .with_style(Properties {
-                        weight: warpui::fonts::Weight::Bold,
-                        ..Default::default()
-                    })
-                    .finish(),
+                Text::new_inline(
+                    crate::menu_label("drive.title", "Warp Drive").to_string(),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(theme.main_text_color(background_color).into())
+                .with_style(Properties {
+                    weight: warpui::fonts::Weight::Bold,
+                    ..Default::default()
+                })
+                .finish(),
             )
             .with_child(Shrinkable::new(1., Empty::new().finish()).finish())
             .with_child(close_icon_button)
             .finish();
 
-        let personal_object_limit_description =
-            "Sign up for free to increase your storage limit and unlock more features.";
+        let personal_object_limit_description = crate::menu_label(
+            "drive.signup.description",
+            "Sign up for free to increase your storage limit and unlock more features.",
+        );
 
         let body_text = appearance
             .ui_builder()
@@ -4055,7 +4083,9 @@ impl DriveIndex {
             .with_style(button_styles)
             .with_hovered_styles(hovered_and_clicked_styles)
             .with_active_styles(hovered_and_clicked_styles)
-            .with_centered_text_label("Sign up".to_string())
+            .with_centered_text_label(
+                crate::menu_label("drive.signup.button", "Sign up").to_string(),
+            )
             .build()
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(DriveIndexAction::SignupAnonymousUser))
             .with_cursor(Cursor::PointingHand)
@@ -4112,15 +4142,23 @@ impl DriveIndex {
         };
 
         let name = match object_type {
-            DriveObjectType::Notebook { .. } => "Notebooks",
-            DriveObjectType::Workflow => "Workflows",
-            DriveObjectType::EnvVarCollection => "Environment Variables",
-            DriveObjectType::Folder => "Folders",
-            DriveObjectType::AgentModeWorkflow => "Agent Workflows",
-            DriveObjectType::AIFact => "AI Fact",
-            DriveObjectType::AIFactCollection => "Rules",
-            DriveObjectType::MCPServer => "MCP Server",
-            DriveObjectType::MCPServerCollection => "MCP Servers",
+            DriveObjectType::Notebook { .. } => {
+                crate::menu_label("drive.type.notebooks", "Notebooks")
+            }
+            DriveObjectType::Workflow => crate::menu_label("drive.type.workflows", "Workflows"),
+            DriveObjectType::EnvVarCollection => {
+                crate::menu_label("drive.type.env_vars_plural", "Environment Variables")
+            }
+            DriveObjectType::Folder => crate::menu_label("drive.type.folders", "Folders"),
+            DriveObjectType::AgentModeWorkflow => {
+                crate::menu_label("drive.type.agent_workflows", "Agent Workflows")
+            }
+            DriveObjectType::AIFact => crate::menu_label("drive.type.ai_fact", "AI Fact"),
+            DriveObjectType::AIFactCollection => crate::menu_label("drive.type.rules", "Rules"),
+            DriveObjectType::MCPServer => crate::menu_label("drive.type.mcp_server", "MCP Server"),
+            DriveObjectType::MCPServerCollection => {
+                crate::menu_label("drive.type.mcp_servers", "MCP Servers")
+            }
         };
         let name_styles = UiComponentStyles {
             font_family_id: Some(appearance.ui_font_family()),
@@ -4199,7 +4237,9 @@ impl DriveIndex {
                     .shared_object_limit_hit_banner_button_mouse_state
                     .clone(),
             )
-            .with_centered_text_label("Compare plans".into())
+            .with_centered_text_label(
+                crate::menu_label("drive.action.compare_plans", "Compare plans").into(),
+            )
             .with_style(UiComponentStyles {
                 font_size: Some(14.),
                 font_weight: Some(Weight::Light),
@@ -4297,7 +4337,9 @@ impl DriveIndex {
                         .payment_issue_banner_button_mouse_state
                         .clone(),
                 )
-                .with_centered_text_label("Manage billing".into())
+                .with_centered_text_label(
+                    crate::menu_label("drive.action.manage_billing", "Manage billing").into(),
+                )
                 .with_style(UiComponentStyles {
                     font_size: Some(14.),
                     font_weight: Some(Weight::Light),
@@ -4364,68 +4406,83 @@ impl DriveIndex {
                 if self.is_online(app) {
                     if !FeatureFlag::SharedWithMe.is_enabled() || editability.can_edit() {
                         menu_items.push(
-                            MenuItemFields::new(INDEX_FOLDER_LABEL)
-                                .with_on_select_action(DriveIndexAction::create_object(
-                                    DriveObjectType::Folder,
-                                    *space,
-                                    Some(*folder_id),
-                                ))
-                                .with_icon(Icon::Folder)
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "drive.create.folder",
+                                "New folder",
+                            ))
+                            .with_on_select_action(DriveIndexAction::create_object(
+                                DriveObjectType::Folder,
+                                *space,
+                                Some(*folder_id),
+                            ))
+                            .with_icon(Icon::Folder)
+                            .into_item(),
                         );
                         menu_items.push(
-                            MenuItemFields::new(INDEX_WORKFLOW_LABEL)
-                                .with_on_select_action(DriveIndexAction::create_object(
-                                    DriveObjectType::Workflow,
-                                    *space,
-                                    Some(*folder_id),
-                                ))
-                                .with_icon(Icon::Workflow)
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "drive.create.workflow",
+                                "New workflow",
+                            ))
+                            .with_on_select_action(DriveIndexAction::create_object(
+                                DriveObjectType::Workflow,
+                                *space,
+                                Some(*folder_id),
+                            ))
+                            .with_icon(Icon::Workflow)
+                            .into_item(),
                         );
 
                         if FeatureFlag::AgentModeWorkflows.is_enabled() {
                             menu_items.push(
-                                MenuItemFields::new(INDEX_AGENT_MODE_WORKFLOW_LABEL)
-                                    .with_on_select_action(DriveIndexAction::create_object(
-                                        DriveObjectType::AgentModeWorkflow,
-                                        *space,
-                                        Some(*folder_id),
-                                    ))
-                                    .with_icon(Icon::Prompt)
-                                    .into_item(),
+                                MenuItemFields::new(crate::menu_label(
+                                    "drive.create.prompt",
+                                    "New prompt",
+                                ))
+                                .with_on_select_action(DriveIndexAction::create_object(
+                                    DriveObjectType::AgentModeWorkflow,
+                                    *space,
+                                    Some(*folder_id),
+                                ))
+                                .with_icon(Icon::Prompt)
+                                .into_item(),
                             );
                         }
 
                         menu_items.push(
-                            MenuItemFields::new(INDEX_NOTEBOOK_LABEL)
-                                .with_on_select_action(DriveIndexAction::create_object(
-                                    DriveObjectType::Notebook {
-                                        is_ai_document: false,
-                                    },
-                                    *space,
-                                    Some(*folder_id),
-                                ))
-                                .with_icon(Icon::Notebook)
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "drive.create.notebook",
+                                "New notebook",
+                            ))
+                            .with_on_select_action(DriveIndexAction::create_object(
+                                DriveObjectType::Notebook {
+                                    is_ai_document: false,
+                                },
+                                *space,
+                                Some(*folder_id),
+                            ))
+                            .with_icon(Icon::Notebook)
+                            .into_item(),
                         );
 
                         menu_items.push(
-                            MenuItemFields::new(INDEX_ENV_VAR_COLLECTION_LABEL)
-                                .with_on_select_action(DriveIndexAction::create_object(
-                                    DriveObjectType::EnvVarCollection,
-                                    *space,
-                                    Some(*folder_id),
-                                ))
-                                .with_icon(Icon::EnvVarCollection)
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "drive.create.env_vars",
+                                "New environment variables",
+                            ))
+                            .with_on_select_action(DriveIndexAction::create_object(
+                                DriveObjectType::EnvVarCollection,
+                                *space,
+                                Some(*folder_id),
+                            ))
+                            .with_icon(Icon::EnvVarCollection)
+                            .into_item(),
                         );
 
                         menu_items.push(MenuItem::Separator);
                     }
                     if !FeatureFlag::SharedWithMe.is_enabled() || editability.can_edit() {
                         menu_items.push(
-                            MenuItemFields::new("Rename")
+                            MenuItemFields::new(crate::menu_label("drive.action.rename", "Rename"))
                                 .with_on_select_action(
                                     DriveIndexAction::OpenCloudObjectNamingDialog {
                                         space: *space,
@@ -4443,21 +4500,27 @@ impl DriveIndex {
                 if let Some(object) = object {
                     if let Some(object_link) = object.object_link() {
                         menu_items.push(
-                            MenuItemFields::new("Copy link")
-                                .with_on_select_action(DriveIndexAction::CopyObjectLinkToClipboard(
-                                    object_link,
-                                ))
-                                .with_icon(Icon::Link)
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "drive.action.copy_link",
+                                "Copy link",
+                            ))
+                            .with_on_select_action(DriveIndexAction::CopyObjectLinkToClipboard(
+                                object_link,
+                            ))
+                            .with_icon(Icon::Link)
+                            .into_item(),
                         );
                         if editability.can_edit() {
                             menu_items.push(
-                                MenuItemFields::new("Share")
-                                    .with_on_select_action(DriveIndexAction::ToggleShareDialog {
-                                        warp_drive_item_id: *warp_drive_item_id,
-                                    })
-                                    .with_icon(Icon::Share)
-                                    .into_item(),
+                                MenuItemFields::new(crate::menu_label(
+                                    "drive.action.share",
+                                    "Share",
+                                ))
+                                .with_on_select_action(DriveIndexAction::ToggleShareDialog {
+                                    warp_drive_item_id: *warp_drive_item_id,
+                                })
+                                .with_icon(Icon::Share)
+                                .into_item(),
                             );
                         }
                     }
@@ -4465,7 +4528,7 @@ impl DriveIndex {
 
                 if !FeatureFlag::SharedWithMe.is_enabled() || editability.can_edit() {
                     menu_items.push(
-                        MenuItemFields::new(IMPORT_LABEL)
+                        MenuItemFields::new(crate::menu_label("drive.action.import", "Import"))
                             .with_on_select_action(DriveIndexAction::OpenImportModal {
                                 space: *space,
                                 initial_folder_id: Some(*folder_id),
@@ -4475,18 +4538,21 @@ impl DriveIndex {
                     );
                 }
                 menu_items.push(
-                    MenuItemFields::new("Collapse all")
-                        .with_on_select_action(DriveIndexAction::CollapseAllInLocation(
-                            CloudObjectLocation::Folder(*folder_id),
-                        ))
-                        .with_icon(Icon::ListCollapsed)
-                        .into_item(),
+                    MenuItemFields::new(crate::menu_label(
+                        "drive.action.collapse_all",
+                        "Collapse all",
+                    ))
+                    .with_on_select_action(DriveIndexAction::CollapseAllInLocation(
+                        CloudObjectLocation::Folder(*folder_id),
+                    ))
+                    .with_icon(Icon::ListCollapsed)
+                    .into_item(),
                 );
 
                 if let Some(object) = object {
                     if FeatureFlag::SharedWithMe.is_enabled() && object.can_leave(app) {
                         menu_items.push(
-                            MenuItemFields::new(REMOVE_LABEL)
+                            MenuItemFields::new(crate::menu_label("drive.action.remove", "Remove"))
                                 .with_on_select_action(DriveIndexAction::LeaveSharedObject {
                                     cloud_object_type_and_id: *cloud_object_type_and_id,
                                 })
@@ -4500,7 +4566,7 @@ impl DriveIndex {
             if let Some(object) = object {
                 if self.is_online(app) && object.metadata().is_errored() {
                     menu_items.push(
-                        MenuItemFields::new("Retry")
+                        MenuItemFields::new(crate::menu_label("drive.action.retry", "Retry"))
                             .with_on_select_action(DriveIndexAction::RetryFailedObject(
                                 *cloud_object_type_and_id,
                             ))
@@ -4510,12 +4576,13 @@ impl DriveIndex {
 
                     if let Some(server_id) = cloud_object_type_and_id.server_id() {
                         menu_items.push(
-                            MenuItemFields::new("Revert to server")
-                                .with_on_select_action(DriveIndexAction::RevertFailedObject(
-                                    server_id,
-                                ))
-                                .with_icon(Icon::ReverseLeft)
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "drive.action.revert_to_server",
+                                "Revert to server",
+                            ))
+                            .with_on_select_action(DriveIndexAction::RevertFailedObject(server_id))
+                            .with_icon(Icon::ReverseLeft)
+                            .into_item(),
                         );
                     }
                 }
@@ -4532,12 +4599,15 @@ impl DriveIndex {
                     {
                         if let Some(ai_document_id) = notebook.model().ai_document_id {
                             menu_items.push(
-                                MenuItemFields::new("Attach to active session")
-                                    .with_on_select_action(DriveIndexAction::AttachPlanAsContext(
-                                        ai_document_id,
-                                    ))
-                                    .with_icon(Icon::Paperclip)
-                                    .into_item(),
+                                MenuItemFields::new(crate::menu_label(
+                                    "drive.action.attach_session",
+                                    "Attach to active session",
+                                ))
+                                .with_on_select_action(DriveIndexAction::AttachPlanAsContext(
+                                    ai_document_id,
+                                ))
+                                .with_icon(Icon::Paperclip)
+                                .into_item(),
                             );
                         }
                     }
@@ -4580,9 +4650,12 @@ impl DriveIndex {
                         let workflow: Option<&CloudWorkflow> = object.into();
                         let workflow = workflow.expect("Object is workflow");
                         let label = if workflow.model().data.is_agent_mode_workflow() {
-                            "Copy prompt"
+                            crate::menu_label("drive.action.copy_prompt", "Copy prompt")
                         } else {
-                            "Copy workflow text"
+                            crate::menu_label(
+                                "drive.action.copy_workflow_text",
+                                "Copy workflow text",
+                            )
                         };
                         menu_items.push(
                             MenuItemFields::new(label)
@@ -4594,12 +4667,15 @@ impl DriveIndex {
                         );
                         if workflow.model().data.is_agent_mode_workflow() {
                             menu_items.push(
-                                MenuItemFields::new("Copy id")
-                                    .with_on_select_action(DriveIndexAction::CopyWorkflowId(
-                                        *cloud_object_type_and_id,
-                                    ))
-                                    .with_icon(Icon::CopyMenuItem)
-                                    .into_item(),
+                                MenuItemFields::new(crate::menu_label(
+                                    "drive.action.copy_id",
+                                    "Copy id",
+                                ))
+                                .with_on_select_action(DriveIndexAction::CopyWorkflowId(
+                                    *cloud_object_type_and_id,
+                                ))
+                                .with_icon(Icon::CopyMenuItem)
+                                .into_item(),
                             );
                         }
                     }
@@ -4607,22 +4683,28 @@ impl DriveIndex {
                         JsonObjectType::EnvVarCollection,
                     )) => {
                         menu_items.push(
-                            MenuItemFields::new("Copy variables")
-                                .with_on_select_action(DriveIndexAction::CopyObjectToClipboard(
-                                    *cloud_object_type_and_id,
-                                ))
-                                .with_icon(Icon::CopyMenuItem)
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "drive.action.copy_variables",
+                                "Copy variables",
+                            ))
+                            .with_on_select_action(DriveIndexAction::CopyObjectToClipboard(
+                                *cloud_object_type_and_id,
+                            ))
+                            .with_icon(Icon::CopyMenuItem)
+                            .into_item(),
                         );
                         menu_items.push(
-                            MenuItemFields::new("Load in subshell")
-                                .with_on_select_action(
-                                    DriveIndexAction::InvokeEnvVarCollectionInSubshell(
-                                        object.cloud_object_type_and_id(),
-                                    ),
-                                )
-                                .with_icon(Icon::Terminal)
-                                .into_item(),
+                            MenuItemFields::new(crate::menu_label(
+                                "drive.action.load_in_subshell",
+                                "Load in subshell",
+                            ))
+                            .with_on_select_action(
+                                DriveIndexAction::InvokeEnvVarCollectionInSubshell(
+                                    object.cloud_object_type_and_id(),
+                                ),
+                            )
+                            .with_icon(Icon::Terminal)
+                            .into_item(),
                         );
                     }
                     ObjectType::Notebook
@@ -4671,22 +4753,28 @@ impl DriveIndex {
                     )) => {
                         if let Some(object_link) = object.object_link() {
                             menu_items.push(
-                                MenuItemFields::new("Copy link")
-                                    .with_on_select_action(
-                                        DriveIndexAction::CopyObjectLinkToClipboard(object_link),
-                                    )
-                                    .with_icon(Icon::Link)
-                                    .into_item(),
+                                MenuItemFields::new(crate::menu_label(
+                                    "drive.action.copy_link",
+                                    "Copy link",
+                                ))
+                                .with_on_select_action(DriveIndexAction::CopyObjectLinkToClipboard(
+                                    object_link,
+                                ))
+                                .with_icon(Icon::Link)
+                                .into_item(),
                             );
                         }
                         if editability.can_edit() {
                             menu_items.push(
-                                MenuItemFields::new("Share")
-                                    .with_on_select_action(DriveIndexAction::ToggleShareDialog {
-                                        warp_drive_item_id: *warp_drive_item_id,
-                                    })
-                                    .with_icon(Icon::Share)
-                                    .into_item(),
+                                MenuItemFields::new(crate::menu_label(
+                                    "drive.action.share",
+                                    "Share",
+                                ))
+                                .with_on_select_action(DriveIndexAction::ToggleShareDialog {
+                                    warp_drive_item_id: *warp_drive_item_id,
+                                })
+                                .with_icon(Icon::Share)
+                                .into_item(),
                             );
                         }
                         if !warpui::platform::is_mobile_device()
@@ -4699,12 +4787,15 @@ impl DriveIndex {
                             if let Some(object_link) = object.object_link() {
                                 if let Ok(url) = Url::parse(&object_link) {
                                     menu_items.push(
-                                        MenuItemFields::new("Open on Desktop")
-                                            .with_on_select_action(
-                                                DriveIndexAction::OpenObjectLinkOnDesktop(url),
-                                            )
-                                            .with_icon(Icon::Laptop)
-                                            .into_item(),
+                                        MenuItemFields::new(crate::menu_label(
+                                            "drive.action.open_on_desktop",
+                                            "Open on Desktop",
+                                        ))
+                                        .with_on_select_action(
+                                            DriveIndexAction::OpenObjectLinkOnDesktop(url),
+                                        )
+                                        .with_icon(Icon::Laptop)
+                                        .into_item(),
                                     );
                                 }
                             }
@@ -4714,12 +4805,15 @@ impl DriveIndex {
                             || (self.is_online(app) && matches!(space, Space::Team { .. }))
                         {
                             menu_items.push(
-                                MenuItemFields::new("Duplicate")
-                                    .with_on_select_action(DriveIndexAction::DuplicateObject(
-                                        *cloud_object_type_and_id,
-                                    ))
-                                    .with_icon(Icon::Duplicate)
-                                    .into_item(),
+                                MenuItemFields::new(crate::menu_label(
+                                    "drive.action.duplicate",
+                                    "Duplicate",
+                                ))
+                                .with_on_select_action(DriveIndexAction::DuplicateObject(
+                                    *cloud_object_type_and_id,
+                                ))
+                                .with_icon(Icon::Duplicate)
+                                .into_item(),
                             );
                         }
                     }
@@ -4729,7 +4823,7 @@ impl DriveIndex {
                 #[cfg(feature = "local_fs")]
                 if object.can_export() {
                     menu_items.push(
-                        MenuItemFields::new("Export")
+                        MenuItemFields::new(crate::menu_label("drive.action.export", "Export"))
                             .with_on_select_action(DriveIndexAction::ExportObject(
                                 *cloud_object_type_and_id,
                             ))
@@ -4740,7 +4834,7 @@ impl DriveIndex {
 
                 if FeatureFlag::SharedWithMe.is_enabled() && object.can_leave(app) {
                     menu_items.push(
-                        MenuItemFields::new(REMOVE_LABEL)
+                        MenuItemFields::new(crate::menu_label("drive.action.remove", "Remove"))
                             .with_on_select_action(DriveIndexAction::LeaveSharedObject {
                                 cloud_object_type_and_id: *cloud_object_type_and_id,
                             })
@@ -4755,7 +4849,7 @@ impl DriveIndex {
             && (!FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash())
         {
             menu_items.push(
-                MenuItemFields::new("Trash")
+                MenuItemFields::new(crate::menu_label("drive.action.trash", "Trash"))
                     .with_on_select_action(DriveIndexAction::TrashObject {
                         cloud_object_type_and_id: *cloud_object_type_and_id,
                     })
@@ -4776,9 +4870,10 @@ impl DriveIndex {
         prefer_open: bool,
     ) -> MenuItemFields<DriveIndexAction> {
         if (FeatureFlag::SharedWithMe.is_enabled() && !editability.can_edit()) || prefer_open {
-            MenuItemFields::new("Open").with_icon(Icon::Eye)
+            MenuItemFields::new(crate::menu_label("drive.action.open", "Open")).with_icon(Icon::Eye)
         } else {
-            MenuItemFields::new("Edit").with_icon(Icon::Rename)
+            MenuItemFields::new(crate::menu_label("drive.action.edit", "Edit"))
+                .with_icon(Icon::Rename)
         }
     }
 
@@ -4801,7 +4896,7 @@ impl DriveIndex {
         if let Some(object) = object {
             if self.is_online(app) && object.metadata().is_errored() {
                 menu_items.push(
-                    MenuItemFields::new("Retry")
+                    MenuItemFields::new(crate::menu_label("drive.action.retry", "Retry"))
                         .with_on_select_action(DriveIndexAction::RetryFailedObject(
                             *cloud_object_type_and_id,
                         ))
@@ -4811,10 +4906,13 @@ impl DriveIndex {
 
                 if let Some(server_id) = cloud_object_type_and_id.server_id() {
                     menu_items.push(
-                        MenuItemFields::new("Revert to server")
-                            .with_on_select_action(DriveIndexAction::RevertFailedObject(server_id))
-                            .with_icon(Icon::ReverseLeft)
-                            .into_item(),
+                        MenuItemFields::new(crate::menu_label(
+                            "drive.action.revert_to_server",
+                            "Revert to server",
+                        ))
+                        .with_on_select_action(DriveIndexAction::RevertFailedObject(server_id))
+                        .with_icon(Icon::ReverseLeft)
+                        .into_item(),
                     );
                 }
             }
@@ -4823,7 +4921,7 @@ impl DriveIndex {
         if self.online_only_operation_allowed(cloud_object_type_and_id, app) {
             if !FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash() {
                 menu_items.push(
-                    MenuItemFields::new("Restore")
+                    MenuItemFields::new(crate::menu_label("drive.action.restore", "Restore"))
                         .with_on_select_action(DriveIndexAction::UntrashObject {
                             cloud_object_type_and_id: *cloud_object_type_and_id,
                         })
@@ -4833,12 +4931,15 @@ impl DriveIndex {
             }
             if !FeatureFlag::SharedWithMe.is_enabled() || access_level.can_delete() {
                 menu_items.push(
-                    MenuItemFields::new("Delete forever")
-                        .with_on_select_action(DriveIndexAction::DeleteObject {
-                            cloud_object_type_and_id: *cloud_object_type_and_id,
-                        })
-                        .with_icon(Icon::AlertTriangle)
-                        .into_item(),
+                    MenuItemFields::new(crate::menu_label(
+                        "drive.action.delete_forever",
+                        "Delete forever",
+                    ))
+                    .with_on_select_action(DriveIndexAction::DeleteObject {
+                        cloud_object_type_and_id: *cloud_object_type_and_id,
+                    })
+                    .with_icon(Icon::AlertTriangle)
+                    .into_item(),
                 );
             }
         }
@@ -4905,12 +5006,15 @@ impl DriveIndex {
             space: *space,
             offset,
         });
-        let menu_items = vec![MenuItemFields::new("Collapse all")
-            .with_on_select_action(DriveIndexAction::CollapseAllInLocation(
-                CloudObjectLocation::Space(*space),
-            ))
-            .with_icon(Icon::ListCollapsed)
-            .into_item()];
+        let menu_items = vec![MenuItemFields::new(crate::menu_label(
+            "drive.action.collapse_all",
+            "Collapse all",
+        ))
+        .with_on_select_action(DriveIndexAction::CollapseAllInLocation(
+            CloudObjectLocation::Space(*space),
+        ))
+        .with_icon(Icon::ListCollapsed)
+        .into_item()];
 
         ctx.update_view(&self.menu, |menu, ctx| {
             menu.set_items(menu_items, ctx);
