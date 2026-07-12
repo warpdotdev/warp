@@ -429,16 +429,12 @@ impl ConvertToExchanges for &api::Task {
                             });
                             true
                         }
-                        api::message::system_query::Type::FetchReviewComments(fetch) => {
-                            current_inputs.push(AIAgentInput::FetchReviewComments {
-                                repo_path: fetch.repo_path.clone(),
-                                context: convert_input_context(query.context.as_ref()),
-                            });
-                            true
-                        }
                         // TriggerSuggestPrompt is not rendered as user input, so we don't want to include it as an input in the exchange.
                         // ResumeConversation is actually added to the task's messages as a plain UserQuery, so we don't expect to encounter it in the task's messages.
+                        // FetchReviewComments backed the removed /pr-comments slash command; the
+                        // proto variant is retained for back-compat but is no longer rendered.
                         api::message::system_query::Type::ResumeConversation(_)
+                        | api::message::system_query::Type::FetchReviewComments(_)
                         | api::message::system_query::Type::GeneratePassiveSuggestions(_)
                         // TODO: Implement this for real. ZB adding this to bump proto version for unrelated API changes.
                         | api::message::system_query::Type::SummarizeConversation(_)

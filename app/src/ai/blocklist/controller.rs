@@ -754,9 +754,8 @@ impl BlocklistAIController {
                 })
                 .collect_vec()
         } else {
-            // Custom AI inputs like CodeReview and FetchReviewComments are encoded as
-            // top-level request variants (`request::input::Type::CodeReview`,
-            // `request::input::Type::FetchReviewComments`, etc.), and `convert_input`
+            // Custom AI inputs like CodeReview are encoded as top-level request
+            // variants (`request::input::Type::CodeReview`, etc.), and `convert_input`
             // only emits those variants in the single-input path.
             //
             // Tool call results are encoded differently: they only exist inside
@@ -765,9 +764,9 @@ impl BlocklistAIController {
             // CodeReview-style input and a ToolCallResult in the same request.
             //
             // So if we prepend an ActionResult here, `convert_input` has to fall back
-            // to the multi-input `UserInputs` path, where CodeReview / FetchReviewComments
-            // are ignored entirely. The stale tool result is preserved, but the custom
-            // AI input disappears from the request.
+            // to the multi-input `UserInputs` path, where CodeReview is ignored
+            // entirely. The stale tool result is preserved, but the custom AI input
+            // disappears from the request.
             vec![]
         };
 

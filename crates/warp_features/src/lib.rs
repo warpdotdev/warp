@@ -361,9 +361,6 @@ pub enum FeatureFlag {
     /// Enables multiple agent profiles in settings for managing different AI agent configurations.
     MultiProfile,
 
-    /// Enables the /pr-comments slash command.
-    PRCommentsSlashCommand,
-
     /// Enables displaying imported PR review comments in the blocklist.
     PRCommentsV2,
 

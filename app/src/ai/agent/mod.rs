@@ -2721,11 +2721,6 @@ pub enum AIAgentInput {
         review_comments: AgentReviewCommentBatch,
     },
 
-    FetchReviewComments {
-        repo_path: String,
-        context: Arc<[AIAgentContext]>,
-    },
-
     SummarizeConversation {
         prompt: Option<String>,
         context: Arc<[AIAgentContext]>,
@@ -2854,7 +2849,6 @@ impl Display for AIAgentInput {
             Self::CreateNewProject { .. } => write!(f, "CreateNewProject"),
             Self::CloneRepository { .. } => write!(f, "CloneRepository"),
             Self::CodeReview { .. } => write!(f, "CodeReview"),
-            Self::FetchReviewComments { .. } => write!(f, "FetchReviewComments"),
             Self::SummarizeConversation { .. } => write!(f, "SummarizeConversation"),
             Self::InvokeSkill {
                 skill, user_query, ..
@@ -2902,7 +2896,6 @@ impl AIAgentInput {
             Self::InitProjectRules { display_query, .. }
             | Self::CreateEnvironment { display_query, .. } => display_query.clone(),
             Self::CodeReview { .. } => Some("Address these comments".to_string()),
-            Self::FetchReviewComments { .. } => Some(commands::PR_COMMENTS.name.to_string()),
             Self::InvokeSkill {
                 skill, user_query, ..
             } => {
@@ -3039,7 +3032,6 @@ impl AIAgentInput {
             | Self::CreateNewProject { context, .. }
             | Self::CloneRepository { context, .. }
             | Self::CodeReview { context, .. }
-            | Self::FetchReviewComments { context, .. }
             | Self::InvokeSkill { context, .. }
             | Self::StartFromAmbientRunPrompt { context, .. }
             | Self::PassiveSuggestionResult { context, .. } => Some(context),
@@ -3071,7 +3063,6 @@ impl AIAgentInput {
             | Self::CreateNewProject { .. }
             | Self::CloneRepository { .. }
             | Self::CodeReview { .. }
-            | Self::FetchReviewComments { .. }
             | Self::SummarizeConversation { .. }
             | Self::InvokeSkill { .. }
             | Self::StartFromAmbientRunPrompt { .. }
@@ -3093,7 +3084,6 @@ impl AIAgentInput {
             self,
             AIAgentInput::InitProjectRules { .. }
                 | AIAgentInput::CreateEnvironment { .. }
-                | AIAgentInput::FetchReviewComments { .. }
                 | AIAgentInput::InvokeSkill { .. }
         )
     }

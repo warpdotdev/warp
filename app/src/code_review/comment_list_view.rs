@@ -5,7 +5,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use vec1::vec1;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::color::internal_colors::{
     accent_overlay_2, accent_overlay_3, neutral_1, neutral_3, neutral_4, neutral_6, text_main,
@@ -261,31 +260,23 @@ impl CommentListView {
     fn recompute_comment_button_label(&mut self, ctx: &mut ViewContext<Self>) {
         let total_count = self.comments_by_id.len();
 
-        let label_text = if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-            let non_outdated_count = self
-                .comments_by_id
-                .values()
-                .filter(|state| !state.card.source().outdated)
-                .count();
+        let non_outdated_count = self
+            .comments_by_id
+            .values()
+            .filter(|state| !state.card.source().outdated)
+            .count();
 
-            if non_outdated_count == 0 && total_count > 0 {
-                format!(
-                    "{} outdated comment{}",
-                    total_count,
-                    if total_count == 1 { "" } else { "s" }
-                )
-            } else {
-                format!(
-                    "{} comment{}",
-                    non_outdated_count,
-                    if non_outdated_count == 1 { "" } else { "s" }
-                )
-            }
+        let label_text = if non_outdated_count == 0 && total_count > 0 {
+            format!(
+                "{} outdated comment{}",
+                total_count,
+                if total_count == 1 { "" } else { "s" }
+            )
         } else {
             format!(
                 "{} comment{}",
-                total_count,
-                if total_count == 1 { "" } else { "s" }
+                non_outdated_count,
+                if non_outdated_count == 1 { "" } else { "s" }
             )
         };
 
@@ -584,35 +575,25 @@ impl CommentListView {
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-        if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-            let (outdated_comments, active_comments): (Vec<_>, Vec<_>) = self
-                .comments_by_id
-                .values()
-                .partition(|state| state.card.source().outdated);
+        let (outdated_comments, active_comments): (Vec<_>, Vec<_>) = self
+            .comments_by_id
+            .values()
+            .partition(|state| state.card.source().outdated);
 
-            if !outdated_comments.is_empty() {
-                comments_column.add_child(self.render_outdated_section(
-                    &outdated_comments,
-                    appearance,
-                    ctx,
-                ));
-            }
+        if !outdated_comments.is_empty() {
+            comments_column.add_child(self.render_outdated_section(
+                &outdated_comments,
+                appearance,
+                ctx,
+            ));
+        }
 
-            for comment_render_state in active_comments {
-                comments_column.add_child(
-                    Container::new(self.render_comment(comment_render_state, ctx))
-                        .with_margin_bottom(12.)
-                        .finish(),
-                );
-            }
-        } else {
-            for comment_render_state in self.comments_by_id.values() {
-                comments_column.add_child(
-                    Container::new(self.render_comment(comment_render_state, ctx))
-                        .with_margin_bottom(12.)
-                        .finish(),
-                );
-            }
+        for comment_render_state in active_comments {
+            comments_column.add_child(
+                Container::new(self.render_comment(comment_render_state, ctx))
+                    .with_margin_bottom(12.)
+                    .finish(),
+            );
         }
 
         let scrollable_content = NewScrollable::vertical(

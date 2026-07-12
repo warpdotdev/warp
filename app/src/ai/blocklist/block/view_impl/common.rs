@@ -128,7 +128,6 @@ pub const LOAD_OUTPUT_MESSAGE_FOR_WRITING_TO_COMMAND: &str = "Writing command in
 pub const LOAD_OUTPUT_MESSAGE_FOR_WAITING_FOR_COMMAND_COMPLETION: &str =
     "Waiting for command to exit...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH: &str = "Searching the web...";
-pub const LOAD_OUTPUT_MESSAGE_FOR_FETCHING_REVIEW_COMMENTS: &str = "Fetching PR comments...";
 
 #[cfg(feature = "local_fs")]
 pub(crate) type ResolvedBlocklistImageSources = HashMap<String, Option<AssetSource>>;
@@ -259,12 +258,6 @@ pub fn render_warping_indicator<V: View>(
         })
     });
 
-    let is_fetching_review_comments = props
-        .model
-        .inputs_to_render(app)
-        .iter()
-        .any(|input| matches!(input, AIAgentInput::FetchReviewComments { .. }));
-
     let summarization_type: Option<SummarizationType> =
         if FeatureFlag::SummarizationCancellationConfirmation.is_enabled() {
             output_to_render.as_ref().and_then(|output| {
@@ -327,8 +320,6 @@ pub fn render_warping_indicator<V: View>(
         LOAD_OUTPUT_MESSAGE_FOR_PREPARING_QUESTION.to_string()
     } else if is_searching_web {
         LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH.to_string()
-    } else if is_fetching_review_comments {
-        LOAD_OUTPUT_MESSAGE_FOR_FETCHING_REVIEW_COMMENTS.to_string()
     } else if is_interrupt_query_for_same_conversation
         && output_to_render
             .as_ref()
@@ -3680,7 +3671,6 @@ pub(super) fn query_prefix_highlight_len(
             | AIAgentInput::CreateNewProject { .. }
             | AIAgentInput::CloneRepository { .. }
             | AIAgentInput::CodeReview { .. }
-            | AIAgentInput::FetchReviewComments { .. }
             | AIAgentInput::SummarizeConversation { .. }
             | AIAgentInput::StartFromAmbientRunPrompt { .. }
             | AIAgentInput::ActionResult { .. }

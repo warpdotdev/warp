@@ -651,7 +651,6 @@ default = [
     "blocklist_markdown_table_rendering",
     "markdown_mermaid",
     "blocklist_markdown_images",
-    "pr_comments_slash_command",
     "pr_comments_v2",
     "pr_comments_skill",
     "revert_to_checkpoints",
@@ -912,7 +911,6 @@ tabbed_editor_view = []
 selection_as_context = []
 send_telemetry_to_file = []
 multi_profile = []
-pr_comments_slash_command = []
 pr_comments_v2 = []
 pr_comments_skill = []
 conversation_artifacts = []

@@ -7399,9 +7399,6 @@ impl TerminalView {
         base_branch: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-            return;
-        }
         let pending_comments = convert_insert_review_comments(comments);
 
         if pending_comments.is_empty() {

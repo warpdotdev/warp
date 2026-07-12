@@ -988,12 +988,6 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                                 context: ctx,
                             });
                         }
-                        api::message::system_query::Type::FetchReviewComments(fetch) => {
-                            inputs.push(AIAgentInput::FetchReviewComments {
-                                repo_path: fetch.repo_path.clone(),
-                                context: ctx,
-                            });
-                        }
                         _ => {}
                     }
                 }
