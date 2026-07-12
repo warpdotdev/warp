@@ -1,10 +1,14 @@
 # TECH: Warp TUI Conversation Resume and Restoration (CODE-1820)
 
-Implements the behavior in [`PRODUCT.md`](./PRODUCT.md). Code references are pinned to commit `1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0`.
+Implements the behavior in [`PRODUCT.md`](./PRODUCT.md). Historical context links remain pinned to commit `1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0`; implementation references below use current branch paths.
 
 ## Context
 
-The TUI already boots the main `app` crate and reuses the same agent conversation, history, action, controller, persistence, terminal model, and blocklist implementations as the GUI. The missing capability is a surface-level restoration entrypoint: no TUI argument accepts a prior conversation, no historical conversation is materialized into the transcript, and no selected token survives teardown long enough to print after the alternate screen is restored.
+The TUI boots the main `app` crate and reuses the same agent conversation, history, action, controller, persistence, terminal model, and blocklist implementations as the GUI. CODE-1820 adds token-based resume, frontend-neutral command/exchange restoration planning, TUI historical block materialization, and post-teardown resume hints.
+
+The TUI is modeled as always presenting one conversation. `TuiConversationSelection` eagerly creates and selects an empty conversation when the session starts, marks it active in `BlocklistAIHistoryModel`, and associates subsequent shell blocks with it. The first prompt must target this eager conversation; it cannot create another conversation as a fallback. `TranscriptScope::Unfiltered` makes the TUI blocklist independent of GUI Agent View lifecycle while preserving the serialized conversation membership used for restoration and cleanup (`app/src/terminal/model/block.rs:85-109`, `app/src/terminal/model/blocks.rs:1661-1741`, `crates/warp_tui/src/conversation_selection.rs:20-310`).
+
+Startup resume loads and validates the requested conversation before replacing the provisional eager conversation. Clearing provisional history emits `ClearedConversationsForTerminalSurface`, whose delivery can occur after the restored conversation is selected and materialized. Selection and transcript subscribers therefore consume the event's `active_conversation_id` and `cleared_conversation_ids`; they never clear whichever conversation happens to be current at delivery time (`crates/warp_tui/src/conversation_selection.rs:263-291`, `crates/warp_tui/src/transcript_view.rs:84-166`).
 
 The relevant existing paths are:
 
@@ -15,9 +19,10 @@ The relevant existing paths are:
 - [`app/src/terminal/view/load_ai_conversation.rs (1196-1272)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/app/src/terminal/view/load_ai_conversation.rs#L1196-L1272) — computes where restored agent exchanges belong relative to command blocks.
 - [`app/src/ai/agent/conversation.rs (4003-4086)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/app/src/ai/agent/conversation.rs#L4003-L4086) — reconstructs `SerializedBlockListItem::Command` values from conversation task messages.
 - [`app/src/ai/blocklist/action_model.rs (606-671)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/app/src/ai/blocklist/action_model.rs#L606-L671) — historical blocks read action status from `BlocklistAIActionModel`; `restore_action_results_from_exchanges` populates the past-results map they require.
-- [`crates/warp_tui/src/terminal_session_view.rs (134-244)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/crates/warp_tui/src/terminal_session_view.rs#L134-L244) — constructs the TUI surface's selection, context, action, controller, transcript, and input models.
-- [`crates/warp_tui/src/transcript_view.rs (84-239)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/crates/warp_tui/src/transcript_view.rs#L84-L239) — creates `TuiAIBlock` rich-content views for live exchanges and stores them in the shared `TerminalModel` blocklist; `RestoredConversations` is currently ignored.
-- [`crates/warp_tui/src/conversation_selection.rs (99-257)`](https://github.com/warpdotdev/warp/blob/1eb3698892bdcc9e038a9b0ea8b0eb34ffadfde0/crates/warp_tui/src/conversation_selection.rs#L99-L257) — selects an existing conversation for the next prompt and resets selection when a surface is cleared.
+- `app/src/terminal/conversation_restoration.rs:55-97` — frontend-neutral command restoration and exchange placement plan consumed by GUI and TUI surfaces.
+- `crates/warp_tui/src/terminal_session_view.rs:444-535` — token load, provisional-state replacement, action restoration, transcript materialization, active-history update, and restored selection.
+- `crates/warp_tui/src/transcript_view.rs:84-166, 251-286` — live/restored `TuiAIBlock` materialization and conversation-ID-scoped cleanup of rich content.
+- `crates/warp_tui/src/conversation_selection.rs:20-310` — eager conversation ownership, strict prompt target, `/new` replacement, and history-event reconciliation.
 
 `RestoredAgentConversations` is not the interactive loader for this feature. It supports GUI startup by handing local-ID records to recreated panes at most once. Token-based interactive restoration already has the correct local-first/server-fallback behavior in `BlocklistAIHistoryModel::load_conversation_by_server_token`.
 
@@ -31,6 +36,7 @@ sequenceDiagram
   participant Server as AI server
   participant Plan as Shared restoration planner
   participant Transcript as TuiTranscriptView
+  Surface->>History: eagerly create + activate provisional conversation
 
   CLI->>Surface: restore_conversation(server token, origin)
   Surface->>History: load_conversation_by_server_token
@@ -41,26 +47,32 @@ sequenceDiagram
     Server-->>History: Oz conversation data
     History-->>Surface: restored Oz AIConversation
   end
+  Surface->>Transcript: remove provisional rich content
+  Surface->>History: clear provisional surface conversations
   Surface->>Plan: prepare conversation block restoration
   Plan-->>Surface: command blocks + exchange placements
   Surface->>History: restore_conversations + set active
   Surface->>Transcript: create placed TuiAIBlock views
   Surface->>Surface: select conversation and focus input
+  History-->>Surface: queued clear event with provisional IDs
+  Surface->>Surface: ignore for restored selection
+  History-->>Transcript: queued clear event with provisional IDs
+  Transcript->>Transcript: remove only matching provisional blocks
 ```
 
-## Proposed changes
+## Implemented design
 
 ### 1. Parse and carry `--resume`
 
-Add a TUI-specific argument parser in `crates/warp_tui/src/session.rs`. `run_tui_worker_if_requested` remains the first operation so terminal-server and other internal re-execs retain their current behavior. After worker detection, parse optional `--resume <token>` input and validate its UUID shape before launching the app.
+`crates/warp_tui/src/session.rs` parses optional `--resume <token>` input and validates its UUID shape before launching the app. `run_tui_worker_if_requested` remains the first operation so terminal-server and other internal re-execs retain their current behavior.
 
-Carry `Option<ServerConversationToken>` through the mount closure and login gate. Initiate restoration from the terminal manager's `post_wire` callback, where the `TuiTerminalSessionView` and all of its controller/model dependencies have been created and connected. Startup without a token follows the current path unchanged.
+`Option<ServerConversationToken>` is carried through the mount closure and login gate. Restoration starts from the terminal manager's `post_wire` callback, where the `TuiTerminalSessionView` and all of its controller/model dependencies have been created and connected. Startup without a token follows the eager-conversation path without entering restoration state.
 
 The startup entrypoint must not implement restoration itself. It calls the generalized TUI operation described below, which the future inline list will call directly with the selected entry's token.
 
 ### 2. Add one generalized TUI restoration operation
 
-Add a method on `TuiTerminalSessionView` with the conceptual shape:
+`TuiTerminalSessionView` exposes the generalized restoration operation:
 
 ```rust
 restore_conversation(
@@ -72,7 +84,9 @@ restore_conversation(
 
 `TuiConversationRestoreOrigin` distinguishes startup resume from future list selection for telemetry and presentation only. It does not change identity, loading, block reconstruction, or continuation semantics.
 
-The operation owns the TUI state transition:
+`TuiConversationSelection` creates and activates the provisional conversation during terminal-session construction. Shell commands completed before the first prompt therefore inherit that conversation, and `send_prompt` requires an existing selection rather than creating a second conversation.
+
+The restoration operation owns this state transition:
 
 1. Enter a loading state that suppresses the interactive zero state.
 2. Call the existing `BlocklistAIHistoryModel::load_conversation_by_server_token`, matching the GUI's local-first/server-fallback behavior.
@@ -84,22 +98,22 @@ The operation owns the TUI state transition:
 
 The server token must be installed on the `AIConversation` before `restore_conversations`. Local conversion obtains it from persisted `AgentConversationData`; server conversion with `RestorationMode::Continue` obtains it from server metadata. If a compatibility path must repair an absent token, add the narrowest pre-registration API needed rather than inserting the conversation and patching it afterward, because registration builds the reverse token index from the conversation value it receives.
 
-For startup, replacement operates on an empty transcript. For future inline selection, load and validate the requested conversation before clearing the current surface. If loading fails, retain the old transcript and selection. Once loading succeeds, use the history clear event plus a transcript/blocklist replacement helper to remove the old conversation's agent rich content, conversation-derived command blocks, action state, and selection before applying the new plan.
+For startup, replacement operates on the provisional eager conversation and an otherwise empty transcript. For future inline selection, load and validate the requested conversation before clearing the current surface. If loading fails, retain the old transcript and selection. Once loading succeeds, remove the old conversation's agent rich content, conversation-derived command blocks, and action state before applying the new plan. `clear_conversations_for_terminal_surface` still emits a cleanup event for other subscribers; selection and transcript handlers must compare their current content with the IDs carried by that event because delivery may occur after the restored conversation is installed.
 
 ### 3. Extract shared conversation block restoration preparation
 
-The GUI and TUI share `AIConversation`, `TerminalModel`, and `BlockList`; only their final rich-content view types differ. Extract the model/blocklist work currently embedded in `TerminalView::restore_conversation_after_view_creation` into a shared module under `app/src/ai/blocklist` or `app/src/terminal`.
+The GUI and TUI share `AIConversation`, `TerminalModel`, and `BlockList`; only their final rich-content view types differ. `app/src/terminal/conversation_restoration.rs` contains the model/blocklist work extracted from `TerminalView::restore_conversation_after_view_creation`.
 
-Introduce a `ConversationBlockRestorationPlan` containing ordered restored exchanges and their `Option<BlockIndex>` placement relative to command blocks. Its builder:
+`ConversationBlockRestorationPlan` contains ordered restored exchanges and their `Option<BlockIndex>` placement relative to command blocks. Its builder:
 
 - Uses the existing `exchanges_for_blocklist` rules from `app/src/terminal/view/blocklist_filter.rs` so hidden exchanges and internal task types remain consistently filtered.
 - Calls `AIConversation::to_serialized_blocklist_items` and inserts the resulting command blocks into the supplied `TerminalModel`.
 - Computes exchange placement with the existing timestamp algorithm from `command_block_indices_for_exchanges`.
 - Returns frontend-neutral exchange data and placement; it does not construct views, manage focus, or apply Agent View policy.
 
-Move or expose the filtering and placement helpers from the GUI view module at the narrowest visibility that supports both `app` and `warp_tui`. Add concise doc comments to new functions and types, and keep imports at file scope.
+Filtering and placement helpers are exposed at the narrowest visibility that supports both `app` and `warp_tui`. New functions and types have concise doc comments, and imports remain at file scope.
 
-Refactor the GUI historical path to consume the plan without behavior changes. The GUI continues to own `AIBlockCreationParams`, document restoration, Agent View entry blocks, directory hints, pixel sizing, mouse state, and restored appearance.
+The GUI historical path consumes the plan without changing its behavior. It continues to own `AIBlockCreationParams`, document restoration, Agent View entry blocks, directory hints, pixel sizing, mouse state, and restored appearance.
 
 ### 4. Restore action state before constructing historical blocks
 
@@ -111,7 +125,7 @@ When the sole TUI surface is replaced, clear the previous conversation's histori
 
 ### 5. Materialize restored TUI blocks with shared placement
 
-Extend `TuiTranscriptView` with a restored-insertion path separate from the live `AppendedExchange` append path.
+`TuiTranscriptView` has a restored-insertion path separate from the live `AppendedExchange` append path.
 
 For each planned exchange:
 
@@ -124,27 +138,32 @@ The explicit restoration operation drives this path because `RestoredConversatio
 
 After all blocks are materialized, move the viewport to the end and notify the transcript so restored height and layout are recomputed.
 
+Conversation-removal events are ID-scoped. `RemoveConversation`, `DeletedConversation`, and `ConversationTransferredBetweenTerminalSurfaces` remove blocks for their explicit conversation ID. `ClearedConversationsForTerminalSurface` removes only blocks named by its `active_conversation_id` and `cleared_conversation_ids`; it must not clear the entire transcript because a queued provisional clear can arrive after restored blocks are inserted.
+
 ### 6. Register, activate, and select in a fixed order
 
 Apply restored state in this order:
 
-1. Restore historical action results.
-2. Insert conversation-derived command blocks and compute placements.
-3. Call `BlocklistAIHistoryModel::restore_conversations`.
-4. Create placed `TuiAIBlock` views.
-5. Call `set_active_conversation_id`.
-6. Call `ConversationSelection::select_existing_conversation` with a restore-specific origin.
-7. Clear loading state and focus the input.
+1. Load and validate the requested conversation without mutating the current surface.
+2. Remove provisional transcript rich content, command blocks, and historical action results.
+3. Clear provisional history ownership, emitting an ID-bearing cleanup event.
+4. Insert conversation-derived command blocks and compute placements.
+5. Restore historical action results.
+6. Call `BlocklistAIHistoryModel::restore_conversations`.
+7. Create placed `TuiAIBlock` views.
+8. Call `set_active_conversation_id`.
+9. Call `ConversationSelection::select_existing_conversation` with a restore-specific origin.
+10. Clear loading state, scroll to the end, and focus the input.
 
 Registration must precede `TuiAIBlock` construction because `AIBlockModelImpl` resolves the exchange from `BlocklistAIHistoryModel`. Selection happens after materialization so the input never targets a conversation whose transcript failed to build.
 
 ### 7. Represent loading and errors in the sole TUI surface
 
-Add restoration state owned by `TuiTerminalSessionView`, for example:
+`TuiTerminalSessionView` owns restoration state:
 
 - `Idle`
 - `Loading`
-- `Failed { message }`
+- `Failed(String)`
 
 Startup resume renders loading instead of the zero state until completion. A startup failure renders an error with the input disabled until the user exits; it must not silently enter new-conversation mode.
 
@@ -156,7 +175,7 @@ Use the GUI loader's generic failure semantics rather than adding a second error
 
 Printing must happen after `warp::run_tui` returns so raw mode and the alternate screen have been restored. At that point the `App` and its models have been dropped.
 
-Create a small TUI-owned `TuiExitSummaryHandle`, backed by run-scoped shared storage and retained by `session::run`. Update it from the live source of truth whenever:
+`TuiExitSummaryHandle` is backed by run-scoped shared storage and retained by `session::run`. It updates from the live source of truth whenever:
 
 - `ConversationSelectionEvent::Changed` changes the selected conversation.
 - `BlocklistAIHistoryEvent::ConversationServerTokenAssigned` gives the selected conversation its token.
@@ -190,9 +209,12 @@ This run-scoped bridge avoids changing the shared `TerminationResult`, which car
 Use existing `App::test` fixtures under `crates/warp_tui` to verify:
 
 - Startup restoration transitions from loading to the restored transcript without showing an interactive zero state. (PRODUCT 5-6)
+- TUI startup eagerly creates one selected and history-active conversation; shell commands before the first prompt belong to it, and prompt submission cannot create a different fallback conversation.
 - Transcript content, command/agent ordering, hidden filtering, and duplicate prevention. (PRODUCT 9-15)
 - Restored tool calls render recorded terminal states. (PRODUCT 12)
 - The restored conversation becomes active and selected only after successful materialization. (PRODUCT 15-18)
+- A queued clear event naming the provisional conversation does not clear the restored selection or remove restored transcript blocks.
+- Transcript clear handling removes only agent blocks whose conversation IDs appear in the event payload.
 - The next submitted prompt carries the restored server token. (PRODUCT 16)
 - Inline-style replacement retains the old transcript on load failure and removes stale blocks/action state on success. (PRODUCT 19-20)
 - Loading cancellation and error states do not start a new conversation. (PRODUCT 21-24)
@@ -216,6 +238,7 @@ Run `cargo nextest run -p warp_tui`, the focused `warp` restoration/history test
 - **Shared GUI refactor:** extracting restoration planning could change existing block ordering. Keep GUI behavior unchanged, preserve its tests, and add plan-level timestamp-ordering coverage before wiring the TUI.
 - **Token patched too late:** inserting a conversation before its token is present can rebuild a stale reverse index. Verify or repair the token before `restore_conversations`, never after.
 - **Partial surface replacement:** clearing before a cloud load succeeds can destroy a usable transcript. Load and validate first, then replace the surface as one foreground-thread operation.
+- **Delayed provisional cleanup:** the provisional history clear event may be delivered after the restored conversation is selected and its blocks are inserted. Every clear subscriber must scope cleanup to the IDs carried by the event.
 - **Stale action results:** reusing an action model across conversation replacements can leak historical tool status. Clear or reinitialize per-conversation restoration state as part of replacement and test action-ID isolation.
 - **Hint printed inside the alternate screen:** only persist the exit summary during the run; print after `run_tui` returns.
 

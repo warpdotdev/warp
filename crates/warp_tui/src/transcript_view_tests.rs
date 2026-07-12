@@ -4,8 +4,9 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentExchangeId, AIAgentInput, AIBlockModel, AIBlockOutputStatus, AIConversationId,
-    AIRequestType, Appearance, BlockHeightItem, LLMId, OutputStatusUpdateCallback, RichContentItem,
-    RichContentType, ServerOutputId, TerminalModel, UserQueryMode, BlocklistAIHistoryEvent,
+    AIRequestType, Appearance, BlockHeightItem, BlocklistAIHistoryEvent, LLMId,
+    OutputStatusUpdateCallback, RichContentItem, RichContentType, ServerOutputId, TerminalModel,
+    UserQueryMode,
 };
 use warpui::event::ModifiersState;
 use warpui::platform::WindowStyle;
