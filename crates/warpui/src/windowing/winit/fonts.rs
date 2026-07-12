@@ -9,7 +9,6 @@ mod linux;
 
 #[cfg(target_os = "windows")]
 mod windows;
-use lazy_static::lazy_static;
 use std::any::Any;
 use std::collections::HashMap;
 use std::ops::{DerefMut, Range};
@@ -26,6 +25,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use fontdb::Source;
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::vector::{vec2f, vec2i, Vector2F, Vector2I};
@@ -1460,7 +1460,10 @@ impl TextLayoutSystem {
     }
 
     fn load_family_name_from_id(&self, id: FamilyId) -> Option<String> {
-        self.families.read().get(&id).map(|family| family.name.to_owned())
+        self.families
+            .read()
+            .get(&id)
+            .map(|family| family.name.to_owned())
     }
 
     fn select_font(&self, family_id: FamilyId, properties: Properties) -> FontId {
@@ -1469,9 +1472,7 @@ impl TextLayoutSystem {
             Entry::Vacant(entry) => {
                 let (family_name, first_font_id) = {
                     let families = self.families.read();
-                    let family = families
-                        .get(&family_id)
-                        .expect("Font family must exist");
+                    let family = families.get(&family_id).expect("Font family must exist");
                     (family.name.clone(), *family.font_ids.first())
                 };
 
