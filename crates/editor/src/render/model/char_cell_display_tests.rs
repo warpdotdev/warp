@@ -135,6 +135,22 @@ fn ghost_graphemes_wrap_by_cluster_width() {
         ]
     );
 }
+
+/// Keeps an oversized multi-character grapheme within one display row.
+#[test]
+fn oversized_grapheme_does_not_wrap_at_zero_width_continuation() {
+    let state = state("\u{2328}\u{fe0f}x", 1);
+    assert_eq!(
+        summarize(&rows(&state, &[])),
+        vec![
+            (buffer(0), char_range(0..2), false),
+            (buffer(0), char_range(2..3), true),
+        ]
+    );
+    assert_eq!(point(&state, 1, &[]), Some((0, 2)));
+    assert_eq!(point(&state, 2, &[]), Some((1, 0)));
+}
+
 #[test]
 fn interior_hidden_ranges_become_gaps_edges_render_nothing() {
     // Lines 0-1 hidden (leading), 3-5 hidden (interior), 7 hidden (trailing).

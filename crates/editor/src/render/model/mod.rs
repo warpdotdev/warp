@@ -5444,7 +5444,7 @@ pub fn char_cell_line_row_starts(char_widths: &[u8], terminal_width: u16) -> Vec
     let mut col = 0usize;
     for (i, &cw) in char_widths.iter().enumerate() {
         let cw = cw as usize;
-        if col > 0 && col + cw > w {
+        if cw > 0 && col > 0 && col + cw > w {
             starts.push(i);
             col = 0;
         }
@@ -5468,7 +5468,7 @@ pub fn char_cell_line_gap_position(
     let mut col: usize = 0;
     for &cw in char_widths.iter().take(n) {
         let cw = cw as usize;
-        if w > 0 && col > 0 && col + cw > w {
+        if cw > 0 && w > 0 && col > 0 && col + cw > w {
             row += 1;
             col = 0;
         }
@@ -5478,7 +5478,7 @@ pub fn char_cell_line_gap_position(
         // The cursor sits before char `char_in_line`; if that char would wrap,
         // the cursor is at the start of the next row.
         let cw = char_widths[char_in_line] as usize;
-        if w > 0 && col > 0 && col + cw > w {
+        if cw > 0 && w > 0 && col > 0 && col + cw > w {
             row += 1;
             col = 0;
         }
