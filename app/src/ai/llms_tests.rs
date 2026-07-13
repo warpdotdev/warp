@@ -656,6 +656,11 @@ fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
     // Before the fix, `reconcile_disabled_model_preferences` would clear any model
     // ID that couldn't be resolved locally, causing the profile to revert to Auto
     // and syncing that change back to cloud — erasing the user's setting on device A.
+    //
+    // The `context_window_limit` clear is a separately-guarded branch in
+    // `reconcile_disabled_model_preferences` (gated on
+    // `preferred_base_model_is_recognized`), so this test also sets a limit and
+    // asserts it is preserved for the unrecognized custom endpoint ID.
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
@@ -681,6 +686,10 @@ fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
 
         let default_profile_id =
             profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        // Also set a context window limit so the separately-guarded
+        // `context_window_limit` clear branch in `reconcile_disabled_model_preferences`
+        // is exercised: it must NOT clear the limit for an unrecognized model ID.
+        let preserved_context_window_limit: u32 = 200_000;
         profiles_model.update(&mut app, |profiles, ctx| {
             profiles.set_base_model(
                 default_profile_id,
@@ -695,6 +704,11 @@ fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
             profiles.set_cli_agent_model(
                 default_profile_id,
                 Some(remote_custom_model_id.clone()),
+                ctx,
+            );
+            profiles.set_context_window_limit(
+                default_profile_id,
+                Some(preserved_context_window_limit),
                 ctx,
             );
         });
@@ -722,6 +736,11 @@ fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
                 profile.data().cli_agent_model.as_ref(),
                 Some(&remote_custom_model_id),
                 "cli_agent_model must be preserved for unknown custom endpoint IDs (cross-device sync)"
+            );
+            assert_eq!(
+                profile.data().context_window_limit,
+                Some(preserved_context_window_limit),
+                "context_window_limit must be preserved for unknown custom endpoint IDs (cross-device sync)"
             );
         });
     });
