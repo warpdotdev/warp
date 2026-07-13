@@ -45,6 +45,8 @@ fn ctrl_letters_map_to_c0_control_bytes() {
     // Ctrl+A..Ctrl+Z must forward as 0x01..0x1A, not the printable letter
     // the TUI conversion leaves in `chars`.
     assert_eq!(ctrl_letter_c0(&ctrl("a")), Some(vec![0x01]));
+    // Ctrl+C is forwarded to the app (0x03), not intercepted by the TUI.
+    assert_eq!(ctrl_letter_c0(&ctrl("c")), Some(vec![0x03]));
     assert_eq!(ctrl_letter_c0(&ctrl("d")), Some(vec![0x04]));
     assert_eq!(ctrl_letter_c0(&ctrl("z")), Some(vec![0x1a]));
     // Shifted letter (Ctrl+Shift+A) folds onto the same control byte.

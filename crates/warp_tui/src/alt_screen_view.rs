@@ -98,15 +98,15 @@ impl TuiElement for AltScreenElement {
         if *is_composing {
             return false;
         }
-        // Leave ctrl-c to the root/session fixed binding as a guaranteed escape
-        // hatch, so a full-screen app can never trap the user in the TUI. (v1;
-        // routing ctrl-c to the app can follow once exit UX is settled.)
-        if keystroke.ctrl && keystroke.key == "c" {
-            return false;
-        }
+        // Every key (including ctrl-c) is forwarded to the app: a full-screen
+        // app owns its own control keys (e.g. vim/less handle ctrl-c
+        // themselves), so the TUI must not intercept them. The user exits by
+        // quitting the app, as in any terminal.
+        //
         // Resolve the bytes to send to the PTY, in priority order:
         // 1. Special/control keys (arrows, ctrl-<x>, fn keys, …) that encode to
-        //    an escape sequence via the shared terminal encoder.
+        //    an escape sequence via `ToEscapeSequence` (the `warp_terminal`
+        //    encoder shared with the GUI).
         // 2. Plain printable keys — the GUI routes these through a separate
         //    typed-characters path, which the TUI event model folds into
         //    `chars`; forward their UTF-8 bytes.
@@ -152,13 +152,14 @@ fn fallback_key_bytes(key: &str, chars: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// The C0 control byte for a `Ctrl+<letter>` combo. The shared legacy encoder
-/// only emits C0 bytes for a small `Ctrl+<number>`/`Ctrl+space` set unless the
-/// kitty keyboard protocol is active, while the TUI key conversion still puts
-/// the printable letter in `chars` for `Ctrl+A`..`Ctrl+Z`. Without this, those
-/// combos would be forwarded as plain letters (e.g. `a` instead of `0x01`),
-/// breaking control shortcuts in full-screen apps. `Ctrl+C` never reaches here
-/// — it's handled earlier as the TUI exit escape hatch.
+/// The C0 control byte for a `Ctrl+<letter>` combo. `ToEscapeSequence`
+/// (`warp_terminal`, the same encoder the GUI uses) only emits C0 bytes for a
+/// small `Ctrl+<number>`/`Ctrl+space` set unless the kitty keyboard protocol is
+/// active, while the crossterm→`TuiEvent` conversion still puts the printable
+/// letter in `chars` for `Ctrl+A`..`Ctrl+Z`. Without this, those combos would be
+/// forwarded as plain letters (e.g. `a` instead of `0x01`), breaking control
+/// shortcuts in full-screen apps. `Ctrl+C` folds to `0x03` and is forwarded to
+/// the app like any other control combo.
 fn ctrl_letter_c0(keystroke: &Keystroke) -> Option<Vec<u8>> {
     if !keystroke.ctrl {
         return None;

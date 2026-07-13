@@ -884,9 +884,13 @@ impl TuiTerminalSessionView {
                     alt_screen_active
                 };
 
-                // Hand keyboard focus to the alt-screen app while it's active
-                // (so keys reach the PTY rather than the hidden input editor's
-                // keymap), and restore input focus when it exits.
+                // While the alt-screen app is active it owns the keyboard, so
+                // move focus off the input editor and onto this view: unbound
+                // keys then fall through the keymap to the alt-screen element,
+                // which forwards them to the PTY. (ctrl-c is the one bound key
+                // that still reaches the keymap; `handle_interrupt` forwards it
+                // to the app while alt-screen is active.) Restore input focus on
+                // exit.
                 if alt_screen_active != view.alt_screen_focus_active {
                     view.alt_screen_focus_active = alt_screen_active;
                     if alt_screen_active {
@@ -1255,6 +1259,17 @@ impl TuiTerminalSessionView {
             ConversationRestoreState::Failed(_)
         ) {
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            return;
+        }
+        // While a full-screen app is active, ctrl-c belongs to that app (it does
+        // its own interrupt handling, e.g. SIGINT), not the TUI. Forward the C0
+        // ETX byte to the PTY instead of cancelling the conversation or arming
+        // the TUI exit.
+        if self.terminal_model.lock().is_alt_screen_active() {
+            ctx.emit(TuiTerminalSessionEvent::WriteAgentInput {
+                bytes: Cow::Owned(vec![0x03]),
+                mode: AIAgentPtyWriteMode::Raw,
+            });
             return;
         }
         let now = Instant::now();
