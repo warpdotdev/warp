@@ -2,32 +2,17 @@
 //!
 //! Layout:
 //!
-//! 1. Pure-function tests for [`conversation_status_from_state`]. These carry
-//!    over unchanged from the legacy polling path.
-//! 2. Streamer-driven path tests (`OrchestrationViewerStreamer` on). The model translates
-//!    `OrchestrationEventStreamerEvent::ChildSpawned` /
-//!    `ChildStatusChanged` events into local placeholder conversations.
-//!    These tests drive the model via the streamer's emit path and a
-//!    `MockAIClient` that returns canned `get_ambient_agent_task` responses
-//!    for the pill metadata fetch.
-//! 3. Legacy polling-path tests (`OrchestrationViewerStreamer` off). The model registers children
-//!    from `register_child` (called from `apply_children_fetch`). These map
-//!    directly to the spec's polling-path semantics.
-//!
-//! `apply_children_fetch` itself is exercised through `register_child`, so
-//! we drive the polling-path tests at the same boundary by calling
-//! `register_child` from the test rather than invoking a synthetic
-//! `apply_children_fetch` shell.
+//! 1. Pure-function tests for [`conversation_status_from_state`].
+//! 2. Tests for the shared `register_child` registration path.
+//! 3. Tests for the streamer-driven event handlers (`ChildSpawned` /
+//!    `ChildStatusChanged`) and the pending-`session_id` poll timer.
 
 use std::sync::Arc;
 
 use chrono::Utc;
-use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, SingletonEntity};
 
 use super::*;
-use crate::ai::agent::task::TaskId;
-use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::task::{AgentConfigSnapshot, AmbientAgentTask};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamerEvent;
 use crate::server::server_api::ai::{AIClient, MockAIClient};
@@ -162,8 +147,7 @@ fn make_task_with_name(
 /// Wires up `BlocklistAIHistoryModel`, a real [`TerminalView`], and an
 /// orchestrator parent conversation marked active for that view. Returns
 /// the model built directly (bypassing `OrchestrationViewerModel::new`,
-/// which would otherwise kick off either a REST fetch or a streamer
-/// registration).
+/// which would otherwise kick off streamer registration).
 fn setup_model(
     app: &mut App,
     parent_task_id: AmbientAgentTaskId,
@@ -184,9 +168,6 @@ fn setup_model(
         terminal_view: terminal_view.downgrade(),
         children: HashMap::new(),
         children_by_run_id: HashMap::new(),
-        polling_handle: None,
-        fetch_generation: 0,
-        idle_due_to_no_children: false,
         pending_session_id_poll_handle: None,
         metadata_fetch_dispatch_count: 0,
     };
@@ -309,9 +290,6 @@ fn skips_child_when_no_active_parent_conversation() {
             terminal_view: terminal_view.downgrade(),
             children: HashMap::new(),
             children_by_run_id: HashMap::new(),
-            polling_handle: None,
-            fetch_generation: 0,
-            idle_due_to_no_children: false,
             pending_session_id_poll_handle: None,
             metadata_fetch_dispatch_count: 0,
         };
@@ -879,7 +857,6 @@ fn pending_session_id_poll_schedules_while_session_id_is_none() {
     // `run_pending_session_id_poll` directly (what the timer's callback
     // would do).
     App::test((), |mut app| async move {
-        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
         let parent = task_id(PARENT_TASK_ID);
         let (_, _, model) = setup_model(&mut app, parent);
         let model_handle = app.add_model(|_| model);
@@ -978,7 +955,6 @@ fn pending_session_id_poll_does_not_schedule_when_no_children_pending() {
     // server has already claimed execution by the time we observe the
     // child.
     App::test((), |mut app| async move {
-        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
         let parent = task_id(PARENT_TASK_ID);
         let (_, _, model) = setup_model(&mut app, parent);
         let model_handle = app.add_model(|_| model);
@@ -1012,7 +988,6 @@ fn pending_session_id_poll_dispatches_per_pending_child() {
     // Two pre-claim children → one timer; the tick should dispatch one
     // refetch per pending child.
     App::test((), |mut app| async move {
-        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
         let parent = task_id(PARENT_TASK_ID);
         let (_, _, model) = setup_model(&mut app, parent);
         let model_handle = app.add_model(|_| model);
@@ -1097,24 +1072,23 @@ fn child_status_changed_does_not_refetch_when_already_materialized() {
 
 #[test]
 fn b1_populates_agent_id_to_conversation_id_for_new_child() {
-    // After `apply_children_fetch` registers a new viewer-created child,
-    // `BlocklistAIHistoryModel::conversation_id_for_agent_id` resolves the
-    // child's `run_id` back to the local child conversation so sibling
-    // references in transcript bodies render display names instead of
-    // "Unknown agent".
+    // After a child is registered, `BlocklistAIHistoryModel::conversation_id_for_agent_id`
+    // resolves the child's `run_id` back to the local child conversation so
+    // sibling references in transcript bodies render display names instead
+    // of "Unknown agent".
     App::test((), |mut app| async move {
         let parent = task_id(PARENT_TASK_ID);
         let (_, _, model) = setup_model(&mut app, parent);
         let model_handle = app.add_model(|_| model);
 
         model_handle.update(&mut app, |model, ctx| {
-            model.apply_children_fetch(
-                vec![make_task(
+            model.register_child(
+                make_task(
                     CHILD_A_TASK_ID,
                     AmbientAgentTaskState::InProgress,
                     "Worker",
                     None,
-                )],
+                ),
                 ctx,
             );
         });
@@ -1159,13 +1133,13 @@ fn b2_backfills_parent_agent_id_on_orchestrator_token_assigned() {
         // Step 1: register a child while the parent has no orchestration
         // agent id. The child's `parent_agent_id` must be `None`.
         model_handle.update(&mut app, |model, ctx| {
-            model.apply_children_fetch(
-                vec![make_task(
+            model.register_child(
+                make_task(
                     CHILD_A_TASK_ID,
                     AmbientAgentTaskState::InProgress,
                     "Worker",
                     None,
-                )],
+                ),
                 ctx,
             );
         });
@@ -1245,13 +1219,13 @@ fn b2_does_not_overwrite_existing_parent_agent_id() {
             );
         });
         model_handle.update(&mut app, |model, ctx| {
-            model.apply_children_fetch(
-                vec![make_task(
+            model.register_child(
+                make_task(
                     CHILD_A_TASK_ID,
                     AmbientAgentTaskState::InProgress,
                     "Worker",
                     None,
-                )],
+                ),
                 ctx,
             );
         });
@@ -1290,13 +1264,13 @@ fn b2_ignores_token_assigned_for_unrelated_conversation() {
         let model_handle = app.add_model(|_| model);
 
         model_handle.update(&mut app, |model, ctx| {
-            model.apply_children_fetch(
-                vec![make_task(
+            model.register_child(
+                make_task(
                     CHILD_A_TASK_ID,
                     AmbientAgentTaskState::InProgress,
                     "Worker",
                     None,
-                )],
+                ),
                 ctx,
             );
         });
@@ -1337,251 +1311,7 @@ fn b2_ignores_token_assigned_for_unrelated_conversation() {
 //
 // Removed: tracked separately under shared-session viewer support work.
 
-// ---- idle_due_to_no_children polling-cost mitigation ----------------------
-
-/// Builds an [`AppendedExchange`] event for the given conversation, with
-/// stub identifiers for the unrelated fields. Mirrors what the history
-/// model would emit when a fresh exchange is appended; the model's
-/// `maybe_kick_polling` handler only reads `conversation_id`.
-fn make_appended_exchange_event(
-    conversation_id: AIConversationId,
-    terminal_view_id: EntityId,
-) -> BlocklistAIHistoryEvent {
-    BlocklistAIHistoryEvent::AppendedExchange {
-        exchange_id: AIAgentExchangeId::new(),
-        task_id: TaskId::new("test-task".to_string()),
-        terminal_surface_id: terminal_view_id,
-        conversation_id,
-        is_hidden: false,
-        response_stream_id: None,
-    }
-}
-
-/// Spawns a long-lived no-op future and stores its handle on the model.
-/// Used to populate `polling_handle` in tests so we can assert that the
-/// polling-state machine aborts it when transitioning to the
-/// idle-due-to-no-children state.
-///
-/// `SpawnedFutureHandle::abort()` doesn't expose an observable side-effect
-/// from outside the model, so the assertion target is
-/// `model.polling_handle.is_none()` after the transition. The timer is
-/// scheduled for an hour so it cannot fire during the test.
-fn populate_polling_handle(
-    model: &mut OrchestrationViewerModel,
-    ctx: &mut ModelContext<OrchestrationViewerModel>,
-) {
-    let handle = ctx.spawn(
-        async {
-            Timer::after(Duration::from_secs(3600)).await;
-        },
-        |_me, _, _ctx| {},
-    );
-    model.polling_handle = Some(handle);
-}
-
-#[test]
-fn empty_descendant_fetch_sets_idle_flag_and_aborts_polling() {
-    // When a non-orchestrator share's first descendant fetch returns no
-    // children, the viewer model sets `idle_due_to_no_children = true`
-    // and tears down its polling handle. `schedule_next_poll` later
-    // honours the flag and refuses to spawn another timer, so the model
-    // spends zero CPU / network until an `AppendedExchange` on the
-    // orchestrator wakes it up.
-    App::test((), |mut app| async move {
-        let parent = task_id(PARENT_TASK_ID);
-        let (_, _, model) = setup_model(&mut app, parent);
-        let model_handle = app.add_model(|_| model);
-
-        // Simulate an already-active polling cadence by pre-populating the
-        // handle. After the empty fetch this handle should be cleared.
-        model_handle.update(&mut app, |model, ctx| {
-            populate_polling_handle(model, ctx);
-        });
-        model_handle.read(&app, |model, _| {
-            assert!(
-                model.polling_handle.is_some(),
-                "sanity: polling_handle populated for the test"
-            );
-            assert!(
-                !model.idle_due_to_no_children,
-                "sanity: idle flag starts clear"
-            );
-        });
-
-        // Server returns no descendants. `apply_children_fetch` is the
-        // sync portion of the fetch callback, so calling it directly
-        // exercises the polling-state transition without an HTTP round
-        // trip.
-        model_handle.update(&mut app, |model, ctx| {
-            model.apply_children_fetch(vec![], ctx);
-        });
-
-        model_handle.read(&app, |model, _| {
-            assert!(
-                model.idle_due_to_no_children,
-                "empty fetch must mark the model as idle-due-to-no-children"
-            );
-            assert!(
-                model.polling_handle.is_none(),
-                "empty fetch must abort the prior polling handle and clear the field"
-            );
-            assert!(
-                model.children.is_empty(),
-                "sanity: no children were registered"
-            );
-        });
-    });
-}
-
-#[test]
-fn appended_exchange_on_orchestrator_resumes_from_idle() {
-    // Once the model has gone idle on an empty fetch, the next
-    // `AppendedExchange` on the orchestrator conversation must resume
-    // polling: clear the idle flag and call `fetch_children`. We observe
-    // `fetch_children` indirectly via `fetch_generation`, which is bumped
-    // synchronously at the head of the function before any spawn fires.
-    App::test((), |mut app| async move {
-        let parent = task_id(PARENT_TASK_ID);
-        let (terminal_view_id, parent_conv_id, model) = setup_model(&mut app, parent);
-        let model_handle = app.add_model(|_| model);
-
-        // Drive the model into the idle state via the same path the
-        // production fetch callback would: empty descendant list.
-        model_handle.update(&mut app, |model, ctx| {
-            model.apply_children_fetch(vec![], ctx);
-        });
-        let generation_before_resume = model_handle.read(&app, |model, _| {
-            assert!(
-                model.idle_due_to_no_children,
-                "sanity: idle flag set after empty fetch"
-            );
-            assert!(
-                model.polling_handle.is_none(),
-                "sanity: polling handle aborted"
-            );
-            model.fetch_generation
-        });
-
-        // Fire an `AppendedExchange` against the orchestrator. The model
-        // resumes via the idle-due-to-no-children branch in
-        // `maybe_kick_polling`.
-        let event = make_appended_exchange_event(parent_conv_id, terminal_view_id);
-        model_handle.update(&mut app, |model, ctx| {
-            model.maybe_kick_polling(&event, ctx);
-        });
-
-        model_handle.read(&app, |model, _| {
-            assert!(
-                !model.idle_due_to_no_children,
-                "AppendedExchange on the orchestrator must clear the idle flag"
-            );
-            assert_eq!(
-                model.fetch_generation,
-                generation_before_resume.wrapping_add(1),
-                "AppendedExchange on the orchestrator must call fetch_children, \
-                 which bumps fetch_generation by one",
-            );
-        });
-    });
-}
-
-#[test]
-fn non_empty_fetch_clears_idle_flag_and_resumes_polling() {
-    // The complementary path: a fetch that *does* discover children
-    // clears the idle flag so subsequent `schedule_next_poll` calls go
-    // back to the active cadence. We then exercise `schedule_next_poll`
-    // directly to verify that, once the flag is clear, a new
-    // `polling_handle` is created.
-    App::test((), |mut app| async move {
-        let parent = task_id(PARENT_TASK_ID);
-        let (_, _, mut model) = setup_model(&mut app, parent);
-        // Manually start from the idle state so we can confirm the
-        // non-empty fetch clears it.
-        model.idle_due_to_no_children = true;
-        let model_handle = app.add_model(|_| model);
-
-        model_handle.update(&mut app, |model, ctx| {
-            model.apply_children_fetch(
-                vec![make_task(
-                    CHILD_A_TASK_ID,
-                    AmbientAgentTaskState::InProgress,
-                    "Worker",
-                    None,
-                )],
-                ctx,
-            );
-        });
-        model_handle.read(&app, |model, _| {
-            assert!(
-                !model.idle_due_to_no_children,
-                "non-empty fetch must clear the idle flag"
-            );
-            assert_eq!(model.children.len(), 1, "child was registered");
-        });
-
-        // The fetch callback would normally call `schedule_next_poll`
-        // right after `apply_children_fetch`. Invoke it explicitly so we
-        // can assert that, with the flag now cleared, a new polling
-        // handle is installed.
-        model_handle.update(&mut app, |model, ctx| {
-            model.schedule_next_poll(ctx);
-        });
-        model_handle.read(&app, |model, _| {
-            assert!(
-                model.polling_handle.is_some(),
-                "schedule_next_poll must spawn a new timer when not idle"
-            );
-        });
-    });
-}
-
-#[test]
-fn appended_exchange_on_non_orchestrator_does_not_resume_idle() {
-    // Symmetric to the orchestrator-resume test: an exchange on an
-    // unrelated conversation (i.e. not the orchestrator tracked by this
-    // viewer) must not pull the model out of the idle-due-to-no-children
-    // state. The flag stays set and `fetch_children` is not invoked.
-    App::test((), |mut app| async move {
-        let parent = task_id(PARENT_TASK_ID);
-        let (terminal_view_id, _, model) = setup_model(&mut app, parent);
-        let model_handle = app.add_model(|_| model);
-
-        // Idle the model.
-        model_handle.update(&mut app, |model, ctx| {
-            model.apply_children_fetch(vec![], ctx);
-        });
-        let generation_before_event = model_handle.read(&app, |model, _| {
-            assert!(model.idle_due_to_no_children, "sanity: model is idle");
-            model.fetch_generation
-        });
-
-        // Fire an `AppendedExchange` for some unrelated conversation. The
-        // resume gate compares against the orchestrator id returned by
-        // `find_parent_conversation_id`, so a fresh id will not match.
-        let unrelated_conversation_id = AIConversationId::new();
-        let event = make_appended_exchange_event(unrelated_conversation_id, terminal_view_id);
-        model_handle.update(&mut app, |model, ctx| {
-            model.maybe_kick_polling(&event, ctx);
-        });
-
-        model_handle.read(&app, |model, _| {
-            assert!(
-                model.idle_due_to_no_children,
-                "AppendedExchange on an unrelated conversation must NOT resume the model"
-            );
-            assert_eq!(
-                model.fetch_generation, generation_before_event,
-                "fetch_children must not run when the resume gate doesn't match the orchestrator"
-            );
-            assert!(
-                model.polling_handle.is_none(),
-                "polling handle must remain cleared while idle"
-            );
-        });
-    });
-}
-
-// ---- Streamer-driven path tests (`OrchestrationViewerStreamer` on) ----------
+// ---- Streamer-driven path tests --------------------------------------------
 
 #[test]
 fn handle_streamer_event_filters_on_parent_task_id() {
@@ -1652,15 +1382,10 @@ fn child_spawned_with_malformed_run_id_is_dropped() {
 }
 
 #[test]
-fn streamer_consumer_is_registered_when_constructed_under_flag() {
-    // With `OrchestrationViewerStreamer` on, `OrchestrationViewerModel::new`
-    // registers the pane on the shared streamer entry and kicks off the
-    // cold-start seed.
-    use warp_core::features::FeatureFlag;
-
+fn streamer_consumer_is_registered_when_constructed() {
+    // `OrchestrationViewerModel::new` registers the pane on the shared
+    // streamer entry and kicks off the cold-start seed.
     App::test((), |mut app| async move {
-        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-
         let parent = task_id(PARENT_TASK_ID);
         let (terminal_view_id, _parent_conv_id, _) = setup_model(&mut app, parent);
 
@@ -1671,8 +1396,7 @@ fn streamer_consumer_is_registered_when_constructed_under_flag() {
         // model's `register_viewer_mode_consumer` call no-ops (handle resolution
         // returns nothing) but doesn't panic.
 
-        // Try constructing the model. The construction must not panic even
-        // when the streamer is or isn't present.
+        // Try constructing the model. The construction must not panic.
         let terminal_view = add_window_with_terminal(&mut app, None);
         let _ = app.add_model(|ctx| {
             OrchestrationViewerModel::new(parent, terminal_view_id, terminal_view.downgrade(), ctx)
@@ -1680,7 +1404,7 @@ fn streamer_consumer_is_registered_when_constructed_under_flag() {
 
         // The streamer's viewer-mode registration is exercised end-to-end
         // by the streamer-side tests; here we just verify non-panicking
-        // construction of the viewer model under the flag.
+        // construction of the viewer model.
         let _ = terminal_view_id;
     });
 }
@@ -1705,14 +1429,11 @@ fn viewer_model_retries_consumer_registration_on_set_active_conversation() {
     // `parent_conversation_id` (children get one through
     // `start_new_child_conversation`). The discriminator in
     // `register_viewer_mode_consumer_if_possible` must accept this shape.
-    use warp_core::features::FeatureFlag;
     use warpui::SingletonEntity;
 
     use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 
     App::test((), |mut app| async move {
-        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
         let terminal_view = add_window_with_terminal(&mut app, None);
         let terminal_view_id = terminal_view.id();
@@ -1770,14 +1491,11 @@ fn viewer_model_does_not_register_when_active_conversation_is_a_child_placeholde
     // `SwapPaneToConversation` before the orchestrator placeholder is
     // activated — which would persist the orchestration cursor on the
     // wrong row.
-    use warp_core::features::FeatureFlag;
     use warpui::SingletonEntity;
 
     use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 
     App::test((), |mut app| async move {
-        let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
         let terminal_view = add_window_with_terminal(&mut app, None);
         let terminal_view_id = terminal_view.id();

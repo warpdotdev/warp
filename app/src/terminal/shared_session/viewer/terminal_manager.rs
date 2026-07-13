@@ -1701,13 +1701,10 @@ impl TerminalManager {
     /// `ctx.spawn` continuations are entity-scoped, so dropping the
     /// entity makes them no-ops; no explicit `.abort()` needed.
     ///
-    /// Under `FeatureFlag::OrchestrationViewerStreamer`, the model also
-    /// holds a viewer-mode registration on the shared
+    /// The model also holds a viewer-mode registration on the shared
     /// [`OrchestrationEventStreamer`]; we unregister explicitly here so
     /// the streamer can refcount-tear-down the ancestor SSE on the last
-    /// pane close. The unregister API is idempotent, so calling it when
-    /// the flag is off (or when the streamer has already removed the
-    /// entry) is harmless.
+    /// pane close. The unregister API is idempotent.
     fn stop_orchestration_polling(
         orchestration_viewer_model: &Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
         ctx: &mut AppContext,
@@ -1721,11 +1718,9 @@ impl TerminalManager {
             "[orch-viewer] stopping orchestration viewer model parent_task_id={parent_task_id} \
              consumer_id={consumer_id:?}"
         );
-        if FeatureFlag::OrchestrationViewerStreamer.is_enabled() {
-            OrchestrationEventStreamer::handle(ctx).update(ctx, move |streamer, _ctx| {
-                streamer.unregister_viewer_mode_consumer(parent_task_id, consumer_id);
-            });
-        }
+        OrchestrationEventStreamer::handle(ctx).update(ctx, move |streamer, _ctx| {
+            streamer.unregister_viewer_mode_consumer(parent_task_id, consumer_id);
+        });
         // `handle` drops here, releasing the per-pane viewer model.
         drop(handle);
     }
