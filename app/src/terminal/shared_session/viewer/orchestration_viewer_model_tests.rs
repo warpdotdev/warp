@@ -187,6 +187,7 @@ fn setup_model(
         polling_handle: None,
         fetch_generation: 0,
         idle_due_to_no_children: false,
+        deferred_tasks: Vec::new(),
         pending_session_id_poll_handle: None,
         metadata_fetch_dispatch_count: 0,
     };

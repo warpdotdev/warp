@@ -70,9 +70,15 @@ pub struct OrchestrationViewerModel {
     /// (Polling path.) Bumped before each fetch so stale responses can
     /// be dropped.
     fetch_generation: u64,
-    /// Set when the most recent fetch returned no children; resumed by
-    /// the next orchestrator `AppendedExchange`.
+    /// Set when the most recent fetch returned no children from the server;
+    /// resumed by the next orchestrator `AppendedExchange`. Note: this is only
+    /// set when the server truly returns no tasks, not when tasks were returned
+    /// but couldn't be registered yet due to a missing parent conversation.
     idle_due_to_no_children: bool,
+    /// Tasks returned by the server that couldn't be registered yet because
+    /// the parent conversation wasn't set. Retried when `SetActiveConversation`
+    /// fires for this terminal surface.
+    deferred_tasks: Vec<AmbientAgentTask>,
     /// (Streamer path.) Periodic timer fetching the claim-time
     /// `session_id` for not-yet-claimed children.
     pending_session_id_poll_handle: Option<SpawnedFutureHandle>,
@@ -122,6 +128,7 @@ impl OrchestrationViewerModel {
                 polling_handle: None,
                 fetch_generation: 0,
                 idle_due_to_no_children: false,
+                deferred_tasks: Vec::new(),
                 pending_session_id_poll_handle: None,
                 #[cfg(test)]
                 metadata_fetch_dispatch_count: 0,
@@ -150,6 +157,7 @@ impl OrchestrationViewerModel {
             polling_handle: None,
             fetch_generation: 0,
             idle_due_to_no_children: false,
+            deferred_tasks: Vec::new(),
             pending_session_id_poll_handle: None,
             #[cfg(test)]
             metadata_fetch_dispatch_count: 0,
@@ -183,8 +191,29 @@ impl OrchestrationViewerModel {
                 ..
             } if *terminal_surface_id == self.terminal_view_id => {
                 self.register_viewer_mode_consumer_if_possible(ctx);
+                // Retry any tasks that were deferred because the parent conversation
+                // wasn't available yet when they were first received.
+                self.flush_deferred_tasks(ctx);
             }
             _ => {}
+        }
+    }
+
+    /// Registers any previously-deferred tasks (tasks that arrived before the
+    /// parent conversation was set). Called when the active conversation becomes
+    /// available so chips and agent names resolve correctly.
+    fn flush_deferred_tasks(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.deferred_tasks.is_empty() {
+            return;
+        }
+        let tasks = std::mem::take(&mut self.deferred_tasks);
+        log::info!(
+            "[orch-viewer] flushing {} deferred child task(s) for parent_task_id={}",
+            tasks.len(),
+            self.parent_task_id,
+        );
+        for task in tasks {
+            self.register_child(task, ctx);
         }
     }
 
@@ -404,7 +433,8 @@ impl OrchestrationViewerModel {
 
         // New child: register under the orchestrator's local conversation.
         // Without an active parent conversation, `start_new_child_conversation`
-        // would lose the parent linkage. Drop and try again next cycle/event.
+        // would lose the parent linkage. Defer and retry when the parent
+        // conversation becomes available (via `flush_deferred_tasks`).
         let Some(parent_conversation_id) = self.find_parent_conversation_id(ctx) else {
             log::warn!(
                 "[orch-viewer] no active parent conversation for terminal_view_id={:?} \
@@ -412,6 +442,11 @@ impl OrchestrationViewerModel {
                 self.terminal_view_id,
                 self.parent_task_id,
             );
+            // Store the task so it can be retried once the parent conversation
+            // is established. Avoid duplicates if the same task is deferred twice.
+            if !self.deferred_tasks.iter().any(|t| t.task_id == task_id) {
+                self.deferred_tasks.push(task);
+            }
             return;
         };
 
@@ -614,6 +649,9 @@ impl OrchestrationViewerModel {
                 if let Some(prior) = self.polling_handle.take() {
                     prior.abort();
                 }
+                // Flush any deferred tasks before fetching so they can
+                // register now that the parent conversation is available.
+                self.flush_deferred_tasks(ctx);
                 self.fetch_children(ctx);
             }
             return;
@@ -742,16 +780,21 @@ impl OrchestrationViewerModel {
     /// so an empty descendant list parks the timer chain until the next
     /// orchestrator `AppendedExchange` resumes it.
     fn apply_children_fetch(&mut self, tasks: Vec<AmbientAgentTask>, ctx: &mut ModelContext<Self>) {
+        let server_returned_tasks = !tasks.is_empty();
         for task in tasks {
             self.register_child(task, ctx);
         }
 
-        // Polling-cost mitigation: if no children are tracked after this
-        // fetch, stop scheduling timers. The resume signal is an
-        // `AppendedExchange` on the orchestrator (see
-        // `maybe_kick_polling`). `schedule_next_poll` honours this flag
-        // and bails before spawning a new timer.
-        if self.children.is_empty() {
+        // Polling-cost mitigation: if the server returned no children and none
+        // are tracked, stop scheduling timers. The resume signal is an
+        // `AppendedExchange` on the orchestrator (see `maybe_kick_polling`).
+        //
+        // IMPORTANT: only enter idle mode when the server truly returned no
+        // tasks. If the server returned tasks but they couldn't be registered
+        // yet (e.g. the parent conversation isn't set, so they were deferred),
+        // keep polling so deferred tasks have a chance to register on the next
+        // cycle.
+        if self.children.is_empty() && !server_returned_tasks && self.deferred_tasks.is_empty() {
             self.idle_due_to_no_children = true;
             if let Some(prior) = self.polling_handle.take() {
                 prior.abort();
