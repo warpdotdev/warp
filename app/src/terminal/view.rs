@@ -2531,11 +2531,6 @@ pub struct TerminalView {
     /// None iff there is no context menu open currently.
     context_menu_state: Option<ContextMenuState>,
 
-    /// True while this terminal view is shown as a temporary replacement for
-    /// another pane. That relationship is owned by PaneGroup, but TerminalView
-    /// needs this bit to keep local menu/keybinding affordances in sync.
-    is_temporary_replacement: bool,
-
     /// The search bar at the top of the terminal view.
     find_bar: ViewHandle<Find<TerminalFindModel>>,
 
@@ -4307,7 +4302,6 @@ impl TerminalView {
             horizontal_clipped_scroll_state: Default::default(),
             is_selecting: false,
             context_menu_state: None,
-            is_temporary_replacement: false,
             context_menu,
             hovered_secret: None,
             open_secret_tool_tip: None,
@@ -17147,9 +17141,7 @@ impl TerminalView {
                 if let Some(clear_menu_item) = self.clear_buffer_menu_item(&model, ctx) {
                     terminal_action_items.push(clear_menu_item);
                 }
-                if self.can_reload_shell_from_model(&model, ctx) {
-                    terminal_action_items.push(self.reload_shell_menu_item(ctx));
-                }
+                terminal_action_items.push(self.reload_shell_menu_item(ctx));
             }
             if !terminal_action_items.is_empty() {
                 if !items.is_empty() {
@@ -17172,7 +17164,7 @@ impl TerminalView {
         items
     }
 
-    #[cfg(any(test, feature = "integration_tests"))]
+    #[cfg(test)]
     pub(crate) fn context_menu_items_for_test(
         &self,
         menu_source: &BlockListMenuSource,
@@ -17213,30 +17205,6 @@ impl TerminalView {
                 ctx,
             ))
             .into_item()
-    }
-
-    pub fn can_reload_shell(&self, ctx: &AppContext) -> bool {
-        let model = self.model.lock();
-        self.can_reload_shell_from_model(&model, ctx)
-    }
-
-    fn can_reload_shell_from_model(&self, model: &TerminalModel, ctx: &AppContext) -> bool {
-        matches!(
-            model.shared_session_status(),
-            SharedSessionStatus::NotShared
-        ) && !model.is_read_only()
-            && !self.is_temporary_replacement
-            && !self.is_orchestration_split_off()
-            && !self.is_ambient_agent_session(ctx)
-            && CLIAgentSessionsModel::as_ref(ctx)
-                .session(self.view_id)
-                .is_none()
-            && !(FeatureFlag::AgentView.is_enabled()
-                && self.agent_view_controller.as_ref(ctx).is_active())
-    }
-
-    pub(crate) fn set_is_temporary_replacement(&mut self, is_temporary_replacement: bool) {
-        self.is_temporary_replacement = is_temporary_replacement;
     }
 
     fn copy_prompt_menu_items(
@@ -17540,11 +17508,9 @@ impl TerminalView {
             && ContextFlag::CreateSharedSession.is_enabled()
         {
             items.extend(self.session_sharing_context_menu_items(&model, false));
-            if self.can_reload_shell_from_model(&model, ctx) {
-                items.push(MenuItem::Separator);
-                items.push(self.reload_shell_menu_item(ctx));
-            }
         }
+        items.push(MenuItem::Separator);
+        items.push(self.reload_shell_menu_item(ctx));
 
         // Section 2: AI Command Search, Ask Warp AI
         items.extend([
@@ -17782,11 +17748,11 @@ impl TerminalView {
             && ContextFlag::CreateSharedSession.is_enabled()
         {
             menu_items.extend(self.session_sharing_context_menu_items(&model, false));
-            if self.can_reload_shell_from_model(&model, ctx) {
-                menu_items.push(MenuItem::Separator);
-                menu_items.push(self.reload_shell_menu_item(ctx));
-            }
         }
+        if !menu_items.is_empty() {
+            menu_items.push(MenuItem::Separator);
+        }
+        menu_items.push(self.reload_shell_menu_item(ctx));
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);
         if !menu_items.is_empty() && !pane_context_menu_items.is_empty() {
@@ -28237,10 +28203,6 @@ impl View for TerminalView {
 
         if self.is_input_box_visible(&model_lock, app) {
             context.set.insert(INPUT_BOX_VISIBLE_KEY);
-        }
-
-        if self.can_reload_shell_from_model(&model_lock, app) {
-            context.set.insert(init::CAN_RELOAD_SHELL_KEY);
         }
 
         if self.input.as_ref(app).editor().as_ref(app).is_focused() {

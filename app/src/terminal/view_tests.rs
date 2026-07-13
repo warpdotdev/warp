@@ -3701,7 +3701,7 @@ fn test_context_menu_omits_clear_and_includes_reload_when_block_list_empty() {
 }
 
 #[test]
-fn test_context_menu_omits_reload_when_session_is_shared() {
+fn test_context_menu_includes_reload_when_session_is_shared() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -3722,15 +3722,15 @@ fn test_context_menu_omits_reload_when_session_is_shared() {
                 .filter_map(|item| item.fields().map(|fields| fields.label()))
                 .collect();
             assert!(
-                !labels.contains(&"Reload Shell"),
-                "Did not expect `Reload Shell` in shared-session right-click menu, got {labels:?}"
+                labels.contains(&"Reload Shell"),
+                "Expected `Reload Shell` in shared-session right-click menu, got {labels:?}"
             );
         });
     })
 }
 
 #[test]
-fn test_context_menu_omits_reload_when_terminal_is_read_only() {
+fn test_context_menu_includes_reload_when_terminal_is_read_only() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -3753,8 +3753,48 @@ fn test_context_menu_omits_reload_when_terminal_is_read_only() {
                 .filter_map(|item| item.fields().map(|fields| fields.label()))
                 .collect();
             assert!(
-                !labels.contains(&"Reload Shell"),
-                "Did not expect `Reload Shell` in read-only terminal right-click menu, got {labels:?}"
+                labels.contains(&"Reload Shell"),
+                "Expected `Reload Shell` in read-only terminal right-click menu, got {labels:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_pane_header_menu_includes_reload_for_cli_agent_session() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    view.view_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Codex,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext::default(),
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                        received_rich_notification: false,
+                    },
+                    ctx,
+                );
+            });
+
+            let items = view.pane_header_overflow_menu_items(ctx);
+            let labels: Vec<&str> = items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect();
+            assert!(
+                labels.contains(&"Reload Shell"),
+                "Expected `Reload Shell` in CLI-agent pane header menu, got {labels:?}"
             );
         });
     })

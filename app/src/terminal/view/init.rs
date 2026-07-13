@@ -57,7 +57,6 @@ pub const KEYBOARD_PROTOCOL_ENABLED_KEY: &str = "KeyboardProtocolEnabled";
 pub const CLI_AGENT_SESSION_ACTIVE_KEY: &str = "CLIAgentSessionActive";
 pub const ROOT_CLOUD_MODE_PANE_KEY: &str = "RootCloudModePane";
 pub const CAN_SHOW_CONVERSATION_DETAILS_KEY: &str = "CanShowConversationDetails";
-pub const CAN_RELOAD_SHELL_KEY: &str = "TerminalView_CanReloadShell";
 
 /// Some keybindings will do different things in different contexts. We break
 /// these into their own function to ensure we pay special attention to
@@ -337,7 +336,7 @@ pub fn init(app: &mut AppContext) {
             TerminalAction::ReloadShell,
         )
         .with_mac_key_binding("cmd-shift-K")
-        .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!(CAN_RELOAD_SHELL_KEY)),
+        .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
         EditableBinding::new(
             ACCEPT_PROMPT_SUGGESTION_KEYBINDING,
             "Accept Prompt Suggestion",

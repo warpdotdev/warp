@@ -679,13 +679,10 @@ impl BackingView for TerminalView {
             );
         }
 
-        // Reload Shell — own section, shown whenever Share session is offered.
-        if self.can_reload_shell_from_model(&model, ctx) {
-            if !items.is_empty() {
-                items.push(MenuItem::Separator);
-            }
-            items.push(self.reload_shell_menu_item(ctx));
+        if !items.is_empty() {
+            items.push(MenuItem::Separator);
         }
+        items.push(self.reload_shell_menu_item(ctx));
 
         // Split-pane related items.
         if self.split_pane_state(ctx).is_in_split_pane() {

@@ -1887,7 +1887,7 @@ fn test_reload_shell_replaces_terminal_with_fresh_session() {
 }
 
 #[test]
-fn test_reload_shell_ignores_shared_session() {
+fn test_reload_shell_replaces_shared_session() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -1908,13 +1908,14 @@ fn test_reload_shell_ignores_shared_session() {
                     .set_shared_session_status(SharedSessionStatus::ActiveSharer);
             });
 
-            assert!(!panes.reload_shell_in_pane(terminal_pane_id, ctx));
-            assert!(panes.has_pane_id(pane_id));
-            assert_eq!(panes.focused_pane_id(ctx), pane_id);
-            assert_eq!(
+            assert!(panes.reload_shell_in_pane(terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, pane_id);
+            assert!(!panes.has_pane_id(pane_id));
+            assert_ne!(
                 panes
-                    .terminal_view_from_pane_id(pane_id, ctx)
-                    .expect("pane should still have a terminal view")
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
                     .id(),
                 terminal_view_id
             );
@@ -1923,7 +1924,7 @@ fn test_reload_shell_ignores_shared_session() {
 }
 
 #[test]
-fn test_reload_shell_ignores_read_only_transcript_viewer() {
+fn test_reload_shell_replaces_read_only_transcript_viewer() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -1946,13 +1947,14 @@ fn test_reload_shell_ignores_read_only_transcript_viewer() {
                 assert!(model.is_read_only());
             });
 
-            assert!(!panes.reload_shell_in_pane(terminal_pane_id, ctx));
-            assert!(panes.has_pane_id(pane_id));
-            assert_eq!(panes.focused_pane_id(ctx), pane_id);
-            assert_eq!(
+            assert!(panes.reload_shell_in_pane(terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, pane_id);
+            assert!(!panes.has_pane_id(pane_id));
+            assert_ne!(
                 panes
-                    .terminal_view_from_pane_id(pane_id, ctx)
-                    .expect("pane should still have a terminal view")
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
                     .id(),
                 terminal_view_id
             );
@@ -1961,7 +1963,7 @@ fn test_reload_shell_ignores_read_only_transcript_viewer() {
 }
 
 #[test]
-fn test_reload_shell_ignores_ambient_agent_pane() {
+fn test_reload_shell_replaces_ambient_agent_pane() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
     let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
     let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
@@ -1991,16 +1993,16 @@ fn test_reload_shell_ignores_ambient_agent_pane() {
             let terminal_view_id = terminal_view.id();
             terminal_view.read(ctx, |view, ctx| {
                 assert!(view.is_ambient_agent_session(ctx));
-                assert!(!view.can_reload_shell(ctx));
             });
 
-            assert!(!panes.reload_shell_in_pane(terminal_pane_id, ctx));
-            assert!(panes.has_pane_id(terminal_pane_id.into()));
-            assert_eq!(panes.active_session_id(ctx), Some(terminal_pane_id));
-            assert_eq!(
+            assert!(panes.reload_shell_in_pane(terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, terminal_pane_id.into());
+            assert!(!panes.has_pane_id(terminal_pane_id.into()));
+            assert_ne!(
                 panes
-                    .terminal_view_from_pane_id(terminal_pane_id, ctx)
-                    .expect("pane should still have a terminal view")
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
                     .id(),
                 terminal_view_id
             );
@@ -2009,7 +2011,7 @@ fn test_reload_shell_ignores_ambient_agent_pane() {
 }
 
 #[test]
-fn test_reload_shell_ignores_temporary_replacement() {
+fn test_reload_shell_replaces_temporary_replacement() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -2039,7 +2041,6 @@ fn test_reload_shell_ignores_temporary_replacement() {
                 .terminal_view_from_pane_id(replacement_terminal_pane_id, ctx)
                 .expect("replacement pane should have a terminal view");
             replacement_terminal_view.update(ctx, |view, ctx| {
-                assert!(!view.can_reload_shell(ctx));
                 let menu_source = BlockListMenuSource::OutsideBlockRightClick {
                     position_in_terminal_view: Vector2F::zero(),
                 };
@@ -2049,16 +2050,20 @@ fn test_reload_shell_ignores_temporary_replacement() {
                     .filter_map(|item| item.fields().map(|fields| fields.label()))
                     .collect();
                 assert!(
-                    !labels.contains(&"Reload Shell"),
-                    "Did not expect `Reload Shell` in temporary replacement menu, got {labels:?}"
+                    labels.contains(&"Reload Shell"),
+                    "Expected `Reload Shell` in temporary replacement menu, got {labels:?}"
                 );
             });
 
-            assert!(!panes.reload_shell_in_pane(replacement_terminal_pane_id, ctx));
-            assert!(panes.has_pane_id(replacement_pane_id));
+            assert!(panes.reload_shell_in_pane(replacement_terminal_pane_id, ctx));
+            let fresh_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(fresh_pane_id, original_pane_id);
+            assert_ne!(fresh_pane_id, replacement_pane_id);
+            assert!(!panes.has_pane_id(original_pane_id));
+            assert!(!panes.has_pane_id(replacement_pane_id));
             assert_eq!(
                 panes.original_pane_for_replacement(replacement_pane_id),
-                Some(original_pane_id)
+                None
             );
         });
     });
@@ -2088,7 +2093,7 @@ fn test_reload_shell_ignores_hidden_child_agent_pane() {
 }
 
 #[test]
-fn test_reload_shell_ignores_split_off_child_agent_pane() {
+fn test_reload_shell_replaces_split_off_child_agent_pane() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -2117,7 +2122,6 @@ fn test_reload_shell_ignores_split_off_child_agent_pane() {
 
             child_terminal_view.update(ctx, |view, ctx| {
                 assert!(view.is_orchestration_split_off());
-                assert!(!view.can_reload_shell(ctx));
                 let menu_source = BlockListMenuSource::OutsideBlockRightClick {
                     position_in_terminal_view: Vector2F::zero(),
                 };
@@ -2127,17 +2131,20 @@ fn test_reload_shell_ignores_split_off_child_agent_pane() {
                     .filter_map(|item| item.fields().map(|fields| fields.label()))
                     .collect();
                 assert!(
-                    !labels.contains(&"Reload Shell"),
-                    "Did not expect `Reload Shell` in split-off child menu, got {labels:?}"
+                    labels.contains(&"Reload Shell"),
+                    "Expected `Reload Shell` in split-off child menu, got {labels:?}"
                 );
             });
 
-            assert!(!panes.reload_shell_in_pane(child_terminal_pane_id, ctx));
-            assert!(panes.has_pane_id(child_pane_id));
-            assert_eq!(
+            assert!(panes.reload_shell_in_pane(child_terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, child_pane_id);
+            assert!(!panes.has_pane_id(child_pane_id));
+            assert!(!panes.is_child_agent_pane(replacement_pane_id));
+            assert_ne!(
                 panes
-                    .terminal_view_from_pane_id(child_pane_id, ctx)
-                    .expect("split-off child pane should still have a terminal view")
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
                     .id(),
                 child_terminal_view_id
             );
@@ -2146,7 +2153,7 @@ fn test_reload_shell_ignores_split_off_child_agent_pane() {
 }
 
 #[test]
-fn test_reload_shell_ignores_split_off_child_agent_tab() {
+fn test_reload_shell_replaces_split_off_child_agent_tab() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -2178,7 +2185,6 @@ fn test_reload_shell_ignores_split_off_child_agent_tab() {
             assert!(panes.is_split_off_child_agent_pane(child_pane_id, ctx));
             child_terminal_view.update(ctx, |view, ctx| {
                 assert!(view.is_orchestration_split_off());
-                assert!(!view.can_reload_shell(ctx));
                 let menu_source = BlockListMenuSource::OutsideBlockRightClick {
                     position_in_terminal_view: Vector2F::zero(),
                 };
@@ -2188,17 +2194,20 @@ fn test_reload_shell_ignores_split_off_child_agent_tab() {
                     .filter_map(|item| item.fields().map(|fields| fields.label()))
                     .collect();
                 assert!(
-                    !labels.contains(&"Reload Shell"),
-                    "Did not expect `Reload Shell` in split-off child tab menu, got {labels:?}"
+                    labels.contains(&"Reload Shell"),
+                    "Expected `Reload Shell` in split-off child tab menu, got {labels:?}"
                 );
             });
 
-            assert!(!panes.reload_shell_in_pane(child_terminal_pane_id, ctx));
-            assert!(panes.has_pane_id(child_pane_id));
-            assert_eq!(
+            assert!(panes.reload_shell_in_pane(child_terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, child_pane_id);
+            assert!(!panes.has_pane_id(child_pane_id));
+            assert!(panes.child_agent_origin().is_none());
+            assert_ne!(
                 panes
-                    .terminal_view_from_pane_id(child_pane_id, ctx)
-                    .expect("split-off child tab should still have a terminal view")
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
                     .id(),
                 child_terminal_view_id
             );
