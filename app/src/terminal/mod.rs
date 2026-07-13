@@ -230,6 +230,22 @@ pub struct SizeUpdate {
 }
 
 impl SizeUpdate {
+    /// Builds a host-terminal-driven resize for headless (TUI) frontends,
+    /// where one cell maps to one "pixel" and there is no window padding
+    /// (mirroring [`SizeInfo::new_without_font_metrics`]). Used to keep the
+    /// PTY's winsize in sync with the host terminal while an alt-screen app
+    /// is running.
+    pub fn for_tui_host_resize(last_size: SizeInfo, rows: usize, cols: usize) -> Self {
+        Self {
+            update_reason: SizeUpdateReason::Refresh,
+            last_size,
+            new_size: SizeInfo::new_without_font_metrics(rows, cols),
+            new_gap_height: None,
+            natural_rows: rows,
+            natural_cols: cols,
+        }
+    }
+
     /// Whether the reason for the update is a refresh.
     pub fn is_refresh(&self) -> bool {
         matches!(self.update_reason, SizeUpdateReason::Refresh)

@@ -1,5 +1,6 @@
 //! Authenticated terminal-session TUI surface.
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,14 +23,16 @@ use warp::tui_export::{
     ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
     GitRepoStatusModel, GitStatusMetadata, LLMPreferences, LLMPreferencesEvent, ModelEvent,
     ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
-    RepoDetectionSource, ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
-    SlashCommandSelectionBehavior, StaticCommand, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
-    TuiZeroStateDataSource, COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
+    RepoDetectionSource, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
+    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalMode,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit, TuiSlashCommandDataSource,
+    TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, COMMAND_REGISTRY,
+    WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
+use warp_terminal::model::escape_sequences::C0;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -43,6 +46,7 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::alt_screen_element::{HostSizeSlot, TuiAltScreenElement, TuiHostSizeProbe};
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_selection::TuiConversationSelection;
@@ -75,6 +79,10 @@ pub(crate) enum TuiTerminalSessionEvent {
         bytes: Cow<'static, [u8]>,
         mode: AIAgentPtyWriteMode,
     },
+    /// Raw user bytes passed straight through to the PTY (alt-screen input).
+    WriteToPty(Cow<'static, [u8]>),
+    /// Pushes a new winsize to the PTY (alt-screen host-size tracking).
+    ResizePty(SizeUpdate),
 }
 
 impl PtyIntentEvent for TuiTerminalSessionEvent {
@@ -85,6 +93,8 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
                 bytes: bytes.clone(),
                 mode: *mode,
             }),
+            Self::WriteToPty(bytes) => Some(PtyIntent::WriteBytes(bytes.clone())),
+            Self::ResizePty(size_update) => Some(PtyIntent::Resize(*size_update)),
         }
     }
 }
@@ -126,11 +136,14 @@ fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
 pub(crate) enum TuiTerminalSessionAction {
     /// Ctrl-c anywhere in the session surface: cancel the running
     /// conversation, else clear the input; a second press within
-    /// [`CTRL_C_EXIT_WINDOW`] exits the TUI.
+    /// [`CTRL_C_EXIT_WINDOW`] exits the TUI. While the alt screen is active,
+    /// ctrl-c is forwarded to the running program instead.
     Interrupt,
     /// Click on the footer's usage entry: flips the persisted credits⇄cost
     /// display-mode setting.
     ToggleUsageDisplay,
+    /// Encoded input from the alt-screen element, forwarded to the PTY.
+    WriteAltScreenInput(Vec<u8>),
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -161,6 +174,13 @@ pub(crate) struct TuiTerminalSessionView {
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
     /// shell submission).
     transient_hint: TransientHint,
+    /// The host terminal's size in cells, recorded during every layout pass
+    /// (by the alt-screen element or the transcript-path probe). Read when
+    /// pushing PTY resizes while an alt-screen app is running.
+    host_size: HostSizeSlot,
+    /// The transcript-mode terminal size captured when the alt screen
+    /// activated, restored when the alt-screen app exits.
+    pre_alt_screen_size: Option<SizeInfo>,
 }
 
 /// Registers the session surface's keybindings. Called once at TUI startup
@@ -412,8 +432,10 @@ impl TuiTerminalSessionView {
         });
 
         // These events update block metadata or grids the transcript reads.
-        // PTY output redraws are driven by `wakeups_rx` below.
-        ctx.subscribe_to_model(&model_events, |_, _, event, ctx| match event {
+        // PTY output redraws are driven by `wakeups_rx` below. Alt-screen
+        // enter/exit swaps the whole surface between the transcript UI and
+        // the alt-screen grid.
+        ctx.subscribe_to_model(&model_events, |view, _, event, ctx| match event {
             ModelEvent::BlockCompleted(_)
             | ModelEvent::AfterBlockStarted { .. }
             | ModelEvent::BlockMetadataReceived(_)
@@ -424,6 +446,9 @@ impl TuiTerminalSessionView {
             | ModelEvent::Typeahead
             | ModelEvent::Handler(_)
             | ModelEvent::FinishUpdate(_) => ctx.notify(),
+            ModelEvent::TerminalModeSwapped(mode) => {
+                view.handle_terminal_mode_swapped(mode, ctx);
+            }
             _ => {}
         });
         // The footer shows the active model, working directory, and usage
@@ -502,12 +527,21 @@ impl TuiTerminalSessionView {
         ctx.spawn_stream_local(
             throttle(WAKEUP_THROTTLE_PERIOD, wakeups_rx),
             |view, _, ctx| {
-                {
+                let is_alt_screen_active = {
                     let mut model = view.terminal_model.lock();
-                    if !model.is_alt_screen_active() {
+                    let is_alt_screen_active = model.is_alt_screen_active();
+                    if !is_alt_screen_active {
                         model.block_list_mut().update_background_block_height();
                         model.block_list_mut().update_active_block_height();
                     }
+                    is_alt_screen_active
+                };
+
+                // While an alt-screen app is producing output, keep the PTY's
+                // winsize tracking the host terminal (covers a host resize
+                // that happened after the alt screen was entered).
+                if is_alt_screen_active {
+                    view.sync_pty_size_to_host(ctx);
                 }
 
                 ctx.notify();
@@ -537,7 +571,68 @@ impl TuiTerminalSessionView {
             ai_input_model,
             terminal_model: model,
             transient_hint: TransientHint::default(),
+            host_size: Rc::new(Cell::new(None)),
+            pre_alt_screen_size: None,
         }
+    }
+
+    /// Swaps the surface between the transcript UI and the alt-screen grid.
+    ///
+    /// Entering the alt screen focuses this view so the input view's editing
+    /// keybindings drop out of the keymap responder chain — every keystroke
+    /// then reaches the alt-screen element (ctrl-c stays bound here and is
+    /// forwarded by [`Self::handle_interrupt`]). The PTY is resized to the
+    /// host terminal so the program lays out against the real window, and the
+    /// transcript-mode size is restored when the program exits.
+    fn handle_terminal_mode_swapped(&mut self, mode: &TerminalMode, ctx: &mut ViewContext<Self>) {
+        match mode {
+            TerminalMode::AltScreen => {
+                self.pre_alt_screen_size =
+                    Some(self.terminal_model.lock().block_list().size().to_owned());
+                ctx.focus_self();
+                self.sync_pty_size_to_host(ctx);
+            }
+            TerminalMode::BlockList => {
+                ctx.focus(&self.input_view);
+                if let Some(size) = self.pre_alt_screen_size.take() {
+                    self.resize_pty(size.rows(), size.columns(), ctx);
+                }
+            }
+        }
+        ctx.notify();
+    }
+
+    /// Resizes the PTY (and terminal model) to the host terminal size
+    /// recorded during the last layout pass, if it is known and differs.
+    fn sync_pty_size_to_host(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(host_size) = self.host_size.get() else {
+            return;
+        };
+        self.resize_pty(
+            usize::from(host_size.height),
+            usize::from(host_size.width),
+            ctx,
+        );
+    }
+
+    /// Resizes the terminal model and pushes the matching winsize to the PTY
+    /// (which delivers `SIGWINCH` to the foreground program). No-ops when the
+    /// model already has the requested size.
+    fn resize_pty(&mut self, rows: usize, columns: usize, ctx: &mut ViewContext<Self>) {
+        let size_update = {
+            let mut model = self.terminal_model.lock();
+            let last_size = model.block_list().size().to_owned();
+            if last_size.rows() == rows && last_size.columns() == columns {
+                return;
+            }
+            let size_update = SizeUpdate::for_tui_host_resize(last_size, rows, columns);
+            // Mirrors the GUI's `resize_internal`: the view applies the
+            // update to the model, and the emitted intent resizes the PTY.
+            model.resize(size_update);
+            size_update
+        };
+        ctx.emit(TuiTerminalSessionEvent::ResizePty(size_update));
+        ctx.notify();
     }
 
     /// Re-renders on history events that can change the warping indicator:
@@ -583,6 +678,15 @@ impl TuiTerminalSessionView {
     /// conversation if there is one, else clear the input — and the exit
     /// confirmation is (re-)armed, surfacing [`CTRL_C_EXIT_HINT`] in the footer.
     fn handle_interrupt(&mut self, ctx: &mut ViewContext<Self>) {
+        // While an alt-screen app is running, ctrl-c belongs to it: forward
+        // ETX instead of cancelling/clearing (mirrors a regular terminal).
+        if self.terminal_model.lock().is_alt_screen_active() {
+            ctx.emit(TuiTerminalSessionEvent::WriteToPty(Cow::Borrowed(&[
+                C0::ETX,
+            ])));
+            return;
+        }
+
         let now = Instant::now();
         if self.exit_confirmation.should_exit(now) {
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -1140,6 +1244,15 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        // While the PTY is on the alternate screen (vim, less, htop, …), the
+        // alt-screen grid replaces the whole transcript surface, full-bleed.
+        // The element also consumes all key/mouse input and forwards it to
+        // the running program (see `TuiAltScreenElement`).
+        if self.terminal_model.lock().is_alt_screen_active() {
+            return TuiAltScreenElement::new(self.terminal_model.clone(), self.host_size.clone())
+                .finish();
+        }
+
         let inline_menu = self.inline_menu.render(ctx);
         // The border takes the shell-mode accent while in shell mode.
         let builder = TuiUiBuilder::from_app(ctx);
@@ -1233,10 +1346,16 @@ impl TuiView for TuiTerminalSessionView {
                 .with_max_rows(1)
                 .finish(),
         );
-        TuiContainer::new(content.finish())
-            .with_padding_x(2)
-            .with_padding_top(2)
-            .finish()
+        // The probe records the host terminal size every layout pass so the
+        // alt-screen path can size the PTY correctly the moment it activates.
+        TuiHostSizeProbe::new(
+            TuiContainer::new(content.finish())
+                .with_padding_x(2)
+                .with_padding_top(2)
+                .finish(),
+            self.host_size.clone(),
+        )
+        .finish()
     }
 }
 
@@ -1247,6 +1366,11 @@ impl TypedActionView for TuiTerminalSessionView {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
+            TuiTerminalSessionAction::WriteAltScreenInput(bytes) => {
+                ctx.emit(TuiTerminalSessionEvent::WriteToPty(Cow::Owned(
+                    bytes.clone(),
+                )));
+            }
         }
     }
 }

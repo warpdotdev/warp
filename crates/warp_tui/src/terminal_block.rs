@@ -265,7 +265,7 @@ fn render_grid_rows(
     );
 }
 
-fn cell_to_color(color: &Color, colors: &TerminalColorList) -> TuiColor {
+pub(crate) fn cell_to_color(color: &Color, colors: &TerminalColorList) -> TuiColor {
     match color {
         Color::Named(named) => {
             let color = &colors[named.into_color_index()];
@@ -279,7 +279,7 @@ fn cell_to_color(color: &Color, colors: &TerminalColorList) -> TuiColor {
     }
 }
 
-fn cell_to_style(cell: &Cell, colors: &TerminalColorList) -> TuiStyle {
+pub(crate) fn cell_to_style(cell: &Cell, colors: &TerminalColorList) -> TuiStyle {
     let mut style = TuiStyle::default().fg(cell_to_color(&cell.fg, colors));
     // Cells with the default background are left bg-unset so they inherit the
     // TUI's own background instead of painting the theme's background color;
@@ -312,7 +312,7 @@ fn cell_to_style(cell: &Cell, colors: &TerminalColorList) -> TuiStyle {
     style
 }
 
-fn sanitized_symbol(cell: &Cell) -> String {
+pub(crate) fn sanitized_symbol(cell: &Cell) -> String {
     let content = cell.content_for_display().to_string();
     if content.is_empty() || content.chars().any(char::is_control) {
         " ".to_owned()

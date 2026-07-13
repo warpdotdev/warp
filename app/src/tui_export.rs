@@ -62,7 +62,7 @@ pub use crate::search::slash_command_menu::static_commands::commands::{
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
-pub use crate::terminal::event::AfterBlockCompletedEvent;
+pub use crate::terminal::event::{AfterBlockCompletedEvent, TerminalMode};
 pub use crate::terminal::input::slash_command_model::{
     slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,
     ParsedSlashCommandInput,
@@ -96,7 +96,7 @@ pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
-    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData,
+    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData, SizeInfo, SizeUpdate,
     TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::{dark_theme, light_theme};

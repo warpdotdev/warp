@@ -9,6 +9,7 @@
 
 mod agent_block;
 mod agent_block_sections;
+mod alt_screen_element;
 mod autoupdate;
 mod clipboard;
 pub mod input;
