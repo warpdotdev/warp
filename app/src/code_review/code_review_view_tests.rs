@@ -825,8 +825,6 @@ fn test_relocate_comments_line_removed_marked_outdated() {
 #[test]
 fn test_imported_context_line_comment_relocates_and_not_outdated() {
     App::test((), |mut app| async move {
-        let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
-
         let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         // Imported comment on line 2 as a CONTEXT line (leading-space marker).
@@ -866,8 +864,6 @@ fn test_imported_context_line_comment_relocates_and_not_outdated() {
 #[test]
 fn test_imported_context_line_comment_removed_marked_outdated() {
     App::test((), |mut app| async move {
-        let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
-
         let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 3");
 
         // Imported context comment on a line (" old line 2") that no longer exists.
@@ -908,8 +904,6 @@ fn test_imported_context_line_comment_removed_marked_outdated() {
 #[test]
 fn test_native_indented_context_comment_not_outdated() {
     App::test((), |mut app| async move {
-        let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
-
         let ctx = TestContext::new(&mut app, "test.txt", "fn f() {\n    let x = 1;\n}");
 
         // Native comment on the indented line; content is the raw line (no marker).
