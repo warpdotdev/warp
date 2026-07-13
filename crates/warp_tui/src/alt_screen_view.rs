@@ -23,6 +23,7 @@ use warpui_core::elements::tui::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPaintContext, TuiRect, TuiSize,
 };
+use warpui_core::keymap::Keystroke;
 use warpui_core::AppContext;
 
 use crate::terminal_block::render_grid_handler;
@@ -121,7 +122,9 @@ impl TuiElement for AltScreenElement {
             }
             .to_escape_sequence(model.deref())
         };
-        let bytes = escape_sequence.or_else(|| fallback_key_bytes(&keystroke.key, chars));
+        let bytes = escape_sequence
+            .or_else(|| ctrl_letter_c0(keystroke))
+            .or_else(|| fallback_key_bytes(&keystroke.key, chars));
         let Some(bytes) = bytes else {
             return false;
         };
@@ -149,34 +152,24 @@ fn fallback_key_bytes(key: &str, chars: &str) -> Option<Vec<u8>> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::fallback_key_bytes;
-
-    #[test]
-    fn printable_keys_forward_their_utf8_bytes() {
-        assert_eq!(fallback_key_bytes("a", "a"), Some(b"a".to_vec()));
-        assert_eq!(fallback_key_bytes("A", "A"), Some(b"A".to_vec()));
-        assert_eq!(fallback_key_bytes(" ", " "), Some(b" ".to_vec()));
-        // A non-ASCII grapheme forwards its full UTF-8 encoding.
-        assert_eq!(fallback_key_bytes("é", "é"), Some("é".as_bytes().to_vec()));
+/// The C0 control byte for a `Ctrl+<letter>` combo. The shared legacy encoder
+/// only emits C0 bytes for a small `Ctrl+<number>`/`Ctrl+space` set unless the
+/// kitty keyboard protocol is active, while the TUI key conversion still puts
+/// the printable letter in `chars` for `Ctrl+A`..`Ctrl+Z`. Without this, those
+/// combos would be forwarded as plain letters (e.g. `a` instead of `0x01`),
+/// breaking control shortcuts in full-screen apps. `Ctrl+C` never reaches here
+/// — it's handled earlier as the TUI exit escape hatch.
+fn ctrl_letter_c0(keystroke: &Keystroke) -> Option<Vec<u8>> {
+    if !keystroke.ctrl {
+        return None;
     }
-
-    #[test]
-    fn named_control_keys_map_to_c0_bytes() {
-        // Escape is the important one: it lets the user leave insert mode in a
-        // full-screen editor. Enter/tab/backspace round out the common set.
-        assert_eq!(fallback_key_bytes("escape", ""), Some(vec![0x1b]));
-        assert_eq!(fallback_key_bytes("enter", ""), Some(vec![b'\r']));
-        assert_eq!(fallback_key_bytes("\t", ""), Some(vec![b'\t']));
-        assert_eq!(fallback_key_bytes("backspace", ""), Some(vec![0x7f]));
-    }
-
-    #[test]
-    fn unmapped_key_without_chars_sends_nothing() {
-        // Keys the encoder handles (arrows, fn keys) never reach this fallback;
-        // anything else with no text produces no PTY bytes.
-        assert_eq!(fallback_key_bytes("f5", ""), None);
-        assert_eq!(fallback_key_bytes("insert", ""), None);
+    match keystroke.key.as_bytes() {
+        // `& 0x1f` folds a/A..z/Z onto 0x01..0x1A (Ctrl+A = 0x01, Ctrl+Z = 0x1A).
+        [byte] if byte.is_ascii_alphabetic() => Some(vec![byte.to_ascii_uppercase() & 0x1f]),
+        _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "alt_screen_view_tests.rs"]
+mod tests;
