@@ -5547,13 +5547,11 @@ impl AgentsWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(Shrinkable::new(1., header_and_description).finish());
 
-        if FeatureFlag::MultiProfile.is_enabled() {
-            profiles_row.add_child(
-                Container::new(view.add_profile_button.as_ref(app).render(app))
-                    .with_margin_left(16.)
-                    .finish(),
-            );
-        }
+        profiles_row.add_child(
+            Container::new(view.add_profile_button.as_ref(app).render(app))
+                .with_margin_left(16.)
+                .finish(),
+        );
 
         let profiles_header = Container::new(profiles_row.finish())
             .with_margin_bottom(12.0)

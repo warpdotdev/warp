@@ -5746,9 +5746,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::AIExecutionProfileRemovedFromAllowlist { .. }
             | Self::AIExecutionProfileRemovedFromDenylist { .. }
             | Self::AIExecutionProfileModelSelected { .. }
-            | Self::AIExecutionProfileContextWindowSelected { .. } => {
-                EnablementState::Flag(FeatureFlag::MultiProfile)
-            }
+            | Self::AIExecutionProfileContextWindowSelected { .. } => EnablementState::Always,
             Self::AIInputNotSent { .. } => EnablementState::Always,
             Self::OpenSlashMenu { .. } => EnablementState::Always,
             Self::SlashCommandAccepted { .. } => EnablementState::Always,

@@ -231,8 +231,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SendTelemetryToFile,
         #[cfg(feature = "undo_closed_panes")]
         FeatureFlag::UndoClosedPanes,
-        #[cfg(feature = "multi_profile")]
-        FeatureFlag::MultiProfile,
         #[cfg(feature = "conversation_artifacts")]
         FeatureFlag::ConversationArtifacts,
         #[cfg(feature = "sync_ambient_plans")]
