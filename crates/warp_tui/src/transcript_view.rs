@@ -142,11 +142,11 @@ impl TuiTranscriptView {
                 self.mark_exchange_dirty(*exchange_id, ctx);
             }
             // Todo statuses are projections of conversation-wide state. A new
-            // list can cancel rows rendered by an older exchange, so dirty all
-            // blocks on this surface rather than only the exchange carrying
-            // the UpdateTodos message.
+            // list can cancel rows rendered by an older exchange, so dirty
+            // every todo-rendering block on this surface rather than only the
+            // exchange carrying the UpdateTodos message.
             BlocklistAIHistoryEvent::UpdatedTodoList { .. } => {
-                self.mark_all_agent_blocks_dirty(ctx);
+                self.mark_todo_blocks_dirty(ctx);
             }
             // The first pending item switches between InProgress and Stopped
             // when its conversation starts or stops, without changing the
@@ -325,15 +325,17 @@ impl TuiTranscriptView {
         }
     }
 
-    /// Marks every agent block on this terminal surface dirty. Todo-list
-    /// updates are conversation-wide: a newly active list can restyle rows in
-    /// any older exchange as cancelled.
-    fn mark_all_agent_blocks_dirty(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Marks every todo-rendering agent block on this terminal surface dirty.
+    /// Todo-list updates are conversation-wide — a newly active list can
+    /// restyle rows in any older exchange as cancelled — but blocks without a
+    /// todo message never change appearance, so their cached heights and
+    /// layout stay untouched.
+    fn mark_todo_blocks_dirty(&mut self, ctx: &mut ViewContext<Self>) {
         let view_ids = self
             .agent_blocks
             .borrow()
-            .keys()
-            .copied()
+            .iter()
+            .filter_map(|(view_id, view)| view.as_ref(ctx).renders_todos().then_some(*view_id))
             .collect::<Vec<_>>();
         if view_ids.is_empty() {
             return;
@@ -346,8 +348,10 @@ impl TuiTranscriptView {
         ctx.notify();
     }
 
-    /// Marks all agent blocks owned by `conversation_id` dirty. Conversation
-    /// status participates in the projected status of the first pending todo.
+    /// Marks `conversation_id`'s todo-rendering agent blocks dirty.
+    /// Conversation status participates in the projected status of the first
+    /// pending todo (InProgress vs Stopped); no other TUI block content reads
+    /// it, so blocks without todo messages keep their cached layout.
     fn mark_conversation_dirty(
         &mut self,
         conversation_id: AIConversationId,
@@ -358,7 +362,9 @@ impl TuiTranscriptView {
             .borrow()
             .iter()
             .filter_map(|(view_id, view)| {
-                (view.as_ref(ctx).conversation_id() == conversation_id).then_some(*view_id)
+                let view = view.as_ref(ctx);
+                (view.conversation_id() == conversation_id && view.renders_todos())
+                    .then_some(*view_id)
             })
             .collect::<Vec<_>>();
         if view_ids.is_empty() {

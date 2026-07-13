@@ -948,9 +948,8 @@ impl BlocklistAIHistoryModel {
     }
 
     /// Returns the render status of one todo item in the conversation's todo
-    /// history (see [`AIConversation::todo_status`]). A narrow projection so
-    /// TUI consumers don't need the whole `AIConversation` exported through
-    /// `tui_export`.
+    /// history (see [`AIConversation::todo_status`]) — a narrow projection
+    /// for consumers that don't need the whole `AIConversation`.
     pub fn todo_status(
         &self,
         conversation_id: &AIConversationId,
@@ -959,8 +958,8 @@ impl BlocklistAIHistoryModel {
         self.conversation(conversation_id)?.todo_status(todo_id)
     }
 
-    /// Returns the conversation's active (most recent) todo list, if any. A
-    /// narrow projection for TUI consumers (see [`Self::todo_status`]).
+    /// Returns the conversation's active (most recent) todo list, if any — a
+    /// narrow projection (see [`Self::todo_status`]).
     pub fn active_todo_list(&self, conversation_id: &AIConversationId) -> Option<&AIAgentTodoList> {
         self.conversation(conversation_id)?.active_todo_list()
     }

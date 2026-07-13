@@ -191,6 +191,11 @@ pub(super) struct TuiAIBlock {
     /// Populated by [`Self::sync_action_views`]; stateless tool calls never
     /// get entries here.
     action_views: HashMap<AIAgentActionId, TuiToolCallView>,
+    /// Whether the exchange's output contains any todo-operation message,
+    /// maintained by [`Self::sync_action_views`]. Lets the transcript scope
+    /// conversation-wide todo/status invalidations to the blocks whose
+    /// rendering can actually change.
+    renders_todos: bool,
     last_measured_width: Cell<Option<u16>>,
 }
 
@@ -218,6 +223,7 @@ impl TuiAIBlock {
             collapsible_states: Default::default(),
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
+            renders_todos: false,
             last_measured_width: Cell::new(None),
         };
         block.sync_action_views(&action_model, ctx);
@@ -257,9 +263,9 @@ impl TuiAIBlock {
         block
     }
 
-    /// Records the exchange's tool-call action ids and creates child views
-    /// for stateful tool calls that don't have one yet. Rendering can't
-    /// create views since it only sees `&AppContext`.
+    /// Records the exchange's tool-call action ids and todo presence, and
+    /// creates child views for stateful tool calls that don't have one yet.
+    /// Rendering can't create views since it only sees `&AppContext`.
     fn sync_action_views(
         &mut self,
         action_model: &ModelHandle<BlocklistAIActionModel>,
@@ -271,6 +277,10 @@ impl TuiAIBlock {
         let mut shell_command_actions = Vec::new();
         if let Some(output) = status.output_to_render() {
             for message in &output.get().messages {
+                if matches!(&message.message, AIAgentOutputMessageType::TodoOperation(_)) {
+                    self.renders_todos = true;
+                    continue;
+                }
                 let AIAgentOutputMessageType::Action(action) = &message.message else {
                     continue;
                 };
@@ -350,6 +360,13 @@ impl TuiAIBlock {
     /// [`Self::sync_action_views`], so per-action-event checks stay cheap.
     fn renders_action(&self, action_id: &AIAgentActionId) -> bool {
         self.action_ids.contains(action_id)
+    }
+
+    /// Returns whether this block's output contains any todo-operation
+    /// message (a task list or a completion row) — the only content whose
+    /// styling depends on conversation-wide todo and status state.
+    pub(super) fn renders_todos(&self) -> bool {
+        self.renders_todos
     }
 
     /// Invalidates this block and its stateful command child after an owned

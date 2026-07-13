@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentExchangeId, AIAgentInput, AIBlockModel, AIBlockOutputStatus, AIConversationId,
-    AIRequestType, Appearance, BlockHeightItem, BlocklistAIHistoryEvent, ConversationStatus,
-    ConversationStatusUpdate, LLMId, OutputStatusUpdateCallback, RichContentItem, RichContentType,
-    ServerOutputId, TerminalModel, UserQueryMode,
+    AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType,
+    AIAgentTodo, AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, Appearance,
+    BlockHeightItem, BlocklistAIHistoryEvent, ConversationStatus, ConversationStatusUpdate, LLMId,
+    MessageId, OutputStatusUpdateCallback, RichContentItem, RichContentType, ServerOutputId,
+    Shared, TerminalModel, TodoOperation, UserQueryMode,
 };
 use warpui::event::ModifiersState;
 use warpui::platform::WindowStyle;
@@ -133,13 +134,14 @@ fn transcript_clear_event_removes_only_named_conversations() {
 
 struct FakeAgentBlockModel {
     inputs: Vec<AIAgentInput>,
+    status: AIBlockOutputStatus,
 }
 
 impl AIBlockModel for FakeAgentBlockModel {
     type View = TuiAIBlock;
 
     fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
-        AIBlockOutputStatus::Pending
+        self.status.clone()
     }
 
     fn server_output_id(&self, _app: &AppContext) -> Option<ServerOutputId> {
@@ -274,13 +276,21 @@ fn todo_and_conversation_status_events_dirty_affected_agent_blocks() {
         let first_conversation_id = AIConversationId::new();
         let second_conversation_id = AIConversationId::new();
 
-        let (first_block_id, second_block_id) = transcript.update(&mut app, |view, ctx| {
+        // Only the first block renders todo content; the second is plain.
+        let (todo_block_id, _plain_block_id) = transcript.update(&mut app, |view, ctx| {
             (
-                append_test_agent_block(view, first_conversation_id, AIAgentExchangeId::new(), ctx),
+                append_test_agent_block(
+                    view,
+                    first_conversation_id,
+                    AIAgentExchangeId::new(),
+                    todo_output_status(),
+                    ctx,
+                ),
                 append_test_agent_block(
                     view,
                     second_conversation_id,
                     AIAgentExchangeId::new(),
+                    AIBlockOutputStatus::Pending,
                     ctx,
                 ),
             )
@@ -298,8 +308,8 @@ fn todo_and_conversation_status_events_dirty_affected_agent_blocks() {
         });
         assert_eq!(
             take_dirty_rich_content_items(&terminal_model),
-            [first_block_id, second_block_id].into_iter().collect(),
-            "a todo update can restyle task rows in any exchange on the surface"
+            [todo_block_id].into_iter().collect(),
+            "a todo update restyles todo-rendering blocks only; plain blocks keep their layout"
         );
 
         transcript.update(&mut app, |view, ctx| {
@@ -317,10 +327,49 @@ fn todo_and_conversation_status_events_dirty_affected_agent_blocks() {
         });
         assert_eq!(
             take_dirty_rich_content_items(&terminal_model),
-            [first_block_id].into_iter().collect(),
-            "a status update should only dirty blocks from that conversation"
+            [todo_block_id].into_iter().collect(),
+            "a status update should only dirty todo-rendering blocks from that conversation"
+        );
+
+        transcript.update(&mut app, |view, ctx| {
+            view.handle_history_event(
+                &BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                    conversation_id: second_conversation_id,
+                    terminal_surface_id,
+                    update: ConversationStatusUpdate::Changed {
+                        prev_status: ConversationStatus::InProgress,
+                    },
+                    new_status: ConversationStatus::Success,
+                },
+                ctx,
+            );
+        });
+        assert!(
+            take_dirty_rich_content_items(&terminal_model).is_empty(),
+            "a status update for a conversation without todo blocks dirties nothing"
         );
     });
+}
+
+/// A completed output whose only message is an `UpdateTodos` operation, so
+/// the owning block renders todo content.
+fn todo_output_status() -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Complete {
+        output: Shared::new(AIAgentOutput {
+            messages: vec![AIAgentOutputMessage {
+                id: MessageId::new("todo-1".to_owned()),
+                message: AIAgentOutputMessageType::TodoOperation(TodoOperation::UpdateTodos {
+                    todos: vec![AIAgentTodo::new(
+                        "t1".to_owned().into(),
+                        "task".to_owned(),
+                        String::new(),
+                    )],
+                }),
+                citations: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    }
 }
 #[test]
 fn transcript_view_scrolls_only_with_the_mouse_wheel() {
@@ -453,7 +502,10 @@ fn insert_test_agent_block(
             TuiAIBlock::new(
                 conversation_id,
                 exchange_id,
-                Rc::new(FakeAgentBlockModel { inputs }),
+                Rc::new(FakeAgentBlockModel {
+                    inputs,
+                    status: AIBlockOutputStatus::Pending,
+                }),
                 action_model,
                 &model_events,
                 terminal_model,
@@ -542,6 +594,7 @@ fn append_test_agent_block(
     view: &mut TuiTranscriptView,
     conversation_id: AIConversationId,
     exchange_id: AIAgentExchangeId,
+    status: AIBlockOutputStatus,
     ctx: &mut ViewContext<TuiTranscriptView>,
 ) -> EntityId {
     let action_model = view.action_model.clone();
@@ -551,7 +604,10 @@ fn append_test_agent_block(
         TuiAIBlock::new(
             conversation_id,
             exchange_id,
-            Rc::new(FakeAgentBlockModel { inputs: Vec::new() }),
+            Rc::new(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status,
+            }),
             action_model,
             &model_events,
             terminal_model,
