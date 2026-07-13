@@ -291,3 +291,38 @@ fn test_clear_after_truncate_front_then_resize_and_push_does_not_panic() {
         .expect("should materialize a row after clearing and resizing storage");
     assert_eq!(row[0].c, 'n');
 }
+
+#[test]
+fn content_offset_at_point_or_before_clamps_empty_row_columns() {
+    let storage = FlatStorage::from_content_using_rows("abc\n\ndef\n", 5, Some(3));
+
+    assert!(storage.content_offset_at_point(Point::new(1, 4)).is_err());
+    assert_eq!(
+        storage.content_offset_at_point_or_before(Point::new(1, 4)),
+        storage
+            .content_offset_at_point(Point::new(1, 0))
+            .expect("empty row start should map to a content offset")
+    );
+}
+
+#[test]
+fn has_cursor_cell_materializes_empty_cells_before_it() {
+    let mut cursor_cell = Cell::default();
+    cursor_cell.flags.insert(Flags::HAS_CURSOR);
+
+    let row = Row::from_vec(
+        vec![
+            Cell::default(),
+            Cell::default(),
+            Cell::default(),
+            Cell::default(),
+            cursor_cell,
+        ],
+        5,
+    );
+
+    let mut storage = FlatStorage::new(5, None, Some(1));
+    storage.push_rows([&row]);
+
+    assert!(storage.content_offset_at_point(Point::new(0, 4)).is_ok());
+}

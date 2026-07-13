@@ -230,7 +230,7 @@ impl FlatStorage {
                     continue;
                 }
 
-                let mut needs_processing = cell.c != cell::DEFAULT_CHAR;
+                let mut needs_processing = !cell.is_empty();
                 if cell.fg != fg_color {
                     needs_processing = true;
                     fg_color = cell.fg;
@@ -412,6 +412,9 @@ impl FlatStorage {
     pub fn content_offset_at_point_or_before(&self, point: Point) -> ByteOffset {
         match self.content_offset_at_point(point) {
             Ok(content_offset) => content_offset,
+            Err(index::ContentOffsetToPointError::NonZeroColumnInEmptyRow { row, .. }) => self
+                .content_offset_at_point(Point::new(row, 0))
+                .expect("empty row start should have a content offset"),
             Err(index::ContentOffsetToPointError::ColumnExceedsContent { row, .. }) => {
                 let fallback_col = self
                     .rows_from(row)
