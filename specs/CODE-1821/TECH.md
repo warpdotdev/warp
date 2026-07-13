@@ -7,7 +7,7 @@ Implements [`PRODUCT.md`](./PRODUCT.md) for [CODE-1821](https://linear.app/warpd
 This change builds on two parent branches whose APIs are already established:
 
 - [`crates/warp_tui/src/inline_menu.rs @ 067fd301`](https://github.com/warpdotdev/warp/blob/067fd301/crates/warp_tui/src/inline_menu.rs) and [`crates/warp_tui/src/input/view.rs @ 067fd301`](https://github.com/warpdotdev/warp/blob/067fd301/crates/warp_tui/src/input/view.rs) route navigation, acceptance, dismissal, and rendering through an ordered collection of TUI inline menus.
-- [`specs/frontend-neutral-conversation-list-policy/TECH.md`](../frontend-neutral-conversation-list-policy/TECH.md) documents the frontend-neutral list policy introduced by the next parent branch. [`AgentConversationsModel @ 2588808d`](https://github.com/warpdotdev/warp/blob/2588808d/app/src/ai/agent_conversations_model.rs) supplies normalized entries, and the TUI’s `ConversationSelection` classifies them relative to its sole conversation surface.
+- [`specs/frontend-neutral-conversation-list-policy/TECH.md`](../frontend-neutral-conversation-list-policy/TECH.md) documents the frontend-neutral list policy introduced by the next parent branch. [`AgentConversationsModel @ d55907a2`](https://github.com/warpdotdev/warp/blob/d55907a2/app/src/ai/agent_conversations_model.rs) supplies normalized entries, and the TUI’s `ConversationSelection` classifies them relative to its sole conversation surface.
 
 This spec does not repeat those parent-branch designs. This branch owns the `/conversations` menu, its loading/search/update lifecycle, acceptance-time validation, and safe replacement of the TUI’s selected conversation.
 
@@ -37,7 +37,7 @@ The model subscribes to input changes and `AgentConversationsModelEvent`. Every 
 
 ### Query and order eligible entries
 
-Request personal Oz entries from `AgentConversationsModel::get_entries` and classify each through the TUI’s existing conversation-selection policy.
+Request personal Oz entries from `AgentConversationsModel::get_entries` and classify each through the TUI’s existing conversation-selection policy. Pass eligible entries to the same pure `query_conversation_entries` helper used by the GUI inline menu. The helper owns the 50-entry recent cap, case-insensitive fuzzy matching, score threshold, score/recency ordering, and 500-result search cap. GUI-only directory filtering and frontend-specific row construction remain outside the helper.
 
 With an empty query:
 
@@ -58,12 +58,9 @@ The currently selected conversation and unavailable entries are omitted by their
 
 Extend the initial `AgentConversationsModel` load result to distinguish successful cloud metadata loading from a request that returned usable local/task data without cloud metadata.
 
-Track:
+Track cloud metadata with one exhaustive `CloudMetadataLoadState`: `Available`, `Failed`, or `Retrying`. Initial-load results transition atomically to `Available` or `Failed`; only `Failed` starts a retry, and retry completion returns to `Available` or `Failed`.
 
-- Whether cloud metadata is temporarily unavailable.
-- Whether a list-open retry is already running.
-
-When a list opens after a cloud metadata failure, retry the metadata request without hiding local results. A successful retry merges metadata into `BlocklistAIHistoryModel` and resynchronizes entries. A failed retry leaves local entries available and emits the event used by the TUI to show the PRODUCT.md warning once per menu opening.
+When a list opens after a cloud metadata failure, retry the metadata request without hiding local results. A successful retry merges metadata into `BlocklistAIHistoryModel` and resynchronizes entries. Failed and retrying states both leave local entries available and cause the TUI to show the PRODUCT.md warning once per menu opening.
 
 ### Wire `/conversations`
 
@@ -166,7 +163,7 @@ sequenceDiagram
 
 ## Testing and validation
 
-- Conversation-menu unit tests cover the 50-row recent cap, fuzzy threshold and 500-result cap, stable-ID selection preservation, and nearest-index fallback.
+- Shared model tests cover the 50-row recent cap, fuzzy threshold, score/recency ordering, and 500-result cap; the TUI menu tests only its stable-ID selection preservation and nearest-index fallback.
 - TUI policy tests from the parent branch cover selected, terminal-state, active, unsupported-harness, and missing-identity classifications.
 - History-model tests verify that attaching a resident conversation preserves canonical state and removes stale cleared membership.
 - Input/menu tests continue to verify navigation, acceptance, and dismissal routing through the active menu.

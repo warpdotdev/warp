@@ -22,9 +22,10 @@ pub use crate::ai::agent::{
     UserQueryMode,
 };
 pub use crate::ai::agent_conversations_model::{
-    AgentConversationEntry, AgentConversationEntryId, AgentConversationListEntryState,
-    AgentConversationListPolicy, AgentConversationsModel, AgentConversationsModelEvent,
-    AgentManagementFilters, AgentRunDisplayStatus, HarnessFilter, OwnerFilter,
+    query_conversation_entries, AgentConversationEntry, AgentConversationEntryId,
+    AgentConversationListEntryState, AgentConversationListPolicy, AgentConversationsModel,
+    AgentConversationsModelEvent, AgentManagementFilters, AgentRunDisplayStatus, HarnessFilter,
+    OwnerFilter,
 };
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
@@ -124,8 +125,8 @@ pub use crate::throttle::throttle;
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;
 
-/// Returns whether cloud conversation metadata is temporarily unavailable.
-pub fn agent_conversations_cloud_metadata_load_failed(app: &warpui::AppContext) -> bool {
+/// Returns whether cloud conversation metadata is failed or retrying.
+pub fn agent_conversations_cloud_metadata_unavailable(app: &warpui::AppContext) -> bool {
     crate::ai::agent_conversations_model::AgentConversationsModel::as_ref(app)
-        .cloud_metadata_load_failed()
+        .cloud_metadata_unavailable()
 }

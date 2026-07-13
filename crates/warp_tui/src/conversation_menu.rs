@@ -1,11 +1,11 @@
 //! Searchable TUI conversation-menu state backed by `AgentConversationsModel`.
 
-use fuzzy_match::match_indices_case_insensitive;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    agent_conversations_cloud_metadata_load_failed, AgentConversationEntryId,
-    AgentConversationListEntryState, AgentConversationsModel, AgentConversationsModelEvent,
-    AgentManagementFilters, ConversationSelectionHandle, Harness, HarnessFilter,
+    agent_conversations_cloud_metadata_unavailable, query_conversation_entries,
+    AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
+    AgentConversationsModelEvent, AgentManagementFilters, ConversationSelectionHandle, Harness,
+    HarnessFilter,
 };
 use warp_editor::model::CoreEditorModel;
 use warp_search_core::inline_menu::InlineMenuSelection;
@@ -16,21 +16,12 @@ use crate::inline_menu::{
     TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
 };
 
-const DEFAULT_RESULT_COUNT: usize = 50;
-const MAX_SEARCH_RESULTS: usize = 500;
-const MINIMUM_FUZZY_SCORE: i64 = 25;
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, true, false);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TuiConversationMenuRow {
     id: AgentConversationEntryId,
     title: String,
-}
-#[derive(Debug, Clone)]
-struct TuiConversationMenuCandidate {
-    id: AgentConversationEntryId,
-    title: String,
-    last_updated_millis: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -238,7 +229,7 @@ impl TuiConversationMenuModel {
         };
         let conversations_model = AgentConversationsModel::as_ref(ctx);
         let is_loading = conversations_model.is_loading();
-        let cloud_metadata_load_failed = agent_conversations_cloud_metadata_load_failed(ctx);
+        let cloud_metadata_unavailable = agent_conversations_cloud_metadata_unavailable(ctx);
         let rows = if is_loading {
             Vec::new()
         } else {
@@ -247,20 +238,20 @@ impl TuiConversationMenuModel {
                 ..Default::default()
             };
             let policy = self.conversation_selection.as_ref(ctx);
-            let candidates = conversations_model
+            let entries = conversations_model
                 .get_entries(&filters, ctx)
                 .into_iter()
                 .filter(|entry| {
                     policy.classify_entry(entry, ctx) == AgentConversationListEntryState::Available
                 })
-                .map(|entry| TuiConversationMenuCandidate {
-                    id: entry.id,
-                    title: entry.display.title,
-                    last_updated_millis: entry.display.last_updated.timestamp_millis(),
-                })
                 .collect();
-            let query = input_text(&self.input_editor, ctx).trim().to_lowercase();
-            build_rows(candidates, &query)
+            query_conversation_entries(entries, &input_text(&self.input_editor, ctx))
+                .into_iter()
+                .map(|result| TuiConversationMenuRow {
+                    id: result.entry.id,
+                    title: result.entry.display.title,
+                })
+                .collect()
         };
 
         let selection = reconcile_selection(&rows, previous_id, previous_index);
@@ -274,50 +265,12 @@ impl TuiConversationMenuModel {
             scroll_offset,
             is_loading,
         };
-        if cloud_metadata_load_failed && !self.cloud_warning_shown {
+        if cloud_metadata_unavailable && !self.cloud_warning_shown {
             self.cloud_warning_shown = true;
             ctx.emit(TuiConversationMenuEvent::CloudMetadataUnavailable);
         }
         ctx.emit(TuiConversationMenuEvent::Updated);
     }
-}
-
-fn build_rows(
-    candidates: Vec<TuiConversationMenuCandidate>,
-    query: &str,
-) -> Vec<TuiConversationMenuRow> {
-    if query.is_empty() {
-        let mut rows = candidates
-            .into_iter()
-            .take(DEFAULT_RESULT_COUNT)
-            .map(|candidate| TuiConversationMenuRow {
-                id: candidate.id,
-                title: candidate.title,
-            })
-            .collect::<Vec<_>>();
-        rows.reverse();
-        return rows;
-    }
-
-    let mut matches = candidates
-        .into_iter()
-        .filter_map(|candidate| {
-            let score = match_indices_case_insensitive(&candidate.title, query)?.score;
-            (score >= MINIMUM_FUZZY_SCORE).then_some((
-                score,
-                candidate.last_updated_millis,
-                TuiConversationMenuRow {
-                    id: candidate.id,
-                    title: candidate.title,
-                },
-            ))
-        })
-        .collect::<Vec<_>>();
-    matches.sort_by_key(|(score, last_updated, _)| (*score, *last_updated));
-    if matches.len() > MAX_SEARCH_RESULTS {
-        matches.drain(..matches.len() - MAX_SEARCH_RESULTS);
-    }
-    matches.into_iter().map(|(_, _, row)| row).collect()
 }
 
 fn reconcile_selection(

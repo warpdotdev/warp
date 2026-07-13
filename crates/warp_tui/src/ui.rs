@@ -58,6 +58,7 @@ pub(crate) fn compact_footer_path(path: &str) -> String {
 pub(crate) fn conversation_restoring(app: &AppContext) -> Box<dyn TuiElement> {
     let muted = TuiUiBuilder::from_app(app).muted_text_style();
     let hint = "Esc or Ctrl-C to cancel and start a new session";
+
     centered_in_viewport(
         TuiConstrainedBox::new(
             TuiFlex::column()

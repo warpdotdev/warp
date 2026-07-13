@@ -691,6 +691,7 @@ impl TuiTerminalSessionView {
             request_id,
             future: None,
         };
+
         ctx.notify();
         let target_for_load = target.clone();
         let (future, resident_conversation_id) =
@@ -713,6 +714,7 @@ impl TuiTerminalSessionView {
                 };
                 (future, resident_conversation_id)
             });
+
         let future_handle = ctx.spawn(future, move |view, result, ctx| {
             if !view.is_current_restore_request(request_id) {
                 return;
