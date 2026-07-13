@@ -123,40 +123,6 @@ where
         self
     }
 
-    /// Tries to move the active selection focus to a position.
-    fn try_move_focus_to(
-        &mut self,
-        position: TuiPoint,
-        area: TuiRect,
-        clamp_outside: bool,
-        ctx: &mut TuiLayoutContext,
-        app: &AppContext,
-    ) -> bool {
-        let Some(interaction) = self.selection.interaction() else {
-            return false;
-        };
-        let Some(focus_span) = self.selection_span_at(
-            position,
-            interaction.selection_type,
-            area,
-            clamp_outside,
-            ctx,
-            app,
-        ) else {
-            return false;
-        };
-        if matches!(
-            interaction.selection_type,
-            SelectionType::Simple | SelectionType::Rect
-        ) && !interaction.has_focus
-            && focus_span.start == interaction.anchor_span.start
-        {
-            return true;
-        }
-        self.selection.set_focus(focus_span);
-        true
-    }
-
     /// Resolves one screen position into the configured selection unit.
     fn selection_span_at(
         &mut self,
@@ -315,6 +281,8 @@ where
                 true
             }
             TuiEvent::LeftMouseDragged { position, .. } if self.selection.is_selecting() => {
+                // Scroll one row per drag event at an edge. The top edge is
+                // inclusive because terminal mouse coordinates cannot go negative.
                 let scroll_rows = if position.y <= area.y {
                     -1
                 } else if position.y >= area.bottom() {
@@ -326,9 +294,31 @@ where
                     self.child
                         .scroll_by_rows(scroll_rows, usize::from(area.height));
                 }
-                if self.try_move_focus_to(*position, area, true, ctx, app) {
+
+                let Some(interaction) = self.selection.interaction() else {
+                    return false;
+                };
+                let Some(focus_span) = self.selection_span_at(
+                    *position,
+                    interaction.selection_type,
+                    area,
+                    true,
+                    ctx,
+                    app,
+                ) else {
+                    return true;
+                };
+                if matches!(
+                    interaction.selection_type,
+                    SelectionType::Simple | SelectionType::Rect
+                ) && !interaction.has_focus
+                    && focus_span.start == interaction.anchor_span.start
+                {
                     event_ctx.notify();
+                    return true;
                 }
+                self.selection.update_focus(focus_span);
+                event_ctx.notify();
                 true
             }
             TuiEvent::LeftMouseUp { .. } if self.selection.is_selecting() => {

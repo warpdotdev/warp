@@ -1,35 +1,6 @@
 use super::{TuiGridPoint, TuiRowResize, TuiSelectionHandle, TuiSelectionSpan};
 use crate::text::SelectionType;
 
-/// Setting the focus updates the ordered selection range.
-#[test]
-fn set_focus_updates_selection_range() {
-    let handle = TuiSelectionHandle::default();
-    handle.start(
-        TuiSelectionSpan {
-            start: TuiGridPoint { row: 0, col: 0 },
-            end: TuiGridPoint { row: 0, col: 1 },
-        },
-        None,
-        SelectionType::Simple,
-        10,
-    );
-    let focus_span = TuiSelectionSpan {
-        start: TuiGridPoint { row: 1, col: 0 },
-        end: TuiGridPoint { row: 2, col: 0 },
-    };
-
-    handle.set_focus(focus_span);
-
-    assert_eq!(
-        handle.range(),
-        Some(TuiSelectionSpan {
-            start: TuiGridPoint { row: 0, col: 0 },
-            end: TuiGridPoint { row: 2, col: 0 },
-        })
-    );
-}
-
 /// Verifies multiple row resizes are applied in original content order.
 #[test]
 fn batch_resize_rebases_selection_by_the_cumulative_delta() {

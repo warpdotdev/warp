@@ -26,10 +26,10 @@ impl TuiSelectionState {
 }
 
 /// Selection data needed while extending an active gesture.
-pub(super) struct TuiSelectionInteraction {
-    pub(super) selection_type: SelectionType,
-    pub(super) anchor_span: TuiSelectionSpan,
-    pub(super) has_focus: bool,
+pub(crate) struct TuiSelectionInteraction {
+    pub(crate) selection_type: SelectionType,
+    pub(crate) anchor_span: TuiSelectionSpan,
+    pub(crate) has_focus: bool,
 }
 
 /// Persistent state shared across selectable element rebuilds.
@@ -67,8 +67,8 @@ impl TuiSelectionHandle {
         });
     }
 
-    /// Updates the moving focus endpoint.
-    pub(super) fn set_focus(&self, focus_span: TuiSelectionSpan) {
+    /// Updates the selection focus while preserving existing glyph baselines.
+    pub(crate) fn update_focus(&self, focus_span: TuiSelectionSpan) {
         let mut slot = self.0.borrow_mut();
         let Some(selection) = slot.as_mut() else {
             return;
@@ -84,7 +84,7 @@ impl TuiSelectionHandle {
     }
 
     /// Returns data needed to extend the current gesture.
-    pub(super) fn interaction(&self) -> Option<TuiSelectionInteraction> {
+    pub(crate) fn interaction(&self) -> Option<TuiSelectionInteraction> {
         self.0
             .borrow()
             .as_ref()
