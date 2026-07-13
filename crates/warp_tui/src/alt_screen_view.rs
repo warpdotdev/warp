@@ -17,13 +17,12 @@ use std::ops::Deref as _;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel, ToEscapeSequence};
+use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel};
 use warp_terminal::model::grid::Dimensions as _;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPaintContext, TuiRect, TuiSize,
 };
-use warpui_core::keymap::Keystroke;
 use warpui_core::AppContext;
 
 use crate::terminal_block::render_grid_handler;
@@ -98,33 +97,20 @@ impl TuiElement for AltScreenElement {
         if *is_composing {
             return false;
         }
-        // Every key (including ctrl-c) is forwarded to the app: a full-screen
-        // app owns its own control keys (e.g. vim/less handle ctrl-c
-        // themselves), so the TUI must not intercept them. The user exits by
-        // quitting the app, as in any terminal.
-        //
-        // Resolve the bytes to send to the PTY, in priority order:
-        // 1. Special/control keys (arrows, ctrl-<x>, fn keys, …) that encode to
-        //    an escape sequence via `ToEscapeSequence` (the `warp_terminal`
-        //    encoder shared with the GUI).
-        // 2. Plain printable keys — the GUI routes these through a separate
-        //    typed-characters path, which the TUI event model folds into
-        //    `chars`; forward their UTF-8 bytes.
-        // 3. Named control keys the encoder doesn't cover and that carry no
-        //    `chars` (escape, enter, tab, backspace) — map to their C0 bytes so
-        //    e.g. Escape leaves an editor's insert mode.
-        let escape_sequence = {
+        // Forward the key to the app. `to_pty_bytes` layers the fallbacks a
+        // single-`KeyDown` frontend needs — `Ctrl+<letter>` → C0, printable
+        // `chars`, and named control keys — on top of the shared
+        // `to_escape_sequence` encoder in `warp_terminal`. (ctrl-c never reaches
+        // here: the session view's interrupt handler forwards it to the app.)
+        let bytes = {
             let model = self.model.lock();
             KeystrokeWithDetails {
                 keystroke,
                 key_without_modifiers: details.key_without_modifiers.as_deref(),
                 chars: Some(chars.as_str()),
             }
-            .to_escape_sequence(model.deref())
+            .to_pty_bytes(model.deref())
         };
-        let bytes = escape_sequence
-            .or_else(|| ctrl_letter_c0(keystroke))
-            .or_else(|| fallback_key_bytes(&keystroke.key, chars));
         let Some(bytes) = bytes else {
             return false;
         };
@@ -132,45 +118,3 @@ impl TuiElement for AltScreenElement {
         true
     }
 }
-
-/// PTY bytes for a key the shared terminal encoder didn't map to an escape
-/// sequence (see [`ToEscapeSequence`]). Plain printable keys carry their text in
-/// `chars` and forward its UTF-8 bytes; a few named control keys carry empty
-/// `chars` and no encoder mapping, so map them to their C0 bytes (notably
-/// `escape`, so it can leave an editor's insert mode). Returns `None` when there
-/// is nothing to send.
-fn fallback_key_bytes(key: &str, chars: &str) -> Option<Vec<u8>> {
-    if !chars.is_empty() {
-        return Some(chars.as_bytes().to_vec());
-    }
-    match key {
-        "enter" => Some(vec![b'\r']),
-        "escape" => Some(vec![0x1b]),
-        "\t" => Some(vec![b'\t']),
-        "backspace" => Some(vec![0x7f]),
-        _ => None,
-    }
-}
-
-/// The C0 control byte for a `Ctrl+<letter>` combo. `ToEscapeSequence`
-/// (`warp_terminal`, the same encoder the GUI uses) only emits C0 bytes for a
-/// small `Ctrl+<number>`/`Ctrl+space` set unless the kitty keyboard protocol is
-/// active, while the crossterm→`TuiEvent` conversion still puts the printable
-/// letter in `chars` for `Ctrl+A`..`Ctrl+Z`. Without this, those combos would be
-/// forwarded as plain letters (e.g. `a` instead of `0x01`), breaking control
-/// shortcuts in full-screen apps. `Ctrl+C` folds to `0x03` and is forwarded to
-/// the app like any other control combo.
-fn ctrl_letter_c0(keystroke: &Keystroke) -> Option<Vec<u8>> {
-    if !keystroke.ctrl {
-        return None;
-    }
-    match keystroke.key.as_bytes() {
-        // `& 0x1f` folds a/A..z/Z onto 0x01..0x1A (Ctrl+A = 0x01, Ctrl+Z = 0x1A).
-        [byte] if byte.is_ascii_alphabetic() => Some(vec![byte.to_ascii_uppercase() & 0x1f]),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-#[path = "alt_screen_view_tests.rs"]
-mod tests;
