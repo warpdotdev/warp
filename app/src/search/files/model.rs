@@ -402,54 +402,25 @@ impl FileSearchModel {
     /// Prioritizes filename matches with 2x weight compared to path matches
     /// Supports space-separated queries - all parts must match for a result
     pub fn fuzzy_match_path(path: &str, query: &str) -> Option<FuzzyMatchResult> {
-        if query.is_empty() {
-            return Some(FuzzyMatchResult::no_match());
-        }
-
-        // Split query by spaces to support multi-term searches
-        let query_parts: Vec<&str> = query.split_whitespace().collect();
-
-        if query_parts.is_empty() {
-            return Some(FuzzyMatchResult::no_match());
-        }
-
-        // If there's only one query part, use the original logic
-        if query_parts.len() == 1 {
-            return Self::fuzzy_match_path_single(path, query_parts[0]);
-        }
-
-        // For multiple query parts, each part must match somewhere in the path
-        let mut combined_score = 0i64;
-        let mut all_matched_indices = Vec::new();
-
-        for query_part in &query_parts {
-            if let Some(part_result) = Self::fuzzy_match_path_single(path, query_part) {
-                combined_score += part_result.score;
-                all_matched_indices.extend(part_result.matched_indices);
-            } else {
-                // If any part doesn't match, the entire query fails
-                return None;
-            }
-        }
-
-        // Remove duplicates and sort indices
-        all_matched_indices.sort_unstable();
-        all_matched_indices.dedup();
-
-        Some(FuzzyMatchResult {
-            score: combined_score,
-            matched_indices: all_matched_indices,
-        })
+        let query = FuzzyPathQuery::new(query);
+        query.match_path(path)
     }
 
     /// Helper method for single-term fuzzy matching (supports wildcards)
     pub fn fuzzy_match_path_single(path: &str, query: &str) -> Option<FuzzyMatchResult> {
+        Self::fuzzy_match_path_single_with_wildcard_flag(path, query, contains_wildcards(query))
+    }
+
+    fn fuzzy_match_path_single_with_wildcard_flag(
+        path: &str,
+        query: &str,
+        has_wildcards: bool,
+    ) -> Option<FuzzyMatchResult> {
         if query.is_empty() {
             return Some(FuzzyMatchResult::no_match());
         }
 
-        // Check if query contains wildcards
-        if contains_wildcards(query) {
+        if has_wildcards {
             // Use wildcard matching for the entire path
             return match_wildcard_pattern_case_insensitive(path, query);
         }
@@ -608,8 +579,7 @@ impl FileSearchModel {
             return original_score;
         }
 
-        let path_chars: Vec<char> = path.chars().collect();
-        let total_chars = path_chars.len();
+        let total_chars = path.chars().count();
 
         // Calculate weighted proximity score based on distance from end of path
         let proximity_bonus: i64 = matched_indices
@@ -671,6 +641,68 @@ impl FileSearchModel {
         }
 
         Ok(changed_files)
+    }
+}
+
+struct FuzzyPathQueryPart<'a> {
+    text: &'a str,
+    has_wildcards: bool,
+}
+
+struct FuzzyPathQuery<'a> {
+    parts: Vec<FuzzyPathQueryPart<'a>>,
+}
+
+impl<'a> FuzzyPathQuery<'a> {
+    fn new(query: &'a str) -> Self {
+        let parts = query
+            .split_whitespace()
+            .map(|text| FuzzyPathQueryPart {
+                has_wildcards: contains_wildcards(text),
+                text,
+            })
+            .collect();
+
+        Self { parts }
+    }
+
+    fn match_path(&self, path: &str) -> Option<FuzzyMatchResult> {
+        if self.parts.is_empty() {
+            return Some(FuzzyMatchResult::no_match());
+        }
+
+        if self.parts.len() == 1 {
+            let part = &self.parts[0];
+            return FileSearchModel::fuzzy_match_path_single_with_wildcard_flag(
+                path,
+                part.text,
+                part.has_wildcards,
+            );
+        }
+
+        let mut combined_score = 0i64;
+        let mut all_matched_indices = Vec::new();
+
+        for part in &self.parts {
+            if let Some(part_result) = FileSearchModel::fuzzy_match_path_single_with_wildcard_flag(
+                path,
+                part.text,
+                part.has_wildcards,
+            ) {
+                combined_score += part_result.score;
+                all_matched_indices.extend(part_result.matched_indices);
+            } else {
+                return None;
+            }
+        }
+
+        all_matched_indices.sort_unstable();
+        all_matched_indices.dedup();
+
+        Some(FuzzyMatchResult {
+            score: combined_score,
+            matched_indices: all_matched_indices,
+        })
     }
 }
 
