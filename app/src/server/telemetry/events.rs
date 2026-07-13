@@ -5755,7 +5755,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentModeSetupProjectScopedRulesAction { .. } => EnablementState::Always,
             Self::AgentModeSetupCodebaseContextAction { .. } => EnablementState::Always,
             Self::AgentModeSetupCreateEnvironmentAction { .. } => EnablementState::Always,
-            Self::InputBufferSubmitted => EnablementState::Always,
+            Self::InputBufferSubmitted => EnablementState::ChannelSpecific {
+                channels: vec![Channel::Local, Channel::Dev],
+            },
             Self::AgentModeContinueConversationButtonClicked { .. } => EnablementState::Always,
             Self::AgentModeRewindDialogOpened { .. } => {
                 EnablementState::Flag(FeatureFlag::RevertToCheckpoints)
