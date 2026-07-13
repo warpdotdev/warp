@@ -3,28 +3,24 @@ use std::cmp::{max, min};
 use std::ops::Range;
 use std::rc::Rc;
 
-use instant::Instant;
-
-use super::auto_scroll::{TuiAutoScrollDragUpdate, TuiAutoScrollState, TuiAutoScrollStep};
-use super::{TuiGridPoint, TuiPoint, TuiRect, TuiRowResize, TuiSelectionSpan};
+use super::{TuiGridPoint, TuiRowResize, TuiSelectionSpan};
 use crate::text::SelectionType;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TuiSelectionState {
     anchor_span: TuiSelectionSpan,
-    extent_span: Option<TuiSelectionSpan>,
+    focus_span: Option<TuiSelectionSpan>,
     selection_type: SelectionType,
     is_selecting: bool,
     width: u16,
-    auto_scroll: TuiAutoScrollState,
 }
 
 impl TuiSelectionState {
     /// Returns the ordered non-empty selection range.
     fn range(&self) -> Option<TuiSelectionSpan> {
-        let extent_span = self.extent_span?;
-        let start = min(self.anchor_span.start, extent_span.start);
-        let end = max(self.anchor_span.end, extent_span.end);
+        let focus_span = self.focus_span?;
+        let start = min(self.anchor_span.start, focus_span.start);
+        let end = max(self.anchor_span.end, focus_span.end);
         (start < end).then_some(TuiSelectionSpan { start, end })
     }
 }
@@ -33,7 +29,7 @@ impl TuiSelectionState {
 pub(super) struct TuiSelectionInteraction {
     pub(super) selection_type: SelectionType,
     pub(super) anchor_span: TuiSelectionSpan,
-    pub(super) has_extent: bool,
+    pub(super) has_focus: bool,
 }
 
 /// Persistent state shared across selectable element rebuilds.
@@ -58,73 +54,32 @@ impl TuiSelectionHandle {
     pub(crate) fn start(
         &self,
         anchor_span: TuiSelectionSpan,
-        extent_span: Option<TuiSelectionSpan>,
+        focus_span: Option<TuiSelectionSpan>,
         selection_type: SelectionType,
         width: u16,
     ) {
         *self.0.borrow_mut() = Some(TuiSelectionState {
             anchor_span,
-            extent_span,
+            focus_span,
             selection_type,
             is_selecting: true,
             width,
-            auto_scroll: TuiAutoScrollState::default(),
         });
     }
 
-    /// Tracks one drag position for repaint-driven auto-scroll.
-    pub(super) fn track_auto_scroll_drag(
-        &self,
-        position: TuiPoint,
-        area: TuiRect,
-        now: Instant,
-    ) -> TuiAutoScrollDragUpdate {
-        let mut slot = self.0.borrow_mut();
-        let Some(selection) = slot.as_mut() else {
-            return TuiAutoScrollDragUpdate::InBounds;
-        };
-        selection.auto_scroll.track_drag(position, area, now)
-    }
-
-    /// Takes one due repaint-driven auto-scroll step.
-    pub(super) fn take_auto_scroll_step(&self, now: Instant) -> Option<TuiAutoScrollStep> {
-        let mut slot = self.0.borrow_mut();
-        let selection = slot.as_mut()?;
-        if !selection.is_selecting {
-            return None;
-        }
-        selection.auto_scroll.take_due_step(now)
-    }
-
-    /// Returns whether repaint-driven auto-scroll is active.
-    pub(super) fn is_auto_scrolling(&self) -> bool {
-        self.0
-            .borrow()
-            .as_ref()
-            .is_some_and(|selection| selection.is_selecting && selection.auto_scroll.is_active())
-    }
-
-    /// Stops repaint-driven auto-scroll.
-    pub(super) fn stop_auto_scroll(&self) {
-        if let Some(selection) = self.0.borrow_mut().as_mut() {
-            selection.auto_scroll.stop();
-        }
-    }
-
-    /// Sets the moving selection endpoint.
-    pub(super) fn set_extent(&self, extent_span: TuiSelectionSpan) {
+    /// Updates the moving focus endpoint.
+    pub(super) fn set_focus(&self, focus_span: TuiSelectionSpan) {
         let mut slot = self.0.borrow_mut();
         let Some(selection) = slot.as_mut() else {
             return;
         };
-        selection.extent_span = Some(extent_span);
+        selection.focus_span = Some(focus_span);
     }
 
     /// Ends the active gesture without clearing its range.
     pub(crate) fn finish(&self) {
         if let Some(selection) = self.0.borrow_mut().as_mut() {
             selection.is_selecting = false;
-            selection.auto_scroll.stop();
         }
     }
 
@@ -136,7 +91,7 @@ impl TuiSelectionHandle {
             .map(|selection| TuiSelectionInteraction {
                 selection_type: selection.selection_type,
                 anchor_span: selection.anchor_span,
-                has_extent: selection.extent_span.is_some(),
+                has_focus: selection.focus_span.is_some(),
             })
     }
 
@@ -206,8 +161,8 @@ impl TuiSelectionHandle {
             old_height,
             new_height,
         );
-        selection.extent_span = selection
-            .extent_span
+        selection.focus_span = selection
+            .focus_span
             .map(|span| rebase_span(span, old_end, new_end, old_height, new_height));
         true
     }

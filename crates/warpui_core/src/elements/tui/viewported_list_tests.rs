@@ -1,8 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Duration;
 
-use instant::Instant;
 use string_offset::ByteOffset;
 
 use super::{
@@ -145,18 +143,6 @@ fn mouse_in_area(
     area: TuiRect,
     event: TuiEvent,
 ) -> bool {
-    mouse_in_area_with_notify_count(app, element, size, area, event).0
-}
-
-/// Dispatches one mouse event and returns its handled state and notification
-/// count.
-fn mouse_in_area_with_notify_count(
-    app: &App,
-    element: &mut impl TuiElement,
-    size: TuiSize,
-    area: TuiRect,
-    event: TuiEvent,
-) -> (bool, usize) {
     app.read(|app_ctx| {
         let mut rendered_views = EntityIdMap::default();
         let mut ctx = TuiLayoutContext {
@@ -165,23 +151,12 @@ fn mouse_in_area_with_notify_count(
         element.layout(TuiConstraint::tight(size), &mut ctx, app_ctx);
         let mut event_ctx = TuiEventContext::default();
         event_ctx.set_origin_view(Some(EntityId::new()));
-        let handled = element.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
-        (handled, event_ctx.take_notified().len())
+        element.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx)
     })
 }
 
 /// Lays out for `size` and renders into `area`.
 fn render_in_area(app: &App, element: &mut impl TuiElement, size: TuiSize, area: TuiRect) {
-    render_in_area_repaint_at(app, element, size, area);
-}
-
-/// Renders one frame and returns its requested repaint deadline.
-fn render_in_area_repaint_at(
-    app: &App,
-    element: &mut impl TuiElement,
-    size: TuiSize,
-    area: TuiRect,
-) -> Option<Instant> {
     app.read(|app_ctx| {
         let mut rendered_views = EntityIdMap::default();
         let mut ctx = TuiLayoutContext {
@@ -191,8 +166,7 @@ fn render_in_area_repaint_at(
         let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, area.right(), area.bottom()));
         let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
         element.render(area, &mut buffer, &mut paint_ctx);
-        paint_ctx.requested_repaint_at()
-    })
+    });
 }
 
 /// Returns a left-button press for selection tests.
@@ -571,15 +545,15 @@ fn selectable_viewport_keeps_selection_when_dragging_past_edges() {
     });
 }
 
-/// The top terminal row must arm upward auto-scroll because mouse coordinates
-/// cannot move above row zero.
+/// The top terminal row scrolls upward because mouse coordinates cannot move
+/// above row zero.
 #[test]
-fn selectable_viewport_auto_scrolls_up_from_top_terminal_row() {
+fn selectable_viewport_scrolls_up_from_top_terminal_row() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
         let state = TuiViewportedListState::new_at_end();
         state.scroll_to_rows_from_top(5);
-        let viewport = viewport_with_state(state.clone(), content.clone());
+        let viewport = viewport_with_state(state.clone(), content);
         let selection = TuiSelectionHandle::default();
         let selectable = TuiSelectable::new(selection.clone(), viewport);
         let mut element = TuiScrollable::new(selectable.finish_scrollable());
@@ -595,56 +569,7 @@ fn selectable_viewport_auto_scrolls_up_from_top_terminal_row() {
             area,
             left_drag(2, 0)
         ));
-        assert!(
-            selection.range().is_some(),
-            "the top row should extend the selection before repaint"
-        );
-        // Production notifications rebuild the transcript element before the
-        // repaint layout tick. The rebuilt viewport must reuse the last
-        // resolved content height so it can scroll before its own first layout.
-        let rebuilt_viewport = viewport_with_state(state.clone(), content);
-        let rebuilt_selectable = TuiSelectable::new(selection, rebuilt_viewport);
-        let mut rebuilt_element = TuiScrollable::new(rebuilt_selectable.finish_scrollable());
-        render_in_area(&app, &mut rebuilt_element, size, area);
         assert_eq!(state.position(), TuiViewportPosition::RowsFromTop(4));
-    });
-}
-
-/// Repeated drag events on one parked edge update the target without queuing
-/// full redraws; changing edges requests one immediate redraw.
-#[test]
-fn repeated_past_edge_drags_only_notify_on_arm_or_direction_change() {
-    App::test((), |app| async move {
-        let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
-        let state = TuiViewportedListState::new_at_end();
-        state.scroll_to_rows_from_top(5);
-        let viewport = viewport_with_state(state, content);
-        let selection = TuiSelectionHandle::default();
-        let selectable = TuiSelectable::new(selection, viewport);
-        let mut element = TuiScrollable::new(selectable.finish_scrollable());
-        let size = TuiSize::new(8, 4);
-        let area = TuiRect::new(0, 2, 8, 4);
-
-        mouse_in_area(&app, &mut element, size, area, left_down(0, 3, 1, false));
-        render_in_area(&app, &mut element, size, area);
-
-        assert_eq!(
-            mouse_in_area_with_notify_count(&app, &mut element, size, area, left_drag(2, 9),),
-            (true, 1)
-        );
-        render_in_area(&app, &mut element, size, area);
-
-        for x in 0..area.width {
-            assert_eq!(
-                mouse_in_area_with_notify_count(&app, &mut element, size, area, left_drag(x, 10),),
-                (true, 0)
-            );
-        }
-
-        assert_eq!(
-            mouse_in_area_with_notify_count(&app, &mut element, size, area, left_drag(2, 0),),
-            (true, 1)
-        );
     });
 }
 
@@ -698,7 +623,7 @@ fn scroll_sensitive_content(row_count: usize, window: TuiViewportWindow) -> TuiV
     }
 }
 
-/// Drag-past-edge auto-scroll must NOT clear the selection even when the scroll
+/// Dragging past an edge must not clear the selection even when the scroll
 /// re-render changes the glyph of a still-visible selected cell.
 #[test]
 fn drag_past_edge_preserves_selection_when_scroll_changes_a_visible_glyph() {
@@ -726,7 +651,7 @@ fn drag_past_edge_preserves_selection_when_scroll_changes_a_visible_glyph() {
 
         assert!(
             selection.range().is_some(),
-            "selection must persist across drag-past-edge auto-scroll"
+            "selection must persist across drag-past-edge scrolling"
         );
         assert!(selection.is_selecting());
     });
@@ -820,90 +745,6 @@ fn repaint_after_mouse_up_preserves_selection_on_glyph_change() {
             "a settled selection must survive a streaming glyph change"
         );
         assert!(!selection.is_selecting());
-    });
-}
-
-/// Part B: while the pointer is parked past an edge, repaint ticks (layout +
-/// render, with NO new drag events) keep advancing the scroll and extending the
-/// selection until the content boundary is reached.
-#[test]
-fn auto_scroll_continues_while_parked_past_edge_without_new_events() {
-    App::test((), |app| async move {
-        // Nine rows, a four-row viewport, starting at the top.
-        let content = FakeContent::new((1..=3).map(|id| fake_item(id, 3)).collect());
-        let state = TuiViewportedListState::new_at_end();
-        state.scroll_to_rows_from_top(0);
-        let viewport = viewport_with_state(state.clone(), content);
-        let selection = TuiSelectionHandle::default();
-        let selectable = TuiSelectable::new(selection.clone(), viewport);
-        let mut element = TuiScrollable::new(selectable.finish_scrollable());
-        let size = TuiSize::new(8, 4);
-        let area = TuiRect::new(0, 2, 8, 4);
-
-        // Start a selection near the top, then drag below the bottom edge: this
-        // arms continuous auto-scroll and scrolls toward the edge.
-        mouse_in_area(&app, &mut element, size, area, left_down(0, 2, 1, false));
-        render_in_area(&app, &mut element, size, area);
-        mouse_in_area(&app, &mut element, size, area, left_drag(2, 9));
-        let before_repaint = Instant::now();
-        let repaint_at = render_in_area_repaint_at(&app, &mut element, size, area)
-            .expect("active auto-scroll should request another repaint");
-        assert!(repaint_at >= before_repaint + Duration::from_millis(100));
-        assert!(selection.is_selecting());
-        assert_eq!(
-            state.position(),
-            TuiViewportPosition::RowsFromTop(2),
-            "distance acceleration should scroll two rows on the first frame"
-        );
-
-        // Due repaint ticks with NO further drag events keep advancing.
-        std::thread::sleep(Duration::from_millis(110));
-        render_in_area(&app, &mut element, size, area);
-        assert_eq!(state.position(), TuiViewportPosition::RowsFromTop(4));
-
-        std::thread::sleep(Duration::from_millis(110));
-        let repaint_at = render_in_area_repaint_at(&app, &mut element, size, area);
-        assert!(
-            state.is_at_end(),
-            "auto-scroll should reach the content end"
-        );
-        assert_eq!(
-            repaint_at, None,
-            "reaching the current end must disarm repaint-driven scrolling"
-        );
-        assert!(
-            selection.is_selecting(),
-            "the gesture stays active while parked"
-        );
-        assert!(selection.range().is_some());
-    });
-}
-
-/// Repaint ticks after mouse-up cannot advance a previously parked drag.
-#[test]
-fn auto_scroll_stops_after_mouse_up() {
-    App::test((), |app| async move {
-        let content = FakeContent::new((1..=4).map(|id| fake_item(id, 3)).collect());
-        let state = TuiViewportedListState::new_at_end();
-        state.scroll_to_rows_from_top(0);
-        let viewport = viewport_with_state(state.clone(), content);
-        let selection = TuiSelectionHandle::default();
-        let selectable = TuiSelectable::new(selection, viewport);
-        let mut element = TuiScrollable::new(selectable.finish_scrollable());
-        let size = TuiSize::new(8, 4);
-        let area = TuiRect::new(0, 2, 8, 4);
-
-        mouse_in_area(&app, &mut element, size, area, left_down(0, 2, 1, false));
-        render_in_area(&app, &mut element, size, area);
-        mouse_in_area(&app, &mut element, size, area, left_drag(2, 9));
-        render_in_area(&app, &mut element, size, area);
-        mouse_in_area(&app, &mut element, size, area, left_up(2, 9));
-        let after_mouse_up = state.position();
-
-        std::thread::sleep(Duration::from_millis(110));
-        render_in_area(&app, &mut element, size, area);
-
-        assert_eq!(state.position(), after_mouse_up);
     });
 }
 

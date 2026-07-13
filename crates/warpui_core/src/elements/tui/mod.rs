@@ -67,7 +67,7 @@ pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use selectable::{
     point_after_col, TuiRowGlyph, TuiRowResize, TuiSelectable, TuiSelectableElement,
-    TuiSelectionHandle, TuiSelectionScrollResult, TuiSelectionSpan,
+    TuiSelectionHandle, TuiSelectionSpan,
 };
 pub use shimmering_text::TuiShimmeringText;
 pub use text::TuiText;

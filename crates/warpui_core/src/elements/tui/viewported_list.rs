@@ -13,8 +13,7 @@ use super::selectable::{row_glyphs, row_text, TuiSelectionHandle};
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
     TuiLayoutContext, TuiPaintContext, TuiPresentationContext, TuiRect, TuiRowResize,
-    TuiScrollableElement, TuiSelectableElement, TuiSelectionScrollResult, TuiSelectionSpan,
-    TuiSize,
+    TuiScrollableElement, TuiSelectableElement, TuiSelectionSpan, TuiSize,
 };
 use crate::AppContext;
 
@@ -108,14 +107,6 @@ where
         clamp_outside: bool,
     ) -> Option<TuiGridPoint> {
         self.resolve_selection_point(position, area, clamp_outside)
-    }
-
-    fn scroll_for_selection(
-        &mut self,
-        rows: isize,
-        viewport_height: usize,
-    ) -> TuiSelectionScrollResult {
-        self.scroll_by(rows, viewport_height)
     }
 
     fn selection_row_glyphs(
@@ -398,14 +389,11 @@ where
 {
     /// Creates a generalized viewport over `content`.
     pub fn new(state: TuiViewportedListState, content: Content) -> Self {
-        let content_height = state
-            .resolved_viewport()
-            .map_or(0, |resolved| resolved.content_height);
         Self {
             state,
             content,
             visible_elements: Vec::new(),
-            content_height,
+            content_height: 0,
             size: TuiSize::ZERO,
             vertical_alignment: TuiViewportVerticalAlignment::Top,
             selection_snapshot: RefCell::new(None),
@@ -542,9 +530,9 @@ where
     }
 
     /// Scrolls by content rows using the viewport's canonical position model.
-    fn scroll_by(&mut self, rows: isize, viewport_height: usize) -> TuiSelectionScrollResult {
+    fn scroll_by(&mut self, rows: isize, viewport_height: usize) -> bool {
         if rows == 0 || viewport_height == 0 {
-            return TuiSelectionScrollResult::NotScrolled;
+            return false;
         }
         let max_scroll_top = max_scroll_top(self.content_height, viewport_height);
         let current_scroll_top = match self.state.position() {
@@ -559,7 +547,7 @@ where
                 .min(max_scroll_top)
         };
         if next_scroll_top == current_scroll_top {
-            return TuiSelectionScrollResult::NotScrolled;
+            return false;
         }
         self.set_position(if next_scroll_top == max_scroll_top {
             TuiViewportPosition::End
@@ -570,9 +558,7 @@ where
             resolved.window.scroll_top = next_scroll_top;
             self.state.set_resolved_viewport(resolved);
         }
-        TuiSelectionScrollResult::Scrolled {
-            reached_boundary: next_scroll_top == 0 || next_scroll_top == max_scroll_top,
-        }
+        true
     }
 
     /// Maps a screen point into the latest resolved content window.
@@ -778,10 +764,7 @@ where
     Content: TuiViewportedElement,
 {
     fn scroll_by_rows(&mut self, rows: isize, viewport_height: usize) -> bool {
-        matches!(
-            self.scroll_by(rows, viewport_height),
-            TuiSelectionScrollResult::Scrolled { .. }
-        )
+        self.scroll_by(rows, viewport_height)
     }
 }
 

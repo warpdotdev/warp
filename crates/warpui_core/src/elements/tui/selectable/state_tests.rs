@@ -1,9 +1,9 @@
 use super::{TuiGridPoint, TuiRowResize, TuiSelectionHandle, TuiSelectionSpan};
 use crate::text::SelectionType;
 
-/// Setting the extent updates the ordered selection range.
+/// Setting the focus updates the ordered selection range.
 #[test]
-fn set_extent_updates_selection_range() {
+fn set_focus_updates_selection_range() {
     let handle = TuiSelectionHandle::default();
     handle.start(
         TuiSelectionSpan {
@@ -14,12 +14,12 @@ fn set_extent_updates_selection_range() {
         SelectionType::Simple,
         10,
     );
-    let extent_span = TuiSelectionSpan {
+    let focus_span = TuiSelectionSpan {
         start: TuiGridPoint { row: 1, col: 0 },
         end: TuiGridPoint { row: 2, col: 0 },
     };
 
-    handle.set_extent(extent_span);
+    handle.set_focus(focus_span);
 
     assert_eq!(
         handle.range(),
