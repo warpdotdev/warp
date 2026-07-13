@@ -593,6 +593,7 @@ impl TerminalModeControl for CrosstermModeControl {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
         if let Err(error) = enter_terminal_screen(&mut out) {
+            let _ = leave_terminal_screen(&mut out);
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
