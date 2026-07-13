@@ -168,11 +168,13 @@ if (-not (Get-Command -Name gcloud -Type Application -ErrorAction SilentlyContin
     Start-Process "$env:Temp\GoogleCloudSDKInstaller.exe" -Wait
 }
 
-[string]$identityToken = gcloud auth print-identity-token
-if ($identityToken.Trim().Length -eq 0) {
-    Write-Output 'gcloud CLI authentication missing.  Press enter to continue...'
-    Read-Host
-    gcloud auth login
+if ($env:WARP_SKIP_GCLOUD_AUTH -ne '1') {
+    [string]$identityToken = gcloud auth print-identity-token
+    if ($identityToken.Trim().Length -eq 0) {
+        Write-Output 'gcloud CLI authentication missing.  Press enter to continue...'
+        Read-Host
+        gcloud auth login
+    }
 }
 
 if ($InstallCommonSkills) {
