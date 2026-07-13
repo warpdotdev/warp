@@ -664,6 +664,8 @@ fn create_test_model() -> AgentConversationsModel {
         next_poll_abort_handle: None,
         active_data_consumers_per_window: HashMap::new(),
         has_finished_initial_load: false,
+        cloud_metadata_load_failed: false,
+        cloud_metadata_retry_in_flight: false,
         task_fetch_state: Default::default(),
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
         dirty_since: None,

@@ -18,6 +18,7 @@ mod telemetry;
 mod tui_builder;
 mod ui;
 
+mod conversation_menu;
 mod conversation_selection;
 mod editor_element;
 mod exit_confirmation;

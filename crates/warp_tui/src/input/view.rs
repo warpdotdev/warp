@@ -465,6 +465,8 @@ pub enum TuiInputViewEvent {
     Submitted(String),
     /// The user selected a slash command menu item.
     AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
+    /// The user selected a conversation menu item.
+    AcceptedConversation(warp::tui_export::AgentConversationEntryId),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1119,6 +1121,9 @@ impl TuiInputView {
                     match accepted {
                         TuiInlineMenuAccepted::SlashCommand(action) => {
                             ctx.emit(TuiInputViewEvent::AcceptedSlashCommand(action));
+                        }
+                        TuiInlineMenuAccepted::Conversation(entry_id) => {
+                            ctx.emit(TuiInputViewEvent::AcceptedConversation(entry_id));
                         }
                     }
                 }

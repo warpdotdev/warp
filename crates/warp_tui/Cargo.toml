@@ -43,6 +43,7 @@ command.workspace = true
 dirs.workspace = true
 futures.workspace = true
 futures-lite.workspace = true
+fuzzy_match.workspace = true
 http_client.workspace = true
 instant.workspace = true
 itertools.workspace = true

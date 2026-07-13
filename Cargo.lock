@@ -15911,6 +15911,7 @@ dependencies = [
  "dirs 6.0.0",
  "futures",
  "futures-lite 1.13.0",
+ "fuzzy_match",
  "http_client",
  "instant",
  "itertools 0.14.0",
