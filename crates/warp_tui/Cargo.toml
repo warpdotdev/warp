@@ -57,6 +57,7 @@ string-offset.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
 sum_tree.workspace = true
+unicode-width.workspace = true
 vec1.workspace = true
 warp = { workspace = true, features = ["tui"] }
 warp_channel_config.workspace = true

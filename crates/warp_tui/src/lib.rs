@@ -35,6 +35,7 @@ mod tool_call_labels;
 mod transcript_view;
 mod transient_hint;
 mod tui_block_list_viewport_source;
+mod tui_column_layout;
 mod tui_diff_storage;
 mod tui_file_edits_view;
 mod tui_shell_command_view;

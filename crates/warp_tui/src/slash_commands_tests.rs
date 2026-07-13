@@ -9,6 +9,7 @@ use warp_search_core::inline_menu::InlineMenuSelection;
 use warpui_core::App;
 
 use super::{
+    argument_hint_text_for_parsed_input, highlighted_prefix_len_for_parsed_input,
     menu_query_for_parsed_input, TuiSlashCommandModel, TuiSlashCommandRow, MAX_VISIBLE_ROWS,
 };
 use crate::inline_menu::keep_selected_visible;
@@ -19,6 +20,27 @@ fn parsed_skill(argument: Option<&str>) -> ParsedSlashCommandInput {
         name: "write-product-spec".to_owned(),
         argument: argument.map(str::to_owned),
     })
+}
+
+#[test]
+fn argument_hint_uses_shared_static_command_placeholder() {
+    let command = ParsedSlashCommandInput::SlashCommand(DetectedCommand {
+        command: slash_commands::EXPORT_TO_FILE.clone(),
+        argument: Some(String::new()),
+    });
+
+    assert_eq!(
+        argument_hint_text_for_parsed_input(&command, "/export-to-file "),
+        Some("<optional filename>")
+    );
+    assert_eq!(
+        argument_hint_text_for_parsed_input(&command, "/export-to-file notes.md"),
+        None
+    );
+    assert_eq!(
+        argument_hint_text_for_parsed_input(&parsed_skill(Some("")), "/write-product-spec "),
+        None
+    );
 }
 
 fn parsed_static_command(argument: Option<&str>) -> ParsedSlashCommandInput {
@@ -33,6 +55,34 @@ fn exact_static_command_stays_open_when_multiple_results_were_visible() {
     assert_eq!(
         menu_query_for_parsed_input(&parsed_static_command(None), true, 2).as_deref(),
         Some("compact")
+    );
+}
+
+#[test]
+fn only_detected_command_and_skill_prefixes_are_highlighted() {
+    let command = ParsedSlashCommandInput::SlashCommand(DetectedCommand {
+        command: slash_commands::PLAN.clone(),
+        argument: Some("research this".to_owned()),
+    });
+    assert_eq!(
+        highlighted_prefix_len_for_parsed_input(&command, "/plan research this"),
+        Some(5)
+    );
+    assert_eq!(
+        highlighted_prefix_len_for_parsed_input(
+            &parsed_skill(Some("prompt")),
+            "/write-product-spec prompt"
+        ),
+        Some("/write-product-spec".chars().count())
+    );
+    assert_eq!(
+        highlighted_prefix_len_for_parsed_input(
+            &ParsedSlashCommandInput::Composing {
+                filter: "pla".to_owned(),
+            },
+            "/pla",
+        ),
+        None
     );
 }
 
