@@ -1,4 +1,6 @@
-use warp::tui_export::{export_conversation_markdown, PtyIntent, PtyIntentEvent};
+use warp::tui_export::{
+    export_conversation_markdown, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
+};
 
 use super::{export_file_success_message, raw_prompt_if_not_blank, TuiTerminalSessionEvent};
 
@@ -33,4 +35,17 @@ fn file_export_success_message_includes_destination_path() {
         export_file_success_message(&export),
         format!("Conversation exported to {}", export.path().display())
     );
+}
+
+#[test]
+fn resize_event_maps_to_pty_resize_intent() {
+    let last_size = SizeInfo::new_without_font_metrics(24, 120);
+    let size_update = SizeUpdate::after_headless_layout(last_size, 8, 42);
+    let event = TuiTerminalSessionEvent::Resize(size_update);
+
+    let Some(PtyIntent::Resize(actual_update)) = event.pty_intent() else {
+        panic!("resize event should map to a PTY resize intent");
+    };
+    assert_eq!(actual_update.new_size().rows(), 8);
+    assert_eq!(actual_update.new_size().columns(), 42);
 }

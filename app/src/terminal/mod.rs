@@ -231,6 +231,24 @@ pub struct SizeUpdate {
 }
 
 impl SizeUpdate {
+    /// Creates a size update for a layout measured directly in terminal cells.
+    pub fn after_headless_layout(last_size: SizeInfo, rows: usize, columns: usize) -> Self {
+        let new_size = SizeInfo::new_without_font_metrics(rows, columns);
+        Self {
+            update_reason: SizeUpdateReason::AfterLayout,
+            last_size,
+            new_size,
+            new_gap_height: None,
+            natural_rows: new_size.rows(),
+            natural_cols: new_size.columns(),
+        }
+    }
+
+    /// Returns the resulting terminal size.
+    pub fn new_size(&self) -> SizeInfo {
+        self.new_size
+    }
+
     /// Whether the reason for the update is a refresh.
     pub fn is_refresh(&self) -> bool {
         matches!(self.update_reason, SizeUpdateReason::Refresh)
@@ -497,3 +515,7 @@ impl BlockPadding {
 
 #[cfg(test)]
 mod ref_tests;
+
+#[cfg(test)]
+#[path = "size_update_tests.rs"]
+mod size_update_tests;

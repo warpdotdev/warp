@@ -7,8 +7,9 @@
 //! keystrokes straight to the PTY as escape sequences — mirroring the GUI's
 //! `AltScreenElement` (`app/src/terminal/alt_screen/alt_screen_element.rs`).
 //!
-//! Slice 1 covers rendering, the cursor, and keyboard forwarding. Mouse
-//! forwarding and resize polish are tracked as follow-ups.
+//! Covers rendering, the cursor, keyboard forwarding, and propagating the
+//! laid-out cell dimensions to the terminal model and PTY. Mouse forwarding is
+//! tracked as a follow-up.
 //!
 //! [`TuiTerminalSessionView`]: crate::terminal_session_view::TuiTerminalSessionView
 //! [`TerminalModel::is_alt_screen_active`]: warp::tui_export::TerminalModel
@@ -16,6 +17,7 @@
 use std::ops::Deref as _;
 use std::sync::Arc;
 
+use async_channel::Sender;
 use parking_lot::FairMutex;
 use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel};
 use warp_terminal::model::grid::Dimensions as _;
@@ -32,11 +34,12 @@ use crate::terminal_session_view::TuiTerminalSessionAction;
 /// the PTY while a full-screen app is active.
 pub(crate) struct AltScreenElement {
     model: Arc<FairMutex<TerminalModel>>,
+    resize_tx: Sender<TuiSize>,
 }
 
 impl AltScreenElement {
-    pub(crate) fn new(model: Arc<FairMutex<TerminalModel>>) -> Self {
-        Self { model }
+    pub(crate) fn new(model: Arc<FairMutex<TerminalModel>>, resize_tx: Sender<TuiSize>) -> Self {
+        Self { model, resize_tx }
     }
 }
 
@@ -48,7 +51,9 @@ impl TuiElement for AltScreenElement {
         _app: &AppContext,
     ) -> TuiSize {
         // The alt-screen app owns the whole pane.
-        constraint.max
+        let size = constraint.max;
+        let _ = self.resize_tx.try_send(size);
+        size
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
@@ -118,3 +123,7 @@ impl TuiElement for AltScreenElement {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "alt_screen_view_tests.rs"]
+mod tests;

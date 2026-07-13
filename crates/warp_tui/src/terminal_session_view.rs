@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use async_channel::Sender;
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
@@ -26,9 +27,9 @@ use warp::tui_export::{
     ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
     GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
     ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
-    RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SkillReference,
-    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
+    RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate,
+    SkillReference, SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
     TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
     UserTakeOverReason, COMMAND_REGISTRY, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
     WAKEUP_THROTTLE_PERIOD,
@@ -40,7 +41,7 @@ use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiText,
+    TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiSize, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::FixedBinding;
@@ -95,6 +96,7 @@ pub(crate) enum TuiTerminalSessionEvent {
         bytes: Cow<'static, [u8]>,
         mode: AIAgentPtyWriteMode,
     },
+    Resize(SizeUpdate),
 }
 
 impl PtyIntentEvent for TuiTerminalSessionEvent {
@@ -106,6 +108,7 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
                 bytes: bytes.clone(),
                 mode: *mode,
             }),
+            Self::Resize(size_update) => Some(PtyIntent::Resize(*size_update)),
         }
     }
 }
@@ -227,6 +230,10 @@ pub(crate) struct TuiTerminalSessionView {
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
+    /// Last dimensions applied to the terminal model and PTY.
+    size_info: SizeInfo,
+    /// Reports the full area allocated to the active alt-screen element.
+    alt_screen_resize_tx: Sender<TuiSize>,
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
     /// shell submission).
     transient_hint: TransientHint,
@@ -478,8 +485,10 @@ impl TuiTerminalSessionView {
             sessions,
             model_events,
             wakeups_rx,
+            size_info,
             ..
         } = surface_init;
+        let (alt_screen_resize_tx, alt_screen_resize_rx) = async_channel::unbounded();
         model
             .lock()
             .block_list_mut()
@@ -904,6 +913,11 @@ impl TuiTerminalSessionView {
             },
             |_, _| {},
         );
+        ctx.spawn_stream_local(
+            alt_screen_resize_rx,
+            Self::handle_alt_screen_resize,
+            |_, _| {},
+        );
 
         // Focus the input view so the keymap responder chain is
         // [root, session, input]: input bindings win for keys they define,
@@ -933,6 +947,8 @@ impl TuiTerminalSessionView {
             ai_context_model: context_model,
             ai_input_model,
             terminal_model: model,
+            size_info,
+            alt_screen_resize_tx,
             transient_hint: TransientHint::default(),
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
@@ -1176,6 +1192,26 @@ impl TuiTerminalSessionView {
             .and_then(|conversation| conversation.server_conversation_token())
             .cloned();
         self.exit_summary.set_token(token);
+    }
+
+    /// Applies an alt-screen layout size to the terminal model and PTY.
+    fn handle_alt_screen_resize(&mut self, size: TuiSize, ctx: &mut ViewContext<Self>) {
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        let size_update = SizeUpdate::after_headless_layout(
+            self.size_info,
+            usize::from(size.height),
+            usize::from(size.width),
+        );
+        if !size_update.rows_or_columns_changed() {
+            return;
+        }
+
+        self.terminal_model.lock().resize(size_update);
+        self.size_info = size_update.new_size();
+        ctx.emit(TuiTerminalSessionEvent::Resize(size_update));
+        ctx.notify();
     }
 
     /// Re-renders on history events that can change the warping indicator:
@@ -2073,7 +2109,11 @@ impl TuiView for TuiTerminalSessionView {
         // While a full-screen (alt-screen) app is active, hand the whole pane to
         // it: render its grid and forward input, instead of the block UI.
         if self.terminal_model.lock().is_alt_screen_active() {
-            return AltScreenElement::new(self.terminal_model.clone()).finish();
+            return AltScreenElement::new(
+                self.terminal_model.clone(),
+                self.alt_screen_resize_tx.clone(),
+            )
+            .finish();
         }
 
         let inline_menu = active_inline_menu(
