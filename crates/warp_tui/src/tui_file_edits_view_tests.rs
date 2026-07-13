@@ -100,29 +100,43 @@ fn diff_pipeline_computes_added_lines_and_ghost_blocks() {
             });
         });
         rx.await.expect("diff computation should complete");
-
-        editor.update(&mut app, |editor, ctx| editor.expand_diffs(ctx));
-
-        // Ghost blocks land via the render state's async layout channel; poll
-        // until the spawned handler has stored them.
-        let mut ghosts = Vec::new();
-        for _ in 0..100 {
-            ghosts = app.read(|app| {
-                editor
-                    .as_ref(app)
-                    .render_state()
-                    .as_ref(app)
-                    .char_cell()
-                    .expect("TUI editor renders in char-cell mode")
-                    .display_lattice(&[])
-                    .ghosts()
-                    .to_vec()
+        // Ghost blocks land via the render state's async layout channel. Wait
+        // for the layout event that exposes them instead of relying on an
+        // arbitrary number of executor yields.
+        let render_state = app.read(|app| editor.as_ref(app).render_state().clone());
+        let (tx, rx) = oneshot::channel();
+        app.update(|ctx| {
+            let mut tx = Some(tx);
+            ctx.subscribe_to_model(&editor, move |_, event, ctx| {
+                if matches!(event, CodeEditorModelEvent::LayoutInvalidated)
+                    && !render_state
+                        .as_ref(ctx)
+                        .char_cell()
+                        .expect("TUI editor renders in char-cell mode")
+                        .display_lattice(&[])
+                        .ghosts()
+                        .is_empty()
+                {
+                    if let Some(tx) = tx.take() {
+                        let _ = tx.send(());
+                    }
+                }
             });
-            if !ghosts.is_empty() {
-                break;
-            }
-            futures_lite::future::yield_now().await;
-        }
+            editor.update(ctx, |editor, ctx| editor.expand_diffs(ctx));
+        });
+        rx.await.expect("ghost block layout should complete");
+
+        let ghosts = app.read(|app| {
+            editor
+                .as_ref(app)
+                .render_state()
+                .as_ref(app)
+                .char_cell()
+                .expect("TUI editor renders in char-cell mode")
+                .display_lattice(&[])
+                .ghosts()
+                .to_vec()
+        });
 
         assert_eq!(ghosts.len(), 1);
         assert_eq!(ghosts[0].content, "old\n");
