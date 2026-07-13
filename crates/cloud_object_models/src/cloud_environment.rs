@@ -122,6 +122,40 @@ impl fmt::Display for BaseImage {
     }
 }
 
+/// Serde helpers for the `base_image` field of [`AmbientAgentEnvironment`].
+///
+/// The environment's base image is stored as a flat top-level `docker_image`
+/// string in the on-wire JSON (not a nested object). These helpers flatten
+/// `Option<BaseImage>` to/from that string so that an environment without a
+/// pinned image omits the key entirely (no `null`, no empty string) while an
+/// environment with one preserves the exact legacy wire format.
+mod base_image_field {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use super::BaseImage;
+
+    pub fn serialize<S>(value: &Option<BaseImage>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(BaseImage::DockerImage(image)) => serializer.serialize_str(image),
+            // `skip_serializing_if = "Option::is_none"` on the field prevents
+            // this arm from running for stored environments; handle it for
+            // safety anyway.
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<BaseImage>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let image = Option::<String>::deserialize(deserializer)?;
+        Ok(image.map(BaseImage::DockerImage))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GcpProviderConfig {
     pub project_number: String,
@@ -181,9 +215,20 @@ pub struct AmbientAgentEnvironment {
     /// `github_repos`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_repos: Option<Vec<SourceRepo>>,
-    /// Base image specification
-    #[serde(flatten)]
-    pub base_image: BaseImage,
+    /// Base image specification.
+    ///
+    /// `None` indicates that no base image is pinned for this environment.
+    /// Serializes as a top-level `docker_image` string when present and is
+    /// omitted entirely when absent, preserving the legacy wire format for
+    /// environments that pin an image while allowing environments without one
+    /// to deserialize successfully.
+    #[serde(
+        rename = "docker_image",
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "base_image_field"
+    )]
+    pub base_image: Option<BaseImage>,
     /// List of setup commands to run after cloning
     #[serde(default)]
     pub setup_commands: Vec<String>,
@@ -212,7 +257,7 @@ impl AmbientAgentEnvironment {
             code_forge: None,
             github_repos,
             source_repos: None,
-            base_image: BaseImage::DockerImage(docker_image),
+            base_image: Some(BaseImage::DockerImage(docker_image)),
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,
