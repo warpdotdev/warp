@@ -96,6 +96,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::time_format::format_elapsed_seconds;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
@@ -127,7 +128,6 @@ pub const LOAD_OUTPUT_MESSAGE_FOR_WRITING_TO_COMMAND: &str = "Writing command in
 pub const LOAD_OUTPUT_MESSAGE_FOR_WAITING_FOR_COMMAND_COMPLETION: &str =
     "Waiting for command to exit...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH: &str = "Searching the web...";
-pub const LOAD_OUTPUT_MESSAGE_FOR_FETCHING_REVIEW_COMMENTS: &str = "Fetching PR comments...";
 
 #[cfg(feature = "local_fs")]
 pub(crate) type ResolvedBlocklistImageSources = HashMap<String, Option<AssetSource>>;
@@ -258,12 +258,6 @@ pub fn render_warping_indicator<V: View>(
         })
     });
 
-    let is_fetching_review_comments = props
-        .model
-        .inputs_to_render(app)
-        .iter()
-        .any(|input| matches!(input, AIAgentInput::FetchReviewComments { .. }));
-
     let summarization_type: Option<SummarizationType> =
         if FeatureFlag::SummarizationCancellationConfirmation.is_enabled() {
             output_to_render.as_ref().and_then(|output| {
@@ -326,8 +320,6 @@ pub fn render_warping_indicator<V: View>(
         LOAD_OUTPUT_MESSAGE_FOR_PREPARING_QUESTION.to_string()
     } else if is_searching_web {
         LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH.to_string()
-    } else if is_fetching_review_comments {
-        LOAD_OUTPUT_MESSAGE_FOR_FETCHING_REVIEW_COMMENTS.to_string()
     } else if is_interrupt_query_for_same_conversation
         && output_to_render
             .as_ref()
@@ -526,6 +518,23 @@ pub struct WarpingIndicatorProps {
     pub secondary_element: Option<Box<dyn Element>>,
 }
 
+/// Computes the fixed height of the warping-indicator footer.
+///
+/// The warping text occupies a single line. When a secondary element (an agent
+/// tip or fallback-model explanation) is present, it renders on a second line
+/// below the warping text, so the footer must reserve room for that extra line;
+/// otherwise the `Clipped` wrapper — which keeps action chips from overflowing
+/// narrow panes — also clips the secondary line. The extra line accounts for the
+/// secondary element's font size (`monospace_font_size - 3`, see
+/// `render_agent_tip` / `render_fallback_explanation`) plus its 1px top margin.
+fn warping_footer_height(monospace_font_size: f32, has_secondary_element: bool) -> f32 {
+    let mut height = STATUS_FOOTER_VERTICAL_PADDING * 2. + monospace_font_size;
+    if has_secondary_element {
+        height += (monospace_font_size - 3.) + 1.;
+    }
+    height
+}
+
 /// Helper function to render text in the "warping..." footer.
 /// Additional text that does not use the shimmering text animation can be passed in via
 /// `non_shimmering_text` which is useful if you want some part of the text to constantly update
@@ -543,6 +552,10 @@ pub fn render_warping_indicator_base(
         is_passive_code_diff,
         secondary_element,
     } = props;
+    // Whether a secondary element (an agent tip or fallback-model explanation)
+    // will be rendered on a second line below the warping text. Captured before
+    // `secondary_element` is consumed so the container can reserve room for it.
+    let has_secondary_element = secondary_element.is_some();
     // Unicode code point for the Warp glyph that is embedded in the version of Roboto we bundle
     // into the app. This code point MUST be rendered using Roboto (the default ui font) or else the
     // glyph may not be rendered.
@@ -646,7 +659,10 @@ pub fn render_warping_indicator_base(
     } else {
         let mut container = Container::new(
             ConstrainedBox::new(content)
-                .with_height(STATUS_FOOTER_VERTICAL_PADDING * 2. + appearance.monospace_font_size())
+                .with_height(warping_footer_height(
+                    appearance.monospace_font_size(),
+                    has_secondary_element,
+                ))
                 .finish(),
         )
         .with_padding_right(CONTENT_HORIZONTAL_PADDING);
@@ -659,16 +675,6 @@ pub fn render_warping_indicator_base(
         }
 
         container.finish()
-    }
-}
-
-/// Formats elapsed time as a human-readable string with proper singular/plural.
-pub fn format_elapsed_seconds(elapsed: std::time::Duration) -> String {
-    let total_seconds = elapsed.as_secs();
-    if total_seconds == 1 {
-        "1 second".to_string()
-    } else {
-        format!("{total_seconds} seconds")
     }
 }
 
@@ -3028,6 +3034,7 @@ pub(crate) fn resolve_absolute_file_path(
 pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
+    pub subscribe_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
@@ -3036,11 +3043,30 @@ pub struct FailedOutputProps<'a> {
 pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
 
+    // While an automatic retry/resume is still in flight, don't surface the underlying
+    // transport failure at all. These are typically transient and recover on their own,
+    // so showing the alarming "Warp lost connection" banner (plus debug info) for every
+    // blip is noisy and misleading. Render nothing during in-flight recovery; the full
+    // error banner is only shown once recovery has actually failed. Dogfood builds
+    // (Local/Dev) opt out so developers still see every transport failure aggressively.
+    if props.error.should_suppress_during_recovery() {
+        return Empty::new().finish();
+    }
+
     let error_text = match props.error {
         RenderableAIError::QuotaLimit {
             user_display_message,
         } => {
             if let Some(message) = user_display_message {
+                if should_show_subscribe_cta(app) {
+                    return render_out_of_credits_error(
+                        message,
+                        props.subscribe_button_handle,
+                        props.is_ai_input_enabled,
+                        props.icon_right_margin,
+                        app,
+                    );
+                }
                 format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
             } else {
                 let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
@@ -3060,22 +3086,19 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         RenderableAIError::InternalWarpError => {
             format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_WARP_ERROR}")
         }
-        RenderableAIError::Other {
-            error_message,
-            will_attempt_resume,
-            waiting_for_network,
-        } => {
-            if *will_attempt_resume {
-                if *waiting_for_network {
-                    format!(
-                        "{error_message}\n\nWill resume conversation when network connectivity is restored..."
-                    )
-                } else {
-                    format!("{error_message}\n\nAttempting to resume conversation...")
-                }
-            } else {
-                format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
-            }
+        RenderableAIError::Other { error_message, .. } => {
+            // A still-recovering `Other` error is handled by the early return above; once we
+            // reach here recovery has failed, so surface the error directly.
+            format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
+        }
+        RenderableAIError::AgentExitedShell => {
+            format!("{ERROR_APOLOGY_TEXT}\n\n{}", props.error)
+        }
+        RenderableAIError::TransientNetworkError { .. } => {
+            // Recovering transient errors are handled by the early return above; once we
+            // reach here recovery has failed. These carry their own complete user-facing
+            // copy (plus debug info), so the apology prefix adds nothing.
+            props.error.to_string()
         }
         RenderableAIError::InvalidApiKey {
             provider,
@@ -3147,6 +3170,120 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 })
                 .finish(),
             )
+            .finish(),
+        )
+        .finish()
+}
+
+/// Whether to show the out-of-credits CTAs: only for non-paid users. Paid users and the
+/// enterprise spend-limit variant of this message fall back to plain text.
+fn should_show_subscribe_cta(app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app)
+        .current_workspace()
+        .is_none_or(|workspace| !workspace.billing_metadata.is_user_on_paid_plan())
+}
+
+/// Builds an out-of-credits CTA button, styled like the invalid-API-key error's button.
+fn out_of_credits_cta_button(
+    label: &str,
+    state_handle: &MouseStateHandle,
+    app: &AppContext,
+) -> Button {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    appearance
+        .ui_builder()
+        .button(
+            warpui::ui_components::button::ButtonVariant::Outlined,
+            state_handle.clone(),
+        )
+        .with_style(UiComponentStyles {
+            font_size: Some(14.),
+            border_color: Some(internal_colors::neutral_4(theme).into()),
+            ..Default::default()
+        })
+        .with_hovered_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_2(theme).into()),
+            ..Default::default()
+        })
+        .with_clicked_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_3(theme).into()),
+            ..Default::default()
+        })
+        .with_text_label(label.to_string())
+        .with_cursor(Some(Cursor::PointingHand))
+}
+
+/// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
+fn render_out_of_credits_error(
+    message: &str,
+    subscribe_button_handle: &MouseStateHandle,
+    is_ai_input_enabled: bool,
+    icon_right_margin: f32,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+
+    let icon = Container::new(
+        ConstrainedBox::new(
+            warpui::elements::Icon::new(
+                Icon::AlertTriangle.into(),
+                error_color(appearance.theme()),
+            )
+            .finish(),
+        )
+        .with_width(icon_size(app))
+        .with_height(icon_size(app))
+        .finish(),
+    )
+    .with_margin_right(icon_right_margin)
+    .finish();
+
+    let text = Text::new(
+        format!("{ERROR_APOLOGY_TEXT}\n\n{message}"),
+        appearance.monospace_font_family(),
+        appearance.monospace_font_size(),
+    )
+    .with_color(blended_colors::text_sub(
+        appearance.theme(),
+        appearance.theme().surface_1(),
+    ))
+    .with_selection_color(if is_ai_input_enabled {
+        appearance
+            .theme()
+            .text_selection_as_context_color()
+            .into_solid()
+    } else {
+        appearance.theme().text_selection_color().into_solid()
+    })
+    .finish();
+
+    let subscribe_button = out_of_credits_cta_button("Subscribe", subscribe_button_handle, app)
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+        })
+        .finish();
+
+    Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(12.)
+        .with_child(
+            Flex::row()
+                .with_child(icon)
+                .with_child(Shrinkable::new(1., text).finish())
+                .finish(),
+        )
+        .with_child(
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_main_axis_alignment(MainAxisAlignment::Start)
+                    .with_child(subscribe_button)
+                    .finish(),
+            )
+            .with_margin_left(icon_size(app) + icon_right_margin)
             .finish(),
         )
         .finish()
@@ -3534,7 +3671,6 @@ pub(super) fn query_prefix_highlight_len(
             | AIAgentInput::CreateNewProject { .. }
             | AIAgentInput::CloneRepository { .. }
             | AIAgentInput::CodeReview { .. }
-            | AIAgentInput::FetchReviewComments { .. }
             | AIAgentInput::SummarizeConversation { .. }
             | AIAgentInput::StartFromAmbientRunPrompt { .. }
             | AIAgentInput::ActionResult { .. }

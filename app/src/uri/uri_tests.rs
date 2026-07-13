@@ -731,6 +731,49 @@ fn test_parse_tab_path_bare_tilde() {
     assert_eq!(parse_tab_path(&url), Some(home));
 }
 
+// -- warp://settings deeplink parsing ----------------------------------------
+
+#[test]
+fn test_settings_widget_deeplink_target() {
+    assert_eq!(
+        settings_widget_deeplink_target("global_hotkey").map(|(section, _)| section),
+        Some(SettingsSection::Features),
+    );
+    assert_eq!(
+        settings_widget_deeplink_target("custom_router").map(|(section, _)| section),
+        Some(SettingsSection::WarpAgent),
+    );
+    #[cfg(not(target_family = "wasm"))]
+    assert_eq!(
+        settings_widget_deeplink_target("cli_agents").map(|(section, _)| section),
+        Some(SettingsSection::ThirdPartyCLIAgents),
+    );
+    // Unknown / empty slugs are not linkable (allowlist only).
+    assert!(settings_widget_deeplink_target("not_a_widget").is_none());
+    assert!(settings_widget_deeplink_target("").is_none());
+}
+
+#[test]
+fn test_settings_section_for_simple_subpage() {
+    assert_eq!(
+        settings_section_for_simple_subpage("appearance"),
+        Some(SettingsSection::Appearance),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("billing_and_usage"),
+        Some(SettingsSection::BillingAndUsage),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("platform"),
+        Some(SettingsSection::OzCloudAPIKeys),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("warp_agent"),
+        Some(SettingsSection::WarpAgent),
+    );
+    assert!(settings_section_for_simple_subpage("not_a_subpage").is_none());
+}
+
 // Regression coverage for issue #9005: shell scripts opened via `file://` should run,
 // not open in the editor. Exercised through the pure routing helper to avoid standing
 // up a full `AppContext`.
@@ -743,7 +786,7 @@ fn test_open_file_executable_sh_routes_to_execute() {
     let p = dir.path().join("run.sh");
     std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let action = classify_open_file_action(&p);
+    let action = classify_open_file_action(&p, true);
     assert_eq!(action, OpenFileAction::ExecuteInSession);
 }
 
@@ -755,7 +798,7 @@ fn test_open_file_non_executable_sh_routes_to_editor() {
     let p = dir.path().join("view.sh");
     std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
+    assert_eq!(classify_open_file_action(&p, true), OpenFileAction::Editor);
 }
 
 #[test]
@@ -768,7 +811,7 @@ fn test_open_file_executable_bash_zsh_fish_route_to_execute() {
         std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(
-            classify_open_file_action(&p),
+            classify_open_file_action(&p, true),
             OpenFileAction::ExecuteInSession,
             "{name} should route to ExecuteInSession",
         );
@@ -776,11 +819,47 @@ fn test_open_file_executable_bash_zsh_fish_route_to_execute() {
 }
 
 #[test]
-fn test_open_file_markdown_unchanged() {
+fn test_open_file_markdown_routes_to_notebook_when_viewer_enabled() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("README.md");
     std::fs::write(&p, b"# hi\n").unwrap();
-    assert_eq!(classify_open_file_action(&p), OpenFileAction::Notebook);
+    assert_eq!(
+        classify_open_file_action(&p, true),
+        OpenFileAction::Notebook
+    );
+}
+
+#[test]
+fn test_open_file_markdown_routes_to_editor_when_viewer_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("README.md");
+    std::fs::write(&p, b"# hi\n").unwrap();
+    assert_eq!(classify_open_file_action(&p, false), OpenFileAction::Editor);
+}
+
+#[test]
+fn test_open_file_ipynb_routes_to_notebook_when_enabled() {
+    // A `.ipynb` opened via `file://` (e.g. "Open with Warp" from Finder) opens
+    // in the notebook viewer, not the raw-JSON code editor.
+    let _flag = crate::features::FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("analysis.ipynb");
+    std::fs::write(&p, b"{\"nbformat\": 4, \"cells\": []}\n").unwrap();
+    assert_eq!(
+        classify_open_file_action(&p, false),
+        OpenFileAction::Notebook
+    );
+}
+
+#[test]
+fn test_open_file_ipynb_opens_in_editor_when_disabled() {
+    // Without the feature flag, `.ipynb` is not rendered in the notebook viewer
+    // and falls through to the code editor.
+    let _flag = crate::features::FeatureFlag::JupyterNotebookRendering.override_enabled(false);
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("analysis.ipynb");
+    std::fs::write(&p, b"{\"nbformat\": 4, \"cells\": []}\n").unwrap();
+    assert_eq!(classify_open_file_action(&p, true), OpenFileAction::Editor);
 }
 
 #[test]
@@ -789,7 +868,7 @@ fn test_open_file_rust_source_still_opens_in_editor() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("main.rs");
     std::fs::write(&p, b"fn main() {}\n").unwrap();
-    assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
+    assert_eq!(classify_open_file_action(&p, true), OpenFileAction::Editor);
 }
 
 #[test]
@@ -825,7 +904,7 @@ fn test_open_file_editor_binary_file_is_rejected() {
 fn test_open_file_directory_routes_to_session() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(
-        classify_open_file_action(dir.path()),
+        classify_open_file_action(dir.path(), true),
         OpenFileAction::ExecuteInSession
     );
 }
@@ -841,7 +920,7 @@ fn test_open_file_non_runnable_shebang_routes_to_editor() {
     let p = dir.path().join("noext");
     std::fs::write(&p, b"#!/bin/sh\necho hi\n").unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
+    assert_eq!(classify_open_file_action(&p, true), OpenFileAction::Editor);
 }
 
 #[test]

@@ -306,8 +306,9 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       # previously run user command (as opposed to any of the commands executed
       # in this function below).
       local exit_code=$?
+      local next_block_id="precmd-$WARP_SESSION_ID-$((block_id++))"
 
-      warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$WARP_SESSION_ID-$((block_id++))\", \"session_id\": $WARP_SESSION_ID}}"
+      warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"$next_block_id\", \"session_id\": $WARP_SESSION_ID}}"
       warp_maybe_send_reset_grid_osc
 
       # If this is being called for a generator command, short circuit and send an unpopulated
@@ -320,6 +321,8 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
 
         _WARP_GENERATOR_COMMAND=""
         warp_send_json_message "{\"hook\": \"Precmd\", \"value\": {
+        \"exit_code\": $exit_code,
+        \"next_block_id\": \"$next_block_id\",
         \"pwd\": \"\",
         \"ps1\": \"\",
         \"git_head\": \"\",
@@ -480,6 +483,8 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       fi
 
       local escaped_json="{\"hook\": \"Precmd\", \"value\": {
+      \"exit_code\": $exit_code,
+      \"next_block_id\": \"$next_block_id\",
       \"pwd\": \"$escaped_pwd\",
       \"ps1\": \"\",
       \"honor_ps1\": $honor_ps1,
@@ -932,6 +937,18 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
               command ssh "${@:1}"
               return
           fi
+
+          # If the user's SSH config sets a RemoteCommand for this destination,
+          # OpenSSH refuses to also run our bootstrap as a command-line remote
+          # command, aborting with "Cannot execute command-line and remote
+          # command." Warpification is structurally impossible there, so fall
+          # back to plain SSH. `ssh -G` prints `remotecommand none` when unset.
+          local user_remote_command=$(command ssh -G "${@:1}" 2>/dev/null | command -p sed -n 's/^remotecommand //p')
+          if [[ -n "$user_remote_command" && "$user_remote_command" != "none" ]]; then
+              command ssh "${@:1}"
+              return
+          fi
+
           # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
           # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
           # and use printf to convert back to plaintext

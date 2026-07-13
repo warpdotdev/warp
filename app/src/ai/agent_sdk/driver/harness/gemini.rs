@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
@@ -166,7 +167,7 @@ impl HarnessRunner for GeminiHarnessRunner {
                     .create_external_conversation(GEMINI_CLI_FORMAT)
                     .await
                     .map_err(|e| {
-                        log::error!("Failed to create external conversation: {e}");
+                        report_error!(&e);
                         AgentDriverError::ConfigBuildFailed(e)
                     })
             })

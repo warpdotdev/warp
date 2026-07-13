@@ -20,6 +20,7 @@ use tab_stops::TabStops;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_terminal::model::ansi::CharsetIndex;
 use warp_terminal::model::grid::cell;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
@@ -156,7 +157,7 @@ enum ResetGridChecks {
 
 impl ansi::Handler for GridHandler {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method GridHandler::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::set_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
@@ -175,9 +176,11 @@ impl ansi::Handler for GridHandler {
     }
 
     fn input(&mut self, c: char) {
-        // We disable Reset Grid checks in unit tests, as they are not designed to test
-        // PTY integration. `#[cfg(test)]` only applies to unit tests, not integration tests.
-        #[cfg(all(windows, not(test)))]
+        // We disable Reset Grid checks in tests, as they are not designed to test
+        // PTY integration. `not(test)` covers this crate's own unit tests, and
+        // `not(feature = "test-util")` covers other crates (e.g. `warp_tui`) that
+        // build real terminal models against `warp`'s test helpers.
+        #[cfg(all(windows, not(test), not(feature = "test-util")))]
         if let ResetGridChecks::Enabled { received_osc } = self.ansi_handler_state.reset_grid_checks
         {
             debug_assert!(
@@ -1137,15 +1140,15 @@ impl ansi::Handler for GridHandler {
     }
 
     fn set_color(&mut self, _: usize, _: warpui::color::ColorU) {
-        log::error!("Handler method GridHandler::set_color should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::set_color should never be called. This should be handled by TerminalModel.");
     }
 
     fn dynamic_color_sequence<W: std::io::Write>(&mut self, _: &mut W, _: u8, _: usize, _: &str) {
-        log::error!("Handler method GridHandler::dynamic_color_sequence should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::dynamic_color_sequence should never be called. This should be handled by TerminalModel.");
     }
 
     fn reset_color(&mut self, _: usize) {
-        log::error!("Handler method GridHandler::reset_color should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::reset_color should never be called. This should be handled by TerminalModel.");
     }
 
     fn clipboard_store(&mut self, clipboard: u8, base64: &[u8]) {
@@ -1194,11 +1197,11 @@ impl ansi::Handler for GridHandler {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method GridHandler::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::push_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method GridHandler::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method GridHandler::pop_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn text_area_size_pixels<W: std::io::Write>(&mut self, writer: &mut W) {
@@ -1211,7 +1214,7 @@ impl ansi::Handler for GridHandler {
         let _ = write!(writer, "\x1b[8;{};{}t", self.visible_rows(), self.columns());
     }
 
-    fn precmd(&mut self, _: PrecmdValue) {
+    fn precmd_with_completion_metadata(&mut self, _: PrecmdValue) {
         unreachable!("Precmd hook is handled at block layer")
     }
 

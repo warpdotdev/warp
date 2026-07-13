@@ -46,9 +46,9 @@ message HostScopedRequest {
     GitCommitChainRequest git_commit_chain = 15;
     GitPushRequest git_push = 16;
     GitCreatePrRequest git_create_pr = 17;
-    GitGetPrInfoRequest git_get_pr_info = 18;
-    GitGenerateCommitMessageRequest git_generate_commit_message = 19;
-    GitGetCommittedBranchFilesRequest git_get_committed_branch_files = 20;
+    GitGenerateCommitMessageRequest git_generate_commit_message = 18;
+    GitGetCommittedBranchFilesRequest git_get_committed_branch_files = 19;
+    RipgrepSearchRequest ripgrep_search = 21;
   }
 }
 
@@ -79,6 +79,9 @@ message Notification {
     BufferEdit buffer_edit = 5;
     CloseBuffer close_buffer = 6;
     UnsubscribeDiffState unsubscribe_diff_state = 7;
+    UpdateGitStatus update_git_status = 8;
+    UpdateGitHubPrInfo update_github_pr_info = 9;
+    UpdateGitHubRepoInfo update_github_repo_info = 10;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -115,10 +118,13 @@ message ServerMessage {
     GitCommitChainResponse git_commit_chain_response = 27;
     GitPushResponse git_push_response = 28;
     GitCreatePrResponse git_create_pr_response = 29;
-    GitGetPrInfoResponse git_get_pr_info_response = 30;
     GitGenerateCommitMessageResponse git_generate_commit_message_response = 31;
     GitGetCommittedBranchFilesResponse git_get_committed_branch_files_response = 32;
-    BundledSkillsSnapshot bundled_skills_snapshot = 33;
+    GitStatusPush git_status_push = 34;
+    GitHubPrInfoPush github_pr_info_push = 35;
+    GitHubRepositoryInfoPush github_repository_info_push = 36;
+    RipgrepSearchResponse ripgrep_search_response = 37;
+    RemoteAgentContextSnapshot remote_agent_context_snapshot = 33;
   }
 }
 
@@ -240,31 +246,45 @@ message ErrorResponse {
   string message = 2;
 }
 
-// ── Bundled skills ────────────────────────────────────────────────
+// ── Remote Agent Mode context ─────────────────────────────────────
 
-// One bundled skill, pre-parsed and handlebars-rendered by the daemon
-// against its own filesystem. Named with the `Proto` suffix (like
-// `FileContextProto`) to avoid colliding with the app's `BundledSkill`.
-message BundledSkillProto {
-  // Directory-based skill ID (unique within the bundled catalog).
+// Metadata specific to a skill bundled with Warp.
+message BundledSkillMetadata {
+  // Directory-based skill ID, unique within the bundled catalog.
   string id = 1;
-  string name = 2;
-  string description = 3;
-  // Absolute path to the skill's SKILL.md on this host.
-  string path = 4;
-  // Skill content with handlebars variables rendered for this host.
-  string content = 5;
   // When set, the skill is only active while the named MCP integration
   // is running on the client (e.g. "figma"). Evaluated client-side.
-  optional string requires_mcp = 6;
+  optional string requires_mcp = 2;
 }
 
-// Server → client push: the daemon's bundled skill catalog. Sent to a
-// connection after its Initialize completes (when parsing has already
-// finished) and broadcast to all connections when parsing completes.
-// Never blocks the initialize handshake.
-message BundledSkillsSnapshot {
-  repeated BundledSkillProto skills = 1;
+// Marker metadata for a file-based skill from the daemon host's home directory.
+message HomeSkillMetadata {}
+
+// One already-read remote skill published by the daemon.
+message RemoteSkillProto {
+  // Absolute path to the file on this host.
+  string path = 1;
+  string content = 2;
+  oneof source {
+    BundledSkillMetadata bundled = 3;
+    HomeSkillMetadata home = 4;
+  }
+}
+
+// One already-read remote context file published by the daemon.
+message RemoteContextFileProto {
+  // Absolute path to the file on this host.
+  string path = 1;
+  string content = 2;
+}
+
+// Revisioned full replacement of the daemon host's Agent Mode context. Source
+// discovery and reading happen daemon-side before this snapshot is published.
+message RemoteAgentContextSnapshot {
+  uint64 revision = 1;
+  string home_dir = 2;
+  repeated RemoteSkillProto skills = 3;
+  repeated RemoteContextFileProto global_rules = 4;
 }
 
 // ── Shared repo metadata sub-messages ─────────────────────────────
@@ -429,6 +449,56 @@ message FileContextProto {
   optional uint32 line_range_end = 5;
   optional uint64 last_modified_epoch_millis = 6;
   uint32 line_count = 7;
+}
+
+// ── Ripgrep search (global search) ────────────────────────────────
+
+// Client → server: run a ripgrep search over the given root directories
+// on the host. Used by global search for remote sessions.
+message RipgrepSearchRequest {
+  // Regex pattern. Already escaped client-side for literal (non-regex)
+  // searches, matching local global search behavior.
+  string pattern = 1;
+  // Absolute directories on the host to search.
+  repeated string roots = 2;
+  bool ignore_case = 3;
+  bool multiline = 4;
+  // Maximum number of matched lines to return. The server also applies its
+  // own match and approximate payload caps.
+  uint32 max_matches = 5;
+}
+
+// Server → client: result of a RipgrepSearchRequest.
+message RipgrepSearchResponse {
+  oneof result {
+    RipgrepSearchSuccess success = 1;
+    RipgrepSearchError error = 2;
+  }
+}
+
+message RipgrepSearchSuccess {
+  repeated RipgrepSearchMatch matches = 1;
+  // True when the search stopped early because the match cap was reached.
+  bool capped = 2;
+}
+
+message RipgrepSearchError {
+  string message = 1;
+}
+
+// A single matched line in a file. A line may contain multiple submatches;
+// the client expands them into per-submatch result rows.
+message RipgrepSearchMatch {
+  string file_path = 1;
+  uint32 line_number = 2;
+  string line_text = 3;
+  repeated RipgrepSearchSubmatch submatches = 4;
+}
+
+// Byte offsets into `line_text` for one submatch (end exclusive).
+message RipgrepSearchSubmatch {
+  uint64 byte_start = 1;
+  uint64 byte_end = 2;
 }
 
 // ── Remote codebase indexing status ───────────────────────────────

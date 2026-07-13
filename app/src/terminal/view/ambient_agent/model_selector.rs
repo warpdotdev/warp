@@ -18,6 +18,7 @@ use warpui::{
 
 use crate::ai::blocklist::agent_view::agent_input_footer::AgentInputButtonTheme;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display::icon_for as harness_icon_for;
@@ -202,28 +203,6 @@ impl ModelSelector {
             me.refresh_menu(ctx);
         });
 
-        if let Some(ambient_agent_model) = ambient_agent_model.as_ref() {
-            ctx.subscribe_to_model(ambient_agent_model, |me, _, event, ctx| match event {
-                AmbientAgentViewModelEvent::HarnessSelected => {
-                    // When the harness changes (including from settings restore),
-                    // try to restore the saved model for the new harness.
-                    me.maybe_restore_harness_model_from_settings(ctx);
-                    me.refresh_button(ctx);
-                    me.refresh_menu(ctx);
-                }
-                AmbientAgentViewModelEvent::HarnessModelSelected => {
-                    me.refresh_button(ctx);
-                    me.refresh_menu(ctx);
-                }
-                AmbientAgentViewModelEvent::SessionReady { .. }
-                | AmbientAgentViewModelEvent::FollowupDispatched
-                | AmbientAgentViewModelEvent::RunLifecycleChanged => {
-                    me.refresh_button(ctx);
-                }
-                _ => {}
-            });
-        }
-
         let mut me = Self {
             button,
             menu,
@@ -232,14 +211,57 @@ impl ModelSelector {
             is_menu_open: false,
             menu_positioning_provider,
             terminal_view_id,
-            ambient_agent_model,
+            ambient_agent_model: None,
         };
 
-        me.maybe_restore_harness_model_from_settings(ctx);
-
-        me.refresh_button(ctx);
-        me.refresh_menu(ctx);
+        // Route ambient wiring through the setter so construction and the lazy
+        // shared-session viewer path share one implementation.
+        if let Some(ambient_agent_model) = ambient_agent_model {
+            me.set_ambient_agent_view_model(ambient_agent_model, ctx);
+        } else {
+            me.refresh_button(ctx);
+            me.refresh_menu(ctx);
+        }
         me
+    }
+
+    /// Attaches an ambient agent view model after construction. Shared by [`Self::new`] and the
+    /// lazy shared-session viewer path (the footer rebuilds this selector via the ambient setter
+    /// when a raw `shared_session` link turns out to be a cloud run) so both wire the ambient
+    /// subscription, restore the saved harness model, and refresh identically. Idempotent: a
+    /// no-op when a model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ambient_agent_model.is_some() {
+            return;
+        }
+        ctx.subscribe_to_model(&ambient_agent_model, |me, _, event, ctx| match event {
+            AmbientAgentViewModelEvent::HarnessSelected => {
+                // When the harness changes (including from settings restore),
+                // try to restore the saved model for the new harness.
+                me.maybe_restore_harness_model_from_settings(ctx);
+                me.refresh_button(ctx);
+                me.refresh_menu(ctx);
+            }
+            AmbientAgentViewModelEvent::HarnessModelSelected => {
+                me.refresh_button(ctx);
+                me.refresh_menu(ctx);
+            }
+            AmbientAgentViewModelEvent::SessionReady { .. }
+            | AmbientAgentViewModelEvent::FollowupDispatched
+            | AmbientAgentViewModelEvent::RunLifecycleChanged => {
+                me.refresh_button(ctx);
+            }
+            _ => {}
+        });
+        self.ambient_agent_model = Some(ambient_agent_model);
+        self.maybe_restore_harness_model_from_settings(ctx);
+        self.refresh_button(ctx);
+        self.refresh_menu(ctx);
+        ctx.notify();
     }
 
     /// Restores the saved harness model from settings if the current harness has no model selected.
@@ -490,8 +512,13 @@ impl ModelSelector {
             .chain(other_choices)
             .map(|llm| {
                 let display_name = llm.menu_display_name();
+                let leading_icon = if is_custom_router_id(llm.id.as_str()) {
+                    Icon::Dataflow
+                } else {
+                    llm.provider.icon().unwrap_or(Icon::Oz)
+                };
                 let fields = MenuItemFields::new(display_name)
-                    .with_icon(llm.provider.icon().unwrap_or(Icon::Oz))
+                    .with_icon(leading_icon)
                     .with_icon_size_override(ITEM_ICON_SIZE)
                     .with_font_size_override(ITEM_FONT_SIZE)
                     .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)

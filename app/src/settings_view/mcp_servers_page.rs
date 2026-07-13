@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::elements::{ChildView, Container};
 use warpui::ui_components::components::{Coords, UiComponentStyles};
 use warpui::{
@@ -153,7 +154,7 @@ impl MCPServersSettingsPageView {
         };
         match item_id {
             ServerCardItemId::TemplatableMCP(_) => {
-                log::error!("Logging out is not supported for template MCP servers.");
+                report_error!("Logging out is not supported for template MCP servers.");
             }
             ServerCardItemId::TemplatableMCPInstallation(uuid) => {
                 TemplatableMCPServerManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -163,7 +164,7 @@ impl MCPServersSettingsPageView {
                 self.add_toast(&message, ctx);
             }
             ServerCardItemId::GalleryMCP(_) => {
-                log::error!("Logging out is not supported for gallery MCP servers.");
+                report_error!("Logging out is not supported for gallery MCP servers.");
             }
             ServerCardItemId::FileBasedMCP(uuid) => {
                 if let Some(installation) =

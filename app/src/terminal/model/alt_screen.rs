@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use pathfinder_color::ColorU;
 use vec1::Vec1;
 use warp_core::semantic_selection::SemanticSelection;
+use warp_errors::report_error;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::text::SelectionType;
 use warpui::units::Lines;
@@ -371,7 +372,7 @@ impl AltScreen {
 
 impl ansi::Handler for AltScreen {
     fn set_title(&mut self, _: Option<String>) {
-        log::error!("Handler method AltScreen::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method AltScreen::set_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn set_cursor_style(&mut self, style: Option<CursorStyle>) {
@@ -606,11 +607,11 @@ impl ansi::Handler for AltScreen {
     }
 
     fn push_title(&mut self) {
-        log::error!("Handler method AltScreen::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method AltScreen::push_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn pop_title(&mut self) {
-        log::error!("Handler method AltScreen::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!("Handler method AltScreen::pop_title should never be called. This should be handled by TerminalModel.");
     }
 
     fn text_area_size_pixels<W: io::Write>(&mut self, writer: &mut W) {
@@ -623,7 +624,7 @@ impl ansi::Handler for AltScreen {
 
     fn command_finished(&mut self, _: CommandFinishedValue) {}
 
-    fn precmd(&mut self, _: PrecmdValue) {}
+    fn precmd_with_completion_metadata(&mut self, _: PrecmdValue) {}
 
     fn preexec(&mut self, _: PreexecValue) {}
 

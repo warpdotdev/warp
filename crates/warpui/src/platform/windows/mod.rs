@@ -1,6 +1,7 @@
 use std::os::windows::ffi::OsStrExt as _;
 
 use itertools::Itertools as _;
+use warp_errors::report_error;
 
 // Re-export a couple winit types and modules as the concrete implementations
 // for Windows.
@@ -31,7 +32,7 @@ impl AppBuilderExt for super::AppBuilder {
     fn set_app_user_model_id(&mut self, app_id: String) {
         let set_id = unsafe { set_app_user_model_id(app_id) };
         if let Err(err) = set_id {
-            log::error!("Unable to set Windows AppUserModel ID: {err:?}");
+            report_error!(anyhow::Error::new(err).context("Unable to set Windows AppUserModel ID"));
         }
     }
 

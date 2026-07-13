@@ -835,7 +835,7 @@ fn test_update_comment_location_removed_line() {
             editor.update(ctx, |editor, ctx| {
                 let new = editor.content.as_ref(ctx).text();
                 editor.diff().update(ctx, |diff, ctx| {
-                    diff.compute_diff(new, false, BufferVersion::new(), ctx);
+                    diff.compute_diff(new, BufferVersion::new(), ctx);
                 });
             });
         });
@@ -880,7 +880,7 @@ async fn compute_diff_and_expand(app: &mut App, editor: &ModelHandle<CodeEditorM
         editor.update(ctx, |editor, ctx| {
             let new = editor.content.as_ref(ctx).text();
             editor.diff().update(ctx, |diff, ctx| {
-                diff.compute_diff(new, false, BufferVersion::new(), ctx);
+                diff.compute_diff(new, BufferVersion::new(), ctx);
             });
         });
     });
@@ -1002,6 +1002,147 @@ fn test_line_at_vertical_offset_removed_line_insert_above() {
             offset_after > offset_before,
             "Expected removed-line offset to increase after inserting a line above (before={offset_before:?}, after={offset_after:?})"
         );
+    })
+}
+
+/// The hidden-lines window must be symmetric: exactly `context_lines`
+/// unchanged lines visible on each side of a hunk. Regression test for an
+/// off-by-one that treated `modified_lines`'s 0-based ranges as 1-based,
+/// shifting the whole window up a line (context+1 above, context-1 below).
+#[test]
+fn test_hidden_lines_window_is_symmetric_around_changes() {
+    App::test((), |mut app| async move {
+        use futures::StreamExt;
+
+        initialize_deps(&mut app);
+        // 20 fixed-width lines "l00".."l19" (3 chars + newline = 4 chars per
+        // line), so offsets map to lines trivially. Change 0-based line 8.
+        let line = |i: usize| format!("l{i:02}");
+        let base = (0..20).map(line).join("\n");
+        let current = (0..20)
+            .map(|i| if i == 8 { "XXX".to_string() } else { line(i) })
+            .join("\n");
+
+        let editor = mock_model_with_diff(&mut app, &base, &current, ContentVersion::new());
+        layout_model(&mut app, &editor).await;
+
+        let (diff_tx, mut diff_rx) = futures::channel::mpsc::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&editor, move |_, event, _| {
+                if let CodeEditorModelEvent::DiffUpdated = event {
+                    let _ = diff_tx.unbounded_send(());
+                }
+            });
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.hide_lines_outside_of_active_diff(3, ctx);
+            let new = editor.content.as_ref(ctx).text();
+            editor.diff().update(ctx, |diff, ctx| {
+                diff.compute_diff(new, BufferVersion::new(), ctx);
+            });
+        });
+        diff_rx.next().await.expect("DiffUpdated should be emitted");
+
+        app.read(|ctx| {
+            let model = editor.as_ref(ctx);
+            let modified: Vec<_> = model.diff().as_ref(ctx).modified_lines().collect();
+            assert_eq!(modified, vec![8..9], "modified_lines is 0-based");
+
+            // Fixed-width lines: 1-based gap offset -> 0-based line = (off-1)/4.
+            let hidden_lines: Vec<_> = model
+                .hidden_ranges(ctx)
+                .iter()
+                .map(|range| {
+                    let start = (range.start.as_usize() - 1) / 4;
+                    let end = (range.end.as_usize() - 1) / 4;
+                    start..end
+                })
+                .collect();
+            // Visible = 5..12: three context lines on each side of line 8.
+            // (Line 19 sits outside the considered range: `line_count`'s
+            // convention assumes a trailing newline, which this fixture omits.)
+            assert_eq!(hidden_lines, vec![0..5, 12..19]);
+        });
+    })
+}
+
+/// The TUI diff pipeline: `new_tui` + seed + `apply_diffs` +
+/// `hide_lines_outside_of_active_diff` + `expand_diffs` must land removed-line
+/// ghosts in `CharCellState` and hidden line ranges in the render state, even
+/// though `hide_lines_outside_of_active_diff` arms `delay_rendering` and the
+/// resulting `rebuild_layout` is a version-stamp no-op in char-cell mode.
+#[test]
+fn test_char_cell_diff_pipeline_populates_ghosts_and_hidden_ranges() {
+    App::test((), |mut app| async move {
+        use futures::StreamExt;
+
+        initialize_deps(&mut app);
+        // Ten lines with a conventional trailing newline (as file content has).
+        let base: String = (0..10).map(|i| format!("line{i}\n")).collect();
+        let editor = app.add_model(|ctx| {
+            let mut model = CodeEditorModel::new_tui(80, ctx);
+            model.reset_content(InitialBufferState::plain_text(&base), ctx);
+            model
+        });
+
+        let (diff_tx, mut diff_rx) = futures::channel::mpsc::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&editor, move |_, event, _| {
+                if let CodeEditorModelEvent::DiffUpdated = event {
+                    let _ = diff_tx.unbounded_send(());
+                }
+            });
+        });
+
+        // The exact sequence the TUI diff wrapper runs per edited file. Delta
+        // line ranges are 1-indexed (matching the executor's resolved deltas),
+        // so 5..6 replaces 0-based line 4.
+        editor.update(&mut app, |editor, ctx| {
+            editor.apply_diffs(
+                vec![DiffDelta {
+                    replacement_line_range: 5..6,
+                    insertion: "changed\n".to_string(),
+                }],
+                ctx,
+            );
+            editor.hide_lines_outside_of_active_diff(3, ctx);
+            editor.expand_diffs(ctx);
+        });
+
+        // The diff computes asynchronously (and `expand_diffs` emits an early
+        // `DiffUpdated` before it lands); keep consuming events until the
+        // ghost block arrives — the model must recalculate hidden lines and
+        // push ghosts on its own, with no further calls from this consumer
+        // (nextest's timeout fails the test if it never does).
+        loop {
+            diff_rx.next().await.expect("DiffUpdated should be emitted");
+            layout_model(&mut app, &editor).await;
+            let has_ghosts = app.read(|ctx| {
+                editor
+                    .as_ref(ctx)
+                    .render_state()
+                    .as_ref(ctx)
+                    .char_cell()
+                    .is_some_and(|char_cell| !char_cell.display_lattice(&[]).ghosts().is_empty())
+            });
+            if has_ghosts {
+                break;
+            }
+        }
+
+        app.read(|ctx| {
+            let render = editor.as_ref(ctx).render_state().as_ref(ctx);
+            let char_cell = render.char_cell().expect("new_tui builds char-cell mode");
+            let ghosts = char_cell.display_lattice(&[]).ghosts().to_vec();
+            assert_eq!(ghosts.len(), 1);
+            assert_eq!(ghosts[0].content, "line4\n");
+
+            // Change at 0-based line 4 with 3 context lines: only the leading
+            // and trailing unchanged runs are hidden.
+            let hidden = char_cell.hidden_line_ranges(ctx);
+            assert_eq!(hidden, vec![0..1, 8..10]);
+        });
     })
 }
 

@@ -7,6 +7,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use thiserror::Error;
 use validator::ValidateEmail;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Fill,
@@ -339,7 +340,7 @@ impl ReferralsPageView {
                 });
             }
             Err(err) => {
-                log::error!("Error sending referral emails: {err}");
+                report_error!(err.context("Error sending referral emails"));
                 ctx.emit(ReferralsPageEvent::ShowToast {
                     message: EMAIL_FAILURE_TOAST.to_owned(),
                     flavor: ToastFlavor::Error,

@@ -30,6 +30,7 @@ fn test_server_metadata(
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
+            context_window_segments: Vec::new(),
         },
         metadata: ServerMetadata {
             uid: ServerId::default(),
@@ -359,6 +360,7 @@ fn test_into_exchanges_basic() {
     // Create minimal test data
     let messages = vec![
         api::Message {
+            fetched_memories: vec![],
             id: "user_msg".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -374,6 +376,7 @@ fn test_into_exchanges_basic() {
             timestamp: None,
         },
         api::Message {
+            fetched_memories: vec![],
             id: "agent_msg".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -387,6 +390,7 @@ fn test_into_exchanges_basic() {
             timestamp: None,
         },
         api::Message {
+            fetched_memories: vec![],
             id: "user_msg2".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -402,6 +406,7 @@ fn test_into_exchanges_basic() {
             timestamp: None,
         },
         api::Message {
+            fetched_memories: vec![],
             id: "agent_msg2".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -415,6 +420,7 @@ fn test_into_exchanges_basic() {
             timestamp: None,
         },
         api::Message {
+            fetched_memories: vec![],
             id: "user_msg3".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -430,6 +436,7 @@ fn test_into_exchanges_basic() {
             timestamp: None,
         },
         api::Message {
+            fetched_memories: vec![],
             id: "agent_msg3".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -474,6 +481,7 @@ fn test_invoke_skill_arguments_round_trip() {
     let query = "arg1 arg2".to_string();
     let messages = vec![
         api::Message {
+            fetched_memories: vec![],
             id: "invoke_skill_msg".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -494,6 +502,7 @@ fn test_invoke_skill_arguments_round_trip() {
             timestamp: None,
         },
         api::Message {
+            fetched_memories: vec![],
             id: "agent_msg".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -530,7 +539,7 @@ fn test_invoke_skill_arguments_round_trip() {
                 Some("arg1 arg2")
             );
             assert_eq!(
-                exchanges[0].input[0].user_query().as_deref(),
+                exchanges[0].input[0].display_query().as_deref(),
                 Some("/test-skill arg1 arg2")
             );
         }
@@ -541,6 +550,7 @@ fn test_invoke_skill_arguments_round_trip() {
 #[test]
 fn test_invoke_skill_missing_user_query_maps_to_none() {
     let messages = vec![api::Message {
+        fetched_memories: vec![],
         id: "invoke_skill_msg".to_string(),
         task_id: "task1".to_string(),
         server_message_data: "".to_string(),
@@ -574,7 +584,7 @@ fn test_invoke_skill_missing_user_query_maps_to_none() {
             assert_eq!(skill.name, "test-skill");
             assert_eq!(user_query, &None);
             assert_eq!(
-                exchanges[0].input[0].user_query().as_deref(),
+                exchanges[0].input[0].display_query().as_deref(),
                 Some("/test-skill")
             );
         }
@@ -587,6 +597,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
     let messages = vec![
         // User query
         api::Message {
+            fetched_memories: vec![],
             id: "user_query".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -603,6 +614,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Agent response
         api::Message {
+            fetched_memories: vec![],
             id: "agent_response".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -617,6 +629,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Tool call 1
         api::Message {
+            fetched_memories: vec![],
             id: "tool_call_1".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -640,6 +653,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Tool call 2
         api::Message {
+            fetched_memories: vec![],
             id: "tool_call_2".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -663,6 +677,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Tool call 3
         api::Message {
+            fetched_memories: vec![],
             id: "tool_call_3".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -686,6 +701,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Tool call result - cancelled (call_2)
         api::Message {
+            fetched_memories: vec![],
             id: "result_cancelled".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -702,6 +718,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Tool call result - success (call_1)
         api::Message {
+            fetched_memories: vec![],
             id: "result_success_1".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -734,6 +751,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Tool call result - success (call_3)
         api::Message {
+            fetched_memories: vec![],
             id: "result_success_3".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -766,6 +784,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Final agent response
         api::Message {
+            fetched_memories: vec![],
             id: "final_response".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -780,6 +799,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Follow-up user query
         api::Message {
+            fetched_memories: vec![],
             id: "followup_query".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -796,6 +816,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
         },
         // Final agent response
         api::Message {
+            fetched_memories: vec![],
             id: "final_response2".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -897,6 +918,7 @@ fn test_into_exchanges_with_code_diffs() {
     let messages = vec![
         // User query asking for code changes
         api::Message {
+            fetched_memories: vec![],
             id: "user_query".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -913,6 +935,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // Agent response
         api::Message {
+            fetched_memories: vec![],
             id: "agent_response".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -927,6 +950,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // File diff tool call
         api::Message {
+            fetched_memories: vec![],
             id: "diff_call".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -948,6 +972,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // User cancels the diff
         api::Message {
+            fetched_memories: vec![],
             id: "diff_cancelled".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -964,6 +989,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // User provides feedback
         api::Message {
+            fetched_memories: vec![],
             id: "user_feedback".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -980,6 +1006,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // Agent response
         api::Message {
+            fetched_memories: vec![],
             id: "agent_response_2".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -994,6 +1021,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // Second file diff tool call
         api::Message {
+            fetched_memories: vec![],
             id: "diff_call_2".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1015,6 +1043,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // User accepts the diff
         api::Message {
+            fetched_memories: vec![],
             id: "diff_accepted".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1042,6 +1071,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // Final agent response
         api::Message {
+            fetched_memories: vec![],
             id: "final_response".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1056,6 +1086,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // Follow-up user query
         api::Message {
+            fetched_memories: vec![],
             id: "followup".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1072,6 +1103,7 @@ fn test_into_exchanges_with_code_diffs() {
         },
         // Final agent response
         api::Message {
+            fetched_memories: vec![],
             id: "final_response_2".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1169,6 +1201,7 @@ fn test_into_exchanges_with_code_diffs() {
 fn test_user_query_mode_conversion() {
     // Test conversion with Plan mode
     let messages = vec![api::Message {
+        fetched_memories: vec![],
         id: "user_msg".to_string(),
         task_id: "task1".to_string(),
         server_message_data: "".to_string(),
@@ -1215,6 +1248,7 @@ fn test_user_query_mode_conversion() {
 
     // Test conversion with Normal mode (no type set)
     let messages_normal = vec![api::Message {
+        fetched_memories: vec![],
         id: "user_msg".to_string(),
         task_id: "task1".to_string(),
         server_message_data: "".to_string(),
@@ -1259,6 +1293,7 @@ fn test_user_query_mode_conversion() {
 
     // Test conversion with no mode field (should default to Normal)
     let messages_default = vec![api::Message {
+        fetched_memories: vec![],
         id: "user_msg".to_string(),
         task_id: "task1".to_string(),
         server_message_data: "".to_string(),
@@ -1312,6 +1347,7 @@ fn test_exchanges_grouped_by_request_id() {
     let messages = vec![
         // Message 0: Server message (should be ignored or handled gracefully)
         api::Message {
+            fetched_memories: vec![],
             id: "2512077c-0ede-46b0-8f69-230c8792df07".to_string(),
             task_id: "d02463e1-2429-48de-ac8f-552df4acc4d0".to_string(),
             request_id: "78e236b8-84a2-45df-876e-ebfb86ceafc4".to_string(),
@@ -1329,6 +1365,7 @@ fn test_exchanges_grouped_by_request_id() {
         },
         // Message 1: User query with request_id 78e236b8
         api::Message {
+            fetched_memories: vec![],
             id: "4d6c450d-3d54-446f-974c-5c414e6083e9".to_string(),
             task_id: "d02463e1-2429-48de-ac8f-552df4acc4d0".to_string(),
             request_id: "78e236b8-84a2-45df-876e-ebfb86ceafc4".to_string(),
@@ -1345,6 +1382,7 @@ fn test_exchanges_grouped_by_request_id() {
         },
         // Message 2: Agent output with same request_id
         api::Message {
+            fetched_memories: vec![],
             id: "10210d1a-5298-45ef-90ba-df6367805080".to_string(),
             task_id: "d02463e1-2429-48de-ac8f-552df4acc4d0".to_string(),
             request_id: "78e236b8-84a2-45df-876e-ebfb86ceafc4".to_string(),
@@ -1359,6 +1397,7 @@ fn test_exchanges_grouped_by_request_id() {
         },
         // Message 3: Tool call with same request_id
         api::Message {
+            fetched_memories: vec![],
             id: "936c7c86-eb4a-4edf-97c0-22f5c61b35a6".to_string(),
             task_id: "d02463e1-2429-48de-ac8f-552df4acc4d0".to_string(),
             request_id: "78e236b8-84a2-45df-876e-ebfb86ceafc4".to_string(),
@@ -1382,6 +1421,7 @@ fn test_exchanges_grouped_by_request_id() {
         },
         // Message 4: Tool call result with NEW request_id 59a3947f (starts new exchange)
         api::Message {
+            fetched_memories: vec![],
             id: "cbebf5fb-4dd8-4aef-be45-bb916eff552c".to_string(),
             task_id: "d02463e1-2429-48de-ac8f-552df4acc4d0".to_string(),
             request_id: "59a3947f-fc7e-413a-96b5-baecd7e406dc".to_string(),
@@ -1416,6 +1456,7 @@ fn test_exchanges_grouped_by_request_id() {
         },
         // Message 5: Agent output with same request_id
         api::Message {
+            fetched_memories: vec![],
             id: "7a89857d-fa33-4d45-88e3-5fa9cbce3f20".to_string(),
             task_id: "d02463e1-2429-48de-ac8f-552df4acc4d0".to_string(),
             request_id: "59a3947f-fc7e-413a-96b5-baecd7e406dc".to_string(),
@@ -1430,6 +1471,7 @@ fn test_exchanges_grouped_by_request_id() {
         },
         // Message 6: Write to long running command with NEW request_id 9f85acb2 (starts new exchange)
         api::Message {
+            fetched_memories: vec![],
             id: "dac6d336-9fcb-4e34-bc2b-b06e70f52ec5".to_string(),
             task_id: "d02463e1-2429-48de-ac8f-552df4acc4d0".to_string(),
             request_id: "9f85acb2-0b1f-41b1-a0de-3623e131758a".to_string(),
@@ -1460,6 +1502,7 @@ fn test_exchanges_grouped_by_request_id() {
         },
         // Message 7: Final tool call result with same request_id
         api::Message {
+            fetched_memories: vec![],
             id: "ad319d66-fac0-4169-8bf1-e6004aca1619".to_string(),
             task_id: "d02463e1-2429-48de-ac8f-552df4acc4d0".to_string(),
             request_id: "9f85acb2-0b1f-41b1-a0de-3623e131758a".to_string(),
@@ -1492,6 +1535,7 @@ fn test_exchanges_grouped_by_request_id() {
         },
         // Message 8: Final agent output with same request_id
         api::Message {
+            fetched_memories: vec![],
             id: "f15f8a59-2e9c-416e-b216-83b3bd52d6be".to_string(),
             task_id: "d02463e1-2429-48de-ac8f-552df4acc4d0".to_string(),
             request_id: "9f85acb2-0b1f-41b1-a0de-3623e131758a".to_string(),
@@ -1580,6 +1624,7 @@ fn test_multiple_create_documents_get_default_version() {
     let messages = vec![
         // User query
         api::Message {
+            fetched_memories: vec![],
             id: "user_msg".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1596,6 +1641,7 @@ fn test_multiple_create_documents_get_default_version() {
         },
         // Agent output
         api::Message {
+            fetched_memories: vec![],
             id: "agent_text".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1610,6 +1656,7 @@ fn test_multiple_create_documents_get_default_version() {
         },
         // First CreateDocuments tool call
         api::Message {
+            fetched_memories: vec![],
             id: "tool_call_create_a".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1632,6 +1679,7 @@ fn test_multiple_create_documents_get_default_version() {
         },
         // First CreateDocuments result
         api::Message {
+            fetched_memories: vec![],
             id: "result_create_a".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1660,6 +1708,7 @@ fn test_multiple_create_documents_get_default_version() {
         },
         // Agent output before second plan
         api::Message {
+            fetched_memories: vec![],
             id: "agent_text_2".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1674,6 +1723,7 @@ fn test_multiple_create_documents_get_default_version() {
         },
         // Second CreateDocuments tool call
         api::Message {
+            fetched_memories: vec![],
             id: "tool_call_create_b".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1696,6 +1746,7 @@ fn test_multiple_create_documents_get_default_version() {
         },
         // Second CreateDocuments result
         api::Message {
+            fetched_memories: vec![],
             id: "result_create_b".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1790,6 +1841,7 @@ fn test_create_then_edit_then_create_version_tracking() {
     let messages = vec![
         // User query
         api::Message {
+            fetched_memories: vec![],
             id: "user_msg".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1806,6 +1858,7 @@ fn test_create_then_edit_then_create_version_tracking() {
         },
         // Agent output
         api::Message {
+            fetched_memories: vec![],
             id: "agent_text".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1820,6 +1873,7 @@ fn test_create_then_edit_then_create_version_tracking() {
         },
         // Create doc A tool call
         api::Message {
+            fetched_memories: vec![],
             id: "tool_call_create_a".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1842,6 +1896,7 @@ fn test_create_then_edit_then_create_version_tracking() {
         },
         // Create doc A result
         api::Message {
+            fetched_memories: vec![],
             id: "result_create_a".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1870,6 +1925,7 @@ fn test_create_then_edit_then_create_version_tracking() {
         },
         // Agent output before edit
         api::Message {
+            fetched_memories: vec![],
             id: "agent_text_2".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1884,6 +1940,7 @@ fn test_create_then_edit_then_create_version_tracking() {
         },
         // Edit doc A tool call
         api::Message {
+            fetched_memories: vec![],
             id: "tool_call_edit_a".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1905,6 +1962,7 @@ fn test_create_then_edit_then_create_version_tracking() {
         },
         // Edit doc A result
         api::Message {
+            fetched_memories: vec![],
             id: "result_edit_a".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1933,6 +1991,7 @@ fn test_create_then_edit_then_create_version_tracking() {
         },
         // Agent output before second create
         api::Message {
+            fetched_memories: vec![],
             id: "agent_text_3".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1947,6 +2006,7 @@ fn test_create_then_edit_then_create_version_tracking() {
         },
         // Create doc B tool call
         api::Message {
+            fetched_memories: vec![],
             id: "tool_call_create_b".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -1969,6 +2029,7 @@ fn test_create_then_edit_then_create_version_tracking() {
         },
         // Create doc B result
         api::Message {
+            fetched_memories: vec![],
             id: "result_create_b".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -2076,6 +2137,7 @@ fn test_handoff_rehydration_system_query_is_hidden() {
     let messages = vec![
         // HandoffRehydration system query – should be hidden
         api::Message {
+            fetched_memories: vec![],
             id: "msg_handoff".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),
@@ -2095,6 +2157,7 @@ fn test_handoff_rehydration_system_query_is_hidden() {
         },
         // Agent output that follows the hidden system query
         api::Message {
+            fetched_memories: vec![],
             id: "msg_output".to_string(),
             task_id: "task1".to_string(),
             server_message_data: "".to_string(),

@@ -6,7 +6,7 @@ use warp_cli::agent::Harness;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
 
-use super::{ConversationDetailsData, PanelMode};
+use super::{ConversationDetailsData, ConversationDetailsPanel, PanelMode};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
@@ -107,6 +107,7 @@ fn test_from_conversation_prefers_server_creator_profile() {
 
 fn create_message_with_directory(id: &str, task_id: &str, directory: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),
@@ -132,6 +133,7 @@ fn create_message_with_directory(id: &str, task_id: &str, directory: &str) -> ap
 
 fn create_agent_output_message(id: &str, task_id: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),
@@ -185,6 +187,7 @@ fn create_test_server_metadata(
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
+            context_window_segments: Vec::new(),
         },
         metadata: ServerMetadata {
             uid: ServerId::default(),
@@ -208,7 +211,8 @@ fn create_test_server_metadata(
 #[test]
 fn test_from_task_includes_linked_directory_when_run_id_matches() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let conversation_id = AIConversationId::new();
         let task_id = "550e8400-e29b-41d4-a716-000000004000";
@@ -289,7 +293,8 @@ fn test_from_conversation_metadata_passes_harness_through() {
 #[test]
 fn test_from_task_resolves_harness() {
     App::test((), |mut app| async move {
-        let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let _history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // Base task has `agent_config_snapshot: None`; cloning lets us mutate per case.
         let base_task = create_test_task("550e8400-e29b-41d4-a716-000000004020");
@@ -327,7 +332,8 @@ fn test_from_task_resolves_harness() {
 #[test]
 fn test_from_task_populates_executor() {
     App::test((), |mut app| async move {
-        let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let _history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let mut task = create_test_task("550e8400-e29b-41d4-a716-000000004030");
         task.executor = Some(TaskPrincipalInfo {
             creator_type: "service_account".to_string(),
@@ -353,7 +359,8 @@ fn test_from_conversation_populates_local_conversation_fields() {
     // and surfaces the conversation-derived fields the conversation details panel
     // renders for local Warp Agent runs (APP-3595).
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let conversation_id = AIConversationId::new();
         let directory = "/tmp/local-conversation-directory";
@@ -420,9 +427,52 @@ fn test_from_conversation_populates_local_conversation_fields() {
 }
 
 #[test]
+fn test_oz_run_url_present_for_task_and_absent_for_conversation() {
+    // The Status chip is only clickable (navigating to the Oz run view) when
+    // `oz_run_url` yields a URL, which happens for task-backed runs but not for
+    // plain local conversations.
+    App::test((), |mut app| async move {
+        let _history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let task_id = "550e8400-e29b-41d4-a716-000000004050";
+        let task = create_test_task(task_id);
+
+        app.update(|ctx| {
+            // Task mode → the chip should link to the Oz run view.
+            let task_data = ConversationDetailsData::from_task(&task, None, None, ctx);
+            let url = ConversationDetailsPanel::oz_run_url(&task_data)
+                .expect("a task with a task_id should produce an Oz run URL");
+            assert!(
+                url.ends_with(&format!("/runs/{task_id}")),
+                "unexpected Oz run URL: {url}"
+            );
+        });
+
+        // Conversation mode → there is no run view to navigate to.
+        let conversation_data = ConversationDetailsData::from_conversation_metadata(
+            AIConversationId::new(),
+            "Title".to_string(),
+            None,
+            Utc::now().with_timezone(&Local),
+            None,
+            None,
+            None,
+            vec![],
+            None,
+            None,
+            None,
+            None,
+            Some(Harness::Oz),
+        );
+        assert!(ConversationDetailsPanel::oz_run_url(&conversation_data).is_none());
+    });
+}
+
+#[test]
 fn test_from_task_includes_linked_directory_when_server_token_matches() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let conversation_id = AIConversationId::new();
         let server_token = "server-token-123";

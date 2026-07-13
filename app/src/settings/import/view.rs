@@ -1,6 +1,7 @@
 use itertools::Itertools;
 use warp_core::settings::Setting;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::{report_error, report_if_error};
 use warpui::elements::{
     Border, Container, CornerRadius, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
@@ -28,9 +29,7 @@ use crate::themes::theme::{CustomTheme, SelectedSystemThemes, ThemeKind};
 use crate::ui_components::blended_colors;
 use crate::user_config::{self, WarpConfig};
 use crate::window_settings::WindowSettings;
-use crate::{
-    report_if_error, send_telemetry_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent,
-};
+use crate::{send_telemetry_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent};
 
 // UI does not scale, so we set a fixed size for all text.
 const FONT_SIZE: f32 = 14.;
@@ -864,7 +863,10 @@ impl SettingsImportView {
         let model = ImportedConfigModel::handle(ctx);
         let imported_settings = model.read(ctx, |model, _ctx| {
             let Some(config) = model.config(terminal_type_and_profile) else {
-                log::error!("Could not find config for terminal {terminal_type_and_profile:?}");
+                report_error!(
+                    "Could not find config for terminal",
+                    extra: { "terminal" => ?terminal_type_and_profile }
+                );
                 return Default::default();
             };
 

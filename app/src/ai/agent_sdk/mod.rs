@@ -24,6 +24,7 @@ use warp_cli::federate::FederateCommand;
 use warp_cli::harness_support::{HarnessSupportCommand, ReportArtifactCommand, TaskStatus};
 use warp_cli::integration::IntegrationCommand;
 use warp_cli::mcp::MCPCommand;
+use warp_cli::memory_store::{MemoryCommand, MemoryStoreCommand};
 use warp_cli::model::ModelCommand;
 use warp_cli::provider::ProviderCommand;
 use warp_cli::schedule::ScheduleSubcommand;
@@ -32,6 +33,7 @@ use warp_cli::share::ShareRequest;
 use warp_cli::task::{MessageCommand, TaskCommand};
 use warp_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_graphql::object_permissions::OwnerType;
 use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
@@ -91,6 +93,7 @@ mod integration;
 mod integration_output;
 mod mcp;
 mod mcp_config;
+mod memory_store;
 mod model;
 mod oauth_flow;
 pub mod output;
@@ -149,6 +152,10 @@ fn dispatch_command(
         CliCommand::MCP(mcp_cmd) => mcp::run(ctx, global_options, mcp_cmd),
         CliCommand::Run(task_cmd) => run_task(ctx, global_options, task_cmd),
         CliCommand::Model(model_cmd) => model::run(ctx, global_options, model_cmd),
+        CliCommand::MemoryStore(memory_store_cmd) => {
+            memory_store::run(ctx, global_options, memory_store_cmd)
+        }
+        CliCommand::Memory(memory_cmd) => memory_store::run_memory(ctx, global_options, memory_cmd),
         CliCommand::Login => admin::login(ctx),
         CliCommand::Logout => admin::logout(ctx),
         CliCommand::Whoami => admin::whoami(ctx, global_options.output_format),
@@ -307,10 +314,11 @@ fn run_agent(
             if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--harness' found"));
             }
-            if args.claude_auth_secret.is_some() && args.harness != Harness::Claude {
-                return Err(anyhow::anyhow!(
-                    "--claude-auth-secret is only valid with --harness claude."
-                ));
+            if let Err(msg) = args.validate_auth_secrets() {
+                return Err(anyhow::anyhow!(msg));
+            }
+            if args.runner.is_some() && !FeatureFlag::CloudRunners.is_enabled() {
+                return Err(anyhow::anyhow!("unexpected argument '--runner' found"));
             }
             ambient::run_ambient_agent(ctx, args)
         }
@@ -359,6 +367,14 @@ fn build_merged_config_and_task(
     // Merge precedence: file < CLI < skill
     let file_merged = config_file::merge_with_precedence(loaded_file.as_ref(), Default::default());
 
+    // Runner support is gated. The `run` command has no `--runner` flag, but a
+    // config file can still set `runner_id`, so reject it when the flag is off.
+    if file_merged.runner_id.is_some() && !FeatureFlag::CloudRunners.is_enabled() {
+        return Err(anyhow::anyhow!(
+            "`runner_id` is set in the config file but runner support is not enabled"
+        ));
+    }
+
     // Skill provides base_prompt and optionally name
     let (skill_name, runtime_base_prompt) = match resolved_skill {
         Some(skill) => (Some(skill.name.clone()), Some(skill.instructions.clone())),
@@ -387,6 +403,7 @@ fn build_merged_config_and_task(
         // CLI name > skill name > file name
         name: args.name.clone().or(skill_name).or(file_merged.name),
         environment_id: args.environment.clone().or(file_merged.environment_id),
+        runner_id: file_merged.runner_id,
         model_id: oz_model,
         // Skill base_prompt takes precedence over file base_prompt
         base_prompt: runtime_base_prompt.clone().or(file_merged.base_prompt),
@@ -486,6 +503,7 @@ fn build_server_side_task(
     let config = AgentConfigSnapshot {
         name: args.name.clone().or(skill_name),
         environment_id: environment.clone(),
+        runner_id: None,
         model_id: model_id_string,
         base_prompt: None,
         mcp_servers: cli_mcp_servers,
@@ -834,7 +852,26 @@ impl AgentDriverRunner {
     async fn bootstrap_git_credentials_for_task(
         foreground: &ModelSpawner<Self>,
         task_id_str: &str,
+        args: &RunAgentArgs,
     ) -> Result<(), AgentDriverError> {
+        if warp_isolation_platform::detect().is_none() && args.configure_git_credentials_with_github
+        {
+            foreground
+                .spawn(|_, _| {
+                    command::blocking::Command::new("gh")
+                        .args(["auth", "setup-git"])
+                        .spawn()
+                        .map_err(|err| {
+                            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                                "gh auth setup-git failed: {err:?}"
+                            ))
+                        })
+                })
+                .await?
+                .map(|_| ())?;
+            return Ok(());
+        }
+
         if !FeatureFlag::GitCredentialRefresh.is_enabled() {
             return Ok(());
         }
@@ -964,7 +1001,7 @@ impl AgentDriverRunner {
         .map_err(AgentDriverError::ConfigBuildFailed)?;
 
         if let Some(task_id_str) = args.task_id.as_ref() {
-            Self::bootstrap_git_credentials_for_task(foreground, task_id_str).await?;
+            Self::bootstrap_git_credentials_for_task(foreground, task_id_str, &args).await?;
         }
         // Resolve the skill, if we have one
         let resolved_skill =
@@ -1095,13 +1132,14 @@ impl AgentDriverRunner {
         let task_id = match server_api
             .create_agent_task(prompt, environment, None, task_config)
             .await
+            .context("Failed to create task")
         {
             Ok(id) => {
                 log::info!("Created task: {id}");
                 Some(id)
             }
             Err(e) => {
-                log::error!("Failed to create task: {e}");
+                report_error!(e);
                 // Continue without a task_id rather than failing entirely
                 None
             }
@@ -1143,10 +1181,10 @@ impl AgentDriverRunner {
             })
             .await?;
 
-        let parsed_task_id = match task_id_str.parse() {
+        let parsed_task_id = match task_id_str.parse().context("Failed to parse task ID") {
             Ok(id) => Some(id),
             Err(e) => {
-                log::error!("Failed to parse task ID: {e}");
+                report_error!(e);
                 None
             }
         };
@@ -1388,7 +1426,10 @@ impl AgentDriverRunner {
         let environment = foreground
             .spawn(move |_, ctx| -> Result<_, AgentDriverError> {
                 let server_id = ServerId::try_from(environment_id.as_str()).map_err(|_| {
-                    log::error!("Invalid environment ID: {environment_id}");
+                    report_error!(
+                        "Invalid environment ID",
+                        extra: { "environment_id" => %environment_id }
+                    );
                     AgentDriver::log_valid_environments(ctx);
                     AgentDriverError::EnvironmentNotFound(environment_id.clone())
                 })?;
@@ -1396,7 +1437,10 @@ impl AgentDriverRunner {
 
                 CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx)
                     .ok_or_else(|| {
-                        log::error!("Environment not found with ID: {environment_id}");
+                        report_error!(
+                            "Environment not found with ID",
+                            extra: { "environment_id" => %environment_id }
+                        );
                         AgentDriver::log_valid_environments(ctx);
                         AgentDriverError::EnvironmentNotFound(environment_id)
                     })
@@ -1492,6 +1536,8 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Model(model_cmd) => match model_cmd {
             ModelCommand::List => true,
         },
+        CliCommand::MemoryStore(_) => true,
+        CliCommand::Memory(_) => true,
         CliCommand::Login => false,
         CliCommand::Logout => false,
         CliCommand::Whoami => true,
@@ -1681,6 +1727,19 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             },
         },
         CliCommand::Model(ModelCommand::List) => CliTelemetryEvent::ModelList,
+        CliCommand::MemoryStore(memory_store_cmd) => match memory_store_cmd {
+            MemoryStoreCommand::List => CliTelemetryEvent::MemoryStoreList,
+            MemoryStoreCommand::Get(_) => CliTelemetryEvent::MemoryStoreGetStore,
+            MemoryStoreCommand::Update(_) => CliTelemetryEvent::MemoryStoreUpdateStore,
+            MemoryStoreCommand::ListStoreAgents(_) => CliTelemetryEvent::MemoryStoreListStoreAgents,
+        },
+        CliCommand::Memory(memory_cmd) => match memory_cmd {
+            MemoryCommand::List(_) => CliTelemetryEvent::MemoryStoreListMemories,
+            MemoryCommand::Create(_) => CliTelemetryEvent::MemoryStoreCreateMemory,
+            MemoryCommand::Update(_) => CliTelemetryEvent::MemoryStoreUpdateMemory,
+            MemoryCommand::Delete(_) => CliTelemetryEvent::MemoryStoreDeleteMemory,
+            MemoryCommand::Versions(_) => CliTelemetryEvent::MemoryStoreListVersions,
+        },
         CliCommand::Login => CliTelemetryEvent::Login,
         CliCommand::Logout => CliTelemetryEvent::Logout,
         CliCommand::Whoami => CliTelemetryEvent::Whoami,

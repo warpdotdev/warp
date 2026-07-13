@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::anyhow;
 use ui_components::lightbox::{LightboxImage, LightboxImageSource};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 #[cfg(feature = "local_fs")]
 use warpui::platform::SaveFilePickerConfiguration;
@@ -19,6 +19,8 @@ use crate::notebooks::NotebookId;
 use crate::server::server_api::ai::ArtifactDownloadResponse;
 use crate::server::server_api::ServerApiProvider;
 use crate::view_components::DismissibleToast;
+#[cfg(feature = "local_fs")]
+use crate::view_components::ToastLink;
 use crate::workspace::{ToastStack, WorkspaceAction};
 
 pub mod buttons;
@@ -438,6 +440,7 @@ fn open_file_download_picker<V: warpui::View>(
             let artifact_uid = artifact.artifact_uid().to_string();
             let path = PathBuf::from(path);
             let toast_filename = download_toast_filename(&path);
+            let toast_path = path.clone();
             let artifact_for_download = artifact.clone();
             ctx.spawn(
                 async move {
@@ -447,7 +450,7 @@ fn open_file_download_picker<V: warpui::View>(
                 move |_me, result, ctx| match result {
                     Ok(()) => show_file_download_toast(
                         &artifact_uid,
-                        DismissibleToast::success(format!("Downloaded {toast_filename}.")),
+                        file_download_success_toast(&toast_filename, &toast_path),
                         ctx,
                     ),
                     Err(error) => {
@@ -486,6 +489,52 @@ fn download_toast_filename(path: &Path) -> String {
         .filter(|file_name| !file_name.is_empty())
         .unwrap_or("file")
         .to_string()
+}
+
+/// The platform-appropriate label for the toast link that reveals a downloaded
+/// file in the system file manager.
+#[cfg(feature = "local_fs")]
+fn reveal_in_file_manager_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "View in Finder"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "Show in Explorer"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "Open folder"
+    }
+}
+
+/// Builds the success message shown after a file artifact is downloaded,
+/// including the directory the file landed in.
+#[cfg(feature = "local_fs")]
+fn download_success_message(filename: &str, directory: &Path) -> String {
+    format!("{filename} was downloaded to {}.", directory.display())
+}
+
+/// Builds the success toast for a completed file-artifact download. When the
+/// saved path has a parent directory, the toast reports where the file landed
+/// and offers a link to reveal it in the file manager; otherwise it falls back
+/// to a plain confirmation.
+#[cfg(feature = "local_fs")]
+fn file_download_success_toast(
+    filename: &str,
+    file_path: &Path,
+) -> DismissibleToast<WorkspaceAction> {
+    let Some(directory) = file_path.parent() else {
+        return DismissibleToast::success(format!("Downloaded {filename}."));
+    };
+    DismissibleToast::success(download_success_message(filename, directory)).with_link(
+        ToastLink::new(reveal_in_file_manager_label().to_string()).with_onclick_action(
+            WorkspaceAction::OpenInExplorer {
+                path: file_path.to_path_buf(),
+            },
+        ),
+    )
 }
 
 fn non_empty_trimmed(value: &str) -> Option<&str> {

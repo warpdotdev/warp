@@ -7,6 +7,7 @@ use anyhow::Result;
 use async_recursion::async_recursion;
 use futures_lite::StreamExt;
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
     MouseStateHandle, ParentElement, Radius, Shrinkable,
@@ -720,7 +721,7 @@ impl FileUploadState {
         match self.folder_id_to_node.get(&folder_id) {
             Some(folder_node) => Some(folder_node.cloud_id()),
             None => {
-                log::error!("Provided folder id should exist");
+                report_error!("Provided folder id should exist");
                 None
             }
         }

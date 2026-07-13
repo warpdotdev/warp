@@ -7,7 +7,7 @@ mod view;
 mod window;
 
 use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::mem;
@@ -132,10 +132,9 @@ impl fmt::Display for TaskId {
 pub type OptionalPlatformWindow = Option<Rc<dyn platform::Window>>;
 
 type ActionCallback =
-    dyn FnMut(&mut dyn AnyView, &dyn Any, &mut AppContext, WindowId, EntityId) -> bool;
+    dyn FnMut(&mut dyn Any, &dyn Any, &mut AppContext, WindowId, EntityId) -> bool;
 
-type TypedActionCallback =
-    dyn FnMut(&mut dyn AnyView, &dyn Any, &mut AppContext, WindowId, EntityId);
+type TypedActionCallback = dyn FnMut(&mut dyn Any, &dyn Any, &mut AppContext, WindowId, EntityId);
 
 type GlobalActionCallback =
     dyn FnMut(&dyn Any, &'static std::panic::Location<'static>, &mut AppContext);
@@ -193,8 +192,8 @@ pub(crate) type SpawnedFuture = BoxFuture<'static, ()>;
 
 #[derive(Debug, Default, Clone)]
 pub struct WindowInvalidation {
-    pub updated: HashSet<EntityId>,
-    pub removed: HashSet<EntityId>,
+    pub updated: EntityIdSet,
+    pub removed: EntityIdSet,
     /// Stores whether an element in the window needs to be repainted. Currently an
     /// invalidation will repaint the entire element tree for that window, so we
     /// only store a boolean. In the future we can extend this to store entity ids
@@ -264,6 +263,7 @@ pub trait AnyView {
         app: &mut AppContext,
         view_id: EntityId,
     );
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId>;
     fn self_or_child_interacted_with(
         &self,
         app: &mut AppContext,
@@ -354,6 +354,10 @@ where
         View::on_window_transferred(self, source_window_id, target_window_id, &mut ctx);
     }
 
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        View::child_view_ids(self, app)
+    }
+
     fn keymap_context(&self, app: &AppContext) -> keymap::Context {
         View::keymap_context(self, app)
     }
@@ -392,13 +396,13 @@ pub enum EntityLocation {
 
 #[derive(Default)]
 struct RefCounts {
-    entity_counts: HashMap<EntityId, usize>,
+    entity_counts: EntityIdMap<usize>,
     dropped: DroppedItems,
 }
 
 #[derive(Default)]
 struct DroppedItems {
-    models: HashSet<EntityId>,
+    models: EntityIdSet,
     views: HashSet<(WindowId, EntityId)>,
 }
 
@@ -539,12 +543,12 @@ type ModelFromStreamItemCallback = dyn FnMut(&mut dyn Any, Box<dyn Any>, &mut Ap
 type ModelFromStreamDoneCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, EntityId);
 
 type ViewFromFutureCallback =
-    dyn FnOnce(&mut dyn AnyView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
+    dyn FnOnce(&mut dyn Any, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
 
 type ViewFromStreamItemCallback =
-    dyn FnMut(&mut dyn AnyView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
+    dyn FnMut(&mut dyn Any, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
 
-type ViewFromStreamDoneCallback = dyn FnOnce(&mut dyn AnyView, &mut AppContext, WindowId, EntityId);
+type ViewFromStreamDoneCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, WindowId, EntityId);
 
 enum TaskCallback {
     ModelFromFuture {
@@ -670,3 +674,7 @@ impl<T> RequestState<T> {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "tui"))]
+#[path = "tui_view_tests.rs"]
+mod tui_view_tests;

@@ -2,15 +2,16 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
 use regex::Regex;
+use warp_errors::report_error;
 use warp_graphql::billing::{
     AiAutonomyPolicy as GqlAiAutonomyPolicy, AmbientAgentsPolicy as GqlAmbientAgentsPolicy,
     BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
     BonusGrant as GqlBonusGrant, ByoApiKeyPolicy as GqlByoApiKeyPolicy,
-    CodebaseContextPolicy as GqlCodebaseContextPolicy, CustomerType as GqlCustomerType,
-    DelinquencyStatus as GqlDelinquencyStatus,
+    ByoEndpointPolicy as GqlByoEndpointPolicy, CodebaseContextPolicy as GqlCodebaseContextPolicy,
+    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
     EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
-    MultiAdminPolicy as GqlMultiAdminPolicy,
+    ManagedByokByoePolicy as GqlManagedByokByoePolicy, MultiAdminPolicy as GqlMultiAdminPolicy,
     PurchaseAddOnCreditsPolicy as GqlPurchaseAddOnCreditsPolicy, ServiceAgreementType,
     SessionSharingPolicy as GqlSessionSharingPolicy,
     SharedNotebooksPolicy as GqlSharedNotebooksPolicy,
@@ -30,10 +31,14 @@ use warp_graphql::workspace::{
     AddonCreditsSettings as GqlAddonCreditsSettings,
     AdminEnablementSetting as GqlAdminEnablementSetting, AiAutonomyValue as GqlAiAutonomyValue,
     AiPermissionsSettings as GqlAiPermissionsSettings,
+    ByoEndpointMetadata as GqlByoEndpointMetadata,
+    ByoEndpointModelMetadata as GqlByoEndpointModelMetadata,
+    ByoFirstPartyKey as GqlByoFirstPartyKey,
     ComputerUseAutonomyValue as GqlComputerUseAutonomyValue, EmailInvite as GqlEmailInvite,
     HostEnablementSetting as GqlHostEnablementSetting,
     InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
-    MembershipRole as GqlMembershipRole, Team as GqlTeam, TeamMember as GqlTeamMember,
+    MembershipRole as GqlMembershipRole, Team as GqlTeam, TeamByoSettings as GqlTeamByoSettings,
+    TeamMember as GqlTeamMember,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting, Workspace as GqlWorkspace,
     WorkspaceMember as GqlWorkspaceMember, WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
     WorkspaceSettings as GqlWorkspaceSettings,
@@ -45,15 +50,15 @@ use super::user_workspaces::WorkspacesMetadataResponse;
 use super::workspace::{
     AIAutonomyPolicy, AddonCreditsSettings, AdminEnablementSetting, AiAutonomySettings,
     AiPermissionsSettings, AmbientAgentsPolicy, BillingCycleUsageData, BillingCycleUsageEntry,
-    BillingCycleUsageSummary, BillingMetadata, CloudConversationStorageSettings,
-    CodebaseContextSettings, CustomerType, DelinquencyStatus, EmailInvite, EnterpriseSecretRegex,
-    HostEnablementSetting, InstanceShape, InviteLinkDomainRestriction, LinkSharingSettings,
-    LlmSettings, MaxPriorCycles, SandboxedAgentSettings, SecretRedactionSettings,
-    SessionSharingPolicy, SharedNotebooksPolicy, SharedWorkflowsPolicy,
-    TelemetryDataCollectionPolicy, TelemetrySettings, Tier, UgcCollectionEnablementSetting,
-    UgcCollectionSettings, UgcDataCollectionPolicy, UsageBasedPricingPolicy,
-    UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy, Workspace,
-    WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
+    BillingCycleUsageSummary, BillingMetadata, ByoEndpointMetadata, ByoEndpointModelMetadata,
+    ByoFirstPartyKey, CloudConversationStorageSettings, CodebaseContextSettings, CustomerType,
+    DelinquencyStatus, EmailInvite, EnterpriseSecretRegex, HostEnablementSetting, InstanceShape,
+    InviteLinkDomainRestriction, LinkSharingSettings, LlmSettings, MaxPriorCycles,
+    SandboxedAgentSettings, SecretRedactionSettings, SessionSharingPolicy, SharedNotebooksPolicy,
+    SharedWorkflowsPolicy, TeamByoSettings, TelemetryDataCollectionPolicy, TelemetrySettings, Tier,
+    UgcCollectionEnablementSetting, UgcCollectionSettings, UgcDataCollectionPolicy,
+    UsageBasedPricingPolicy, UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy,
+    Workspace, WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
     WorkspaceSizePolicy,
 };
 use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
@@ -62,17 +67,17 @@ use crate::ai::execution_profiles::{
 };
 use crate::ai::{BonusGrant, BonusGrantScope};
 use crate::auth::UserUid;
+use crate::convert_to_server_experiment;
 use crate::server::cloud_objects::listener::ObjectUpdateMessage;
 use crate::server::experiments::ServerExperiment;
 use crate::server::graphql::schema::object_action_history_from_gql;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::workspace::{
-    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, CodebaseContextPolicy,
-    EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
+    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
+    EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, ManagedByokByoePolicy,
+    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
 };
-use crate::{convert_to_server_experiment, report_error};
 
 pub const PLACEHOLDER_WORKSPACE_UID: &str = "NOT_A_REAL_WORKSPACE_UID";
 
@@ -82,6 +87,64 @@ impl From<GqlTeamMember> for TeamMember {
             uid: UserUid::new(&gql_team_member.uid.into_inner()),
             email: gql_team_member.email,
             role: gql_team_member.role.into(),
+        }
+    }
+}
+
+impl From<GqlManagedByokByoePolicy> for ManagedByokByoePolicy {
+    fn from(gql_managed_byok_byoe_policy: GqlManagedByokByoePolicy) -> ManagedByokByoePolicy {
+        Self {
+            enabled: gql_managed_byok_byoe_policy.enabled,
+        }
+    }
+}
+
+impl From<GqlTeamByoSettings> for TeamByoSettings {
+    fn from(gql_team_byo: GqlTeamByoSettings) -> TeamByoSettings {
+        Self {
+            first_party_enabled: gql_team_byo.first_party_enabled,
+            endpoints_enabled: gql_team_byo.endpoints_enabled,
+            allow_user_keys: gql_team_byo.allow_user_keys,
+            allow_user_endpoints: gql_team_byo.allow_user_endpoints,
+            first_party_keys: gql_team_byo
+                .first_party_keys
+                .into_iter()
+                .map(From::from)
+                .collect(),
+            endpoints: gql_team_byo.endpoints.into_iter().map(From::from).collect(),
+        }
+    }
+}
+
+impl From<GqlByoFirstPartyKey> for ByoFirstPartyKey {
+    fn from(gql_key: GqlByoFirstPartyKey) -> ByoFirstPartyKey {
+        Self {
+            provider: gql_key.provider.into(),
+            credential_uid: gql_key.credential_uid.into_inner(),
+        }
+    }
+}
+
+impl From<GqlByoEndpointMetadata> for ByoEndpointMetadata {
+    fn from(gql_endpoint: GqlByoEndpointMetadata) -> ByoEndpointMetadata {
+        Self {
+            uid: gql_endpoint.uid.into_inner(),
+            name: gql_endpoint.name,
+            enabled: gql_endpoint.enabled,
+            credential_uid: gql_endpoint.credential_uid.into_inner(),
+            models: gql_endpoint.models.into_iter().map(From::from).collect(),
+        }
+    }
+}
+
+impl From<GqlByoEndpointModelMetadata> for ByoEndpointModelMetadata {
+    fn from(gql_model: GqlByoEndpointModelMetadata) -> ByoEndpointModelMetadata {
+        Self {
+            config_key: gql_model.config_key,
+            slug: gql_model.slug,
+            alias: gql_model.alias,
+            display_name: gql_model.display_name,
+            enabled: gql_model.enabled,
         }
     }
 }
@@ -228,10 +291,9 @@ impl From<GqlUgcCollectionEnablementSetting> for UgcCollectionEnablementSetting 
             }
             GqlUgcCollectionEnablementSetting::Other(value) => {
                 report_error!(
-                    anyhow!(
-                        "Invalid UgcCollectionEnablementSetting '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    "Invalid UgcCollectionEnablementSetting. Make sure to update client GraphQL types!",
+                    extra: { "value" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 UgcCollectionEnablementSetting::RespectUserSetting
             }
@@ -247,6 +309,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             token_usage: models,
             tool_usage_metadata: tool,
             context_window_usage,
+            context_window_segments,
             ..
         } = (&gql.usage_metadata).into();
         ConversationUsageInfo {
@@ -256,6 +319,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             tool_calls: tool.total_tool_calls(),
             models,
             context_window_usage,
+            context_window_segments,
             files_changed: tool.apply_file_diff_stats.files_changed,
             lines_added: tool.apply_file_diff_stats.lines_added,
             lines_removed: tool.apply_file_diff_stats.lines_removed,
@@ -274,10 +338,9 @@ impl From<GqlAdminEnablementSetting> for AdminEnablementSetting {
             }
             GqlAdminEnablementSetting::Other(value) => {
                 report_error!(
-                    anyhow!(
-                        "Invalid AdminEnablementSetting '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    "Invalid AdminEnablementSetting. Make sure to update client GraphQL types!",
+                    extra: { "value" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 AdminEnablementSetting::RespectUserSetting
             }
@@ -294,10 +357,9 @@ impl From<GqlHostEnablementSetting> for HostEnablementSetting {
             }
             GqlHostEnablementSetting::Other(value) => {
                 report_error!(
-                    anyhow!(
-                        "Invalid HostEnablementSetting '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    "Invalid HostEnablementSetting. Make sure to update client GraphQL types!",
+                    extra: { "value" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 HostEnablementSetting::RespectUserSetting
             }
@@ -316,7 +378,10 @@ impl From<&GqlAiPermissionsSettings> for AiPermissionsSettings {
                     match regex {
                         Ok(regex) => Some(regex),
                         Err(_) => {
-                            log::error!("Invalid regex pattern for remote session detection: {r}");
+                            report_error!(
+                                "Invalid regex pattern for remote session detection",
+                                extra: { "pattern" => %r }
+                            );
                             None
                         }
                     }
@@ -389,6 +454,14 @@ impl From<GqlByoApiKeyPolicy> for ByoApiKeyPolicy {
     }
 }
 
+impl From<GqlByoEndpointPolicy> for ByoEndpointPolicy {
+    fn from(gql_byo_endpoint_policy: GqlByoEndpointPolicy) -> ByoEndpointPolicy {
+        Self {
+            enabled: gql_byo_endpoint_policy.enabled,
+        }
+    }
+}
+
 impl From<GqlPurchaseAddOnCreditsPolicy> for PurchaseAddOnCreditsPolicy {
     fn from(
         gql_purchase_add_on_credits_policy: GqlPurchaseAddOnCreditsPolicy,
@@ -456,10 +529,9 @@ impl From<GqlUsageVisibilityGranularity> for UsageVisibilityGranularity {
             }
             GqlUsageVisibilityGranularity::Other(value) => {
                 report_error!(
-                    anyhow!(
-                        "Invalid UsageVisibilityGranularity '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    "Invalid UsageVisibilityGranularity. Make sure to update client GraphQL types!",
+                    extra: { "value" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 // Fail closed to the most restrictive granularity.
                 UsageVisibilityGranularity::OwnOnly
@@ -474,9 +546,10 @@ fn from_gql_max_prior_cycles(value: i32) -> MaxPriorCycles {
         n if n > 0 => MaxPriorCycles::Limited(n as u32),
         -1 => MaxPriorCycles::Unlimited,
         other => {
-            report_error!(anyhow!(
-                "Unexpected maxPriorCycles value '{other}' from server; treating as unlimited"
-            ));
+            report_error!(
+                "Unexpected maxPriorCycles value from server; treating as unlimited",
+                extra: { "value" => %other }
+            );
             MaxPriorCycles::None
         }
     }
@@ -538,6 +611,8 @@ impl From<GqlTier> for Tier {
             usage_based_pricing_policy: gql_tier.usage_based_pricing_policy.map(From::from),
             codebase_context_policy: gql_tier.codebase_context_policy.map(From::from),
             byo_api_key_policy: gql_tier.byo_api_key_policy.map(From::from),
+            byo_endpoint_policy: gql_tier.byo_endpoint_policy.map(From::from),
+            managed_byok_byoe_policy: gql_tier.managed_byok_byoe_policy.map(From::from),
             purchase_add_on_credits_policy: gql_tier.purchase_add_on_credits_policy.map(From::from),
             enterprise_pay_as_you_go_policy: gql_tier
                 .enterprise_pay_as_you_go_policy
@@ -660,10 +735,9 @@ fn convert_gql_ai_autonomy_value_to_action_permission(
         GqlAiAutonomyValue::RespectUserSetting => None,
         GqlAiAutonomyValue::Other(value) => {
             report_error!(
-                anyhow!(
-                    "Invalid AiAutonomyValue '{value}'. Make sure to update client GraphQL types!"
-                ),
-                warp_core::errors::ReportErrorLogMode::OncePerRun
+                "Invalid AiAutonomyValue. Make sure to update client GraphQL types!",
+                extra: { "value" => %value },
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
             None
         }
@@ -680,10 +754,9 @@ fn convert_gql_write_to_pty_autonomy_value_to_write_to_pty_permission(
         GqlWriteToPtyAutonomyValue::RespectUserSetting => None,
         GqlWriteToPtyAutonomyValue::Other(value) => {
             report_error!(
-                anyhow!(
-                    "Invalid WriteToPtyAutonomyValue '{value}'. Make sure to update client GraphQL types!"
-                ),
-                warp_core::errors::ReportErrorLogMode::OncePerRun
+                "Invalid WriteToPtyAutonomyValue. Make sure to update client GraphQL types!",
+                extra: { "value" => %value },
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
             None
         }
@@ -700,10 +773,9 @@ fn convert_gql_computer_use_autonomy_value_to_computer_use_permission(
         GqlComputerUseAutonomyValue::RespectUserSetting => None,
         GqlComputerUseAutonomyValue::Other(value) => {
             report_error!(
-                anyhow!(
-                    "Invalid ComputerUseAutonomyValue '{value}'. Make sure to update client GraphQL types!"
-                ),
-                warp_core::errors::ReportErrorLogMode::OncePerRun
+                "Invalid ComputerUseAutonomyValue. Make sure to update client GraphQL types!",
+                extra: { "value" => %value },
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
             None
         }
@@ -750,11 +822,8 @@ impl From<warp_graphql::workspace::LlmModelHost> for crate::ai::llms::LLMModelHo
             GqlLlmModelHost::CustomEndpoint => Self::CustomEndpoint,
             GqlLlmModelHost::GeminiEnterprise => Self::GeminiEnterprise,
             GqlLlmModelHost::Other(value) => {
-                report_error!(
-                    anyhow!(
-                        "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                log::warn!(
+                    "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
                 );
                 Self::Unknown
             }
@@ -802,6 +871,7 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
     fn from(gql_workspace_settings: GqlWorkspaceSettings) -> WorkspaceSettings {
         Self {
             llm_settings: gql_workspace_settings.llm_settings.into(),
+            team_byo: gql_workspace_settings.team_byo.map(From::from),
             telemetry_settings: TelemetrySettings {
                 force_enabled: gql_workspace_settings.telemetry_settings.force_enabled,
             },
@@ -829,8 +899,9 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
                         match regex {
                             Ok(regex) => Some(regex),
                             Err(_) => {
-                                log::error!(
-                                    "Invalid regex pattern for remote session detection: {r}"
+                                report_error!(
+                                    "Invalid regex pattern for remote session detection",
+                                    extra: { "pattern" => %r }
                                 );
                                 None
                             }
@@ -901,10 +972,10 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
                     .max_monthly_spend_cents
                     .and_then(|cents| {
                         if cents < 0 {
-                            report_error!(anyhow!(
-                                "Usage-based pricing has a negative max monthly spend of {} cents",
-                                cents
-                            ));
+                            report_error!(
+                                "Usage-based pricing has a negative max monthly spend",
+                                extra: { "cents" => %cents }
+                            );
                             None
                         } else {
                             Some(cents as u32)

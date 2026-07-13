@@ -15,6 +15,7 @@ use session_sharing_protocol::common::SessionId;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
+use warp_server_client::iap::IapManager;
 use warpui::platform::{WindowBounds, WindowStyle};
 use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::WindowManager;
@@ -74,7 +75,6 @@ use crate::resource_center::TipsCompleted;
 use crate::search::files::model::FileSearchModel;
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::iap::IapManager;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
@@ -115,7 +115,13 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
     // Disabled (`None`) IapManager so shared-session viewer code that reads the
     // singleton doesn't panic in tests; it is an inert no-op.
-    app.add_singleton_model(|ctx| IapManager::new(None, ctx));
+    app.add_singleton_model(|ctx| {
+        IapManager::new(
+            None,
+            Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+            ctx,
+        )
+    });
     app.add_singleton_model(|ctx| ChangelogModel::new(ServerApiProvider::as_ref(ctx).get()));
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
@@ -200,7 +206,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|ctx| PersistedWorkspace::new(vec![], HashMap::new(), None, ctx));
     app.add_singleton_model(|_| ProjectContextModel::default());
     app.add_singleton_model(|ctx| crate::ai::agent_tips::AITipModel::new_for_agent_tips(ctx));
-    app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|_| RestoredAgentConversations::new_seeded(vec![]));
     app.add_singleton_model(OneTimeModalModel::new);
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(UndoCloseStack::new);
@@ -346,6 +352,7 @@ fn test_server_conversation_metadata(
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
+            context_window_segments: Vec::new(),
         },
         metadata: mock_server_metadata(),
         creator: None,
@@ -392,6 +399,7 @@ fn persisted_remote_child_conversation(
             })
             .expect("conversation data should serialize"),
             last_modified_at: Utc::now().naive_utc(),
+            summary: None,
         },
         tasks: vec![warp_multi_agent_api::Task {
             id: Uuid::new_v4().to_string(),
@@ -1074,7 +1082,7 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
 ///   * the hidden child pane must materialize in `child_agent_panes` keyed
 ///     by the placeholder conversation id after parent fullscreen.
 ///
-/// The disk-load construction path (`BlocklistAIHistoryModel::new(_, &conversations)`
+/// The disk-load construction path (`BlocklistAIHistoryModel::new(_, _, &conversations)`
 /// invoking `initialize_historical_conversations`) is covered by
 /// `test_initialize_historical_conversations_eagerly_hydrates_orchestration_children`
 /// in `app/src/ai/blocklist/history_model_tests.rs`. `agent_display_name_from_id`
@@ -1262,13 +1270,14 @@ fn test_create_missing_child_agent_panes_restores_remote_child_from_history_mode
                     .set_parent_for_conversation(child_conversation_id, parent_conversation_id);
             });
             RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
-                *store =
-                    RestoredAgentConversations::new(vec![persisted_remote_child_conversation(
+                *store = RestoredAgentConversations::new_seeded(vec![
+                    persisted_remote_child_conversation(
                         child_conversation_id,
                         Some(parent_conversation_id),
                         None,
                         task_id,
-                    )]);
+                    ),
+                ]);
             });
 
             panes.restore_missing_child_agent_panes_for_parent(
@@ -1893,13 +1902,14 @@ fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked
                     .set_parent_for_conversation(child_conversation_id, parent_conversation_id);
             });
             RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
-                *store =
-                    RestoredAgentConversations::new(vec![persisted_remote_child_conversation(
+                *store = RestoredAgentConversations::new_seeded(vec![
+                    persisted_remote_child_conversation(
                         child_conversation_id,
                         None,
                         Some(parent_run_id),
                         task_id,
-                    )]);
+                    ),
+                ]);
             });
 
             assert!(!panes.child_agent_panes.contains_key(&child_conversation_id));
@@ -2012,7 +2022,7 @@ fn test_ensure_hidden_child_agent_pane_skips_child_owned_by_another_pane_group()
             assert_eq!(panes.pane_count(), initial_pane_count);
             assert_eq!(
                 BlocklistAIHistoryModel::as_ref(ctx)
-                    .terminal_view_id_for_conversation(&child_conversation_id),
+                    .terminal_surface_id_for_conversation(&child_conversation_id),
                 Some(child_owner_terminal_view_id)
             );
         });
@@ -2058,7 +2068,7 @@ fn test_entering_parent_agent_view_skips_child_owned_by_another_pane_group() {
             assert_eq!(panes.pane_count(), initial_pane_count);
             assert_eq!(
                 BlocklistAIHistoryModel::as_ref(ctx)
-                    .terminal_view_id_for_conversation(&child_conversation_id),
+                    .terminal_surface_id_for_conversation(&child_conversation_id),
                 Some(child_owner_terminal_view_id)
             );
         });
@@ -2662,20 +2672,16 @@ fn test_stop_shared_session() {
         // Start the shared session.
         pane_group.update(&mut app, |pane_group, ctx| {
             let terminal_pane = pane_group.terminal_session_by_pane_index(0).unwrap();
-            terminal_pane
-                .terminal_manager(ctx)
-                .update(ctx, |terminal_manager, ctx| {
-                    let terminal_view = terminal_manager.view();
-                    terminal_view.update(ctx, |terminal_view, ctx| {
-                        terminal_view.attempt_to_share_session(
-                            SharedSessionScrollbackType::None,
-                            None,
-                            SharedSessionSource::user(None),
-                            false,
-                            ctx,
-                        );
-                    });
-                })
+            let terminal_view = terminal_pane.terminal_view(ctx);
+            terminal_view.update(ctx, |terminal_view, ctx| {
+                terminal_view.attempt_to_share_session(
+                    SharedSessionScrollbackType::None,
+                    None,
+                    SharedSessionSource::user(None),
+                    false,
+                    ctx,
+                );
+            });
         });
 
         // Wait for one tick of the event loop for the share to be started.
@@ -2696,15 +2702,10 @@ fn test_stop_shared_session() {
         // Stop the shared session.
         pane_group.update(&mut app, |pane_group, ctx| {
             let terminal_pane = pane_group.terminal_session_by_pane_index(0).unwrap();
-            terminal_pane
-                .terminal_manager(ctx)
-                .update(ctx, |terminal_manager, ctx| {
-                    let terminal_view = terminal_manager.view();
-                    terminal_view.update(ctx, |terminal_view, ctx| {
-                        terminal_view
-                            .stop_sharing_session(SharedSessionActionSource::PaneHeader, ctx);
-                    });
-                });
+            let terminal_view = terminal_pane.terminal_view(ctx);
+            terminal_view.update(ctx, |terminal_view, ctx| {
+                terminal_view.stop_sharing_session(SharedSessionActionSource::PaneHeader, ctx);
+            });
         });
 
         // Ensure the state is correct after stopping.
@@ -2714,7 +2715,7 @@ fn test_stop_shared_session() {
                 .terminal_manager(ctx)
                 .as_ref(ctx)
                 .as_any()
-                .downcast_ref::<TerminalManager>()
+                .downcast_ref::<TerminalManager<TerminalView>>()
                 .unwrap();
             let terminal_model = terminal_pane.terminal_manager(ctx).as_ref(ctx).model();
 

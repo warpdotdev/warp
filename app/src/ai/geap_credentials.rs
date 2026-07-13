@@ -7,6 +7,7 @@ use ai::api_keys::{
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::r#async::Timer;
@@ -106,7 +107,7 @@ pub trait GeapCredentialRefresher {
 
 impl GeapCredentialRefresher for ApiKeyManager {
     fn subscribe_to_geap_settings_changes(&mut self, ctx: &mut ModelContext<Self>) {
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, event, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, _, event, ctx| {
             if matches!(
                 event,
                 UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
@@ -116,7 +117,7 @@ impl GeapCredentialRefresher for ApiKeyManager {
             }
         });
 
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |manager, event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |manager, _, event, ctx| {
             if matches!(
                 event,
                 AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. }
@@ -316,7 +317,7 @@ fn apply_geap_mint_result(
             schedule_geap_token_refresh(manager, ctx);
         }
         Err(err) => {
-            log::error!("GEAP: credential mint failed: {err:?}");
+            report_error!("GEAP: credential mint failed", extra: { "error" => ?err });
             match previous {
                 // A failed background re-mint keeps the previous token — even
                 // near/past expiry (Google remains the authority on validity;

@@ -35,6 +35,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         should_redact_secrets: false,
         api_keys: None,
         custom_model_providers: None,
+        custom_model_routers: None,
         allow_use_of_warp_credits: false,
         autonomy_level: api::AutonomyLevel::Supervised,
         isolation_level: api::IsolationLevel::None,

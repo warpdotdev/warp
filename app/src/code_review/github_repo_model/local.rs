@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use settings::Setting as _;
+use warp_errors::report_if_error;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::GitHubRepoEvent;
 use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
-use crate::report_if_error;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
@@ -96,7 +96,7 @@ impl LocalGitHubRepoModel {
 
         // Track branch changes from the sibling. Only PR info depends on the
         // branch — repository info is deliberately left untouched here.
-        ctx.subscribe_to_model(&git_status, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&git_status, |me, _, event, ctx| match event {
             GitRepoStatusEvent::MetadataChanged => {
                 let new_branch = me
                     .git_status
@@ -258,19 +258,19 @@ impl LocalGitHubRepoModel {
 
     fn handle_repository_info_result(
         &mut self,
-        result: anyhow::Result<RepositoryInfo>,
+        result: anyhow::Result<Option<RepositoryInfo>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let repository_info = match result {
-            Ok(repository_info) => Some(repository_info),
+        match result {
+            Ok(repository_info) => {
+                if self.repository_info != repository_info {
+                    self.repository_info = repository_info;
+                    ctx.emit(GitHubRepoEvent::RepositoryInfoChanged);
+                }
+            }
             Err(err) => {
                 log::debug!("GitHubRepoModel: repository info load failed: {err}");
-                None
             }
-        };
-        if self.repository_info != repository_info {
-            self.repository_info = repository_info;
-            ctx.emit(GitHubRepoEvent::RepositoryInfoChanged);
         }
     }
 

@@ -9,9 +9,7 @@ pub(crate) mod find_model;
 pub(crate) mod git_actions;
 pub(crate) mod git_dialog;
 pub mod git_repo_model;
-#[cfg(feature = "local_fs")]
 mod git_repo_models;
-#[cfg(feature = "local_fs")]
 pub mod github_repo_model;
 mod hidden_lines;
 pub mod telemetry_event;
@@ -58,6 +56,10 @@ pub enum DiffSetScope {
     File(String),
 }
 
+/// The keystroke that submits in the code review panel. Meant to mirror the keystroke for
+/// [`EditorViewEvent::CmdEnter`].
+pub const CODE_REVIEW_SUBMIT_KEYSTROKE: &str = "cmdorctrl-enter";
+
 /// Register keybindings for code review functionality.
 pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
@@ -86,12 +88,20 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| crate::features::FeatureFlag::GitOperationsInCodeReview.is_enabled()),
     ]);
 
-    app.register_fixed_bindings([FixedBinding::custom(
-        CustomAction::Undo,
-        CodeReviewAction::UndoRevert,
-        "Undo",
-        id!("CodeReviewView") & !id!("IMEOpen"),
-    )]);
+    app.register_fixed_bindings([
+        FixedBinding::custom(
+            CustomAction::Undo,
+            CodeReviewAction::UndoRevert,
+            "Undo",
+            id!("CodeReviewView") & !id!("IMEOpen"),
+        ),
+        FixedBinding::new(
+            CODE_REVIEW_SUBMIT_KEYSTROKE,
+            CodeReviewAction::SubmitReviewComments,
+            id!("CodeReviewView_NotEditing"),
+        )
+        .with_command_description("Send code review comments to agent"),
+    ]);
 
     diff_menu::init(app);
     diff_selector::init(app);

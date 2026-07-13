@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use ai::skills::{parse_bundled_skill, ParsedSkill, SkillReference};
+use ai::skills::{parse_bundled_skill, ParsedSkill, SkillPathOrigin, SkillReference};
 use futures::TryStreamExt;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_core::safe_warn;
 use warp_core::ui::icons::Icon;
-use warp_core::{report_error, safe_warn};
+use warp_errors::report_error;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
 use warpui::{AppContext, SingletonEntity};
 
 use super::SkillDescriptor;
@@ -54,8 +56,38 @@ impl BundledSkills {
         self.local = bundled_skill;
     }
 
-    pub fn local(&self) -> &BundledSkill {
-        &self.local
+    pub fn active_descriptors(
+        &self,
+        path_origin: &SkillPathOrigin,
+        ctx: &AppContext,
+    ) -> Vec<SkillDescriptor> {
+        match path_origin {
+            SkillPathOrigin::Local | SkillPathOrigin::RestoredDisplayOnly => {
+                self.local.active_descriptors(ctx)
+            }
+            SkillPathOrigin::Remote { host_id } => self
+                .remote(host_id)
+                .map(|bundled_skill| bundled_skill.active_path_referenced_descriptors(ctx))
+                .unwrap_or_default(),
+            SkillPathOrigin::Unavailable => Vec::new(),
+        }
+    }
+
+    pub fn reference_for_path(&self, path: &LocalOrRemotePath) -> Option<SkillReference> {
+        self.local.reference_for_path(path)
+    }
+
+    pub fn local_skill(&self, id: &str) -> Option<&ParsedSkill> {
+        self.local.skill(id)
+    }
+
+    pub fn active_skill(
+        &self,
+        id: &str,
+        path_origin: &SkillPathOrigin,
+        ctx: &AppContext,
+    ) -> Option<&ParsedSkill> {
+        self.for_path_origin(path_origin)?.active_skill(id, ctx)
     }
 
     /// Installs the catalog for a connected remote host, replacing any
@@ -79,28 +111,31 @@ impl BundledSkills {
     /// addressed by path (their paths are real files on the remote host),
     /// unlike local bundled skills which are addressed by
     /// [`SkillReference::BundledSkillId`].
-    pub fn remote_skill_by_path(&self, path: &LocalOrRemotePath) -> Option<&ParsedSkill> {
-        let LocalOrRemotePath::Remote(remote_path) = path else {
-            return None;
-        };
+    pub fn remote_skill_by_path(&self, path: &RemotePath) -> Option<&ParsedSkill> {
         self.remote_by_host
-            .get(&remote_path.host_id)?
-            .skill_by_path(path)
+            .get(&path.host_id)?
+            .skill_by_path(&LocalOrRemotePath::Remote(path.clone()))
     }
 
     /// Like [`Self::remote_skill_by_path`], but only returns the skill when
     /// its activation condition is met.
     pub fn remote_active_skill_by_path(
         &self,
-        path: &LocalOrRemotePath,
+        path: &RemotePath,
         ctx: &AppContext,
     ) -> Option<&ParsedSkill> {
-        let LocalOrRemotePath::Remote(remote_path) = path else {
-            return None;
-        };
         self.remote_by_host
-            .get(&remote_path.host_id)?
-            .active_skill_by_path(path, ctx)
+            .get(&path.host_id)?
+            .active_skill_by_path(&LocalOrRemotePath::Remote(path.clone()), ctx)
+    }
+
+    /// Returns the bundled catalog selected by the execution path origin.
+    fn for_path_origin(&self, path_origin: &SkillPathOrigin) -> Option<&BundledSkill> {
+        match path_origin {
+            SkillPathOrigin::Local | SkillPathOrigin::RestoredDisplayOnly => Some(&self.local),
+            SkillPathOrigin::Remote { host_id } => self.remote(host_id),
+            SkillPathOrigin::Unavailable => None,
+        }
     }
 
     #[cfg(test)]
@@ -111,6 +146,20 @@ impl BundledSkills {
         activation: BundledSkillActivation,
     ) {
         self.local.insert_for_testing(id, skill, activation);
+    }
+
+    #[cfg(test)]
+    pub fn insert_remote_for_testing(
+        &mut self,
+        host_id: HostId,
+        id: impl Into<String>,
+        skill: ParsedSkill,
+        activation: BundledSkillActivation,
+    ) {
+        self.remote_by_host
+            .entry(host_id)
+            .or_default()
+            .insert_for_testing(id, skill, activation);
     }
 }
 
@@ -159,6 +208,27 @@ impl BundledSkill {
             .filter(|(_, definition)| definition.activation.is_enabled(ctx))
             .map(|(id, definition)| {
                 SkillDescriptor::new_bundled(id.clone(), definition.skill.clone(), definition.icon)
+            })
+            .collect()
+    }
+
+    /// Returns descriptors for bundled skills whose activation conditions are
+    /// met, referenced by their `SKILL.md` paths instead of
+    /// [`SkillReference::BundledSkillId`].
+    ///
+    /// Used for remote-host catalogs: a `BundledSkillId` reference resolves
+    /// against the local catalog, so descriptors listed from a remote catalog
+    /// must carry the skill's real remote path — which resolves back to this
+    /// catalog through the path lookups — or invoking a listed skill would
+    /// serve the local client's content.
+    pub fn active_path_referenced_descriptors(&self, ctx: &AppContext) -> Vec<SkillDescriptor> {
+        self.definitions
+            .values()
+            .filter(|definition| definition.activation.is_enabled(ctx))
+            .map(|definition| {
+                let mut descriptor = SkillDescriptor::from(definition.skill.clone());
+                descriptor.icon_override = Some(definition.icon);
+                descriptor
             })
             .collect()
     }
@@ -216,7 +286,14 @@ impl BundledSkill {
         let definitions = definitions
             .into_iter()
             .map(|(id, skill, activation)| {
-                let icon = icon_for_bundled_skill(&id);
+                // MCP-gated skills carry their integration's brand icon, like
+                // the local figma catalog loaded from `mcp_skills/figma`.
+                let icon = match &activation {
+                    BundledSkillActivation::RequiresMcp(McpIntegration::Figma) => Icon::Figma,
+                    BundledSkillActivation::Always
+                    | BundledSkillActivation::RequiresFeature(_)
+                    | BundledSkillActivation::RequiresFile(_) => icon_for_bundled_skill(&id),
+                };
                 (
                     id,
                     BundledSkillDefinition {
@@ -232,7 +309,7 @@ impl BundledSkill {
 
     /// Iterates the catalog's definitions as `(id, skill, activation)`.
     /// Used by the daemon to serialize its catalog for the
-    /// `BundledSkillsSnapshot` push.
+    /// aggregate remote Agent Mode context snapshot.
     pub(crate) fn iter_definitions(
         &self,
     ) -> impl Iterator<Item = (&str, &ParsedSkill, &BundledSkillActivation)> {
@@ -306,6 +383,12 @@ async fn load_figma_skill_definitions(
 /// Read bundled skill definitions from the specified directory, rendering
 /// handlebars variables against this host's filesystem (`resources_dir` is
 /// the resources root the skills belong to).
+///
+/// Only ever runs against the calling process's own filesystem: the local
+/// app reads its bundled resources, and the remote daemon reads its global
+/// install location before pushing the rendered content over the wire.
+/// Clients never call this for files on another host, so local `Path`
+/// semantics (this OS's encoding) are correct here.
 pub(crate) async fn read_bundled_skills(
     skills_dir: &Path,
     resources_dir: &Path,
@@ -359,6 +442,8 @@ pub(crate) async fn read_bundled_skills(
 /// Supported variables:
 /// - `{{warp_server_url}}` - The server root URL (e.g., `https://api.warp.dev`)
 /// - `{{warp_cli_binary_name}}` - The CLI binary name (e.g., `warp` or `warp-cli`)
+/// - `{{warpctrl_binary_name}}` - The channel-specific Warp Control command name
+/// - `{{warpctrl_wrapper_path}}` - Path to the bundled Warp Control wrapper
 /// - `{{warp_url_scheme}}` - The URL scheme (e.g., `warp`, `warpdev`, `warppreview`)
 /// - `{{settings_schema_path}}` - Path to the bundled JSON settings schema
 /// - `{{skill_dir}}` - Path to the bundled skill's directory
@@ -376,6 +461,18 @@ pub(crate) fn build_bundled_skill_context(
         (
             "warp_cli_binary_name".to_owned(),
             ChannelState::channel().cli_command_name().to_owned(),
+        ),
+        (
+            "warpctrl_binary_name".to_owned(),
+            ChannelState::channel().warpctrl_command_name().to_owned(),
+        ),
+        (
+            "warpctrl_wrapper_path".to_owned(),
+            resources_dir
+                .join("bin")
+                .join(ChannelState::channel().warpctrl_command_name())
+                .display()
+                .to_string(),
         ),
         (
             "warp_url_scheme".to_owned(),

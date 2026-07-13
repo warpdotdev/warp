@@ -573,3 +573,83 @@ fn test_multiple_global_rules_all_contribute() {
     assert!(contents.contains(&"agents_global"));
     assert!(contents.contains(&"warp_global"));
 }
+
+#[test]
+fn test_remote_global_rules_only_layer_for_matching_remote_host() {
+    let mut model = ProjectContextModel::default();
+    insert_global_rule(
+        &mut model,
+        Path::new("/home/local/.agents/AGENTS.md"),
+        "local_global",
+    );
+    insert_remote_project_rule(
+        &mut model,
+        "host-a",
+        "/repo",
+        "/repo/WARP.md",
+        "remote_project",
+    );
+    let host_a = HostId::new("host-a".to_string());
+    model.set_remote_global_rules(
+        host_a.clone(),
+        vec![ProjectRule {
+            path: remote_path("host-a", "/home/remote/.agents/AGENTS.md"),
+            content: "remote_global".to_string(),
+        }],
+    );
+    model.set_remote_global_rules(
+        HostId::new("host-b".to_string()),
+        vec![ProjectRule {
+            path: remote_path("host-b", "/home/remote/.agents/AGENTS.md"),
+            content: "other_remote_global".to_string(),
+        }],
+    );
+
+    let matching = model
+        .find_applicable_rules(&remote_path("host-a", "/repo/src/main.rs"))
+        .unwrap();
+    assert_eq!(
+        matching
+            .active_rules
+            .iter()
+            .map(|rule| rule.content.as_str())
+            .collect::<Vec<_>>(),
+        ["local_global", "remote_global", "remote_project"]
+    );
+
+    let other_host = model
+        .find_applicable_rules(&remote_path("host-b", "/repo/src/main.rs"))
+        .unwrap();
+    assert_eq!(
+        other_host
+            .active_rules
+            .iter()
+            .map(|rule| rule.content.as_str())
+            .collect::<Vec<_>>(),
+        ["local_global", "other_remote_global"]
+    );
+
+    let local = model
+        .find_applicable_rules(&local_path("/repo/src/main.rs"))
+        .unwrap();
+    assert_eq!(local.active_rules.len(), 1);
+    assert_eq!(local.active_rules[0].content, "local_global");
+
+    assert_eq!(
+        model.global_rule_paths().collect::<Vec<_>>(),
+        [local_path("/home/local/.agents/AGENTS.md")]
+    );
+
+    model.set_remote_global_rules(host_a, Vec::new());
+    let replaced = model
+        .find_applicable_rules(&remote_path("host-a", "/repo/src/main.rs"))
+        .unwrap();
+    assert_eq!(
+        replaced
+            .active_rules
+            .iter()
+            .map(|rule| rule.content.as_str())
+            .collect::<Vec<_>>(),
+        ["local_global", "remote_project"]
+    );
+}

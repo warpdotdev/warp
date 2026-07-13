@@ -77,12 +77,8 @@ case "$PROFILE_MODE" in
     ;;
 esac
 
-# Check for musl-cross linker
-if ! command -v x86_64-linux-musl-gcc &>/dev/null; then
-  echo "Error: x86_64-linux-musl-gcc not found." >&2
-  echo "Install it with: brew install filosottile/musl-cross/musl-cross" >&2
-  exit 1
-fi
+TARGET="x86_64-unknown-linux-musl"
+source "$SCRIPT_DIR/linux/configure_musl_toolchain" "$TARGET"
 
 # Check for musl target
 if ! rustup target list --installed 2>/dev/null | grep -q x86_64-unknown-linux-musl; then
@@ -91,9 +87,7 @@ if ! rustup target list --installed 2>/dev/null | grep -q x86_64-unknown-linux-m
   exit 1
 fi
 
-# Determine build parameters
-TARGET="x86_64-unknown-linux-musl"
-
+# Select the requested Cargo build profile.
 case "$PROFILE_MODE" in
   dev-remote)
     CARGO_PROFILE="dev-remote"
@@ -135,11 +129,7 @@ echo "    Binary: $WARP_BIN -> $BINARY_NAME"
 echo "    Features: $FEATURES"
 echo ""
 
-# Build with linker and rustflags overrides to avoid macOS-specific flags
-# from .cargo/config.toml
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc \
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C symbol-mangling-version=v0" \
-  cargo build \
+cargo build \
     -p warp \
     --bin "$WARP_BIN" \
     --target "$TARGET" \

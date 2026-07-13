@@ -7,10 +7,11 @@ use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use warp_cli::RecoveryMechanism;
 use warp_core::channel::{Channel, ChannelState};
+use warp_errors::{report_error, report_if_error};
 use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
 use warpui_extras::user_preferences::UserPreferences;
 
-use crate::{report_if_error, settings};
+use crate::settings;
 
 /// Keep in sync with [`warp_cli::AppArgs`].
 pub const RECOVERY_MECHANISM_ARG: &str = "crash-recovery-mechanism";
@@ -104,7 +105,7 @@ impl CrashRecoveryProcess {
                     .get(&window_id)
                     .expect("sequence of renders map cannot be empty")
             );
-            log::error!(
+            report_error!(
                     "Failed to render a frame {NUM_DRAW_ERRORS_BEFORE_EXITING} times in a row; exiting..."
                 );
 
@@ -192,7 +193,8 @@ impl CrashRecovery {
                 let child_process = match spawn_recovery_process(recovery_mechanism) {
                     Ok(child_process) => child_process,
                     Err(err) => {
-                        log::error!("Failed to spawn crash recovery child process: {err:#}");
+                        report_error!(anyhow::Error::new(err)
+                            .context("Failed to spawn crash recovery child process"));
                         return Self {
                             child_process: Default::default(),
                             should_notify_user_about_crash,
@@ -398,10 +400,10 @@ fn wait_for_parent_crash(args: &warp_cli::AppArgs) {
                 log::info!("Parent has crashed; continuing execution.");
                 break;
             } else if result == WAIT_FAILED {
-                log::error!(
+                report_error!(anyhow::anyhow!(
                     "Encountered error while waiting on parent process: {:?}",
                     GetLastError()
-                );
+                ));
             }
         }
     }

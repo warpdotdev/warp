@@ -80,6 +80,9 @@ pub fn init(app: &mut AppContext) {
 }
 
 #[cfg(feature = "local_fs")]
+use anyhow::Context as _;
+use warp_errors::report_error;
+#[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 
 #[cfg(feature = "local_fs")]
@@ -97,6 +100,7 @@ pub enum AIDocumentAction {
     Close,
     SelectVersion(AIDocumentVersion),
     Export,
+    CopyAsMarkdown,
     OpenVersionMenu,
     CreateWarpDriveNotebook,
     RevertToDocumentVersion,
@@ -262,21 +266,26 @@ impl AIDocumentView {
                 use crate::ai::blocklist::BlocklistAIHistoryEvent;
                 match event {
                     BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                        terminal_view_id, ..
+                        terminal_surface_id,
+                        ..
                     } => {
                         // Check if this is our terminal view
                         if let Some(tv) = &me.original_terminal_view {
-                            if tv.id() == *terminal_view_id {
+                            if tv.id() == *terminal_surface_id {
                                 me.update_header_buttons(ctx);
                             }
                         }
                     }
                     BlocklistAIHistoryEvent::RestoredConversations {
-                        terminal_view_id,
+                        terminal_surface_id,
                         conversation_ids,
                     } => {
                         // Try to populate terminal view if conversations were restored
-                        me.maybe_populate_terminal_view(*terminal_view_id, conversation_ids, ctx);
+                        me.maybe_populate_terminal_view(
+                            *terminal_surface_id,
+                            conversation_ids,
+                            ctx,
+                        );
                     }
                     BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
                         conversation_id: cid,
@@ -1001,7 +1010,7 @@ impl AIDocumentView {
             model.sync_to_warp_drive(self.document_id, ctx)
         });
         if !success {
-            log::error!("Failed to create Warp Drive notebook");
+            report_error!("Failed to create Warp Drive notebook");
         }
     }
 
@@ -1041,8 +1050,10 @@ impl AIDocumentView {
         ctx.open_save_file_picker(
             move |path_opt: Option<String>, _me: &mut Self, _ctx: &mut ViewContext<Self>| {
                 if let Some(path) = path_opt {
-                    if let Err(e) = std::fs::write(&path, &markdown) {
-                        log::error!("Failed to export AI document: {e}");
+                    if let Err(e) =
+                        std::fs::write(&path, &markdown).context("Failed to export AI document")
+                    {
+                        report_error!(e);
                     }
                 }
             },
@@ -1132,6 +1143,20 @@ impl TypedActionView for AIDocumentView {
                 self.refresh(ctx);
             }
             AIDocumentAction::Export => self.export(ctx),
+            AIDocumentAction::CopyAsMarkdown => {
+                let markdown = self.editor.as_ref(ctx).markdown_unescaped(ctx);
+                ctx.clipboard()
+                    .write(ClipboardContent::plain_text(markdown));
+
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::success("Copied to clipboard as Markdown".to_string()),
+                        window_id,
+                        ctx,
+                    );
+                });
+            }
             AIDocumentAction::CreateWarpDriveNotebook => self.create_warp_drive_notebook(ctx),
             AIDocumentAction::CopyLink(link) => {
                 send_telemetry_from_ctx!(
@@ -1180,7 +1205,7 @@ impl TypedActionView for AIDocumentView {
                         self.refresh(ctx);
                     }
                     Err(e) => {
-                        log::error!("Failed to restore previous version: {e}");
+                        report_error!(e.context("Failed to restore previous version"));
                     }
                 }
             }
@@ -1319,6 +1344,13 @@ impl BackingView for AIDocumentView {
                     .into_item(),
             );
         }
+
+        menu_items.push(
+            MenuItemFields::new("Copy as Markdown")
+                .with_on_select_action(AIDocumentAction::CopyAsMarkdown)
+                .with_icon(Icon::Copy)
+                .into_item(),
+        );
 
         #[cfg(feature = "local_fs")]
         {

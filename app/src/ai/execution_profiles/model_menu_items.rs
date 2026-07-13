@@ -7,11 +7,12 @@ use warpui::elements::{
     Text,
 };
 use warpui::fonts::{Properties, Style};
-use warpui::{Action, AppContext, Element, SingletonEntity as _};
+use warpui::{Action, AppContext, Element};
 
+use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::llms::{
-    is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,
-    LLMInfo, LLMPreferences,
+    should_show_bedrock_icon_for_model, should_show_key_icon_for_model, DisableReason, LLMId,
+    LLMInfo,
 };
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
 
@@ -82,13 +83,13 @@ fn make_item_fields<A: Action + Clone>(
     } else {
         llm.menu_display_name()
     };
-    let is_custom_endpoint = LLMPreferences::as_ref(app)
-        .custom_llm_info_for_id(&llm.id)
-        .is_some();
     let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
-    let is_using_api_key = is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
+    let is_using_api_key = should_show_key_icon_for_model(llm, app);
+    let is_custom_router = is_custom_router_id(llm.id.as_str());
     let leading_icon = if is_using_bedrock {
         Icon::Aws
+    } else if is_custom_router {
+        Icon::Dataflow
     } else {
         llm.provider.icon().unwrap_or(Icon::Oz)
     };

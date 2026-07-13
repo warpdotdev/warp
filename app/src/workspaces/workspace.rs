@@ -14,7 +14,7 @@ use super::team::{MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
-use crate::ai::llms::LLMModelHost;
+use crate::ai::llms::{LLMModelHost, LLMProvider};
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
@@ -377,6 +377,16 @@ pub struct ByoApiKeyPolicy {
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+pub struct ByoEndpointPolicy {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+pub struct ManagedByokByoePolicy {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct PurchaseAddOnCreditsPolicy {
     pub enabled: bool,
 }
@@ -474,6 +484,8 @@ pub struct Tier {
     pub usage_based_pricing_policy: Option<UsageBasedPricingPolicy>,
     pub codebase_context_policy: Option<CodebaseContextPolicy>,
     pub byo_api_key_policy: Option<ByoApiKeyPolicy>,
+    pub byo_endpoint_policy: Option<ByoEndpointPolicy>,
+    pub managed_byok_byoe_policy: Option<ManagedByokByoePolicy>,
     pub purchase_add_on_credits_policy: Option<PurchaseAddOnCreditsPolicy>,
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
@@ -703,6 +715,18 @@ impl BillingMetadata {
             .is_some_and(|policy| policy.enabled)
     }
 
+    pub fn is_byo_endpoint_enabled(&self) -> bool {
+        self.tier
+            .byo_endpoint_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn is_managed_byok_byoe_enabled(&self) -> bool {
+        self.tier
+            .managed_byok_byoe_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
     pub fn has_overages_used(&self) -> bool {
         self.ai_overages
             .as_ref()
@@ -906,6 +930,7 @@ pub struct SandboxedAgentSettings {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
     pub llm_settings: LlmSettings,
+    pub team_byo: Option<TeamByoSettings>,
     pub telemetry_settings: TelemetrySettings,
     pub ugc_collection_settings: UgcCollectionSettings,
     pub cloud_conversation_storage_settings: CloudConversationStorageSettings,
@@ -925,4 +950,38 @@ pub struct WorkspaceSettings {
     pub enable_warp_attribution: AdminEnablementSetting,
     #[serde(default)]
     pub default_host_slug: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamByoSettings {
+    pub first_party_enabled: bool,
+    pub endpoints_enabled: bool,
+    pub allow_user_keys: bool,
+    pub allow_user_endpoints: bool,
+    pub first_party_keys: Vec<ByoFirstPartyKey>,
+    pub endpoints: Vec<ByoEndpointMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ByoFirstPartyKey {
+    pub provider: LLMProvider,
+    pub credential_uid: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ByoEndpointMetadata {
+    pub uid: String,
+    pub name: String,
+    pub enabled: bool,
+    pub credential_uid: String,
+    pub models: Vec<ByoEndpointModelMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ByoEndpointModelMetadata {
+    pub config_key: String,
+    pub slug: String,
+    pub alias: Option<String>,
+    pub display_name: String,
+    pub enabled: bool,
 }

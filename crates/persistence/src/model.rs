@@ -16,8 +16,8 @@ use super::schema::{
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
     project_rules, projects, server_experiments, settings_panes, tab_groups, tabs, team_members,
-    team_settings, teams, terminal_panes, user_profiles, welcome_panes, windows, workflow_panes,
-    workflows, workspace_language_server, workspace_metadata, workspace_teams, workspaces,
+    team_settings, teams, terminal_panes, user_profiles, windows, workflow_panes, workflows,
+    workspace_language_server, workspace_metadata, workspace_teams, workspaces,
 };
 
 #[derive(Insertable)]
@@ -350,6 +350,7 @@ pub struct Tab {
     pub custom_title: Option<String>,
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
+    pub pinned: bool,
 }
 
 #[derive(Insertable)]
@@ -359,6 +360,7 @@ pub struct NewTab {
     pub custom_title: Option<String>,
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
+    pub pinned: bool,
 }
 
 /// Persisted form of a tab group. `name` is optional — untitled groups omit
@@ -372,6 +374,7 @@ pub struct TabGroup {
     pub name: Option<String>,
     pub color: Option<String>,
     pub collapsed: bool,
+    pub pinned: bool,
 }
 
 #[derive(Insertable)]
@@ -381,6 +384,7 @@ pub struct NewTabGroup {
     pub name: Option<String>,
     pub color: Option<String>,
     pub collapsed: bool,
+    pub pinned: bool,
 }
 
 /// The panes data model includes pane_nodes, pane_leaves and pane_branches.
@@ -491,15 +495,6 @@ pub struct SettingsPane {
     pub current_page: String,
 }
 
-#[derive(Identifiable, Queryable, Selectable)]
-#[diesel(table_name = welcome_panes)]
-#[diesel(primary_key(id))]
-pub struct WelcomePane {
-    pub id: i32,
-    pub kind: String,
-    pub startup_directory: Option<String>,
-}
-
 /// Maps to the `ai_memory_panes` table
 /// (where table name is historical and not worth a migration to change).
 #[derive(Identifiable, Queryable, Selectable)]
@@ -581,9 +576,6 @@ pub const CODE_REVIEW_PANE_KIND: &str = "code_review";
 
 /// The [`pane_leaves::kind`] value for execution profile editor panes.
 pub const EXECUTION_PROFILE_EDITOR_PANE_KIND: &str = "execution_profile_editor";
-
-/// The [`pane_leaves::kind`] value for the welcome pane.
-pub const WELCOME_PANE_KIND: &str = "welcome";
 
 /// The [`pane_leaves::kind`] value for the get-started pane.
 pub const GET_STARTED_PANE_KIND: &str = "get_started";
@@ -676,13 +668,6 @@ pub struct NewAIFactPane {
 #[diesel(table_name = mcp_server_panes)]
 pub struct NewMCPServerPane {
     pub id: i32,
-}
-
-#[derive(Insertable)]
-#[diesel(table_name = welcome_panes)]
-pub struct NewWelcomePane {
-    pub id: i32,
-    pub startup_directory: Option<String>,
 }
 
 #[derive(Identifiable, Queryable, Selectable)]
@@ -921,6 +906,12 @@ pub struct AgentConversationRecord {
     pub conversation_id: String,
     pub conversation_data: String,
     pub last_modified_at: NaiveDateTime,
+    /// Serialized [`AgentConversationSummary`], computed from the task
+    /// snapshot at write time so startup can list conversations without
+    /// loading or decoding `agent_tasks`. `None` on rows written before the
+    /// column existed; readers fall back to deriving from tasks (and
+    /// backfill the column).
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Queryable, Selectable)]
@@ -965,48 +956,181 @@ pub struct AgentConversation {
 impl AgentConversation {
     /// Returns `true` if the conversation is restorable.
     ///
-    /// A conversation is restorable if:
-    /// - It contains a single task or fewer, OR
-    /// - It has exactly one parentless (root) task, OR
-    /// - It has multiple parentless tasks but exactly one of them has
-    ///   non-empty `messages`. This permits restoring conversations whose
-    ///   persisted state was corrupted by the pre-QUALITY-774 optimistic-root
-    ///   writer bug, where a stub root row co-existed with the real server
-    ///   root row. `AIConversation::new_restored` deterministically picks
-    ///   the real root in that shape via its restore-side dedupe.
-    ///
-    /// Non-root tasks need not be validated here: any task that does not
-    /// match the parentless predicate has, by construction, a non-empty
-    /// `parent_task_id`.
+    /// See [`tasks_are_restorable`] for the exact rules.
     pub fn is_restorable(&self) -> bool {
-        if self.tasks.len() <= 1 {
-            return true;
+        tasks_are_restorable(self.tasks.iter())
+    }
+}
+
+/// Returns `true` if a conversation with the given task snapshot is
+/// restorable.
+///
+/// A conversation is restorable if:
+/// - It contains a single task or fewer, OR
+/// - It has exactly one parentless (root) task, OR
+/// - It has multiple parentless tasks but exactly one of them has
+///   non-empty `messages`. This permits restoring conversations whose
+///   persisted state was corrupted by the pre-QUALITY-774 optimistic-root
+///   writer bug, where a stub root row co-existed with the real server
+///   root row. `AIConversation::new_restored` deterministically picks
+///   the real root in that shape via its restore-side dedupe.
+///
+/// Non-root tasks need not be validated here: any task that does not
+/// match the parentless predicate has, by construction, a non-empty
+/// `parent_task_id`.
+pub fn tasks_are_restorable<'a>(tasks: impl IntoIterator<Item = &'a api::Task>) -> bool {
+    let tasks: Vec<&api::Task> = tasks.into_iter().collect();
+    if tasks.len() <= 1 {
+        return true;
+    }
+
+    // Find parentless (root) tasks - tasks with no dependencies or with an
+    // empty parent_task_id.
+    let root_tasks: Vec<_> = tasks
+        .iter()
+        .filter(|task| {
+            task.dependencies
+                .as_ref()
+                .map(|deps| deps.parent_task_id.is_empty())
+                .unwrap_or(true)
+        })
+        .collect();
+
+    match root_tasks.len() {
+        // Malformed: no parentless task means no root to anchor restore on.
+        0 => false,
+        // Single root: the normal happy path.
+        1 => true,
+        // Multi-root: only permit the specific [stub + real] shape
+        // produced by the pre-QUALITY-774 optimistic-root writer bug,
+        // where exactly one parentless row carries the real conversation
+        // content. The restore-side dedupe in
+        // `AIConversation::new_restored` will pick that real root.
+        _ => root_tasks.iter().filter(|t| !t.messages.is_empty()).count() == 1,
+    }
+}
+
+/// Returns the working directory of the first message in the task that
+/// carries directory context, if any.
+pub fn api_task_initial_working_directory(task: &api::Task) -> Option<String> {
+    task.messages
+        .iter()
+        .find_map(|message| {
+            message.message.as_ref().and_then(|content| {
+                let context = match content {
+                    api::message::Message::UserQuery(user_query) => user_query.context.as_ref(),
+                    api::message::Message::ToolCallResult(tool_call_result) => {
+                        tool_call_result.context.as_ref()
+                    }
+                    api::message::Message::SystemQuery(system_query) => {
+                        system_query.context.as_ref()
+                    }
+                    _ => None,
+                };
+
+                context
+                    .and_then(|ctx| ctx.directory.as_ref())
+                    .map(|dir| dir.pwd.clone())
+            })
+        })
+        .filter(|pwd| !pwd.is_empty())
+}
+
+/// Task-derived conversation metadata, serialized into the `summary` column
+/// of `agent_conversations` at write time.
+///
+/// This lets startup build the conversation history list from
+/// `agent_conversations` rows alone, without loading or protobuf-decoding the
+/// (potentially very large) `agent_tasks` blobs.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AgentConversationSummary {
+    /// The conversation's initial user query (or passive diff summary).
+    /// Empty when the conversation has no root task with a user query.
+    #[serde(default)]
+    pub initial_query: String,
+    /// Display title: the root task description, falling back to
+    /// `initial_query`.
+    #[serde(default)]
+    pub title: String,
+    /// The working directory of the first message carrying directory context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_working_directory: Option<String>,
+    /// Mirror of [`tasks_are_restorable`] over the persisted task snapshot.
+    pub is_restorable: bool,
+    /// True when the conversation only contains passive `AutoCodeDiff` system
+    /// queries and no user queries; such conversations are hidden from the
+    /// history list.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_unlisted_auto_code_diff: bool,
+}
+
+impl AgentConversationSummary {
+    /// Derives the summary from a conversation's full task snapshot.
+    pub fn from_tasks<'a>(tasks: impl IntoIterator<Item = &'a api::Task>) -> Self {
+        let tasks: Vec<&api::Task> = tasks.into_iter().collect();
+
+        let mut has_user_query = false;
+        let mut has_auto_code_diff = false;
+        for task in &tasks {
+            for message in &task.messages {
+                match &message.message {
+                    Some(api::message::Message::UserQuery(_)) => {
+                        has_user_query = true;
+                    }
+                    Some(api::message::Message::SystemQuery(sys)) => {
+                        if let Some(api::message::system_query::Type::AutoCodeDiff(_)) = &sys.r#type
+                        {
+                            has_auto_code_diff = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
 
-        // Find parentless (root) tasks - tasks with no dependencies or with an
-        // empty parent_task_id.
-        let root_tasks: Vec<_> = self
-            .tasks
-            .iter()
-            .filter(|task| {
-                task.dependencies
-                    .as_ref()
-                    .map(|deps| deps.parent_task_id.is_empty())
-                    .unwrap_or(true)
-            })
-            .collect();
+        let root_task = tasks.iter().find(|task| task.dependencies.is_none());
 
-        match root_tasks.len() {
-            // Malformed: no parentless task means no root to anchor restore on.
-            0 => false,
-            // Single root: the normal happy path.
-            1 => true,
-            // Multi-root: only permit the specific [stub + real] shape
-            // produced by the pre-QUALITY-774 optimistic-root writer bug,
-            // where exactly one parentless row carries the real conversation
-            // content. The restore-side dedupe in
-            // `AIConversation::new_restored` will pick that real root.
-            _ => root_tasks.iter().filter(|t| !t.messages.is_empty()).count() == 1,
+        // The first user query in the root task (or, for a passive code
+        // diff, the summary of the diff).
+        let initial_query = root_task
+            .map(|task| {
+                task.messages
+                    .iter()
+                    .find_map(|msg| match &msg.message {
+                        Some(api::message::Message::UserQuery(user_query)) => {
+                            Some(user_query.query.clone())
+                        }
+                        Some(api::message::Message::ToolCall(tool_call)) => {
+                            match tool_call.tool.as_ref()? {
+                                api::message::tool_call::Tool::ApplyFileDiffs(diff_suggestion) => {
+                                    Some(diff_suggestion.summary.clone())
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
+        // The title is the root task description, falling back to
+        // `initial_query` when the description is empty.
+        let title = root_task
+            .map(|task| task.description.clone())
+            .filter(|desc| !desc.is_empty())
+            .unwrap_or_else(|| initial_query.clone());
+
+        let initial_working_directory = tasks
+            .iter()
+            .find_map(|task| api_task_initial_working_directory(task));
+
+        Self {
+            initial_query,
+            title,
+            initial_working_directory,
+            is_restorable: tasks_are_restorable(tasks.iter().copied()),
+            is_unlisted_auto_code_diff: has_auto_code_diff && !has_user_query,
         }
     }
 }
@@ -1376,6 +1500,109 @@ impl From<&stream_finished::ToolUsageMetadata> for ToolUsageMetadata {
     }
 }
 
+/// The kind of a context-window segment, mirroring the proto
+/// `ContextWindowSegmentType` enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextWindowSegmentType {
+    #[default]
+    Unknown,
+    SystemPrompt,
+    ToolDefinitions,
+    ConversationHistory,
+    LatestInput,
+    Images,
+    Other,
+}
+
+impl ContextWindowSegmentType {
+    /// Snake-case identifier used for display-name lookup.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContextWindowSegmentType::Unknown => "unknown",
+            ContextWindowSegmentType::SystemPrompt => "system_prompt",
+            ContextWindowSegmentType::ToolDefinitions => "tool_definitions",
+            ContextWindowSegmentType::ConversationHistory => "conversation_history",
+            ContextWindowSegmentType::LatestInput => "latest_input",
+            ContextWindowSegmentType::Images => "images",
+            ContextWindowSegmentType::Other => "other",
+        }
+    }
+}
+
+impl From<i32> for ContextWindowSegmentType {
+    fn from(value: i32) -> Self {
+        match stream_finished::ContextWindowSegmentType::try_from(value) {
+            Ok(stream_finished::ContextWindowSegmentType::SystemPrompt) => Self::SystemPrompt,
+            Ok(stream_finished::ContextWindowSegmentType::ToolDefinitions) => Self::ToolDefinitions,
+            Ok(stream_finished::ContextWindowSegmentType::ConversationHistory) => {
+                Self::ConversationHistory
+            }
+            Ok(stream_finished::ContextWindowSegmentType::LatestInput) => Self::LatestInput,
+            Ok(stream_finished::ContextWindowSegmentType::Images) => Self::Images,
+            Ok(stream_finished::ContextWindowSegmentType::Other) => Self::Other,
+            // Unknown (0) and any unrecognized value map to Unknown.
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<ContextWindowSegmentType> for i32 {
+    fn from(value: ContextWindowSegmentType) -> Self {
+        match value {
+            ContextWindowSegmentType::Unknown => {
+                stream_finished::ContextWindowSegmentType::Unknown as i32
+            }
+            ContextWindowSegmentType::SystemPrompt => {
+                stream_finished::ContextWindowSegmentType::SystemPrompt as i32
+            }
+            ContextWindowSegmentType::ToolDefinitions => {
+                stream_finished::ContextWindowSegmentType::ToolDefinitions as i32
+            }
+            ContextWindowSegmentType::ConversationHistory => {
+                stream_finished::ContextWindowSegmentType::ConversationHistory as i32
+            }
+            ContextWindowSegmentType::LatestInput => {
+                stream_finished::ContextWindowSegmentType::LatestInput as i32
+            }
+            ContextWindowSegmentType::Images => {
+                stream_finished::ContextWindowSegmentType::Images as i32
+            }
+            ContextWindowSegmentType::Other => {
+                stream_finished::ContextWindowSegmentType::Other as i32
+            }
+        }
+    }
+}
+
+/// A single portion of the context window, described by its kind and an
+/// estimated token count. Segment token counts add up to the token total
+/// represented by `context_window_usage`.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ContextWindowSegment {
+    pub segment_type: ContextWindowSegmentType,
+    /// Estimated number of tokens this segment occupies in the context window.
+    pub token_count: u32,
+}
+
+impl From<&stream_finished::ContextWindowSegment> for ContextWindowSegment {
+    fn from(segment: &stream_finished::ContextWindowSegment) -> Self {
+        Self {
+            segment_type: segment.segment_type.into(),
+            token_count: segment.token_count,
+        }
+    }
+}
+
+impl From<&ContextWindowSegment> for stream_finished::ContextWindowSegment {
+    fn from(segment: &ContextWindowSegment) -> Self {
+        Self {
+            segment_type: segment.segment_type.into(),
+            token_count: segment.token_count,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ConversationUsageMetadata {
     pub was_summarized: bool,
@@ -1389,6 +1616,8 @@ pub struct ConversationUsageMetadata {
     pub token_usage: Vec<ModelTokenUsage>,
     #[serde(default)]
     pub tool_usage_metadata: ToolUsageMetadata,
+    #[serde(default)]
+    pub context_window_segments: Vec<ContextWindowSegment>,
 }
 
 impl ConversationUsageMetadata {

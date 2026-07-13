@@ -294,16 +294,12 @@ pub fn init(ctx: &mut AppContext) {
             EditorAction::Right,
             id!("EditorView") & !id!("IMEOpen"),
         ),
-        FixedBinding::new(
-            "home",
-            EditorAction::Home,
-            id!("EditorView") & !id!("IMEOpen"),
-        ),
-        FixedBinding::new(
-            "end",
-            EditorAction::End,
-            id!("EditorView") & !id!("IMEOpen"),
-        ),
+        // NOTE: physical `home`/`end` keys are bound via the editable
+        // `editor_view:home`/`editor_view:end` bindings below (linux/windows
+        // map them to the visual-line action; macOS maps them to document
+        // start/end). We intentionally do not register cross-platform
+        // `home`/`end` FixedBindings here, as they would conflict with the
+        // macOS document-navigation bindings.
         FixedBinding::new(
             "shift-up",
             EditorAction::SelectUp,
@@ -652,11 +648,15 @@ pub fn init(ctx: &mut AppContext) {
         .with_mac_key_binding("ctrl-e"),
         // Match the behavior of both VSCode and Intellij by using `cmd-left/right` on Mac and
         // `home/end` on Windows and Linux. See https://www.jetbrains.com/help/idea/reference-keymap-win-default.html#caret_navigation.
-        EditableBinding::new("editor_view:home", "Home", EditorAction::Home)
-            .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
-            .with_mac_key_binding("cmd-left")
-            .with_linux_or_windows_key_binding("home"),
-        EditableBinding::new("editor_view:end", "End", EditorAction::End)
+        EditableBinding::new(
+            "editor_view:home",
+            "Home",
+            EditorAction::MoveToVisualLineStart,
+        )
+        .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
+        .with_mac_key_binding("cmd-left")
+        .with_linux_or_windows_key_binding("home"),
+        EditableBinding::new("editor_view:end", "End", EditorAction::MoveToVisualLineEnd)
             .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
             .with_mac_key_binding("cmd-right")
             .with_linux_or_windows_key_binding("end"),
@@ -736,6 +736,24 @@ pub fn init(ctx: &mut AppContext) {
         )
         .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
         .with_key_binding("meta-shift->"),
+        // On macOS, the physical Home/End keys jump to the start/end of the
+        // document (matching the macOS convention), distinct from `cmd-left`/
+        // `cmd-right` which move to the visual-line start/end. On Linux/Windows
+        // the Home/End keys remain bound to the visual-line action above.
+        EditableBinding::new(
+            "editor_view:move_to_buffer_start",
+            "Move to the start of the buffer",
+            EditorAction::MoveToBufferStart,
+        )
+        .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
+        .with_mac_key_binding("home"),
+        EditableBinding::new(
+            "editor_view:move_to_buffer_end",
+            "Move to the end of the buffer",
+            EditorAction::MoveToBufferEnd,
+        )
+        .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
+        .with_mac_key_binding("end"),
         // Buffer modifications
         EditableBinding::new(
             "editor_view:backspace",
@@ -1015,8 +1033,8 @@ pub enum EditorAction {
     Down,
     Left,
     Right,
-    Home,
-    End,
+    MoveToVisualLineStart,
+    MoveToVisualLineEnd,
     PageUp,
     PageDown,
     CmdUp,
@@ -1178,7 +1196,7 @@ impl NewCursorDirection {
                     }
                 }
                 Err(err) => {
-                    log::error!("Error calling map#up {err:?}");
+                    report_error!(err.context("Error calling map#up"));
                     None
                 }
             },
@@ -1191,7 +1209,7 @@ impl NewCursorDirection {
                     }
                 }
                 Err(err) => {
-                    log::error!("Error calling map#down {err:?}");
+                    report_error!(err.context("Error calling map#down"));
                     None
                 }
             },
@@ -1393,6 +1411,8 @@ pub enum BaselinePositionComputationMethod {
 }
 
 // Re-export voice transcription types for backwards compatibility
+use warp_errors::report_error;
+
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
 
 /// Similar to [`ImageContext`], but contains un-processed and un-resized image data.
@@ -3235,6 +3255,23 @@ impl EditorView {
         ctx.emit(Event::BufferReinitialized);
     }
 
+    /// Exits the ephemeral loading state created by `set_buffer_text_ignoring_undo`
+    /// without touching the CRDT buffer or emitting any `UpdatePeers` operations.
+    /// The editor switches back to displaying the regular collaborative buffer.
+    pub fn exit_ephemeral_loading_state(&mut self, ctx: &mut ViewContext<Self>) {
+        self.editor_model.update(ctx, |model, ctx| {
+            model.exit_ephemeral_loading_state(ctx);
+        });
+    }
+
+    /// Shows an empty display-only ephemeral overlay for immediate visual feedback.
+    /// See [`EditorModel::show_display_only_empty_buffer`] for the full contract.
+    pub fn show_display_only_empty_buffer(&mut self, ctx: &mut ViewContext<Self>) {
+        self.editor_model.update(ctx, |model, ctx| {
+            model.show_display_only_empty_buffer(ctx);
+        });
+    }
+
     pub fn register_remote_peer(
         &mut self,
         replica_id: ReplicaId,
@@ -3855,7 +3892,7 @@ impl EditorView {
                                             .anchor_before(Point::new(position.row(), end_col))
                                             .expect("Anchor should exist")
                                     }
-                                    Err(_) => log::error!(
+                                    Err(_) => report_error!(
                                         "Update selection is called with invalid position"
                                     ),
                                 }
@@ -3920,7 +3957,7 @@ impl EditorView {
 
                 editor_model.change_selections(new_selections, ctx);
             } else {
-                log::error!("update_selection dispatched with no pending selection");
+                report_error!("update_selection dispatched with no pending selection");
             }
         });
 
@@ -3975,7 +4012,7 @@ impl EditorView {
                 new_selections.insert(ix, pending_selection.selection);
                 editor_model.change_selections(new_selections, ctx);
             } else {
-                log::error!("end_selection dispatched with no pending selection");
+                report_error!("end_selection dispatched with no pending selection");
             }
         });
     }
@@ -4019,7 +4056,7 @@ impl EditorView {
                     );
                 }
                 Err(_) => {
-                    log::error!("select_line is called with invalid position");
+                    report_error!("select_line is called with invalid position");
                 }
             }
         });
@@ -4805,15 +4842,20 @@ impl EditorView {
                 |editor_model, ctx| {
                     // Convert ByteOffset to CharOffset properly to handle multi-byte characters
                     let buffer = editor_model.buffer(ctx);
-                    match (range.start.to_char_offset(buffer), range.end.to_char_offset(buffer)) {
+                    match (
+                        range.start.to_char_offset(buffer),
+                        range.end.to_char_offset(buffer),
+                    ) {
                         (Ok(start_char), Ok(end_char)) => {
                             let char_range = start_char..end_char;
                             if let Err(error) = editor_model.buffer_edit([char_range], "", ctx) {
-                                log::error!("error performing system delete: {error}");
+                                report_error!(error.context("error performing system delete"));
                             }
                         }
                         (Err(error), _) | (_, Err(error)) => {
-                            log::error!("error converting byte offset to char offset for system delete: {error}");
+                            report_error!(error.context(
+                                "error converting byte offset to char offset for system delete"
+                            ));
                         }
                     }
                 },
@@ -5712,7 +5754,13 @@ impl EditorView {
         });
     }
 
-    pub fn cursor_home(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Moves each cursor to the start of the current visual (soft-wrapped) row,
+    /// toggling between the row's first non-whitespace character and the very
+    /// start of the row (classic "smart home" behavior, applied per visual row).
+    ///
+    /// When the soft-wrap layout has not been laid out yet, this falls back to
+    /// the logical-line start (column 0 / first non-whitespace toggle).
+    pub fn move_to_visual_line_start(&mut self, ctx: &mut ViewContext<Self>) {
         self.change_selections(ctx, |editor_model, ctx| {
             let map = editor_model.display_map(ctx);
             let buffer = editor_model.buffer(ctx);
@@ -5720,25 +5768,39 @@ impl EditorView {
             let mut new_selections = editor_model.selections(ctx).clone();
             for selection in new_selections.iter_mut() {
                 let start = selection.start().to_display_point(map, ctx).unwrap();
-                let string_start = buffer
+                // Resolve the current visual (soft-wrapped) row's start column,
+                // falling back to the logical-line start (column 0) when the
+                // soft-wrap layout hasn't been laid out yet. The same "smart
+                // home" toggle (row start <-> first non-whitespace) then runs in
+                // both cases; when bounds are known we only scan whitespace
+                // within the current visual row.
+                let bounds = map.soft_wrapped_row_bounds(start, selection.clamp_direction);
+                let row_start = bounds.as_ref().map_or(0, |bounds| bounds.start);
+                let whitespace_scan_limit = bounds
+                    .as_ref()
+                    .map(|bounds| (bounds.end - bounds.start) as usize);
+                let chars = buffer
                     .chars_at(
-                        DisplayPoint::new(start.row(), 0)
+                        DisplayPoint::new(start.row(), row_start)
                             .to_buffer_point(map, Bias::Left, ctx)
                             .unwrap(),
                     )
-                    .unwrap()
-                    .take_while(|c| c.is_whitespace())
-                    .count();
-                let cursor_start = {
-                    if string_start == start.column() as usize {
-                        0
-                    } else {
-                        string_start
+                    .unwrap();
+                let leading_whitespace = match whitespace_scan_limit {
+                    Some(limit) => {
+                        chars.take(limit).take_while(|c| c.is_whitespace()).count() as u32
                     }
+                    None => chars.take_while(|c| c.is_whitespace()).count() as u32,
+                };
+                let first_non_whitespace = row_start + leading_whitespace;
+                let cursor_start = if first_non_whitespace == start.column() {
+                    row_start
+                } else {
+                    first_non_whitespace
                 };
                 let cursor = map
                     .anchor_before(
-                        DisplayPoint::new(start.row(), cursor_start as u32),
+                        DisplayPoint::new(start.row(), cursor_start),
                         Bias::Left,
                         ctx,
                     )
@@ -5750,6 +5812,9 @@ impl EditorView {
                 });
                 selection.goal_start_column = None;
                 selection.goal_end_column = None;
+                // The caret now sits at the start of a visual row; clamp downward
+                // so subsequent vertical movement treats it as the row's start.
+                selection.clamp_direction = ClampDirection::Down;
             }
             editor_model.change_selections(new_selections, ctx);
         });
@@ -5956,7 +6021,11 @@ impl EditorView {
         );
     }
 
-    pub fn cursor_end(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Moves each cursor to the end of the current visual (soft-wrapped) row.
+    ///
+    /// When the soft-wrap layout has not been laid out yet, this falls back to
+    /// the logical-line end.
+    pub fn move_to_visual_line_end(&mut self, ctx: &mut ViewContext<Self>) {
         if self.single_cursor_at_autosuggestion_beginning(ctx) {
             self.insert_full_autosuggestion(ctx);
         } else {
@@ -5968,14 +6037,19 @@ impl EditorView {
                         .end()
                         .to_display_point(map, ctx)
                         .expect("Should be able to get end point of selection.");
+                    // Use the end of the current visual (soft-wrapped) row,
+                    // falling back to the logical line end when the soft-wrap
+                    // layout isn't available.
+                    let cursor_column = map
+                        .soft_wrapped_row_bounds(end, selection.clamp_direction)
+                        .map(|bounds| bounds.end)
+                        .unwrap_or_else(|| {
+                            map.line_len(end.row(), ctx)
+                                .expect("Should be able to get length of line at selection end.")
+                        });
                     let cursor = map
                         .anchor_before(
-                            DisplayPoint::new(
-                                end.row(),
-                                map.line_len(end.row(), ctx).expect(
-                                    "Should be able to get length of line at selection end.",
-                                ),
-                            ),
+                            DisplayPoint::new(end.row(), cursor_column),
                             Bias::Right,
                             ctx,
                         )
@@ -5983,6 +6057,9 @@ impl EditorView {
                     selection.set_selection(Selection::single_cursor(cursor));
                     selection.goal_start_column = None;
                     selection.goal_end_column = None;
+                    // The caret now sits at the end of a visual row; clamp upward
+                    // so subsequent vertical movement treats it as the row's end.
+                    selection.clamp_direction = ClampDirection::Up;
                 }
                 editor_model.change_selections(new_selections, ctx);
             });
@@ -6155,7 +6232,10 @@ impl EditorView {
                             "",
                             ctx,
                         ) {
-                            log::error!("error deleting all (direction {direction:?}): {error}");
+                            report_error!(
+                                error.context("error deleting all"),
+                                extra: { "direction" => ?direction }
+                            );
                         };
                     },
                 ),
@@ -6234,7 +6314,7 @@ impl EditorView {
                         "",
                         ctx,
                     ) {
-                        log::error!("error clearing lines: {error}");
+                        report_error!(error.context("error clearing lines"));
                     }
                 },
             ),
@@ -6754,7 +6834,7 @@ impl EditorView {
                                 result.point_and_clamp_direction.clamp_direction;
                         }
                         Err(err) => {
-                            log::error!("Failed to call DisplayMap#up {err:?}");
+                            report_error!(err.context("Failed to call DisplayMap#up"));
                         }
                     }
                 }
@@ -6902,7 +6982,9 @@ impl EditorView {
                             selection.clamp_direction =
                                 result.point_and_clamp_direction.clamp_direction;
                         }
-                        Err(err) => log::error!("Failed to call DisplayMap#down {err:?}"),
+                        Err(err) => {
+                            report_error!(err.context("Failed to call DisplayMap#down"))
+                        }
                     }
                 }
                 editor_model.change_selections(new_selections, ctx);
@@ -8398,8 +8480,8 @@ impl TypedActionView for EditorView {
             | EditorAction::MoveToBufferEnd
             | EditorAction::Left
             | EditorAction::Right
-            | EditorAction::Home
-            | EditorAction::End
+            | EditorAction::MoveToVisualLineStart
+            | EditorAction::MoveToVisualLineEnd
             | EditorAction::MoveForwardOneWord
             | EditorAction::MoveBackwardOneWord
             | EditorAction::MoveForwardOneSubword
@@ -8468,8 +8550,8 @@ impl TypedActionView for EditorView {
             Down => self.down(ctx),
             Left => self.move_left(/* stop at line start */ false, ctx),
             Right => self.right(ctx),
-            Home => self.cursor_home(ctx),
-            End => self.cursor_end(ctx),
+            MoveToVisualLineStart => self.move_to_visual_line_start(ctx),
+            MoveToVisualLineEnd => self.move_to_visual_line_end(ctx),
             PageUp => self.page_up(ctx),
             PageDown => self.page_down(ctx),
             CmdUp => self.cmd_up(ctx),

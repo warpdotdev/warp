@@ -47,9 +47,7 @@ use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::{
     OrchestrationPillBarEvent, OrchestrationPillBarModel,
 };
-use crate::ai::blocklist::agent_view::{
-    agent_view_bg_color, AgentViewController, AgentViewControllerEvent,
-};
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::orchestration_topology::{
     aggregated_orchestrator_status, descendant_conversation_ids_in_pill_order,
     descendant_conversation_ids_in_spawn_order,
@@ -819,7 +817,7 @@ impl OrchestrationPillBar {
     /// the `FocusOpenedConversation` handler so the `PillClicked`
     /// handler can reuse the same nav logic without emitting the
     /// menu-driven `FocusOpenedConversation` telemetry event.
-    fn navigate_to_owner_pane(&self, id: AIConversationId, ctx: &mut ViewContext<Self>) {
+    fn navigate_to_conversation_pane(&self, id: AIConversationId, ctx: &mut ViewContext<Self>) {
         // "Focus pane" is purely a focus operation: the conversation
         // already lives in some other visible terminal view (verified
         // by `is_conversation_open_in_other_visible_view` at the call
@@ -828,15 +826,15 @@ impl OrchestrationPillBar {
         // `RestoreOrNavigateToConversation`: that path calls
         // `set_active_conversation_id` with whichever
         // `terminal_view_id` it receives, which would either
-        // re-transfer ownership to a stale id pulled from
+        // reassign the terminal surface to a stale id pulled from
         // `AgentConversationsModel::nav_data` or, worse, blank out
-        // the real owner pane while the conversation pops back into
+        // the real conversation pane while the conversation pops back into
         // the orchestrator.
         //
-        // Resolve the canonical owner directly from
+        // Resolve the canonical terminal surface directly from
         // `BlocklistAIHistoryModel` (the single source of truth) and
         // pick the appropriate focus action based on whether the
-        // owner pane lives in the same pane group as us:
+        // conversation pane lives in the same pane group as us:
         //   * Same pane group (sibling pane in this tab) —
         //     dispatch `TerminalAction::RevealChildAgent`. The pane
         //     group's handler walks visible terminal panes and calls
@@ -850,11 +848,11 @@ impl OrchestrationPillBar {
         //     dispatch `WorkspaceAction::FocusTerminalViewInWorkspace`,
         //     which walks all tabs/windows and activates the
         //     containing tab as needed.
-        let owner_view_id =
-            BlocklistAIHistoryModel::as_ref(ctx).terminal_view_id_for_conversation(&id);
-        let Some(owner_view_id) = owner_view_id else {
+        let conversation_view_id =
+            BlocklistAIHistoryModel::as_ref(ctx).terminal_surface_id_for_conversation(&id);
+        let Some(conversation_view_id) = conversation_view_id else {
             log::warn!(
-                "navigate_to_owner_pane: no canonical owner for {id:?}; falling back to switch-in-place"
+                "navigate_to_conversation_pane: no canonical terminal surface for {id:?}; falling back to switch-in-place"
             );
             ctx.dispatch_typed_action(
                 &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
@@ -866,8 +864,10 @@ impl OrchestrationPillBar {
             return;
         };
         let self_pane_group_id = self.agent_view_controller.as_ref(ctx).pane_group_id();
-        let owner_pane_group_id = pane_group_id_containing_terminal_view(owner_view_id, ctx);
-        if owner_pane_group_id.is_some() && owner_pane_group_id == self_pane_group_id {
+        let conversation_pane_group_id =
+            pane_group_id_containing_terminal_view(conversation_view_id, ctx);
+        if conversation_pane_group_id.is_some() && conversation_pane_group_id == self_pane_group_id
+        {
             ctx.dispatch_typed_action(
                 &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
                     TerminalAction::RevealChildAgent {
@@ -877,7 +877,7 @@ impl OrchestrationPillBar {
             );
         } else {
             ctx.dispatch_typed_action(&WorkspaceAction::FocusTerminalViewInWorkspace {
-                terminal_view_id: owner_view_id,
+                terminal_view_id: conversation_view_id,
             });
         }
     }
@@ -1022,7 +1022,7 @@ impl TypedActionView for OrchestrationPillBar {
                 };
                 self.emit_pill_switch(pill_kind.telemetry_kind(), id, outcome, ctx);
                 if is_open_elsewhere {
-                    self.navigate_to_owner_pane(id, ctx);
+                    self.navigate_to_conversation_pane(id, ctx);
                 } else {
                     ctx.dispatch_typed_action(
                         &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
@@ -1039,7 +1039,7 @@ impl TypedActionView for OrchestrationPillBar {
                     ctx,
                 );
                 self.close_menu(ctx);
-                self.navigate_to_owner_pane(*id, ctx);
+                self.navigate_to_conversation_pane(*id, ctx);
             }
         }
     }
@@ -1738,12 +1738,14 @@ fn render_pill(
     let is_remote_child = spec.is_remote_child;
 
     // Per Figma: fg_overlay_2 at rest, fg_overlay_3 on hover, composed over
-    // the agent-view surface. Pre-blend to a solid so the avatar cutout ring
+    // the theme background. Pre-blend to a solid so the avatar cutout ring
     // matches the painted pill exactly.
-    let pill_rest_bg = Fill::from(agent_view_bg_color(app))
+    let pill_rest_bg = theme
+        .background()
         .blend(&internal_colors::fg_overlay_2(theme))
         .into_solid();
-    let pill_hover_bg = Fill::from(agent_view_bg_color(app))
+    let pill_hover_bg = theme
+        .background()
         .blend(&internal_colors::fg_overlay_3(theme))
         .into_solid();
     let pill_text_color = internal_colors::fg_overlay_6(theme).into_solid();
@@ -2431,7 +2433,7 @@ fn render_crumb(
         // rather than switching this (split-off child) pane to it.
         //
         // Pick the focus path based on where the parent's canonical
-        // owner pane lives, mirroring the orchestration pill bar's
+        // conversation pane lives, mirroring the orchestration pill bar's
         // "Focus pane" handler:
         //   * Same pane group as us (sibling pane in this tab) —
         //     dispatch `TerminalAction::RevealChildAgent`, which the
@@ -2444,17 +2446,20 @@ fn render_crumb(
         //     `WorkspaceAction::FocusTerminalViewInWorkspace`, which
         //     walks all tabs/windows and activates the containing tab
         //     as needed.
-        //   * No canonical owner anywhere — fall back to
+        //   * No canonical terminal surface anywhere — fall back to
         //     `SwitchAgentViewToConversation` so the breadcrumb stays
         //     useful even after the orchestrator pane has been closed
         //     and the parent conversation only persists in history.
-        if let Some(owner_view_id) =
-            BlocklistAIHistoryModel::as_ref(app).terminal_view_id_for_conversation(&conversation_id)
+        if let Some(conversation_view_id) = BlocklistAIHistoryModel::as_ref(app)
+            .terminal_surface_id_for_conversation(&conversation_id)
         {
             let self_pane_group_id =
                 pane_group_id_containing_terminal_view(self_terminal_view_id, app);
-            let owner_pane_group_id = pane_group_id_containing_terminal_view(owner_view_id, app);
-            if owner_pane_group_id.is_some() && owner_pane_group_id == self_pane_group_id {
+            let conversation_pane_group_id =
+                pane_group_id_containing_terminal_view(conversation_view_id, app);
+            if conversation_pane_group_id.is_some()
+                && conversation_pane_group_id == self_pane_group_id
+            {
                 ctx.dispatch_typed_action(
                     PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
                         TerminalAction::RevealChildAgent { conversation_id },
@@ -2463,7 +2468,7 @@ fn render_crumb(
                 return;
             }
             ctx.dispatch_typed_action(WorkspaceAction::FocusTerminalViewInWorkspace {
-                terminal_view_id: owner_view_id,
+                terminal_view_id: conversation_view_id,
             });
             return;
         }

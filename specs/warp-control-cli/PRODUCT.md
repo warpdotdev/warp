@@ -26,16 +26,17 @@ Warp has rich interactive actions reachable through UI, keybindings, menus, and 
 3. **Deterministic demos and walkthroughs.** A script puts Warp into a known presentation state: theme, zoom, windows, tabs, panes, focused targets, panels, and surfaces. The walkthrough advances using structured target IDs and recovers from stale or missing targets.
 4. **Personalization and preference migration.** An agent inspects settings, proposes Warp equivalents from other tools, applies allowlisted changes, and reports unsupported mappings explicitly.
 ## Behavior
-1. The CLI operates only on running local Warp app processes. If no compatible process is available, it exits non-zero with a structured error.
+1. The CLI operates only on running local Warp app processes from the same channel as the channel-specific CLI binary. If no compatible same-channel process is available, it exits non-zero with a structured error.
 2. The CLI exposes only the 84 explicitly allowlisted actions. Unknown, unsupported, or non-allowlisted requests fail with structured errors and are never forwarded to arbitrary internal dispatch.
 3. Every successful mutating request identifies the Warp process instance, resolved target, and a success payload suitable for JSON output.
 4. Every failure identifies a stable machine-readable error code, a human-readable explanation, and any selector that was ambiguous, missing, stale, or invalid.
 5. The CLI supports human-readable output by default and JSON output for scripts with stable field names.
 6. Process discovery and instance selection:
-   - `warpctrl instance list` returns all reachable local Warp app processes.
+   - `warpctrl instance list` returns all reachable local Warp app processes from the CLI binary's channel.
    - Each process has an opaque `instance_id`, channel/build identity, and display metadata.
    - If exactly one compatible process is available, commands target it implicitly.
    - If multiple compatible processes are available and no single clearly active instance exists, the CLI fails and asks for an explicit `--instance` selector.
+   - Explicit `--instance` and `--pid` selectors cannot target a process from another channel.
 7. Target introspection:
    - `warpctrl window list`, `warpctrl tab list`, `warpctrl pane list`, `warpctrl session list`, `warpctrl app active`.
    - These return opaque protocol-facing IDs and metadata for subsequent commands.
@@ -61,7 +62,7 @@ The two input commands (`input.insert`, `input.replace`) only stage or edit text
 The public catalog contains exactly 84 actions. The Block, Auth, Drive, and History families are entirely absent. Input is limited to `input.insert` and `input.replace`. Actions are organized by noun and use the exact dotted names from the authoritative `ActionKind` catalog.
 ### Instance (2 actions)
 All default-authorized.
-- `instance.list` — list reachable Warp app processes.
+- `instance.list` — list reachable Warp app processes from the CLI binary's channel.
 - `instance.inspect` — metadata for one instance.
 ### App (4 actions)
 All default-authorized.

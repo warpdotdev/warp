@@ -16,6 +16,8 @@ pub(crate) mod attachment_utils;
 pub mod auth_secret_types;
 #[cfg(not(target_family = "wasm"))]
 pub mod aws_credentials;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod bedrock_credentials;
 pub(crate) mod block_context;
 pub(crate) mod blocklist;
 #[cfg(any(feature = "local_fs", not(target_family = "wasm")))]
@@ -26,6 +28,8 @@ pub(crate) mod conversation_navigation;
 pub(crate) mod conversation_rename;
 pub(crate) mod conversation_status_ui;
 pub(crate) mod conversation_utils;
+pub(crate) mod custom_model_router_editor;
+pub(crate) mod custom_model_routers;
 pub(crate) mod document;
 #[cfg(not(target_family = "wasm"))]
 pub mod geap_credentials;
@@ -38,6 +42,9 @@ pub(crate) mod metadata_project_rules;
 pub mod onboarding;
 pub(crate) mod persisted_workspace;
 pub(crate) mod predict;
+#[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+pub(crate) mod remote_agent_context;
+pub(crate) mod remote_context_files;
 pub mod request_usage_model;
 pub(crate) mod restored_conversations;
 pub(crate) mod skills;

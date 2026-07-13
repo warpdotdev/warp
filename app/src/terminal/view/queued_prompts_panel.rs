@@ -13,12 +13,13 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, DragAxis, Draggable, DraggableState, Empty, Expanded, Fill,
     Flex, Hoverable, MinSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Stack, Text,
+    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack, Text,
     DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::fonts::{Properties, Style, Weight};
@@ -57,8 +58,13 @@ const PROMPT_PREVIEW_MAX_CHARS: usize = 500;
 const INITIAL_CLOUD_MODE_PROMPT_TOOLTIP: &str = "The first cloud-mode prompt cannot be changed.";
 const SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP: &str =
     "Prompts cannot be sent until environment setup is complete.";
+const SEND_NOW_PENDING_LRC_TOOLTIP: &str =
+    "Prompts cannot be sent until the full terminal use agent is initialized.";
 const SEND_NOW_TO_FULL_TERMINAL_USE_AGENT_TOOLTIP: &str = "Send to full terminal use agent";
 const SEND_NOW_AS_READ_ONLY_VIEWER_TOOLTIP: &str = "Read-only viewers cannot send prompts.";
+/// Suffix on rows auto-queued during an agent-requested long-running command, which fire
+/// when that command completes rather than at the end of the full response.
+const LRC_AUTO_QUEUE_ROW_SUFFIX: &str = "(queued until the command finishes)";
 
 /// Returns the position-cache id used to look up a row's bounding rect during a drag.
 /// Indexed by the row's current visual index so swaps maintain stable lookups.
@@ -75,13 +81,10 @@ fn build_row_state(
     let is_initial_cloud_mode_prompt = origin == QueuedQueryOrigin::InitialCloudMode;
     // The send-now tooltip is owned by `update_send_now_availability`, which swaps in a
     // "wait for the cloud agent" message while send-now is disabled; "Send now" is the default.
-    let (edit_tooltip, delete_tooltip) = if is_initial_cloud_mode_prompt {
-        (
-            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
-            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
-        )
+    let edit_tooltip = if is_initial_cloud_mode_prompt {
+        INITIAL_CLOUD_MODE_PROMPT_TOOLTIP
     } else {
-        ("Edit", "Delete")
+        "Edit"
     };
 
     let send_now_button = ctx.add_typed_action_view(move |_| {
@@ -107,17 +110,28 @@ fn build_row_state(
     let delete_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
             .with_icon(TerminalIcon::Trash)
-            .with_tooltip(delete_tooltip)
+            .with_tooltip("Delete")
             .with_size(ButtonSize::XSmall)
             .with_disabled_theme(NakedTheme)
             .on_click(move |ctx| {
                 ctx.dispatch_typed_action(QueuedPromptsPanelAction::DeleteRow(query_id));
             })
     });
+    let copy_button = is_initial_cloud_mode_prompt.then(|| {
+        ctx.add_typed_action_view(move |_| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(TerminalIcon::Copy)
+                .with_tooltip("Copy")
+                .with_size(ButtonSize::XSmall)
+                .with_disabled_theme(NakedTheme)
+                .on_click(move |ctx| {
+                    ctx.dispatch_typed_action(QueuedPromptsPanelAction::CopyRow(query_id));
+                })
+        })
+    });
 
     if is_initial_cloud_mode_prompt {
         edit_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
-        delete_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
     }
 
     QueuedPromptRowState {
@@ -130,6 +144,7 @@ fn build_row_state(
         send_now_button,
         edit_button,
         delete_button,
+        copy_button,
         draggable_state: DraggableState::default(),
     }
 }
@@ -143,6 +158,7 @@ struct QueuedPromptRowState {
     send_now_button: ViewHandle<ActionButton>,
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
+    copy_button: Option<ViewHandle<ActionButton>>,
     draggable_state: DraggableState,
 }
 
@@ -190,6 +206,7 @@ pub enum QueuedPromptsPanelAction {
     SendNow(QueuedQueryId),
     StartEditingRow(QueuedQueryId),
     DeleteRow(QueuedQueryId),
+    CopyRow(QueuedQueryId),
     StartDrag(QueuedQueryId),
     DragMoved { rect: RectF },
     DropEnd,
@@ -260,6 +277,10 @@ impl QueuedPromptsPanelView {
             me.handle_cli_subagent_event(event, ctx);
         });
 
+        ctx.subscribe_to_model(&suggestions_mode_model, |_, _, _, ctx| {
+            ctx.notify();
+        });
+
         let host_editor_was_empty = host_editor.as_ref(ctx).is_empty(ctx);
         let mut me = Self {
             view_id: ctx.view_id(),
@@ -325,6 +346,13 @@ impl QueuedPromptsPanelView {
                 .queue(conv_id)
                 .first()
                 .is_some_and(|row| !row.is_locked())
+    }
+
+    /// Returns whether the reusable inline edit editor is currently holding focus for an active
+    /// queued prompt row. Parent views use this to avoid stealing focus during async AI/tool
+    /// updates.
+    pub(in crate::terminal) fn is_inline_edit_editor_focused(&self, ctx: &AppContext) -> bool {
+        self.editing_row_id(ctx).is_some() && self.edit_editor.is_focused(ctx)
     }
 
     /// Re-renders when the host input transitions between empty and non-empty, so the header
@@ -406,10 +434,14 @@ impl QueuedPromptsPanelView {
             else {
                 continue;
             };
+            let disabled_for_pending_lrc = *origin == QueuedQueryOrigin::PendingLrcAutoQueue;
             let disabled_for_cloud_setup =
                 *origin == QueuedQueryOrigin::InitialCloudMode || cloud_setup_in_progress;
-            let disabled = disabled_for_cloud_setup || !self.can_send_prompt;
-            let tooltip = if disabled_for_cloud_setup {
+            let disabled =
+                disabled_for_pending_lrc || disabled_for_cloud_setup || !self.can_send_prompt;
+            let tooltip = if disabled_for_pending_lrc {
+                SEND_NOW_PENDING_LRC_TOOLTIP
+            } else if disabled_for_cloud_setup {
                 SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP
             } else if !self.can_send_prompt {
                 SEND_NOW_AS_READ_ONLY_VIEWER_TOOLTIP
@@ -446,7 +478,7 @@ impl QueuedPromptsPanelView {
         ctx: &mut ViewContext<Self>,
     ) {
         let is_for_this_view = event
-            .terminal_view_id()
+            .terminal_surface_id()
             .is_some_and(|id| id == self.terminal_view_id);
         if !is_for_this_view {
             return;
@@ -478,6 +510,7 @@ impl QueuedPromptsPanelView {
             | QueuedQueryEvent::Removed {
                 conversation_id, ..
             }
+            | QueuedQueryEvent::RowUnlocked { conversation_id }
             | QueuedQueryEvent::Reordered { conversation_id }
             | QueuedQueryEvent::EditEntered {
                 conversation_id, ..
@@ -566,6 +599,9 @@ impl QueuedPromptsPanelView {
                 // A new row queued while the locked initial row is present must start disabled.
                 self.update_send_now_availability(ctx);
             }
+            QueuedQueryEvent::RowUnlocked { .. } => {
+                self.update_send_now_availability(ctx);
+            }
             QueuedQueryEvent::Reordered { .. }
             | QueuedQueryEvent::QueueNextPromptToggled { .. }
             | QueuedQueryEvent::DefaultModeChanged => {}
@@ -601,7 +637,7 @@ impl QueuedPromptsPanelView {
         QueuedQueryModel::as_ref(ctx).editing_row(conv_id)
     }
 
-    fn commit_edit(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn commit_edit(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(conv_id) = self.active_conversation_id else {
             return;
         };
@@ -682,6 +718,17 @@ impl QueuedPromptsPanelView {
     pub(super) fn enter_hint_shown_for_test(&self, ctx: &AppContext) -> bool {
         self.should_show_enter_hint(ctx)
     }
+
+    /// Test helper: replaces the inline edit editor buffer.
+    pub(super) fn set_edit_buffer_text_for_test(
+        &mut self,
+        text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.edit_editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(text, ctx);
+        });
+    }
 }
 
 impl TypedActionView for QueuedPromptsPanelView {
@@ -730,6 +777,17 @@ impl TypedActionView for QueuedPromptsPanelView {
                 QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                     model.enter_edit_mode(conv_id, query_id, ctx);
                 });
+            }
+            QueuedPromptsPanelAction::CopyRow(query_id) => {
+                let query_id = *query_id;
+                let text = QueuedQueryModel::as_ref(ctx)
+                    .queue(conv_id)
+                    .iter()
+                    .find(|row| row.id() == query_id)
+                    .map(|row| row.text().to_owned());
+                if let Some(text) = text {
+                    ctx.clipboard().write(ClipboardContent::plain_text(text));
+                }
             }
             QueuedPromptsPanelAction::DeleteRow(query_id) => {
                 let query_id = *query_id;
@@ -913,7 +971,8 @@ fn build_edit_editor(ctx: &mut ViewContext<QueuedPromptsPanelView>) -> ViewHandl
             soft_wrap: true,
             text: text_options,
             propagate_and_no_op_escape_key: PropagateAndNoOpEscapeKey::PropagateFirst,
-            propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Always,
+            // Keep up/down inside the inline editor so they move the cursor between lines.
+            propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Never,
             propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::AtBoundary,
             ..Default::default()
         };
@@ -1093,6 +1152,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
         send_now_button,
         edit_button,
         delete_button,
+        copy_button,
         draggable_state,
     } = row_state;
 
@@ -1141,7 +1201,8 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             .with_clip(ClipConfig::ellipsis())
             .finish();
             // Command rows are prefaced with a blue `!` so they read as shell commands; prompt
-            // rows render their text directly.
+            // rows render their text directly. Rows auto-queued during an agent-requested
+            // long-running command carry an italic suffix explaining when they will fire.
             if is_command {
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -1153,6 +1214,31 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
                             .finish(),
                     )
                     .with_child(Expanded::new(1., preview).finish())
+                    .finish()
+            } else if origin == QueuedQueryOrigin::LrcAutoQueue
+                || origin == QueuedQueryOrigin::PendingLrcAutoQueue
+            {
+                let suffix_color: ColorU = theme.sub_text_color(theme.surface_1()).into();
+                let suffix = Text::new(
+                    LRC_AUTO_QUEUE_ROW_SUFFIX.to_owned(),
+                    appearance.ui_font_family(),
+                    queued_input_font_size,
+                )
+                .with_color(suffix_color)
+                .with_style(Properties {
+                    style: Style::Italic,
+                    weight: Weight::Normal,
+                })
+                .with_selectable(false)
+                .soft_wrap(false)
+                .finish();
+                // The preview shrinks to its text (clipping with an ellipsis when long) so the
+                // suffix hugs it, mirroring the model picker's "(selected)" treatment.
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(6.)
+                    .with_child(Shrinkable::new(1., preview).finish())
+                    .with_child(suffix)
                     .finish()
             } else {
                 preview
@@ -1224,7 +1310,11 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             if !is_in_edit_mode {
                 buttons.add_child(ChildView::new(&edit_button).finish());
             }
-            buttons.add_child(ChildView::new(&delete_button).finish());
+            if let Some(copy_button) = &copy_button {
+                buttons.add_child(ChildView::new(copy_button).finish());
+            } else {
+                buttons.add_child(ChildView::new(&delete_button).finish());
+            }
             buttons.finish()
         } else {
             let count = if is_in_edit_mode { 2. } else { 3. };

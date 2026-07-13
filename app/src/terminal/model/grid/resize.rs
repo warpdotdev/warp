@@ -2,6 +2,7 @@
 // Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
 
 use string_offset::ByteOffset;
+use warp_errors::report_error;
 use warp_terminal::model::grid::cell::{self, LineLength as _};
 use warp_terminal::model::grid::Dimensions as _;
 use warp_terminal::model::{Point, VisiblePoint, VisibleRow};
@@ -199,25 +200,27 @@ impl InitialCursorState {
         // in case some bug causes it to end up in an invalid place.
         if cursor_point.row.0 >= grid.visible_rows() {
             #[cfg(debug_assertions)]
-            log::error!(
-                "cursor should not be outside the bounds of the grid! \
-                 cursor at ({}, {}) but grid has {} rows and {} columns",
-                cursor_point.row,
-                cursor_point.col,
-                grid.total_rows(),
-                grid.columns()
+            report_error!(
+                "cursor should not be outside the bounds of the grid!",
+                extra: {
+                    "row" => %cursor_point.row,
+                    "col" => %cursor_point.col,
+                    "total_rows" => %grid.total_rows(),
+                    "columns" => %grid.columns()
+                }
             );
             cursor_point.row.0 = grid.visible_rows() - 1;
         }
         if cursor_point.col >= grid.columns() {
             #[cfg(debug_assertions)]
-            log::error!(
-                "cursor should not be outside the bounds of the grid! \
-                 cursor at ({}, {}) but grid has {} rows and {} columns",
-                cursor_point.row,
-                cursor_point.col,
-                grid.total_rows(),
-                grid.columns()
+            report_error!(
+                "cursor should not be outside the bounds of the grid!",
+                extra: {
+                    "row" => %cursor_point.row,
+                    "col" => %cursor_point.col,
+                    "total_rows" => %grid.total_rows(),
+                    "columns" => %grid.columns()
+                }
             );
             cursor_point.col = grid.columns() - 1;
         }

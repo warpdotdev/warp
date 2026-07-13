@@ -3,6 +3,7 @@ use pathfinder_geometry::vector::vec2f;
 use serde::Serialize;
 use settings::Setting as _;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -16,6 +17,7 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
+use crate::appearance::AppearanceEvent;
 use crate::chip_configurator::{ChipConfigurator, ChipConfiguratorAction, ChipConfiguratorLayout};
 use crate::context_chips::prompt::{Prompt, PromptConfiguration, PromptSelection};
 use crate::context_chips::renderer::Renderer as ContextChipRenderer;
@@ -30,7 +32,7 @@ use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::SizeInfo;
 use crate::view_components::{Dropdown, DropdownItem};
-use crate::{report_if_error, send_telemetry_from_ctx, Appearance};
+use crate::{send_telemetry_from_ctx, Appearance};
 
 const MODAL_WIDTH: f32 = 700.;
 const BORDER_WIDTH: f32 = 1.;
@@ -215,6 +217,25 @@ impl EditorModal {
             dropdown.set_items(items, ctx);
             dropdown.set_selected_by_name(warp_prompt_separator_label, ctx);
             dropdown
+        });
+
+        // Context-chip colors are theme-derived, so rebuild the chips when the
+        // theme changes to keep an open editor in sync (preserving the current
+        // used-chip selection).
+        ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AppearanceEvent::ThemeChanged)
+                && me.chip_configurator.current_dragging_state.is_none()
+                && me.chip_configurator.has_items()
+            {
+                let used_chips = me
+                    .chip_configurator
+                    .used_chips
+                    .iter()
+                    .filter_map(|r| r.chip_kind().cloned())
+                    .collect();
+                me.update_used_chips(used_chips, ctx);
+                ctx.notify();
+            }
         });
 
         Self {

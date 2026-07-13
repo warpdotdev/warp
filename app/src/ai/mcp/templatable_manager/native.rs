@@ -1,4 +1,3 @@
-use core::fmt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -17,6 +16,7 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
 use warp_core::settings::Setting as _;
+use warp_errors::report_error;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
@@ -42,7 +42,7 @@ use crate::cloud_object::{
 };
 use crate::drive::CloudObjectTypeAndId;
 use crate::persistence::{
-    database_file_path_for_scope, establish_ro_connection, ModelEvent, PersistenceScope,
+    database_file_path_for_current_scope, establish_ro_connection, ModelEvent,
 };
 use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, SyncId};
@@ -87,23 +87,14 @@ impl SpawnMode {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
 enum LegacyToTemplatableMCPConversionError {
+    #[error("templatable MCP server already exists")]
     TemplateAlreadyExists,
+    #[error("failed to connect to database")]
     NoDBConnection,
+    #[error("created template successfully, but could not create installation")]
     InstallationFailed,
-}
-
-impl fmt::Display for LegacyToTemplatableMCPConversionError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::TemplateAlreadyExists => write!(f, "templatable MCP server already exists"),
-            Self::NoDBConnection => write!(f, "failed to connect to database"),
-            Self::InstallationFailed => write!(
-                f,
-                "created template successfully, but could not create installation"
-            ),
-        }
-    }
 }
 
 /// An MCP server integration that Warp ships with bundled skills for.
@@ -197,8 +188,9 @@ impl TemplatableMCPServerManager {
                 &self.server_credentials,
             );
         } else {
-            log::error!(
-                "Corresponding file or cloud-based server not found for installation UUID {installation_uuid}"
+            report_error!(
+                "Corresponding file or cloud-based server not found for installation UUID",
+                extra: { "installation_uuid" => %installation_uuid }
             );
         }
     }
@@ -216,7 +208,10 @@ impl TemplatableMCPServerManager {
                 &self.server_credentials,
             );
         } else {
-            log::error!("No template UUID found for installation UUID {installation_uuid}");
+            report_error!(
+                "No template UUID found for installation UUID",
+                extra: { "installation_uuid" => %installation_uuid }
+            );
         }
     }
 
@@ -229,7 +224,7 @@ impl TemplatableMCPServerManager {
     ) -> Self {
         // Subscribe to FileBasedMCPManager events.
         let file_based_mcp_manager = FileBasedMCPManager::handle(ctx);
-        ctx.subscribe_to_model(&file_based_mcp_manager, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&file_based_mcp_manager, |me, _, event, ctx| match event {
             FileBasedMCPManagerEvent::SpawnServers { installations } => {
                 me.spawn_file_based_servers(installations, ctx);
             }
@@ -247,7 +242,7 @@ impl TemplatableMCPServerManager {
 
         // TemplatableMCPServerManager is the source of truth for templatable MCP servers stored on the cloud
         let cloud_model = CloudModel::handle(ctx);
-        ctx.subscribe_to_model(&cloud_model, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&cloud_model, |me, _, event, ctx| match event {
             CloudModelEvent::ObjectUpdated {
                 type_and_id:
                     CloudObjectTypeAndId::GenericStringObject {
@@ -330,13 +325,14 @@ impl TemplatableMCPServerManager {
             _ => {}
         });
 
-        let database_connection = database_file_path_for_scope(&PersistenceScope::App)
-            .to_str()
-            .and_then(|db_url| {
-                establish_ro_connection(db_url)
-                    .ok()
-                    .map(|conn| Arc::new(Mutex::new(conn)))
-            });
+        let database_connection =
+            database_file_path_for_current_scope()
+                .to_str()
+                .and_then(|db_url| {
+                    establish_ro_connection(db_url)
+                        .ok()
+                        .map(|conn| Arc::new(Mutex::new(conn)))
+                });
 
         let mut me = Self {
             cloud_templatable_mcp_servers: Default::default(),
@@ -661,9 +657,9 @@ impl TemplatableMCPServerManager {
             running,
         };
         if let Err(err) = sender.send(event) {
-            log::error!(
-                "Failed to save TemplatableMCPServerInstallation running status to database: {err}"
-            );
+            report_error!(anyhow::Error::new(err).context(
+                "Failed to save TemplatableMCPServerInstallation running status to database"
+            ));
         }
     }
 
@@ -718,8 +714,9 @@ impl TemplatableMCPServerManager {
             .get(&installation_uuid)
             .cloned()
         else {
-            log::error!(
-                "No templatable MCP installation found for installation_uuid {installation_uuid}; cannot resolve template variables"
+            report_error!(
+                "No templatable MCP installation found; cannot resolve template variables",
+                extra: { "installation_uuid" => %installation_uuid }
             );
 
             self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
@@ -756,8 +753,9 @@ impl TemplatableMCPServerManager {
                     s
                 }
                 None => {
-                    log::error!(
-                        "Templatable MCP server template contains no servers: {template_uuid}",
+                    report_error!(
+                        "Templatable MCP server template contains no servers",
+                        extra: { "template_uuid" => %template_uuid }
                     );
                     self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
                     if mode.is_reconnect() {
@@ -770,15 +768,14 @@ impl TemplatableMCPServerManager {
                 }
             },
             Err(err) => {
-                log::error!(
-                    "Failed to parse resolved MCP server JSON for '{template_uuid}': {err:#}",
+                let detail = format!("Failed to parse MCP server: {err:#}");
+                report_error!(
+                    anyhow::Error::new(err).context("Failed to parse resolved MCP server JSON"),
+                    extra: { "template_uuid" => %template_uuid }
                 );
                 self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
                 if mode.is_reconnect() {
-                    self.notify_reconnect_waiters(
-                        installation_uuid,
-                        Err(format!("Failed to parse MCP server: {err:#}")),
-                    );
+                    self.notify_reconnect_waiters(installation_uuid, Err(detail));
                 }
                 return;
             }
@@ -1140,7 +1137,8 @@ impl TemplatableMCPServerManager {
                 mcp_server_installation: mcp_server_installation.clone(),
             };
             if let Err(err) = sender.send(event) {
-                log::error!("Failed to save TemplatableMCPServerInstallation to database: {err}");
+                report_error!(anyhow::Error::new(err)
+                    .context("Failed to save TemplatableMCPServerInstallation to database"));
             }
         }
 
@@ -1223,7 +1221,8 @@ impl TemplatableMCPServerManager {
                 installation_uuids: installation_uuids.clone(),
             };
             if let Err(err) = sender.send(event) {
-                log::error!("Failed to delete installations from local database: {err}");
+                report_error!(anyhow::Error::new(err)
+                    .context("Failed to delete installations from local database"));
             }
         }
 
@@ -1301,7 +1300,10 @@ impl TemplatableMCPServerManager {
         updates: Vec<MCPServerUpdate>,
     ) -> Vec<MCPServerUpdate> {
         let Some(installation) = self.get_installed_server(&installation_uuid) else {
-            log::error!("Could not find installed server {installation_uuid}");
+            report_error!(
+                "Could not find installed server",
+                extra: { "installation_uuid" => %installation_uuid }
+            );
             return updates.to_vec();
         };
 
@@ -1504,6 +1506,7 @@ impl TemplatableMCPServerManager {
         let ParsedTemplatableMCPServerResult {
             templatable_mcp_server,
             templatable_mcp_server_installation,
+            ..
         } = parsed_result.clone();
         let template_uuid = templatable_mcp_server.uuid;
         self.create_templatable_mcp_server(templatable_mcp_server, space, initiated_by, ctx);
@@ -1561,7 +1564,8 @@ impl TemplatableMCPServerManager {
                         ctx
                     );
                 }
-                Err(e) => log::error!("{e}"),
+                Err(e) => report_error!(anyhow::Error::new(e)
+                    .context("Failed to convert legacy MCP server to templatable")),
             }
         }
     }

@@ -35,6 +35,7 @@ use vim::{
     vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
     vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
+use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::text::point::Point;
 use warpui::text::word_boundaries::WordBoundariesPolicy;
@@ -347,6 +348,14 @@ struct BufferAndDisplayMaps {
     /// A buffer and display map dedicated for ephemeral edits (see [`UpdateBufferOption::IsEphemeral`]).
     /// If [`Some`], then the ephemeral buffer is active.
     ephemeral: Option<(ModelHandle<Buffer>, ModelHandle<DisplayMap>)>,
+
+    /// When `true`, the active ephemeral buffer is "display-only": it exists purely for
+    /// visual feedback and its content must NOT be applied to the regular buffer when the
+    /// ephemeral is exited (materialized). On materialization the ephemeral is simply
+    /// discarded and the edit proceeds directly on the regular buffer without any
+    /// content-restoration step. This avoids generating spurious CRDT delete operations
+    /// that would corrupt the shared collaborative state.
+    ephemeral_is_display_only: bool,
 }
 
 impl BufferAndDisplayMaps {
@@ -371,9 +380,11 @@ impl BufferAndDisplayMaps {
     /// Deactivates any ephemeral state.
     fn deactivate_ephemeral_state(&mut self) {
         self.ephemeral.take();
+        self.ephemeral_is_display_only = false;
     }
 
-    /// Activates a new ephemeral state.
+    /// Activates a new regular ephemeral state whose content will be applied
+    /// to the regular buffer when the ephemeral is exited (materialized).
     fn activate_new_ephemeral_state(&mut self, ctx: &mut ModelContext<EditorModel>) {
         let tab_size = self.regular.1.as_ref(ctx).tab_size();
         let ephemeral_buffer = ctx.add_model(|_| Buffer::new(""));
@@ -388,6 +399,15 @@ impl BufferAndDisplayMaps {
             EditorModel::handle_display_map_event,
         );
         self.ephemeral = Some((ephemeral_buffer, ephemeral_display_map));
+        self.ephemeral_is_display_only = false;
+    }
+
+    /// Activates a display-only ephemeral state. When this ephemeral is materialized
+    /// (exited by a non-ephemeral edit), its content is discarded rather than applied
+    /// to the regular buffer, preventing spurious CRDT operations.
+    fn activate_display_only_ephemeral_state(&mut self, ctx: &mut ModelContext<EditorModel>) {
+        self.activate_new_ephemeral_state(ctx);
+        self.ephemeral_is_display_only = true;
     }
 }
 
@@ -538,6 +558,7 @@ impl EditorModel {
             buffer_and_display_map: BufferAndDisplayMaps {
                 regular,
                 ephemeral: None,
+                ephemeral_is_display_only: false,
             },
             vim_visual_tails: vec![],
             consecutive_autocomplete_insertion_edits_counter: 0,
@@ -601,6 +622,31 @@ impl EditorModel {
         });
 
         self.buffer_and_display_map.deactivate_ephemeral_state();
+    }
+
+    /// Exits an ephemeral loading state (created by `set_buffer_text_ignoring_undo`)
+    /// without touching the CRDT buffer or generating any `UpdatePeers` operations.
+    /// After this call the editor displays the regular collaborative buffer, allowing
+    /// any pending remote delete operations to become visible.
+    pub fn exit_ephemeral_loading_state(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.is_ephemeral() {
+            self.buffer_and_display_map.deactivate_ephemeral_state();
+            ctx.notify();
+        }
+    }
+
+    /// Shows an empty buffer as a display-only ephemeral overlay for immediate visual
+    /// feedback, without touching the regular CRDT buffer or emitting `UpdatePeers` ops.
+    ///
+    /// When the viewer next makes an edit (materializing the ephemeral), the empty content
+    /// is **discarded** rather than applied to the regular buffer — so no spurious CRDT
+    /// delete ops are generated for whatever is currently in the regular buffer (e.g.
+    /// another viewer's concurrent edits). The edit instead proceeds directly on the
+    /// regular buffer as-is.
+    pub fn show_display_only_empty_buffer(&mut self, ctx: &mut ModelContext<Self>) {
+        self.buffer_and_display_map
+            .activate_display_only_ephemeral_state(ctx);
+        ctx.notify();
     }
 
     fn refresh_batch_version(&mut self, ctx: &mut ModelContext<Self>) {
@@ -678,15 +724,26 @@ impl EditorModel {
         // 2) we star the the batch on the correct (regular vs. ephemeral) buffer
         let restore_from_snapshot = if can_edit && edit.is_ephemeral() {
             let snapshot = self.as_snapshot(ctx);
+            let vim_visual_tail_offsets = self.vim_visual_tail_offsets(ctx);
             self.buffer_and_display_map
                 .activate_new_ephemeral_state(ctx);
-            Some(snapshot)
+            Some((snapshot, vim_visual_tail_offsets))
         } else if can_edit && self.is_ephemeral() && edit.update_buffer.is_some() {
-            // We're materializing an ephemeral edit, so snapshot the ephemeral buffer
-            // so that we can apply it to the regular buffer.
-            let snapshot = self.as_snapshot(ctx);
-            self.buffer_and_display_map.deactivate_ephemeral_state();
-            Some(snapshot)
+            if self.buffer_and_display_map.ephemeral_is_display_only {
+                // Display-only ephemeral: discard the ephemeral content entirely and
+                // proceed directly on the regular buffer. Do NOT snapshot-and-restore,
+                // which would generate spurious CRDT delete ops for whatever the regular
+                // buffer currently contains (e.g. another viewer's concurrent edits).
+                self.buffer_and_display_map.deactivate_ephemeral_state();
+                None
+            } else {
+                // Regular ephemeral (history picker, model selector, etc.): snapshot the
+                // ephemeral buffer so its content can be applied to the regular buffer.
+                let snapshot = self.as_snapshot(ctx);
+                let vim_visual_tail_offsets = self.vim_visual_tail_offsets(ctx);
+                self.buffer_and_display_map.deactivate_ephemeral_state();
+                Some((snapshot, vim_visual_tail_offsets))
+            }
         } else {
             None
         };
@@ -702,8 +759,8 @@ impl EditorModel {
         // right buffer state. For example, if we tried to select
         // without having restored the snapshot, we would be selecting
         // on the wrong underlying buffer.
-        if let Some(snapshot) = restore_from_snapshot {
-            self.restore_from_snapshot(snapshot, ctx);
+        if let Some((snapshot, vim_visual_tail_offsets)) = restore_from_snapshot {
+            self.restore_from_snapshot(snapshot, vim_visual_tail_offsets, ctx);
             // Refresh batch version here as we already recorded edits for the snapshot
             // restoration.
             self.refresh_batch_version(ctx);
@@ -771,7 +828,17 @@ impl EditorModel {
                 if let Err(e) = buffer.apply_ops(operations, ctx) {
                     log::warn!("Failed to apply remote edits to buffer: {e}");
                 }
-            })
+            });
+
+        // If a display-only empty ephemeral is showing (optimistic clear after sending
+        // an agent prompt), exit it now that a real CRDT update has arrived. This makes
+        // the actual collaborative buffer state immediately visible to the viewer, whether
+        // that's an empty buffer from the sharer's delete ops or another participant's
+        // concurrent edits.
+        if self.buffer_and_display_map.ephemeral_is_display_only {
+            self.buffer_and_display_map.deactivate_ephemeral_state();
+            ctx.notify();
+        }
     }
 
     pub fn interaction_state(&self) -> InteractionState {
@@ -975,7 +1042,7 @@ impl EditorModel {
         if let Some((start, end)) = start.ok().zip(end.ok()) {
             self.buffer_handle().update(ctx, |buffer, ctx| {
                 if let Err(error) = buffer.indent(start.row..end.row + 1, ctx) {
-                    log::error!("error indenting text: {error}");
+                    report_error!(error.context("error indenting text"));
                 }
             });
         }
@@ -996,7 +1063,7 @@ impl EditorModel {
                 .collect::<Vec<_>>();
 
             if let Err(error) = buffer.unindent(row_ranges, ctx) {
-                log::error!("error unindenting text: {error}");
+                report_error!(error.context("error unindenting text"));
             };
         });
     }
@@ -1031,7 +1098,7 @@ impl EditorModel {
     {
         self.buffer_handle().update(ctx, |buffer, ctx| {
             if let Err(e) = buffer.update_styles(old_ranges, text_style_operation, ctx) {
-                log::error!("Error with updating styles: {e:?}")
+                report_error!(e.context("Error with updating styles"))
             }
         });
     }
@@ -1121,7 +1188,7 @@ impl EditorModel {
                 self.buffer_handle().update(ctx, |buffer, ctx| {
                     if let Err(error) = buffer.edit(offset_ranges.iter().cloned(), *completion, ctx)
                     {
-                        log::error!("error inserting text: {error}");
+                        report_error!(error.context("error inserting text"));
                     };
                 });
                 self.consecutive_autocomplete_insertion_edits_counter += 1;
@@ -1154,7 +1221,7 @@ impl EditorModel {
                 Text::new(text, text_style),
                 ctx,
             ) {
-                log::error!("error inserting text: {error}");
+                report_error!(error.context("error inserting text"));
             };
         });
 
@@ -1265,8 +1332,21 @@ impl EditorModel {
         );
     }
 
+    fn vim_visual_tail_offsets<C: ModelAsRef>(&self, ctx: &C) -> Vec<CharOffset> {
+        let buffer = self.buffer(ctx);
+        self.vim_visual_tails
+            .iter()
+            .filter_map(|tail| tail.to_char_offset(buffer).ok())
+            .collect()
+    }
+
     // Used for restoring the buffer from a snapshot.
-    fn restore_from_snapshot(&mut self, snapshot: EditorSnapshot, ctx: &mut ModelContext<Self>) {
+    fn restore_from_snapshot(
+        &mut self,
+        snapshot: EditorSnapshot,
+        vim_visual_tail_offsets: Vec<CharOffset>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let version = self.buffer_handle().as_ref(ctx).versions();
         self.clear_selections(ctx);
         self.clear_buffer(ctx);
@@ -1279,7 +1359,7 @@ impl EditorModel {
                     Text::new(styled_text.text(), Some(styled_text.text_style())),
                     ctx,
                 ) {
-                    log::error!("error inserting text: {error}");
+                    report_error!(error.context("error inserting text"));
                 };
                 text_added_offset += styled_text.text().chars().count();
             }
@@ -1299,18 +1379,16 @@ impl EditorModel {
                 // Handle the error to convert saved selection offsets to editor anchors gracefully
                 // as the restored buffer state might not match exactly to the saved snapshot.
                 let Some(end) = buffer.anchor_before(range.end).ok() else {
-                    log::error!(
-                        "error restoring snapshot with selection end {} on text with max range {}",
-                        range.end,
-                        text_added_offset
+                    report_error!(
+                        "error restoring snapshot: selection end is past text max range",
+                        extra: { "selection_end" => %range.end, "max_range" => %text_added_offset }
                     );
                     return None;
                 };
                 let Some(start) = buffer.anchor_before(range.start).ok() else {
-                    log::error!(
-                        "error restoring snapshot with selection start {} on text with max range {}",
-                        range.start,
-                        text_added_offset
+                    report_error!(
+                        "error restoring snapshot: selection start is past text max range",
+                        extra: { "selection_start" => %range.start, "max_range" => %text_added_offset }
                     );
                     return None;
                 };
@@ -1341,6 +1419,15 @@ impl EditorModel {
             }]
         };
         self.change_selections(new_selections, ctx);
+
+        let new_visual_tails: Vec<Anchor> = {
+            let buffer = self.buffer(ctx);
+            vim_visual_tail_offsets
+                .iter()
+                .filter_map(|offset| buffer.anchor_before(*offset).ok())
+                .collect()
+        };
+        self.vim_visual_tails = new_visual_tails;
     }
 
     pub fn selection_insertion_index(&self, start: &Anchor, app: &AppContext) -> usize {
@@ -1960,7 +2047,7 @@ impl EditorModel {
     pub fn clear_buffer(&mut self, ctx: &mut ModelContext<Self>) {
         self.buffer_handle().update(ctx, |buffer, ctx| {
             if let Err(error) = buffer.edit(Some(0.into()..buffer.len()), "", ctx) {
-                log::error!("error clearing text: {error}");
+                report_error!(error.context("error clearing text"));
             };
         });
         self.clear_selections(ctx);
@@ -1977,7 +2064,7 @@ impl EditorModel {
     ) {
         self.buffer_handle().update(ctx, |buffer, ctx| {
             if let Err(error) = buffer.edit(Some(0.into()..n), text, ctx) {
-                log::error!("error replacing first n chars: {error}");
+                report_error!(error.context("error replacing first n chars"));
             };
         });
     }
@@ -1995,7 +2082,7 @@ impl EditorModel {
             let len = buffer.len();
             let start = len.saturating_sub(&n);
             if let Err(error) = buffer.edit(Some(start..len), text, ctx) {
-                log::error!("error replacing last n chars: {error}");
+                report_error!(error.context("error replacing last n chars"));
             };
         });
     }
@@ -2924,7 +3011,12 @@ impl EditorModel {
 
 /// The private interface.
 impl EditorModel {
-    fn handle_buffer_event(&mut self, event: &buffer::Event, ctx: &mut ModelContext<Self>) {
+    fn handle_buffer_event(
+        &mut self,
+        _: ModelHandle<Buffer>,
+        event: &buffer::Event,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             buffer::Event::Edited { edit_origin, .. } => ctx.emit(EditorModelEvent::Edited {
                 edit_origin: *edit_origin,
@@ -2939,17 +3031,19 @@ impl EditorModel {
 
     fn handle_buffer_event_for_non_collaborative_editor(
         &mut self,
+        handle: ModelHandle<Buffer>,
         event: &buffer::Event,
         ctx: &mut ModelContext<Self>,
     ) {
         // For non-collaborative editors, we don't care about fanning out updates to peers.
         if !matches!(event, buffer::Event::UpdatePeers { .. }) {
-            self.handle_buffer_event(event, ctx);
+            self.handle_buffer_event(handle, event, ctx);
         }
     }
 
     fn handle_display_map_event(
         &mut self,
+        _: ModelHandle<DisplayMap>,
         event: &display_map::Event,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -2994,7 +3088,7 @@ impl EditorModel {
                 before_cursor_text,
                 ctx,
             ) {
-                log::error!("error inserting text: {error}");
+                report_error!(error.context("error inserting text"));
             };
 
             // Inserting the autocompleted characters. Because the buffer has
@@ -3009,7 +3103,7 @@ impl EditorModel {
                 after_cursor_text,
                 ctx,
             ) {
-                log::error!("error inserting text: {error}");
+                report_error!(error.context("error inserting text"));
             };
         });
 

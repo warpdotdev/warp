@@ -6,7 +6,6 @@ use vec1::Vec1;
 use warpui_core::text::TextBuffer;
 use warpui_core::text::point::Point;
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
-use warpui_core::units::Pixels;
 use warpui_core::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle};
 
 use crate::content::buffer::{
@@ -16,7 +15,7 @@ use crate::content::buffer::{
 use crate::content::hidden_lines_model::HiddenLinesModel;
 use crate::content::selection_model::BufferSelectionModel;
 use crate::content::text::{BlockType, BufferBlockStyle, CodeBlockType};
-use crate::render::model::{RenderState, SoftWrapPoint};
+use crate::render::model::{ColumnUnit, RenderState, SoftWrapPoint};
 
 #[cfg(test)]
 #[path = "selection_tests.rs"]
@@ -29,13 +28,13 @@ pub struct SelectionModel {
     selection_model: ModelHandle<BufferSelectionModel>,
     hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
 
-    /// The goal x-coordinate in pixels. When moving between lines, the desired column
-    /// might not exist on the new line (because it's shorter than the previous line). Storing
-    /// the goal column lets us move back to that column when changing to a longer line.
+    /// The goal column when moving between lines. The desired column might not exist on the
+    /// new line (because it's shorter than the previous line). Storing the goal column lets
+    /// us move back to that column when changing to a longer line.
     ///
-    /// This is stored in pixels instead of characters so that, like other editors, we can
-    /// match the visual column, accounting for any differences in padding and character width.
-    pub goal_xs: Option<Vec1<Pixels>>,
+    /// Uses [`ColumnUnit`] to work in either pixel coordinates (GUI path) or char-cell
+    /// coordinates (TUI path). All values must use the same variant within one session.
+    pub goal_xs: Option<Vec1<ColumnUnit>>,
 
     /// The in-progress selection.
     pending_selection: Option<PendingSelection>,
@@ -95,7 +94,7 @@ pub struct NavigationResult {
     /// The resulting character offset from text navigation.
     pub offset: CharOffset,
     /// The goal column based on the original offset, if it's different from the character offset.
-    pub goal_x: Option<Pixels>,
+    pub goal_x: Option<ColumnUnit>,
 }
 
 impl SelectionModel {
@@ -483,6 +482,13 @@ impl SelectionModel {
         self.pending_selection = None;
     }
 
+    /// Whether a drag selection is in progress: begun via
+    /// [`Self::begin_selection`] (mouse down) and not yet ended via
+    /// [`Self::end_selection`] (mouse up).
+    pub fn has_pending_selection(&self) -> bool {
+        self.pending_selection.is_some()
+    }
+
     /// Set a single cursor at the offset.
     pub fn set_cursor(&mut self, offset: CharOffset, ctx: &mut ModelContext<Self>) {
         self.update_selection(
@@ -664,19 +670,19 @@ impl SelectionModel {
     }
 
     /// Modify all of the selections in a given way.
-    /// The currently active selections are looped though, along with any current x-pixel goal values,
-    /// and a new head and tail offsets and a new x-pixel goal value are calculated for each selection.
+    /// The currently active selections are looped though, along with any current goal column values,
+    /// and a new head, tail, and goal column are calculated for each selection.
     ///
-    /// selection_update: A function that takes the current selection, the current goal x, and the current
-    /// selection offsets, and returns the new goal x and the new selection offsets.
+    /// selection_update: A function that takes the current selection, the current goal column, and
+    /// the current selection offsets, and returns the new goal column and new selection offsets.
     fn update_selections_internal<T>(&mut self, selection_update: T, ctx: &mut ModelContext<Self>)
     where
         T: Fn(
             &SelectionModel,
             &mut ModelContext<SelectionModel>,
             &SelectionOffsets,
-            &Option<Pixels>,
-        ) -> (Option<Pixels>, SelectionOffsets),
+            &Option<ColumnUnit>,
+        ) -> (Option<ColumnUnit>, SelectionOffsets),
     {
         // Before we take action, merge any overlapping selections.
         self.selection_model.update(ctx, |selection_model, _ctx| {
@@ -803,7 +809,7 @@ impl SelectionModel {
         direction: TextDirection,
         unit: TextUnit,
         step_size: u32,
-        goal_x: Option<Pixels>,
+        goal_x: Option<ColumnUnit>,
         ctx: &impl ModelAsRef,
     ) -> NavigationResult {
         match unit {
@@ -870,7 +876,7 @@ impl SelectionModel {
         start: CharOffset,
         direction: TextDirection,
         step_size: u32,
-        goal_x: Option<Pixels>,
+        goal_x: Option<ColumnUnit>,
         ctx: &impl ModelAsRef,
     ) -> NavigationResult {
         let render = self.render.as_ref(ctx);
@@ -910,7 +916,7 @@ impl SelectionModel {
         // equivalent to self.goal_x.unwrap_or(next_point.column()), but captures the intent that we
         // want to stick to the rightmost point along the path, especially with proportional fonts.
         let goal_column = match goal_x {
-            Some(x) => x.max(next_point.column()),
+            Some(x) => x.col_max(next_point.column()),
             None => next_point.column(),
         };
         let goal_point = SoftWrapPoint::new(next_point.row(), goal_column);
@@ -943,7 +949,7 @@ impl SelectionModel {
         let start_point = render.offset_to_softwrap_point(start.saturating_sub(&1.into()));
         let end_offset = match direction {
             TextDirection::Backwards => {
-                let row_start = SoftWrapPoint::new(start_point.row(), Pixels::zero());
+                let row_start = SoftWrapPoint::new(start_point.row(), ColumnUnit::pixels_zero());
                 let soft_wrapped_start = render.softwrap_point_to_offset(row_start);
 
                 match content.indented_line_start(start) {
@@ -968,8 +974,10 @@ impl SelectionModel {
                     match content.indented_line_start(start) {
                         Some(indented_start) if indented_start > start => indented_start,
                         _ => {
-                            let next_row_start =
-                                SoftWrapPoint::new(start_point.row() + 1, Pixels::zero());
+                            let next_row_start = SoftWrapPoint::new(
+                                start_point.row() + 1,
+                                ColumnUnit::pixels_zero(),
+                            );
                             // TODO(CLD-558): This should have a -1.
                             render.softwrap_point_to_offset(next_row_start)
                         }
@@ -1004,7 +1012,12 @@ impl SelectionModel {
         }
     }
 
-    fn handle_buffer_event(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_buffer_event(
+        &mut self,
+        _: ModelHandle<Buffer>,
+        event: &BufferEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             BufferEvent::ContentChanged { origin, .. } if origin.from_user() => self.goal_xs = None,
             BufferEvent::AnchorUpdated {
@@ -1028,7 +1041,7 @@ impl NavigationResult {
     /// Creates a `NavigationResult` with both a new offset and an updated goal column.
     /// If the goal column does not exist on the new line, it may not correspond to the
     /// actual offset.
-    pub fn for_offset_and_goal(offset: CharOffset, goal_x: Option<Pixels>) -> Self {
+    pub fn for_offset_and_goal(offset: CharOffset, goal_x: Option<ColumnUnit>) -> Self {
         Self { offset, goal_x }
     }
 

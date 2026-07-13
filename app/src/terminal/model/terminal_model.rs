@@ -14,9 +14,10 @@ use session_sharing_protocol::common::{
     AICommandMetadata, OrderedTerminalEventType, ParticipantId,
 };
 use session_sharing_protocol::sharer::SessionSourceType;
+use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
 use warp_core::semantic_selection::SemanticSelection;
+use warp_errors::report_error;
 pub use warp_terminal::model::BlockIndex;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::assets::asset_cache::Asset;
@@ -31,6 +32,7 @@ use super::block::{
     BlocklistEnvVarMetadata, SerializedBlock,
 };
 use super::blockgrid::BlockGrid;
+use super::blocks::ActiveBlockCompletion;
 use super::grid::grid_handler::{
     ContainsPoint, FragmentBoundary, GridHandler, Link, PossiblePath, TermMode,
 };
@@ -39,6 +41,10 @@ use super::index::Point;
 use super::kitty::{
     create_kitty_error_reply, create_kitty_ok_reply, DeletionType, KittyAction, KittyChunk,
     KittyMessage, KittyResponse, PendingKittyMessage,
+};
+use super::lifecycle::{
+    BlockLifecycleCoordinator, CommandStartKind, IgnoreReason, LifecycleAction, LifecycleInput,
+    LifecycleSnapshot, LifecycleTransition, PreexecObservation, StartCommandOutcome,
 };
 use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
@@ -57,8 +63,9 @@ use crate::terminal::event_listener::ChannelEventListener;
 pub use crate::terminal::history::HistoryEntry;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
-    ClearValue, CommandFinishedValue, ExitShellValue, Handler, InitShellValue, InitSubshellValue,
-    PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, SSHValue, SourcedRcFileForWarpValue,
+    ClearValue, CommandFinishedValue, CompletionMetadata, ExitShellValue, Handler, InitShellValue,
+    InitSubshellValue, PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata,
+    SSHValue, SourcedRcFileForWarpValue,
 };
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::completions::{
@@ -377,6 +384,7 @@ pub struct TerminalModel {
     /// List of blocks. All blocks are immutable except for the current block.
     /// Always non-empty (includes an invisible block).
     block_list: BlockList,
+    lifecycle_coordinator: BlockLifecycleCoordinator,
     /// Whether the blocklist has been cleared in the lifetime of this terminal model.
     pub blocklist_has_been_cleared: bool,
 
@@ -939,12 +947,12 @@ impl TerminalModel {
     pub fn set_is_input_dirty(&mut self, value: bool) {
         self.is_input_dirty = value;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     #[allow(clippy::too_many_arguments)]
     /// Returns a bootstrapped `TerminalModel` with no restored blocks
     /// and just one default block to avoid any side effects of being
     /// in the middle of the bootstrap sequence.
-    pub fn new_for_test(
+    pub(crate) fn new_for_test(
         sizes: BlockSize,
         colors: color::List,
         event_proxy: ChannelEventListener,
@@ -997,13 +1005,17 @@ impl TerminalModel {
             shell: "zsh".to_string(),
             ..Default::default()
         });
+        let completion_metadata = ansi::CompletionMetadata::default();
         terminal_model.command_finished(CommandFinishedValue {
+            completion_metadata: completion_metadata.clone(),
             session_id: Some(session_id.as_u64()),
-            ..Default::default()
         });
-        terminal_model.precmd(PrecmdValue {
-            session_id: Some(session_id.as_u64()),
-            ..Default::default()
+        terminal_model.precmd_with_completion_metadata(PrecmdValue {
+            completion_metadata,
+            prompt_metadata: PromptMetadata {
+                session_id: Some(session_id.as_u64()),
+                ..Default::default()
+            },
         });
         terminal_model
     }
@@ -1051,6 +1063,7 @@ impl TerminalModel {
             alt_screen,
             is_input_dirty: false,
             block_list,
+            lifecycle_coordinator: BlockLifecycleCoordinator::default(),
             blocklist_has_been_cleared: false,
             alt_screen_active: false,
             title_stack: Vec::new(),
@@ -1417,6 +1430,7 @@ impl TerminalModel {
 
         self.block_list_mut()
             .load_shared_session_scrollback(scrollback);
+        self.lifecycle_coordinator.reset_unknown();
 
         // The scrollback contains the prompt for the active block, and the terminal view needs to be notified to render it.
         self.event_proxy.send_wakeup_event();
@@ -1427,6 +1441,7 @@ impl TerminalModel {
 
         self.block_list_mut()
             .append_followup_shared_session_scrollback(scrollback);
+        self.lifecycle_coordinator.reset_unknown();
 
         self.event_proxy.send_wakeup_event();
     }
@@ -1458,6 +1473,7 @@ impl TerminalModel {
         if self.handled_exit {
             return;
         }
+        let transition = self.plan_lifecycle_transition(LifecycleInput::Exit, None, None, None);
 
         self.handled_exit = true;
         // Forcibly exit the alt screen so that we can show the user the
@@ -1467,6 +1483,7 @@ impl TerminalModel {
         // possibly receive more output from the shell.
         self.block_list.active_block_mut().finish(0);
         self.event_proxy.send_terminal_event(Event::Exit { reason });
+        self.commit_lifecycle_transition(&transition);
     }
 
     pub fn is_read_only(&self) -> bool {
@@ -1636,18 +1653,21 @@ impl TerminalModel {
     /// from the input editor when it sends user bytes to the pty (usually the
     /// next command to run, but also ctrl-d). Once we've written to the pty on
     /// the user's behalf, we consider the active block started.
-    pub fn start_command_execution(&mut self) {
-        self.block_list.start_active_block();
+    pub fn start_command_execution(&mut self) -> StartCommandOutcome {
+        self.start_command_execution_for_kind(CommandStartKind::UserOrQueued)
     }
 
     pub fn start_command_execution_from_env_var_collection(
         &mut self,
         env_var_metadata: BlocklistEnvVarMetadata,
-    ) {
-        self.start_command_execution();
-        self.block_list
-            .active_block_mut()
-            .set_env_var_metadata(env_var_metadata);
+    ) -> StartCommandOutcome {
+        let outcome = self.start_command_execution_for_kind(CommandStartKind::UserOrQueued);
+        if outcome.is_accepted() {
+            self.block_list
+                .active_block_mut()
+                .set_env_var_metadata(env_var_metadata);
+        }
+        outcome
     }
 
     /// Starts the execution for a command in a shared session (sharer or viewer).
@@ -1655,8 +1675,11 @@ impl TerminalModel {
         &mut self,
         participant_id: ParticipantId,
         agent_metadata: Option<AgentInteractionMetadata>,
-    ) {
-        self.start_command_execution();
+    ) -> StartCommandOutcome {
+        let outcome = self.start_command_execution_for_kind(CommandStartKind::SharedSession);
+        if !outcome.is_accepted() {
+            return outcome;
+        }
 
         // If this command has AI metadata, attach it to the active block.
         if let Some(ai_metadata) = &agent_metadata {
@@ -1677,6 +1700,7 @@ impl TerminalModel {
                 log::warn!("Failed to send OrderedTerminalEventType::CommandExecutionStarted: {e}");
             }
         }
+        outcome
     }
 
     /// Starts the command execution (per `Self::start_command_execution`) and additionally sets
@@ -1684,11 +1708,98 @@ impl TerminalModel {
     pub fn start_command_execution_with_ai_metadata(
         &mut self,
         agent_metadata: AgentInteractionMetadata,
-    ) {
-        self.start_command_execution();
-        self.block_list
-            .active_block_mut()
-            .set_agent_interaction_mode(agent_metadata);
+    ) -> StartCommandOutcome {
+        let outcome = self.start_command_execution_for_kind(CommandStartKind::UserOrQueued);
+        if outcome.is_accepted() {
+            self.block_list
+                .active_block_mut()
+                .set_agent_interaction_mode(agent_metadata);
+        }
+        outcome
+    }
+
+    pub(in crate::terminal) fn start_in_band_command_execution(&mut self) -> StartCommandOutcome {
+        self.start_command_execution_for_kind(CommandStartKind::InBand)
+    }
+
+    fn start_command_execution_for_kind(&mut self, kind: CommandStartKind) -> StartCommandOutcome {
+        let transition =
+            self.plan_lifecycle_transition(LifecycleInput::StartCommand(kind), None, None, None);
+        let outcome = match transition.action {
+            LifecycleAction::StartActiveBlock => {
+                match kind {
+                    CommandStartKind::UserOrQueued | CommandStartKind::SharedSession => {
+                        self.block_list.start_active_block()
+                    }
+                    CommandStartKind::InBand => {
+                        self.block_list.start_active_block_for_in_band_command()
+                    }
+                }
+                StartCommandOutcome::Accepted
+            }
+            LifecycleAction::Ignore(IgnoreReason::CoalescedStart) => StartCommandOutcome::Coalesced,
+            LifecycleAction::Ignore(IgnoreReason::RejectedExecuting) => {
+                StartCommandOutcome::RejectedExecuting
+            }
+            LifecycleAction::Ignore(IgnoreReason::IgnoredTerminated) => {
+                StartCommandOutcome::IgnoredTerminated
+            }
+            action => {
+                log::error!("Unexpected lifecycle action for command start: {action:?}");
+                StartCommandOutcome::RejectedExecuting
+            }
+        };
+        self.commit_lifecycle_transition(&transition);
+        outcome
+    }
+
+    fn lifecycle_snapshot(
+        &self,
+        supplied_next_block_id: Option<&BlockId>,
+        supplied_exit_code: Option<ExitCode>,
+        hook_session_id: Option<u64>,
+    ) -> LifecycleSnapshot {
+        let active_block = self.block_list.active_block();
+        let completion_mismatch = supplied_next_block_id == Some(active_block.id())
+            && supplied_exit_code
+                .zip(self.block_list.previous_command_exit_code())
+                .is_some_and(|(supplied, recorded)| supplied != recorded);
+        LifecycleSnapshot {
+            active_block_id: active_block.id().to_string(),
+            active_session_id: active_block.session_id().map(|id| id.as_u64()),
+            supplied_next_block_id: supplied_next_block_id.map(ToString::to_string),
+            hook_session_id,
+            block_state: active_block.state(),
+            started: active_block.started(),
+            finished: active_block.finished(),
+            received_precmd: active_block.has_received_precmd(),
+            is_in_band: active_block.is_in_band_command_block(),
+            is_bootstrapped: active_block.is_bootstrapped(),
+            is_bootstrap_done: self.block_list.is_bootstrapping_precmd_done(),
+            is_alt_screen_active: self.alt_screen_active,
+            completion_mismatch,
+        }
+    }
+
+    fn plan_lifecycle_transition(
+        &mut self,
+        input: LifecycleInput,
+        supplied_next_block_id: Option<&BlockId>,
+        supplied_exit_code: Option<ExitCode>,
+        hook_session_id: Option<u64>,
+    ) -> LifecycleTransition {
+        let snapshot =
+            self.lifecycle_snapshot(supplied_next_block_id, supplied_exit_code, hook_session_id);
+        self.lifecycle_coordinator.plan(&snapshot, input)
+    }
+
+    fn commit_lifecycle_transition(&mut self, transition: &LifecycleTransition) {
+        if let Some(record) = transition.recovery_record.clone() {
+            log::debug!("Terminal lifecycle transition diagnostic: {record:?}");
+            self.event_proxy
+                .send_terminal_event(Event::LifecycleRecovery(record));
+        }
+        self.lifecycle_coordinator.commit(transition);
     }
 
     // Starts active block as a background block. Used in Alacritty integration tests to
@@ -2152,6 +2263,72 @@ impl TerminalModel {
 
     fn emit_handler_event(&mut self, event: HandlerEvent) {
         self.event_proxy.send_handler_event(event);
+    }
+
+    /// Applies the normal command-completion pipeline and its once-per-command side effects.
+    fn complete_command(&mut self, data: CompletionMetadata) {
+        // If we ssh from a doesn't-understand-bracketed-paste shell into one
+        // that enables it, then get disconnected, we'll be stuck in a state
+        // of bracketed paste being enabled, but the local shell doesn't know
+        // how to turn it off (and will never do so).  We forcibly unset the
+        // mode to avoid getting stuck in this state.
+        self.unset_mode(Mode::BracketedPaste);
+
+        // Similar to bracketed paste, above, make sure we quit out of the
+        // alt screen if we're currently in it.  This prevents issues where we
+        // remain in the alt screen after disconnect when we should return to
+        // the blocklist (for the local shell).
+        self.exit_alt_screen(true);
+
+        let block_id = data.next_block_id.to_string();
+        self.block_list
+            .ensure_active_block_executing_for_completion();
+        let is_for_in_band_command = self.block_list().active_block().is_in_band_command_block();
+        let finished_block_bootstrap_stage = self.block_list().active_block().bootstrap_stage();
+        let active_block_completion = self.block_list.complete_active_block_and_advance(data);
+
+        if active_block_completion == ActiveBlockCompletion::NewlyFinished {
+            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
+                if let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionFinished {
+                    next_block_id: block_id.into(),
+                }) {
+                    log::warn!("Failed to send OrderedTerminalEventType::CommandFinished: {e}");
+                }
+            }
+
+            self.emit_handler_event(HandlerEvent::CommandFinished {
+                command_type: if is_for_in_band_command {
+                    CommandType::InBandCommand
+                } else if finished_block_bootstrap_stage == BootstrapStage::PostBootstrapPrecmd {
+                    CommandType::User
+                } else {
+                    CommandType::Bootstrap
+                },
+            });
+        }
+    }
+
+    /// Applies prompt metadata through the normal once-per-block path.
+    fn apply_precmd_to_fresh_block(&mut self, data: PromptMetadata) {
+        self.ignore_bootstrapping_messages = false;
+        let session_id = data.session_id;
+        let mut env_vars = HashMap::new();
+        if let Some(kube_config) = data.kube_config.clone() {
+            env_vars.insert("KUBECONFIG".to_string(), kube_config);
+        }
+        let handled_after_inband = data.was_sent_after_in_band_command();
+        self.block_list.apply_precmd_to_active(data);
+
+        self.emit_handler_event(HandlerEvent::Precmd {
+            session_id: session_id.map(|id| id.into()),
+            handled_after_inband,
+            env_vars,
+        });
+    }
+
+    fn apply_preexec(&mut self, data: PreexecValue) {
+        self.block_list.apply_preexec_to_active(data);
+        self.emit_handler_event(HandlerEvent::Preexec);
     }
 
     pub fn set_env_var_collection_name(&mut self, value: Option<String>) {
@@ -2694,41 +2871,19 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn command_finished(&mut self, data: CommandFinishedValue) {
-        // If we ssh from a doesn't-understand-bracketed-paste shell into one
-        // that enables it, then get disconnected, we'll be stuck in a state
-        // of bracketed paste being enabled, but the local shell doesn't know
-        // how to turn it off (and will never do so).  We forcibly unset the
-        // mode to avoid getting stuck in this state.
-        self.unset_mode(Mode::BracketedPaste);
-
-        // Similar to bracketed paste, above, make sure we quit out of the
-        // alt screen if we're currently in it.  This prevents issues where we
-        // remain in the alt screen after disconnect when we should return to
-        // the blocklist (for the local shell).
-        self.exit_alt_screen(true);
-
-        let block_id = data.next_block_id.to_string();
-        let is_for_in_band_command = self.block_list().active_block().is_in_band_command_block();
-        let finished_block_bootstrap_stage = self.block_list().active_block().bootstrap_stage();
-        delegate!(self.command_finished(data));
-
-        if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-            if let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionFinished {
-                next_block_id: block_id.into(),
-            }) {
-                log::warn!("Failed to send OrderedTerminalEventType::CommandFinished: {e}");
-            }
+        let disposition = self
+            .block_list
+            .classify_next_block_id(&data.completion_metadata.next_block_id);
+        let transition = self.plan_lifecycle_transition(
+            LifecycleInput::CommandFinished(disposition),
+            Some(&data.completion_metadata.next_block_id),
+            Some(data.completion_metadata.exit_code),
+            data.session_id,
+        );
+        if matches!(transition.action, LifecycleAction::AcceptCommandFinished) {
+            self.complete_command(data.completion_metadata);
         }
-
-        self.emit_handler_event(HandlerEvent::CommandFinished {
-            command_type: if is_for_in_band_command {
-                CommandType::InBandCommand
-            } else if finished_block_bootstrap_stage == BootstrapStage::PostBootstrapPrecmd {
-                CommandType::User
-            } else {
-                CommandType::Bootstrap
-            },
-        });
+        self.commit_lifecycle_transition(&transition);
     }
 
     fn set_current_working_directory(&mut self, path: String) {
@@ -2750,26 +2905,66 @@ impl ansi::Handler for TerminalModel {
         self.block_list.set_current_working_directory(path);
     }
 
-    fn precmd(&mut self, data: PrecmdValue) {
-        self.ignore_bootstrapping_messages = false;
-        let session_id = data.session_id;
-        let mut env_vars = HashMap::new();
-        if let Some(kube_config) = data.kube_config.clone() {
-            env_vars.insert("KUBECONFIG".to_string(), kube_config);
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        let disposition = self
+            .block_list
+            .classify_next_block_id(&data.completion_metadata.next_block_id);
+        let transition = self.plan_lifecycle_transition(
+            LifecycleInput::PrecmdWithCompletionMetadata(disposition),
+            Some(&data.completion_metadata.next_block_id),
+            Some(data.completion_metadata.exit_code),
+            data.prompt_metadata.session_id,
+        );
+        match transition.action {
+            LifecycleAction::ApplyPrecmd => self.apply_precmd_to_fresh_block(data.prompt_metadata),
+            LifecycleAction::ReconcileCompletionThenApplyPrecmd => {
+                self.complete_command(data.completion_metadata);
+                self.apply_precmd_to_fresh_block(data.prompt_metadata);
+            }
+            LifecycleAction::StartActiveBlock
+            | LifecycleAction::ApplyPreexec
+            | LifecycleAction::AcceptCommandFinished
+            | LifecycleAction::BeginEpoch
+            | LifecycleAction::Terminate
+            | LifecycleAction::Ignore(_) => {}
         }
-        let handled_after_inband = data.was_sent_after_in_band_command();
-        delegate!(self.precmd(data));
+        self.commit_lifecycle_transition(&transition);
+    }
 
-        self.emit_handler_event(HandlerEvent::Precmd {
-            session_id: session_id.map(|id| id.into()),
-            handled_after_inband,
-            env_vars,
-        });
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
+        let transition = self.plan_lifecycle_transition(
+            LifecycleInput::PromptOnlyPrecmd,
+            None,
+            None,
+            data.session_id,
+        );
+        if matches!(transition.action, LifecycleAction::ApplyPrecmd) {
+            self.apply_precmd_to_fresh_block(data);
+        }
+        self.commit_lifecycle_transition(&transition);
     }
 
     fn preexec(&mut self, data: PreexecValue) {
-        delegate!(self.preexec(data));
-        self.emit_handler_event(HandlerEvent::Preexec);
+        let active_block = self.block_list.active_block();
+        let observation = if active_block.state() == BlockState::Executing {
+            if active_block.command_to_string() == data.command.as_str() {
+                PreexecObservation::RepeatedSameCommand
+            } else {
+                PreexecObservation::RepeatedDifferentCommand
+            }
+        } else {
+            PreexecObservation::First
+        };
+        let transition = self.plan_lifecycle_transition(
+            LifecycleInput::Preexec(observation),
+            None,
+            None,
+            data.session_id,
+        );
+        if matches!(transition.action, LifecycleAction::ApplyPreexec) {
+            self.apply_preexec(data);
+        }
+        self.commit_lifecycle_transition(&transition);
     }
 
     fn bootstrapped(&mut self, value: BootstrappedValue) {
@@ -2781,7 +2976,7 @@ impl ansi::Handler for TerminalModel {
                 // Not being able to read the value should not cause a full-app crash. Instead,
                 // bootstrapping should fail in the same way that it would if the DCS message
                 // were otherwise corrupted.
-                log::error!("Received bootstrap message with no pending session info.");
+                report_error!("Received bootstrap message with no pending session info.");
                 return;
             }
         };
@@ -2856,6 +3051,17 @@ impl ansi::Handler for TerminalModel {
 
     fn init_shell(&mut self, data: InitShellValue) {
         if !self.ignore_bootstrapping_messages {
+            let hook_session_id = Some(data.session_id.as_u64());
+            let transition = self.plan_lifecycle_transition(
+                LifecycleInput::InitShell,
+                None,
+                None,
+                hook_session_id,
+            );
+            if !matches!(transition.action, LifecycleAction::BeginEpoch) {
+                self.commit_lifecycle_transition(&transition);
+                return;
+            }
             let subshell_info = if data.is_subshell {
                 let was_triggered_by_rc_file_snippet =
                     self.did_receive_rc_file_dcs.take().unwrap_or(false);
@@ -2895,6 +3101,7 @@ impl ansi::Handler for TerminalModel {
             self.emit_handler_event(HandlerEvent::InitShell {
                 pending_session_info: Box::new(pending_session_info),
             });
+            self.commit_lifecycle_transition(&transition);
         }
     }
 
@@ -2915,9 +3122,9 @@ impl ansi::Handler for TerminalModel {
                         uname: data.uname,
                     }))
             }
-            None => log::error!(
-                "Received invalid shell name in init_subshell: {}",
-                data.shell
+            None => report_error!(
+                "Received invalid shell name in init_subshell",
+                extra: { "shell" => %data.shell }
             ),
         }
     }
@@ -2939,9 +3146,9 @@ impl ansi::Handler for TerminalModel {
                         ))
                 }
                 None => {
-                    log::error!(
-                        "Received invalid shell name in SourcedRCFileForWarpValue: {}",
-                        data.shell
+                    report_error!(
+                        "Received invalid shell name in SourcedRCFileForWarpValue",
+                        extra: { "shell" => %data.shell }
                     );
                 }
             }

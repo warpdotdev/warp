@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
-use crate::settings::{AISettings, AISettingsChangedEvent, PromptSubmissionMode};
+use crate::features::FeatureFlag;
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, LongRunningCommandSubmissionMode, PromptSubmissionMode,
+};
+use crate::terminal::model::block::Block;
 
 /// A globally unique identifier for a single queued prompt row.
 /// Used by the queue panel to address rows across reorder, edit, and delete.
@@ -28,6 +32,11 @@ pub enum QueuedQueryOrigin {
     QueueSlashCommand,
     /// Filed via the auto-queue toggle in the warping indicator.
     AutoQueueToggle,
+    /// Filed because auto-queue was in effect during an agent-requested long-running command.
+    LrcAutoQueue,
+    /// Filed while an agent-requested run_shell_command action's snapshot has not yet fired.
+    /// Locked for manual push and auto-fire until the snapshot fires.
+    PendingLrcAutoQueue,
     /// Filed as the follow-up prompt of a `/compact-and <prompt>` slash command, waiting for
     /// the summarize to finish.
     CompactAndSlashCommand,
@@ -109,10 +118,14 @@ impl QueuedQuery {
     }
 
     /// Returns true if this row is locked from user mutation, reorder, and auto-fire.
-    /// Currently only the locked initial Cloud Mode row is non-mutable; lifecycle code
-    /// removes it explicitly via [`QueuedQueryModel::remove_initial_cloud_mode_row`].
+    /// Locked rows cannot be edited, deleted, reordered, pushed manually, or auto-fired by
+    /// the drain mechanism. The initial Cloud Mode row is locked permanently; PendingLrcAutoQueue
+    /// rows are locked only until the action snapshot fires.
     pub fn is_locked(&self) -> bool {
-        matches!(self.origin, QueuedQueryOrigin::InitialCloudMode)
+        matches!(
+            self.origin,
+            QueuedQueryOrigin::InitialCloudMode | QueuedQueryOrigin::PendingLrcAutoQueue
+        )
     }
 }
 
@@ -161,6 +174,9 @@ struct ConversationQueueState {
     /// dispatched and cleared when it finishes; keeps the queue accepting new rows while the
     /// agent is idle and gates the next drain until the command completes.
     command_in_flight: bool,
+    /// Manual queue toggle made during an agent-requested long-running command. Cleared when
+    /// the command ends; never touches `queue_next_prompt_override`.
+    queue_next_lrc_prompt_override: Option<bool>,
 }
 
 /// App-wide singleton owning the queued prompts and auto-queue toggle for every conversation,
@@ -184,6 +200,11 @@ pub enum QueuedQueryEvent {
     Appended {
         conversation_id: AIConversationId,
         query_id: QueuedQueryId,
+    },
+    /// Emitted when PendingLrcAutoQueue rows are transitioned to LrcAutoQueue after
+    /// the action snapshot fires.
+    RowUnlocked {
+        conversation_id: AIConversationId,
     },
     Removed {
         conversation_id: AIConversationId,
@@ -230,20 +251,26 @@ impl QueuedQueryModel {
         // from its owning terminal view. Agent-view exit is intentionally NOT subscribed to:
         // conversations (cloud agents in particular) outlive their visible session.
         let history_handle = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_handle, |this, event, ctx| {
+        ctx.subscribe_to_model(&history_handle, |this, _, event, ctx| {
             this.handle_history_event(event, ctx);
         });
 
         // Cache the default submission mode and refresh whenever the AI setting
         // changes. The render path consults the cache instead of dereferencing
-        // the setting on every call.
+        // the setting on every call. The LRC submission-mode setting is read by
+        // callers directly, but its changes also re-emit `DefaultModeChanged` so
+        // the chip and ghost text re-render with the new effective state.
         let default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
         let ai_settings_handle = AISettings::handle(ctx);
-        ctx.subscribe_to_model(&ai_settings_handle, |this, event, ctx| {
-            if matches!(event, AISettingsChangedEvent::PromptSubmissionMode { .. }) {
+        ctx.subscribe_to_model(&ai_settings_handle, |this, _, event, ctx| match event {
+            AISettingsChangedEvent::PromptSubmissionMode { .. } => {
                 this.default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
                 ctx.emit(QueuedQueryEvent::DefaultModeChanged);
             }
+            AISettingsChangedEvent::LongRunningCommandSubmissionMode { .. } => {
+                ctx.emit(QueuedQueryEvent::DefaultModeChanged);
+            }
+            _ => {}
         });
 
         Self {
@@ -266,7 +293,7 @@ impl QueuedQueryModel {
             } => {
                 self.drop_conversation(*conversation_id, ctx);
             }
-            BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
+            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
                 cleared_conversation_ids,
                 ..
             } => {
@@ -345,7 +372,7 @@ impl QueuedQueryModel {
         history_model: &BlocklistAIHistoryModel,
     ) -> Option<AIConversationId> {
         history_model
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
             .find_map(|conversation| {
                 self.has_command_in_flight(conversation.id())
                     .then_some(conversation.id())
@@ -370,10 +397,39 @@ impl QueuedQueryModel {
         state.queue.first().is_some_and(|q| q.id == editing_id)
     }
 
-    /// Returns the per-conversation auto-queue toggle state. Falls back to the cached
-    /// [`AISettings::default_prompt_submission_mode`] when the conversation has no
-    /// explicit override.
-    pub fn is_queue_next_prompt_enabled(&self, conversation_id: AIConversationId) -> bool {
+    /// Returns the effective auto-queue state for `conversation_id`, given the terminal's
+    /// `active_block`.
+    pub fn is_queue_next_prompt_enabled(
+        &self,
+        conversation_id: AIConversationId,
+        active_block: &Block,
+        app: &AppContext,
+    ) -> bool {
+        if is_lrc_auto_queue_active(active_block, conversation_id, app) {
+            // While an agent controls the active agent-requested command, the command-scoped
+            // toggle governs queueing.
+            self.is_queue_next_prompt_enabled_during_lrc(conversation_id)
+        } else {
+            // Otherwise the per-conversation toggle governs queueing.
+            self.is_queue_next_prompt_toggle_enabled(conversation_id)
+        }
+    }
+
+    /// Auto-queue state while an eligible agent-requested long-running command is active: on unless
+    /// toggled off for the duration of the command.
+    fn is_queue_next_prompt_enabled_during_lrc(&self, conversation_id: AIConversationId) -> bool {
+        self.queues
+            .get(&conversation_id)
+            .and_then(|state| state.queue_next_lrc_prompt_override)
+            .unwrap_or(true)
+    }
+
+    /// Per-conversation auto-queue toggle state, ignoring any long-running-command override:
+    /// the explicit toggle when set, otherwise on when the default submission mode is `Queue`.
+    pub(crate) fn is_queue_next_prompt_toggle_enabled(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> bool {
         self.queues
             .get(&conversation_id)
             .and_then(|state| state.queue_next_prompt_override)
@@ -389,10 +445,87 @@ impl QueuedQueryModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let current = self.is_queue_next_prompt_enabled(conversation_id);
+        let current = self.is_queue_next_prompt_toggle_enabled(conversation_id);
         let state = self.queues.entry(conversation_id).or_default();
         state.queue_next_prompt_override = Some(!current);
         ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
+    }
+
+    /// Toggles the auto-queue state for the duration of the eligible long-running command.
+    pub fn toggle_queue_next_prompt_during_lrc(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let current = self.is_queue_next_prompt_enabled_during_lrc(conversation_id);
+        let state = self.queues.entry(conversation_id).or_default();
+        state.queue_next_lrc_prompt_override = Some(!current);
+        ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
+    }
+
+    /// Clears the LRC-scoped auto-queue override when the long-running command ends, so the
+    /// conversation reverts to its pre-command queue state.
+    pub fn clear_queue_next_lrc_prompt_override(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
+            return;
+        };
+        if state.queue_next_lrc_prompt_override.take().is_some() {
+            ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
+        }
+    }
+
+    /// Transitions all `PendingLrcAutoQueue` rows for `conversation_id` to `LrcAutoQueue`,
+    /// unlocking them for auto-fire when the command completes. Emits `RowUnlocked` if any
+    /// rows were changed.
+    pub fn unlock_pending_lrc_rows(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
+            return;
+        };
+        let mut unlocked = false;
+        for row in state.queue.iter_mut() {
+            if row.origin == QueuedQueryOrigin::PendingLrcAutoQueue {
+                row.origin = QueuedQueryOrigin::LrcAutoQueue;
+                unlocked = true;
+            }
+        }
+        if unlocked {
+            ctx.emit(QueuedQueryEvent::RowUnlocked { conversation_id });
+        }
+    }
+
+    /// Removes all `PendingLrcAutoQueue` rows for `conversation_id` so stale locked
+    /// rows do not linger.
+    pub fn remove_pending_lrc_rows(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
+            return;
+        };
+        let mut removed_ids = Vec::new();
+        state.queue.retain(|row| {
+            if row.origin == QueuedQueryOrigin::PendingLrcAutoQueue {
+                removed_ids.push(row.id);
+                false
+            } else {
+                true
+            }
+        });
+        for query_id in removed_ids {
+            ctx.emit(QueuedQueryEvent::Removed {
+                conversation_id,
+                query_id,
+            });
+        }
     }
 
     /// Appends `query` to the tail of `conversation_id`'s queue.
@@ -687,6 +820,24 @@ impl QueuedQueryModel {
             query_id,
         });
     }
+}
+
+/// Returns true when queue mode is auto-enabled for `conversation_id`: an agent controls
+/// `active_block`'s agent-requested long-running command, and the user's settings opt into
+/// queueing prompts for the duration of such commands.
+pub(crate) fn is_lrc_auto_queue_active(
+    active_block: &Block,
+    conversation_id: AIConversationId,
+    app: &AppContext,
+) -> bool {
+    let ai_settings = AISettings::as_ref(app);
+    FeatureFlag::QueueSlashCommand.is_enabled()
+        && ai_settings.default_prompt_submission_mode == PromptSubmissionMode::Interrupt
+        && ai_settings.long_running_command_submission_mode
+            == LongRunningCommandSubmissionMode::QueueUntilCommandCompletes
+        && active_block.is_agent_in_control()
+        && active_block.is_agent_requested_command()
+        && active_block.ai_conversation_id() == Some(conversation_id)
 }
 
 #[cfg(test)]

@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+#[cfg(not(target_family = "wasm"))]
+use std::path::Path;
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::store_client::{IntermediateNode, StoreClient};
@@ -16,7 +18,7 @@ use mockall::automock;
 use prost::Message;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::client::Operation;
 use warp_graphql::mutations::confirm_file_artifact_upload::{
@@ -109,6 +111,8 @@ use warp_graphql::queries::task_git_credentials::{
 };
 use warp_multi_agent_api::ConversationData;
 
+#[cfg(not(target_family = "wasm"))]
+use super::download::write_response_body_to_path;
 use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
 use super::ServerApi;
 use crate::ai::agent::api::ServerConversationToken;
@@ -143,9 +147,7 @@ use crate::ai_assistant::utils::TranscriptPart;
 use crate::ai_assistant::{AIGeneratedCommand, GenerateCommandsFromNaturalLanguageError};
 use crate::drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError};
 use crate::persistence::model::ConversationUsageMetadata;
-use crate::server::graphql::{
-    default_request_options, get_request_context, get_user_facing_error_message,
-};
+use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::{
@@ -671,13 +673,13 @@ pub struct CreateFileArtifactUploadResponse {
 /// A single git credential entry returned by `taskGitCredentials`.
 #[derive(Clone)]
 pub struct GitCredential {
-    /// The GitHub token (OAuth user token or App installation token).
+    /// The provider's OAuth or installation access token.
     pub token: String,
-    /// The GitHub username. `None` for service-account (installation token) principals.
+    /// The provider-specific git username, when available.
     pub username: Option<String>,
-    /// The GitHub email. `None` for service-account principals.
+    /// The provider account's email, when available.
     pub email: Option<String>,
-    /// The host (always `"github.com"` in V1).
+    /// The managed git host, such as `"github.com"` or `"gitlab.com"`.
     pub host: String,
 }
 
@@ -992,6 +994,7 @@ pub struct AgentResponse {
 struct ListAgentsResponse {
     agents: Vec<AgentResponse>,
 }
+
 fn build_agent_url(uid: &str) -> String {
     format!("agent/identities/{}", urlencoding::encode(uid))
 }
@@ -1010,6 +1013,108 @@ pub struct ListConnectedSelfHostedWorkersResponse {
 }
 
 pub(crate) const CONNECTED_SELF_HOSTED_WORKERS_PATH: &str = "agent/connected-self-hosted-workers";
+
+/// A memory store returned by the public API.
+#[derive(Clone, serde::Deserialize, serde::Serialize, Debug, PartialEq)]
+pub struct MemoryStoreItem {
+    pub uid: String,
+    pub owner_type: String,
+    pub owner_uid: String,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(serde::Deserialize)]
+struct ListMemoryStoresResponse {
+    memory_stores: Vec<MemoryStoreItem>,
+}
+
+/// A memory in a memory store returned by the public API.
+#[derive(Clone, serde::Deserialize, serde::Serialize, Debug, PartialEq)]
+pub struct MemoryItem {
+    pub uid: String,
+    pub content: String,
+    pub version_id: String,
+    pub source: String,
+    pub source_id: Option<String>,
+    pub source_run_id: Option<String>,
+    pub is_tombstoned: bool,
+    pub tombstoned_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(serde::Deserialize)]
+struct ListMemoriesResponse {
+    memories: Vec<MemoryItem>,
+}
+
+#[derive(Clone, Copy, serde::Serialize, Debug, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MemorySource {
+    Manual,
+}
+
+#[derive(Clone, serde::Serialize, Debug, PartialEq)]
+pub struct CreateMemoryRequest {
+    pub content: String,
+    pub version: Option<String>,
+    pub source: MemorySource,
+    pub source_id: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize, Debug, PartialEq)]
+pub struct CreateMemoryResponse {
+    pub memory_id: String,
+    pub version_id: String,
+}
+
+#[derive(Clone, serde::Serialize, Debug, PartialEq)]
+pub struct UpdateMemoryStoreRequest {
+    pub description: Option<String>,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize, Debug, PartialEq)]
+pub struct MemoryVersionItem {
+    pub uid: String,
+    pub version: String,
+    pub content: String,
+    pub reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(serde::Deserialize)]
+struct ListMemoryVersionsResponse {
+    versions: Vec<MemoryVersionItem>,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize, Debug, PartialEq)]
+pub struct AgentAttachmentItem {
+    pub uid: String,
+    pub name: String,
+    pub access: String,
+    pub instructions: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ListMemoryStoreAgentsResponse {
+    agents: Vec<AgentAttachmentItem>,
+}
+
+#[derive(Clone, serde::Serialize, Debug, PartialEq)]
+pub struct UpdateMemoryRequest {
+    pub content: String,
+    pub version: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize, Debug, PartialEq)]
+pub struct UpdateMemoryResponse {
+    pub memory_id: String,
+    pub version_id: String,
+}
 
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -1147,6 +1252,13 @@ pub trait AIClient: 'static + Send + Sync {
         task_id: &AmbientAgentTaskId,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
 
+    #[cfg(not(target_family = "wasm"))]
+    async fn download_run_transcript_to_path(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        destination: &Path,
+    ) -> anyhow::Result<(), anyhow::Error>;
+
     async fn submit_run_followup(
         &self,
         run_id: &AmbientAgentTaskId,
@@ -1219,6 +1331,54 @@ pub trait AIClient: 'static + Send + Sync {
     ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
 
     async fn delete_agent(&self, uid: &str) -> anyhow::Result<(), anyhow::Error>;
+
+    async fn list_memory_stores(&self) -> anyhow::Result<Vec<MemoryStoreItem>, anyhow::Error>;
+
+    async fn list_memory_store_memories(
+        &self,
+        store_uid: &str,
+    ) -> anyhow::Result<Vec<MemoryItem>, anyhow::Error>;
+
+    async fn create_memory_store_memory(
+        &self,
+        store_uid: &str,
+        request: CreateMemoryRequest,
+    ) -> anyhow::Result<CreateMemoryResponse, anyhow::Error>;
+
+    async fn update_memory_store_memory(
+        &self,
+        store_uid: &str,
+        memory_uid: &str,
+        request: UpdateMemoryRequest,
+    ) -> anyhow::Result<UpdateMemoryResponse, anyhow::Error>;
+
+    async fn delete_memory_store_memory(
+        &self,
+        store_uid: &str,
+        memory_uid: &str,
+    ) -> anyhow::Result<(), anyhow::Error>;
+
+    async fn get_memory_store(
+        &self,
+        store_uid: &str,
+    ) -> anyhow::Result<MemoryStoreItem, anyhow::Error>;
+
+    async fn update_memory_store(
+        &self,
+        store_uid: &str,
+        request: UpdateMemoryStoreRequest,
+    ) -> anyhow::Result<MemoryStoreItem, anyhow::Error>;
+
+    async fn list_memory_store_agents(
+        &self,
+        store_uid: &str,
+    ) -> anyhow::Result<Vec<AgentAttachmentItem>, anyhow::Error>;
+
+    async fn list_memory_versions(
+        &self,
+        store_uid: &str,
+        memory_uid: &str,
+    ) -> anyhow::Result<Vec<MemoryVersionItem>, anyhow::Error>;
 
     async fn cancel_ambient_agent_task(
         &self,
@@ -1731,11 +1891,9 @@ impl AIClient for ServerApi {
 
         let response = operation
             .send_request(
-                self.client.clone(),
-                warp_graphql::client::RequestOptions {
-                    auth_token,
-                    ..default_request_options()
-                },
+                self.base_client.owned_http_client(),
+                self.base_client
+                    .graphql_request_options_with_token(auth_token),
             )
             .await?
             .data
@@ -1911,7 +2069,13 @@ impl AIClient for ServerApi {
         }
     }
 
-    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, ?task_state))]
+    #[tracing::instrument(skip_all, err, fields(
+        tags.cloud_agent = true,
+        ?task_state,
+        ?session_id,
+        ?conversation_id,
+        error_code = ?status_message.as_ref().map(|m| m.error_code)
+    ))]
     async fn update_agent_task(
         &self,
         task_id: AmbientAgentTaskId,
@@ -2015,6 +2179,7 @@ impl AIClient for ServerApi {
         Ok(response)
     }
 
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
     async fn get_ambient_agent_task(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -2248,6 +2413,107 @@ impl AIClient for ServerApi {
         let response: ListSkillsResponse = self.get_public_api(&path).await?;
         Ok(response.agents)
     }
+    async fn list_memory_stores(&self) -> anyhow::Result<Vec<MemoryStoreItem>, anyhow::Error> {
+        let response: ListMemoryStoresResponse = self.get_public_api("memory_stores").await?;
+        Ok(response.memory_stores)
+    }
+
+    async fn list_memory_store_memories(
+        &self,
+        store_uid: &str,
+    ) -> anyhow::Result<Vec<MemoryItem>, anyhow::Error> {
+        let encoded_store_uid = urlencoding::encode(store_uid);
+        let response: ListMemoriesResponse = self
+            .get_public_api(&format!("memory_stores/{encoded_store_uid}/memories"))
+            .await?;
+        Ok(response.memories)
+    }
+
+    async fn create_memory_store_memory(
+        &self,
+        store_uid: &str,
+        request: CreateMemoryRequest,
+    ) -> anyhow::Result<CreateMemoryResponse, anyhow::Error> {
+        let encoded_store_uid = urlencoding::encode(store_uid);
+        self.post_public_api(
+            &format!("memory_stores/{encoded_store_uid}/memories"),
+            &request,
+        )
+        .await
+    }
+
+    async fn update_memory_store_memory(
+        &self,
+        store_uid: &str,
+        memory_uid: &str,
+        request: UpdateMemoryRequest,
+    ) -> anyhow::Result<UpdateMemoryResponse, anyhow::Error> {
+        let encoded_store_uid = urlencoding::encode(store_uid);
+        let encoded_memory_uid = urlencoding::encode(memory_uid);
+        self.put_public_api(
+            &format!("memory_stores/{encoded_store_uid}/memories/{encoded_memory_uid}"),
+            &request,
+        )
+        .await
+    }
+
+    async fn delete_memory_store_memory(
+        &self,
+        store_uid: &str,
+        memory_uid: &str,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        let encoded_store_uid = urlencoding::encode(store_uid);
+        let encoded_memory_uid = urlencoding::encode(memory_uid);
+        self.delete_public_api_unit(&format!(
+            "memory_stores/{encoded_store_uid}/memories/{encoded_memory_uid}",
+        ))
+        .await
+    }
+
+    async fn get_memory_store(
+        &self,
+        store_uid: &str,
+    ) -> anyhow::Result<MemoryStoreItem, anyhow::Error> {
+        let encoded_store_uid = urlencoding::encode(store_uid);
+        self.get_public_api(&format!("memory_stores/{encoded_store_uid}"))
+            .await
+    }
+
+    async fn update_memory_store(
+        &self,
+        store_uid: &str,
+        request: UpdateMemoryStoreRequest,
+    ) -> anyhow::Result<MemoryStoreItem, anyhow::Error> {
+        let encoded_store_uid = urlencoding::encode(store_uid);
+        self.put_public_api(&format!("memory_stores/{encoded_store_uid}"), &request)
+            .await
+    }
+
+    async fn list_memory_store_agents(
+        &self,
+        store_uid: &str,
+    ) -> anyhow::Result<Vec<AgentAttachmentItem>, anyhow::Error> {
+        let encoded_store_uid = urlencoding::encode(store_uid);
+        let response: ListMemoryStoreAgentsResponse = self
+            .get_public_api(&format!("memory_stores/{encoded_store_uid}/agents"))
+            .await?;
+        Ok(response.agents)
+    }
+
+    async fn list_memory_versions(
+        &self,
+        store_uid: &str,
+        memory_uid: &str,
+    ) -> anyhow::Result<Vec<MemoryVersionItem>, anyhow::Error> {
+        let encoded_store_uid = urlencoding::encode(store_uid);
+        let encoded_memory_uid = urlencoding::encode(memory_uid);
+        let response: ListMemoryVersionsResponse = self
+            .get_public_api(&format!(
+                "memory_stores/{encoded_store_uid}/memories/{encoded_memory_uid}/versions"
+            ))
+            .await?;
+        Ok(response.versions)
+    }
 
     async fn list_agents(&self) -> anyhow::Result<Vec<AgentResponse>, anyhow::Error> {
         let response: ListAgentsResponse = self.get_public_api("agent/identities").await?;
@@ -2348,6 +2614,7 @@ impl AIClient for ServerApi {
         }
     }
 
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
     async fn get_task_attachments(
         &self,
         task_id: String,
@@ -2509,6 +2776,7 @@ impl AIClient for ServerApi {
         Ok(response)
     }
 
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
     async fn get_handoff_snapshot_attachments(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -2529,6 +2797,18 @@ impl AIClient for ServerApi {
                     .unwrap_or_else(|| "application/octet-stream".to_string()),
             })
             .collect())
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn download_run_transcript_to_path(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        destination: &Path,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        let response = self
+            .get_public_api_response(&format!("agent/runs/{run_id}/transcript"))
+            .await?;
+        write_response_body_to_path(response, destination).await
     }
 
     // --- Orchestrations V2 messaging ---
@@ -2641,7 +2921,7 @@ impl AIClient for ServerApi {
         request: GenerateCodeReviewContentRequest,
     ) -> Result<GenerateCodeReviewContentResponse, anyhow::Error> {
         let auth_token = self.get_or_refresh_access_token().await?;
-        let request_builder = self.client.post(format!(
+        let request_builder = self.base_client.http_client().post(format!(
             "{}/ai/generate_code_review_content",
             ChannelState::server_root_url()
         ));
@@ -2830,11 +3110,8 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
                 LLMModelHost::GeminiEnterprise
             }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::Other(value) => {
-                report_error!(
-                    anyhow!(
-                        "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                log::warn!(
+                    "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
                 );
                 LLMModelHost::Unknown
             }
@@ -2860,10 +3137,9 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmProvider> for LLM
             }
             warp_graphql::queries::get_feature_model_choices::LlmProvider::Other(value) => {
                 report_error!(
-                    anyhow!(
-                        "Invalid LlmProvider '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    "Invalid LlmProvider; update client GraphQL types",
+                    extra: { "provider" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 LLMProvider::Unknown
             }
@@ -2881,10 +3157,9 @@ impl From<warp_graphql::workspace::LlmProvider> for LLMProvider {
             warp_graphql::workspace::LlmProvider::Unknown => LLMProvider::Unknown,
             warp_graphql::workspace::LlmProvider::Other(value) => {
                 report_error!(
-                    anyhow!(
-                        "Invalid LlmProvider '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                    "Invalid LlmProvider; update client GraphQL types",
+                    extra: { "provider" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 LLMProvider::Unknown
             }
@@ -2976,10 +3251,9 @@ fn convert_harness(harness: warp_graphql::ai::AgentHarness) -> AIAgentHarness {
         warp_graphql::ai::AgentHarness::Codex => AIAgentHarness::Codex,
         warp_graphql::ai::AgentHarness::Other(value) => {
             report_error!(
-                anyhow!(
-                    "Invalid AgentHarness '{value}'. Make sure to update client GraphQL types!"
-                ),
-                warp_core::errors::ReportErrorLogMode::OncePerRun
+                "Invalid AgentHarness; update client GraphQL types",
+                extra: { "harness" => %value },
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
             AIAgentHarness::Unknown
         }
@@ -3003,34 +3277,14 @@ fn convert_conversation_format(
     }
 }
 
-// Helper function
-fn convert_usage_metadata(
-    summarized: bool,
-    context_window_usage: f64,
-    credits_spent: f64,
-    platform_credits_spent: f64,
-) -> ConversationUsageMetadata {
-    ConversationUsageMetadata {
-        was_summarized: summarized,
-        context_window_usage: context_window_usage as f32,
-        credits_spent: credits_spent as f32,
-        platform_credits_spent: platform_credits_spent as f32,
-        credits_spent_for_last_block: None,
-        token_usage: vec![],
-        tool_usage_metadata: Default::default(),
-    }
-}
-
 impl TryFrom<warp_graphql::ai::AIConversation> for ServerAIConversationMetadata {
     type Error = anyhow::Error;
 
     fn try_from(value: warp_graphql::ai::AIConversation) -> Result<Self, Self::Error> {
-        let usage = convert_usage_metadata(
-            value.usage.usage_metadata.summarized,
-            value.usage.usage_metadata.context_window_usage,
-            value.usage.usage_metadata.credits_spent,
-            value.usage.usage_metadata.platform_credits_spent,
-        );
+        // Full conversion including per-model token usage and tool usage
+        // stats, so restored conversations render the same usage details
+        // (e.g. the credits-expansion "Models" rows) as live ones.
+        let usage: ConversationUsageMetadata = (&value.usage.usage_metadata).into();
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;
         let ambient_agent_task_id = value
@@ -3071,12 +3325,7 @@ impl TryFrom<warp_graphql::queries::list_ai_conversations::AIConversationMetadat
     fn try_from(
         value: warp_graphql::queries::list_ai_conversations::AIConversationMetadata,
     ) -> Result<Self, Self::Error> {
-        let usage = convert_usage_metadata(
-            value.usage.usage_metadata.summarized,
-            value.usage.usage_metadata.context_window_usage,
-            value.usage.usage_metadata.credits_spent,
-            value.usage.usage_metadata.platform_credits_spent,
-        );
+        let usage: ConversationUsageMetadata = (&value.usage.usage_metadata).into();
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;
         let ambient_agent_task_id = value

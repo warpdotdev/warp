@@ -12,10 +12,10 @@ use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigSt
 use ai::skills::SkillReference;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
-    MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-    Stack, Text,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text, Wrap,
 };
 use warpui::keymap::FixedBinding;
 use warpui::{
@@ -960,9 +960,9 @@ impl View for RunAgentsCardView {
             if let AIAgentActionResultType::RunAgents(orchestrate_result) = &result.result {
                 return render_terminal_state(orchestrate_result, appearance, app);
             }
-            log::error!(
-                "Unexpected action result type for orchestrate: {:?}",
-                result.result
+            report_error!(
+                "Unexpected action result type for orchestrate",
+                extra: { "result_type" => ?result.result }
             );
             return Empty::new().finish();
         }
@@ -1332,18 +1332,22 @@ fn render_agents_section(state: &RunAgentsEditState, app: &AppContext) -> Box<dy
     .with_color(blended_colors::text_disabled(theme, theme.background()))
     .finish();
 
-    let mut pills_row = Flex::row()
+    let pills_row = Wrap::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_size(MainAxisSize::Min)
-        .with_spacing(4.);
-    for cfg in &state.agent_run_configs {
-        pills_row.add_child(render_static_agent_pill(&cfg.name, app));
-    }
+        .with_spacing(4.)
+        .with_run_spacing(4.)
+        .with_children(
+            state
+                .agent_run_configs
+                .iter()
+                .map(|cfg| render_static_agent_pill(&cfg.name, app)),
+        )
+        .finish();
 
     Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_child(Container::new(label).with_margin_bottom(6.).finish())
-        .with_child(pills_row.finish())
+        .with_child(pills_row)
         .finish()
 }
 
@@ -1364,21 +1368,28 @@ pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, Status
                 .iter()
                 .filter(|a| matches!(a.kind, RunAgentsAgentOutcomeKind::Launched { .. }))
                 .count();
-            let label = if launched == total {
-                if total == 1 {
+            if launched == total {
+                let label = if total == 1 {
                     "Spawned 1 agent".to_string()
                 } else {
                     format!("Spawned {total} agents")
-                }
+                };
+                (label, StatusKind::Success)
+            } else if launched == 0 {
+                // Every child failed to launch: surface a terminal failure
+                // rather than the in-progress-looking mixed state.
+                let label = if total == 1 {
+                    "Failed to spawn agent".to_string()
+                } else {
+                    format!("Failed to spawn {total} agents")
+                };
+                (label, StatusKind::Failure)
             } else {
-                format!("Spawned {launched} of {total} agents")
-            };
-            let kind = if launched == total {
-                StatusKind::Success
-            } else {
-                StatusKind::Mixed
-            };
-            (label, kind)
+                (
+                    format!("Spawned {launched} of {total} agents"),
+                    StatusKind::Mixed,
+                )
+            }
         }
         RunAgentsResult::Denied { reason } => {
             let body = if reason.is_empty() {
@@ -1434,7 +1445,10 @@ fn render_status_only_card(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let icon = match kind {
-        StatusKind::Spawning | StatusKind::Mixed => icons::yellow_running_icon(appearance).finish(),
+        StatusKind::Spawning => icons::yellow_running_icon(appearance).finish(),
+        // Partial success is terminal, so use a static warning glyph rather
+        // than the in-progress-looking running circle.
+        StatusKind::Mixed => inline_action_icons::warning_icon(appearance).finish(),
         StatusKind::Success => inline_action_icons::green_check_icon(appearance).finish(),
         StatusKind::Failure => inline_action_icons::red_x_icon(appearance).finish(),
         StatusKind::Cancelled => inline_action_icons::cancelled_icon(appearance).finish(),

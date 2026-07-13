@@ -278,7 +278,8 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
         set exit_code 1
     end
 
-    warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$WARP_SESSION_ID-$block_id\", \"session_id\": $WARP_SESSION_ID}}"
+    set -l next_block_id "precmd-$WARP_SESSION_ID-$block_id"
+    warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"$next_block_id\", \"session_id\": $WARP_SESSION_ID}}"
     warp_maybe_send_reset_grid_osc
 
     set block_id (math $block_id + 1)
@@ -286,6 +287,8 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     if ! test -z $_WARP_GENERATOR_COMMAND
         set -e _WARP_GENERATOR_COMMAND
         set -l escaped_json "{\"hook\": \"Precmd\", \"value\": {
+        \"exit_code\": $exit_code,
+        \"next_block_id\": \"$next_block_id\",
         \"pwd\": \"\",
         \"ps1\": \"\",
         \"git_head\": \"\",
@@ -440,6 +443,8 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     if test "$WARP_HONOR_PS1" = "1"
       # Don't send lprompt or rprompt in this case - we'll use prompt markers for both directly!
       set escaped_json "{\"hook\": \"Precmd\", \"value\": {
+      \"exit_code\": $exit_code,
+      \"next_block_id\": \"$next_block_id\",
       \"pwd\": \"$escaped_pwd\",
       \"ps1\": \"\",
       \"rprompt\": \"\",
@@ -453,6 +458,8 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     else
       # We send an lprompt to use for prompt preview purposes only (we still use prompt markers for active prompts).
       set escaped_json "{\"hook\": \"Precmd\", \"value\": {
+      \"exit_code\": $exit_code,
+      \"next_block_id\": \"$next_block_id\",
       \"pwd\": \"$escaped_pwd\",
       \"ps1\": \"$escaped_prompt\",
       \"rprompt\": \"\",
@@ -630,6 +637,18 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
             command ssh $argv
             return
         end
+
+        # If the user's SSH config sets a RemoteCommand for this destination,
+        # OpenSSH refuses to also run our bootstrap as a command-line remote
+        # command, aborting with "Cannot execute command-line and remote
+        # command." Warpification is structurally impossible there, so fall back
+        # to plain SSH. `ssh -G` prints `remotecommand none` when unset.
+        set -l user_remote_command (command ssh -G $argv 2>/dev/null | command sed -n 's/^remotecommand //p')
+        if test -n "$user_remote_command"; and test "$user_remote_command" != "none"
+            command ssh $argv
+            return
+        end
+
         # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
         # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
         # and use printf to convert back to plaintext

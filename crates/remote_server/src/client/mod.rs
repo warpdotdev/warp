@@ -15,11 +15,12 @@ use crate::codebase_index_proto::{
 };
 use crate::proto::{
     notification, server_message, session_scoped_request, Abort, Authenticate, BufferEdit,
-    BundledSkillProto, ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode,
-    DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, Initialize,
-    InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse,
-    RunCommandRequest, RunCommandResponse, ServerMessage, SessionBootstrapped, TextEdit,
-    UnsubscribeDiffState,
+    ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode, DiffStateFileDelta,
+    DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, GitStatusMetadata, Initialize,
+    InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, PrInfo,
+    RemoteAgentContextSnapshot, RepositoryInfo, RunCommandRequest, RunCommandResponse,
+    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UpdateGitHubPrInfo,
+    UpdateGitHubRepoInfo, UpdateGitStatus,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -28,6 +29,7 @@ mod remote_server_log;
 #[cfg(not(target_family = "wasm"))]
 pub use remote_server_log::RemoteServerLog;
 use warp_core::{safe_error, safe_warn, SessionId};
+use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::TransportStream;
 
@@ -126,8 +128,26 @@ pub enum ClientEvent {
         mode: DiffMode,
         delta: DiffStateFileDelta,
     },
-    /// The daemon pushed its pre-parsed bundled skill catalog.
-    BundledSkillsSnapshotReceived { skills: Vec<BundledSkillProto> },
+    /// The daemon pushed a revisioned full replacement of its Agent Mode context.
+    RemoteAgentContextSnapshotReceived {
+        snapshot: RemoteAgentContextSnapshot,
+    },
+    /// An aggregate git status push (branch + diff stats) was pushed by the
+    /// server for the tab / prompt chips.
+    GitStatusPushReceived {
+        repo_path: StandardizedPath,
+        metadata: GitStatusMetadata,
+    },
+    /// PR info for the current branch was pushed by the server for the PR chip.
+    GitHubPrInfoPushReceived {
+        repo_path: StandardizedPath,
+        pr_info: Option<PrInfo>,
+    },
+    /// Repository name/owner info was pushed by the server for repository chips.
+    GitHubRepositoryInfoPushReceived {
+        repo_path: StandardizedPath,
+        repository_info: Option<RepositoryInfo>,
+    },
 }
 
 /// Parameters for the `Initialize` handshake, sent to the daemon at
@@ -671,9 +691,47 @@ impl RemoteServerClient {
                     delta,
                 })
             }
-            server_message::Message::BundledSkillsSnapshot(snapshot) => {
-                Some(ClientEvent::BundledSkillsSnapshotReceived {
-                    skills: snapshot.skills,
+            server_message::Message::RemoteAgentContextSnapshot(snapshot) => {
+                Some(ClientEvent::RemoteAgentContextSnapshotReceived { snapshot })
+            }
+            server_message::Message::GitStatusPush(push) => {
+                let Some(repo_path) = StandardizedPath::try_new(&push.repo_path).ok() else {
+                    log::warn!("GitStatusPush: invalid repo_path: {}", push.repo_path);
+                    return None;
+                };
+                let Some(metadata) = push.metadata else {
+                    log::warn!(
+                        "GitStatusPush: missing metadata for repo_path: {}",
+                        push.repo_path
+                    );
+                    return None;
+                };
+                Some(ClientEvent::GitStatusPushReceived {
+                    repo_path,
+                    metadata,
+                })
+            }
+            server_message::Message::GithubPrInfoPush(push) => {
+                let Some(repo_path) = StandardizedPath::try_new(&push.repo_path).ok() else {
+                    log::warn!("GitHubPrInfoPush: invalid repo_path: {}", push.repo_path);
+                    return None;
+                };
+                Some(ClientEvent::GitHubPrInfoPushReceived {
+                    repo_path,
+                    pr_info: push.pr_info,
+                })
+            }
+            server_message::Message::GithubRepositoryInfoPush(push) => {
+                let Some(repo_path) = StandardizedPath::try_new(&push.repo_path).ok() else {
+                    log::warn!(
+                        "GitHubRepositoryInfoPush: invalid repo_path: {}",
+                        push.repo_path
+                    );
+                    return None;
+                };
+                Some(ClientEvent::GitHubRepositoryInfoPushReceived {
+                    repo_path,
+                    repository_info: push.repository_info,
                 })
             }
             other => {
@@ -697,7 +755,39 @@ impl RemoteServerClient {
         self.send_notification(msg);
     }
 
-    /// Sends a `RunCommand` request
+    /// Sends an `UpdateGitStatus` notification (fire-and-forget).
+    pub fn update_git_status(&self, repo_path: &StandardizedPath) {
+        let msg =
+            ClientMessage::notification(notification::Message::UpdateGitStatus(UpdateGitStatus {
+                repo_path: repo_path.to_string(),
+            }));
+        self.send_notification(msg);
+    }
+
+    /// Sends an `UpdateGitHubPrInfo` notification (fire-and-forget). The daemon
+    /// refreshes PR info and broadcasts the result as a `GitHubPrInfoPush`.
+    pub fn update_github_pr_info(&self, repo_path: &StandardizedPath) {
+        let msg = ClientMessage::notification(notification::Message::UpdateGithubPrInfo(
+            UpdateGitHubPrInfo {
+                repo_path: repo_path.to_string(),
+            },
+        ));
+        self.send_notification(msg);
+    }
+
+    /// Sends an `UpdateGitHubRepoInfo` notification (fire-and-forget). The
+    /// daemon refreshes repository info and broadcasts the result as a
+    /// `GitHubRepositoryInfoPush`.
+    pub fn update_github_repo_info(&self, repo_path: &StandardizedPath) {
+        let msg = ClientMessage::notification(notification::Message::UpdateGithubRepoInfo(
+            UpdateGitHubRepoInfo {
+                repo_path: repo_path.to_string(),
+            },
+        ));
+        self.send_notification(msg);
+    }
+
+    /// Sends a `RunCommand` request.
     pub async fn run_command(
         &self,
         session_id: SessionId,
@@ -885,7 +975,10 @@ impl RemoteServerClient {
                     );
                 }
                 if !e.is_write_recoverable() {
-                    log::error!("Writer task fatal error: request_id={request_id} error={e}");
+                    report_error!(
+                        anyhow::Error::new(e).context("Writer task fatal error"),
+                        extra: { "request_id" => %request_id }
+                    );
                     pending_requests.clear();
                     break;
                 }
@@ -977,7 +1070,9 @@ impl RemoteServerClient {
                         ProtocolError::UnexpectedEof => {
                             log::info!("Reader task: server disconnected (EOF)");
                         }
-                        _ => log::error!("Reader task fatal error: {e}"),
+                        _ => {
+                            report_error!(anyhow::Error::new(e).context("Reader task fatal error"))
+                        }
                     }
                     break;
                 }

@@ -11,6 +11,7 @@ use futures_util::stream::AbortHandle;
 use instant::{Duration, Instant};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_errors::report_error;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::JsCast;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition};
@@ -31,7 +32,9 @@ use crate::actions::StandardAction;
 use crate::event::ModifiersState;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use crate::notification::RequestPermissionsOutcome;
-use crate::platform::app::{AppCallbackDispatcher, ApproveTerminateResult};
+use crate::platform::app::{
+    AppCallbackDispatcher, ApproveTerminateResult, TerminationRequestSource,
+};
 use crate::platform::{self, NotificationInfo, OperatingSystem, TerminationMode, WindowContext};
 use crate::r#async::Timer;
 use crate::rendering::wgpu::renderer;
@@ -615,7 +618,7 @@ impl EventLoop {
                         self.callbacks.for_window(window).window_resized(window);
                     }
                     Err(err) => {
-                        log::error!("Failed to open window: {err:#}");
+                        report_error!(err.context("Failed to open window"));
                         // Tell the app that the window is "closing".
                         self.callbacks.window_will_close(window_id);
                     }
@@ -1504,7 +1507,11 @@ impl EventLoop {
             return ApproveTerminateResult::Terminate;
         }
 
-        let approve_terminate_result = self.callbacks.should_terminate_app();
+        // Winit doesn't tell us why termination was requested, so assume the
+        // user asked (system-initiated shutdown detection is macOS-only for now).
+        let approve_terminate_result = self
+            .callbacks
+            .should_terminate_app(TerminationRequestSource::User);
         if let ApproveTerminateResult::Terminate = approve_terminate_result {}
         approve_terminate_result
     }
@@ -1630,7 +1637,11 @@ impl EventLoop {
                         // We won't receive MouseInput::Released after drag_window.
                         match winit_window.drag_window() {
                             Ok(_) => window_state.current_mouse_button_pressed = None,
-                            Err(err) => log::error!("error dragging window: {err:?}"),
+                            Err(err) => {
+                                report_error!(
+                                    anyhow::Error::new(err).context("error dragging window")
+                                )
+                            }
                         }
                     }
                 }
@@ -1862,7 +1873,9 @@ impl EventLoop {
         let on_input = Box::new(move |input: SoftKeyboardInput| {
             log::debug!("Soft keyboard callback received input: {:?}", input);
             if let Err(e) = proxy.send_event(CustomEvent::SoftKeyboardInput(input)) {
-                log::error!("Failed to send SoftKeyboardInput event: {:?}", e);
+                report_error!(
+                    anyhow::anyhow!("{e:?}").context("Failed to send SoftKeyboardInput event")
+                );
             }
         });
 
@@ -1872,7 +1885,8 @@ impl EventLoop {
                 self.soft_keyboard_manager = Some(manager);
             }
             Err(err) => {
-                log::error!("Failed to initialize soft keyboard manager: {:?}", err);
+                report_error!(anyhow::anyhow!("{err:?}")
+                    .context("Failed to initialize soft keyboard manager"));
             }
         }
     }

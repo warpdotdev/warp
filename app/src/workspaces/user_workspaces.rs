@@ -4,6 +4,7 @@ use anyhow::Result;
 use regex::Regex;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::{ChangeEventReason, Setting};
+use warp_errors::report_error;
 use warp_graphql::workspace::FeatureModelChoice;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
 
@@ -20,7 +21,6 @@ use crate::channel::ChannelState;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, ObjectType, Owner, Space};
 use crate::pricing::PricingInfoModel;
-use crate::report_error;
 use crate::server::experiments::{ServerExperiment, ServerExperiments, ServerExperimentsEvent};
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::TeamClient;
@@ -158,22 +158,23 @@ impl UserWorkspaces {
         current_workspace_uid: Option<WorkspaceUid>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, _, event, ctx| {
             let ServerExperimentsEvent::ExperimentsUpdated = event;
             me.update_session_sharing_enablement(ctx);
         });
 
-        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |_, code_settings_event, ctx| {
-            match code_settings_event {
+        ctx.subscribe_to_model(
+            &CodeSettings::handle(ctx),
+            |_, _, code_settings_event, ctx| match code_settings_event {
                 CodeSettingsChangedEvent::CodebaseContextEnabled { .. }
                 | CodeSettingsChangedEvent::AutoIndexingEnabled { .. } => {
                     ctx.emit(UserWorkspacesEvent::CodebaseContextEnablementChanged);
                 }
                 _ => {}
-            }
-        });
+            },
+        );
 
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, ai_settings_event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, ai_settings_event, ctx| {
             if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = ai_settings_event {
                 ctx.emit(UserWorkspacesEvent::CodebaseContextEnablementChanged);
             }
@@ -490,9 +491,26 @@ impl UserWorkspaces {
             .map(|workspace| workspace.is_byo_api_key_enabled())
             .unwrap_or(FeatureFlag::SoloUserByok.is_enabled())
     }
+
+    /// Whether the current workspace's managed BYOK/BYOE policy allows members
+    /// to use their own provider API keys. Users with no workspace, or
+    /// workspaces without the managed BYOK/BYOE policy, have no team-level
+    /// restriction, so this returns true and the normal BYO entitlement applies.
+    pub fn are_member_byo_keys_allowed(&self) -> bool {
+        self.current_workspace().is_none_or(|workspace| {
+            !workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                || workspace
+                    .settings
+                    .team_byo
+                    .as_ref()
+                    .is_some_and(|team_byo| {
+                        team_byo.first_party_enabled && team_byo.allow_user_keys
+                    })
+        })
+    }
     /// Whether custom inference endpoints are enabled for the current user.
     /// Anonymous or logged-out users are not allowed to use custom inference.
-    /// Enterprise workspaces require the enterprise custom inference flag, Warp Plan, or dogfood.
+    /// Controlled by the BYO_ENDPOINT billing policy.
     pub fn is_custom_inference_enabled(&self, app: &AppContext) -> bool {
         if AuthStateProvider::as_ref(app)
             .get()
@@ -502,12 +520,25 @@ impl UserWorkspaces {
         }
 
         self.current_workspace()
-            .map(|workspace| {
-                workspace.billing_metadata.customer_type != CustomerType::Enterprise
-                    || FeatureFlag::CustomInferenceEndpointsEnterprise.is_enabled()
-                    || ChannelState::channel().is_dogfood()
-            })
+            .map(|workspace| workspace.billing_metadata.is_byo_endpoint_enabled())
             .unwrap_or(true)
+    }
+
+    /// Whether the current workspace's managed BYOK/BYOE policy allows members
+    /// to use their own custom endpoints. Users with no workspace, or
+    /// workspaces without the managed BYOK/BYOE policy, have no team-level
+    /// restriction, so this returns true and the normal BYO entitlement applies.
+    pub fn are_member_byo_endpoints_allowed(&self) -> bool {
+        self.current_workspace().is_none_or(|workspace| {
+            !workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                || workspace
+                    .settings
+                    .team_byo
+                    .as_ref()
+                    .is_some_and(|team_byo| {
+                        team_byo.endpoints_enabled && team_byo.allow_user_endpoints
+                    })
+        })
     }
 
     pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {

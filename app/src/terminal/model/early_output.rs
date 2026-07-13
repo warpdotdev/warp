@@ -3,6 +3,7 @@ use std::mem;
 
 use pathfinder_color::ColorU;
 use string_offset::CharOffset;
+use warp_errors::report_error;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 use super::ansi;
@@ -423,8 +424,16 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
         );
     }
 
-    fn precmd(&mut self, _data: ansi::PrecmdValue) {
-        panic!("Called EarlyOutput::precmd handler method instead of Block::precmd");
+    fn precmd_with_completion_metadata(&mut self, _data: ansi::PrecmdValue) {
+        panic!(
+            "Called EarlyOutput::precmd_with_completion_metadata handler method instead of Block::precmd_with_completion_metadata"
+        );
+    }
+
+    fn prompt_only_precmd(&mut self, _data: ansi::PromptMetadata) {
+        panic!(
+            "Called EarlyOutput::prompt_only_precmd handler method instead of Block::prompt_only_precmd"
+        );
     }
 
     /*
@@ -650,7 +659,7 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn prompt_marker(&mut self, _marker: ansi::PromptMarker) {
-        log::error!(
+        report_error!(
             "Received prompt_marker in EarlyOutput, but it should be sent to the active block by the blocklist"
         );
     }

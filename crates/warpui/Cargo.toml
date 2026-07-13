@@ -17,6 +17,8 @@ fontkit-rasterizer = []
 traces = ["warpui_core/traces"]
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = ["warpui_core/integration_tests"]
+# See warpui_core's defer_scene_build feature.
+defer_scene_build = ["warpui_core/defer_scene_build"]
 # If enabled, writes named telemetry events to the info log.  Should never be
 # enabled in release builds without a PII audit of telemetry data.
 log_named_telemetry_events = ["warpui_core/log_named_telemetry_events"]
@@ -27,6 +29,7 @@ test-util = ["warpui_core/test-util"]
 experimental-wgpu-renderer = ["dep:wgpu", "dep:bytemuck", "dep:version-compare"]
 
 [dependencies]
+warp_errors.workspace = true
 async-task.workspace = true
 anyhow.workspace = true
 bytemuck = { workspace = true, features = ["derive"], optional = true }
@@ -72,6 +75,7 @@ core-graphics = "0.25.0"
 core-text = "21.0.0"
 dispatch = "0.2.0"
 font-kit.workspace = true
+foreign-types = "0.5"
 libc.workspace = true
 objc.workspace = true
 objc2.workspace = true

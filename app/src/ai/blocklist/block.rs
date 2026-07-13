@@ -47,6 +47,7 @@ use warp_editor::content::buffer::InitialBufferState;
 #[cfg(feature = "local_fs")]
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
 use warpui::assets::asset_cache::AssetCache;
@@ -67,8 +68,6 @@ use warpui::{
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-#[cfg(feature = "agent_mode_debug")]
-use self::code_diff_view::FileDiff;
 use self::model::{AIBlockModel, AIBlockModelHelper};
 use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
 use super::code_block::CodeSnippetButtonHandles;
@@ -108,6 +107,8 @@ use crate::ai::blocklist::block::keyboard_navigable_buttons::{
     KeyboardNavigableButtonBuilder, KeyboardNavigableButtons,
 };
 use crate::ai::blocklist::context_model::AttachmentType;
+#[cfg(feature = "agent_mode_debug")]
+use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::inline_action::ask_user_question_view::{
     self, AskUserQuestionView, AskUserQuestionViewEvent,
 };
@@ -165,6 +166,7 @@ use crate::editor::InteractionState;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{
     AgentModeRewindEntrypoint, AutonomySettingToggleSource, InteractionSource, TelemetryEvent,
 };
@@ -202,8 +204,8 @@ use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, 
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    report_error, report_if_error, send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit,
-    LLMPreferences, PrivacySettings, ToastStack,
+    send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit, LLMPreferences,
+    PrivacySettings, ToastStack,
 };
 
 /// The default display name used for the user if they have no associated display name.
@@ -217,6 +219,14 @@ const AUTO_EXPAND_REQUESTED_COMMAND_DELAY: std::time::Duration =
 
 pub const RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID: &str =
     "ai_block:rich_content_secret_first_char_position";
+
+/// Builds a per-view-unique save-position id for a rich-content link tooltip, so that tooltips in
+/// different AI blocks don't collide on a single shared anchor id. Sharing one global id caused the
+/// tooltip to fail to position (and therefore not appear) in multi-block conversations.
+fn rich_content_link_tooltip_position_id(view_id: &EntityId) -> String {
+    let base = RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID;
+    format!("{base}_{view_id}")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UserAvatarInfo {
@@ -473,6 +483,9 @@ pub(super) struct AIBlockStateHandles {
 
     /// Mouse state handle for the invalid API key button
     invalid_api_key_button_handle: MouseStateHandle,
+
+    /// Mouse state handle for the Subscribe button shown on the out-of-credits error
+    subscribe_button_handle: MouseStateHandle,
 
     /// Mouse state handle for AI document created block
     ai_document_handle: MouseStateHandle,
@@ -1033,6 +1046,15 @@ pub struct AIBlock {
     /// Per-action button components for "View screenshot" buttons on UseComputer actions.
     view_screenshot_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
 
+    /// Per-action button components for "Open recording" buttons on StopRecording actions.
+    open_recording_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
+
+    /// Whether this block's output contains recording-related actions
+    /// (StartRecording/StopRecording/UseComputer). Computed on output updates so
+    /// rendering can skip the conversation-wide recording span derivation for
+    /// unrelated blocks.
+    has_recording_related_actions: bool,
+
     /// Stores the last command that was right-clicked by a child component.
     /// When set, CopyCommand will copy this specific command instead of all commands.
     last_right_clicked_command: Option<String>,
@@ -1272,7 +1294,7 @@ impl AIBlock {
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
                 if event
-                    .terminal_view_id()
+                    .terminal_surface_id()
                     .is_none_or(|id| id == me.terminal_view_id)
                 {
                     match event {
@@ -1500,6 +1522,8 @@ impl AIBlock {
             disable_rule_suggestions_button,
             rewind_button,
             view_screenshot_buttons: Default::default(),
+            open_recording_buttons: Default::default(),
+            has_recording_related_actions: false,
             last_right_clicked_command: None,
             is_usage_footer_expanded: false,
             agent_view_controller,
@@ -1734,10 +1758,13 @@ impl AIBlock {
                         for source in image_sources {
                             resolved_image_sources.insert(
                                 source.clone(),
-                                Some(resolve_asset_source_relative_to_directory(
-                                    &source,
-                                    cwd.as_deref().map(Path::new),
-                                )),
+                                Some(
+                                    resolve_asset_source_relative_to_directory(
+                                        &source,
+                                        cwd.as_deref().map(Path::new),
+                                    )
+                                    .with_local_file_content_version(),
+                                ),
                             );
                         }
 
@@ -1782,7 +1809,7 @@ impl AIBlock {
             .unwrap_or(false);
 
         if !conversation_contains_exchange {
-            log::error!(
+            report_error!(
                 "Reassigning AIBlock to a new conversation but the new conversation does not contain the AI exchange"
             );
             return;
@@ -1849,6 +1876,7 @@ impl AIBlock {
         match status {
             AIBlockOutputStatus::Pending => {
                 self.requested_action_ids.clear();
+                self.has_recording_related_actions = false;
                 self.secret_redaction_state.reset();
             }
             AIBlockOutputStatus::PartiallyReceived { output } => {
@@ -1933,6 +1961,15 @@ impl AIBlock {
                 self.todo_list_states.entry(message.id.clone()).or_default();
             }
         }
+
+        self.has_recording_related_actions = output.actions().any(|action| {
+            matches!(
+                &action.action,
+                AIAgentActionType::StartRecording { .. }
+                    | AIAgentActionType::StopRecording { .. }
+                    | AIAgentActionType::UseComputer(_)
+            )
+        });
 
         if FeatureFlag::WebSearchUI.is_enabled() {
             // Handle WebSearch messages
@@ -2029,6 +2066,12 @@ impl AIBlock {
                     .or_default();
             }
 
+            if matches!(&action.action, AIAgentActionType::StopRecording { .. }) {
+                self.open_recording_buttons
+                    .entry(action.id.clone())
+                    .or_default();
+            }
+
             match action {
                 AIAgentAction {
                     id: action_id,
@@ -2076,7 +2119,12 @@ impl AIBlock {
                     } else {
                         format!("MCP Tool: {name} ({display_input})")
                     };
-                    self.handle_mcp_tool_stream_update(action_id, &command_text, ctx);
+                    self.handle_mcp_tool_stream_update(
+                        action_id,
+                        &command_text,
+                        display_input,
+                        ctx,
+                    );
                 }
                 AIAgentAction {
                     id: action_id,
@@ -2145,6 +2193,30 @@ impl AIBlock {
                 .footer_citation_chip_handles
                 .entry(citation.clone())
                 .or_default();
+        }
+        // Also register handles for memory citations derived from fetched_memories,
+        // which are synthesized at render time and never go through output.citations.
+        // Only register for the first exchange since that's the only one that shows them.
+        if let Some(conversation) = self.model.conversation(ctx) {
+            let is_first_exchange = conversation
+                .first_exchange()
+                .map(|e| Some(e.id) == self.model.exchange_id(ctx))
+                .unwrap_or(false);
+            if is_first_exchange {
+                for memory in conversation.fetched_memories() {
+                    if memory.memory_store_id.is_empty() || memory.memory_id.is_empty() {
+                        continue;
+                    }
+                    self.state_handles
+                        .footer_citation_chip_handles
+                        .entry(AIAgentCitation::AgentMemory {
+                            memory_store_id: memory.memory_store_id.clone(),
+                            memory_id: memory.memory_id.clone(),
+                            content: memory.content.clone(),
+                        })
+                        .or_default();
+                }
+            }
         }
 
         // Register element state for reasoning messages and track summarization timing.
@@ -3105,7 +3177,9 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    log::error!("Failed to persist 'Show code suggestion speedbump' setting: {e}");
+                    report_error!(
+                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
+                    );
                 }
             });
         }
@@ -3127,9 +3201,6 @@ impl AIBlock {
             .action_model
             .as_ref(ctx)
             .request_file_edits_executor(ctx);
-        executor.update(ctx, |executor, _| {
-            executor.register_requested_edits(action_id, &view);
-        });
 
         // If the diff is being viewed in a shared session (read-only mode), populate diffs from the payload.
         if self.action_model.as_ref(ctx).is_view_only() {
@@ -3142,12 +3213,28 @@ impl AIBlock {
             view.update(ctx, |diff_view, ctx| {
                 diff_view.set_candidate_diffs(file_diffs, ctx);
             });
+        } else {
+            // Register the review view as the action's diff storage: the
+            // executor seeds it with the resolved diffs when preprocess
+            // completes and drives its save at execute time.
+            //
+            // View-only (shared-session viewer) diffs must not be registered:
+            // registration wires the view into the persistence flow, and a
+            // spectator's view must never become the surface that writes the
+            // edits to disk.
+            executor.update(ctx, |executor, _| {
+                executor.register_requested_edits(action_id, Box::new(view.downgrade()));
+            });
         }
 
         let action_id_clone = action_id.clone();
         ctx.subscribe_to_view(&view, move |me, view, event, ctx| {
             match event {
                 CodeDiffViewEvent::TryAccept => {
+                    // The executor drives the save through the registered
+                    // diff storage at execute time, pulling the (possibly
+                    // edited) final content from the view's editor buffers.
+                    view.update(ctx, |view, ctx| view.send_malformed_line_telemetry(ctx));
                     me.action_model.update(ctx, |action_model, ctx| {
                         action_model.execute_action(
                             &action_id_clone,
@@ -3351,7 +3438,7 @@ impl AIBlock {
                     match action_status {
                         Some(AIActionStatus::Finished(result)) => {
                             if result.result.is_successful() {
-                                CodeDiffState::Accepted(None)
+                                CodeDiffState::Accepted
                             } else {
                                 // For other finished states, default to rejected
                                 CodeDiffState::Rejected
@@ -3438,6 +3525,7 @@ impl AIBlock {
                         ctx,
                     );
                 });
+                self.yield_requested_action_focus_if_focused(&view, ctx);
                 ctx.notify();
             }
             RequestedCommandViewEvent::EnableAutoexecuteMode => {
@@ -3445,6 +3533,7 @@ impl AIBlock {
             }
             RequestedCommandViewEvent::Rejected => {
                 self.cancel_action(action_id, ctx);
+                self.yield_requested_action_focus_if_focused(&view, ctx);
             }
             RequestedCommandViewEvent::UpdatedExpansionState { is_expanded } => {
                 // We only care about expansion state updates when the command
@@ -3521,12 +3610,14 @@ impl AIBlock {
         &mut self,
         action_id: &AIAgentActionId,
         command_text: &str,
+        mcp_args: serde_json::Value,
         ctx: &mut ViewContext<Self>,
     ) {
         match self.requested_mcp_tools.get_mut(action_id) {
             Some(requested_mcp_tool) => {
                 requested_mcp_tool.view.update(ctx, |view, ctx| {
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_request(mcp_args);
                     ctx.notify();
                 });
             }
@@ -3547,6 +3638,7 @@ impl AIBlock {
                         ctx,
                     );
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_request(mcp_args);
                     view
                 });
                 let action_id_clone = action_id.clone();
@@ -3576,10 +3668,12 @@ impl AIBlock {
                 self.action_model.update(ctx, |action_model, ctx| {
                     action_model.execute_action(action_id, self.client_ids.conversation_id, ctx);
                 });
+                self.yield_requested_action_focus_if_focused(&view, ctx);
                 ctx.notify();
             }
             RequestedCommandViewEvent::Rejected => {
                 self.cancel_action(action_id, ctx);
+                self.yield_requested_action_focus_if_focused(&view, ctx);
             }
             RequestedCommandViewEvent::TextSelected => {
                 // If there's an ongoing text selection, clear all other selections within the
@@ -4176,7 +4270,9 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    log::error!("Failed to persist 'Show code suggestion speedbump' setting: {e}");
+                    report_error!(
+                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
+                    );
                 }
             });
         }
@@ -4316,7 +4412,7 @@ impl AIBlock {
         self.model
             .inputs_to_render(app)
             .iter()
-            .any(|input| input.user_query().is_some())
+            .any(|input| input.display_query().is_some())
     }
 
     /// `true` if the AI block is "finished".
@@ -4732,6 +4828,10 @@ impl AIBlock {
 
         if !cards.is_empty() {
             self.has_imported_comments = true;
+            let conversation_id = self.client_ids.conversation_id;
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, _| {
+                model.mark_conversation_has_imported_comments(conversation_id);
+            });
         }
 
         self.imported_comments.insert(
@@ -4753,6 +4853,15 @@ impl AIBlock {
         });
     }
 
+    fn yield_requested_action_focus_if_focused(
+        &self,
+        view: &ViewHandle<RequestedCommandView>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if view.is_self_or_child_focused(ctx) {
+            ctx.emit(AIBlockEvent::FocusTerminal);
+        }
+    }
     /// Tries to focus the AI block or one of its parts, if applicable.
     /// If the block doesn't need to be focused, focus is yielded
     /// back to the owning [`TerminalView`].
@@ -4884,6 +4993,32 @@ impl AIBlock {
                     .find_map(|comment| comment.rich_text_editor.as_ref(ctx).selected_text(ctx))
             })
             .or_else(|| self.selected_text.read().clone())
+            .filter(|selection| !selection.is_empty())
+    }
+
+    /// Test-only helper to set the block-level text selection, which is normally
+    /// written by the `SelectableArea` selection callback during a drag.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn set_block_level_selected_text_for_test(&self, text: Option<String>) {
+        *self.selected_text.write() = text;
+    }
+
+    /// Test-only helper that simulates a block-level text selection in this AI
+    /// block: it writes the selected text and emits the same
+    /// [`AIBlockEvent::SelectionChanged`] signal that
+    /// [`AIBlockAction::SelectText`] does, so the terminal view mirrors it into
+    /// the model's rich content selection (which the copy/insert paths read).
+    ///
+    /// This lets integration tests exercise the in-AI-block copy path without
+    /// depending on layout-sensitive pixel coordinates.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn simulate_text_selection_for_test(
+        &mut self,
+        text: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        *self.selected_text.write() = text;
+        ctx.emit(AIBlockEvent::SelectionChanged);
     }
 
     /// Start a selection at the top left corner of the block's SelectableArea.
@@ -5080,13 +5215,15 @@ impl AIBlock {
                 target_override: self.detected_file_path_target_override(absolute_path),
             },
         };
+        let position_id = rich_content_link_tooltip_position_id(&ctx.view_id());
+        self.detected_links_state.tooltip_position_id = position_id.clone();
         self.detected_links_state.link_location_open_tooltip = Some(LinkLocation {
             link_range: link_range.clone(),
             location: *location,
         });
         ctx.emit(AIBlockEvent::ShowLinkTooltip(RichContentLinkTooltipInfo {
             link: rich_content_link,
-            position_id: RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+            position_id,
         }));
     }
 
@@ -5460,7 +5597,7 @@ impl AIBlock {
         self.model
             .inputs_to_render(app)
             .iter()
-            .filter_map(|input| input.user_query())
+            .filter_map(|input| input.display_query())
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -5696,15 +5833,18 @@ impl AIBlock {
     /// bulk "Open all in code review" button based on whether the current working
     /// directory is still within the imported comments' repository.
     fn update_imported_comments_disabled_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let cwd_location = self.current_working_directory_location(ctx);
-
         if self.has_imported_comments {
+            let cwd_location = self.current_working_directory_location(ctx);
             self.update_own_imported_comments_disabled_state(cwd_location.as_ref(), ctx);
-        } else if self.model.is_latest_visible_exchange_in_root_task(ctx) {
+        } else if BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation_has_imported_comments(&self.client_ids.conversation_id)
+            && self.model.is_latest_visible_exchange_in_root_task(ctx)
+        {
             // The "Open all" button is rendered by the latest visible exchange when the
             // current thread has imported comments but this block does not own them directly.
             // Update that block's button state from its CWD so the button disables when the
             // user navigates outside the imported comments' repository.
+            let cwd_location = self.current_working_directory_location(ctx);
             self.update_open_all_button_disabled_state(cwd_location.as_ref(), ctx);
         } else {
             return;
@@ -5943,6 +6083,12 @@ pub enum AIBlockEvent {
     /// important because selecting across multiple blocks only supports text selections at the
     /// `AIBlock` level.
     ChildViewTextSelected,
+    /// Emitted when the `AIBlock`'s own (block-level) text selection state may
+    /// have changed. The terminal view uses this to keep the model's record of
+    /// which rich content block has an active selection in sync, so copy/insert
+    /// paths can find the selected text. Rich content selections are not tied to
+    /// the point-based model selection, so this signal is required.
+    SelectionChanged,
     CopiedEmptyText,
     OpenSettings,
     #[cfg(feature = "local_fs")]
@@ -6136,6 +6282,9 @@ pub enum AIBlockAction {
     OpenCommentInGitHub {
         url: String,
     },
+    OpenRecordingArtifact {
+        artifact_uid: String,
+    },
 }
 
 impl TypedActionView for AIBlock {
@@ -6203,12 +6352,25 @@ impl TypedActionView for AIBlock {
                 ctx.notify();
             }
             AIBlockAction::SelectText => {
-                // If there's an ongoing text selection, clear all other selections within the
-                // `AIBlock`'s view sub-hierarchy to ensure only one component has a selection at a time.
+                // A plain click (no drag) produces an empty selection, but the enclosing
+                // `SelectableArea` still dispatches `SelectText` for it. Only treat it as a real
+                // selection — and, crucially, only dismiss any open link/secret tooltip — when there
+                // is actually a non-empty selection. Otherwise a plain click on a link would
+                // immediately dismiss the very tooltip that same click just opened, so the tooltip
+                // never becomes visible.
+                let has_selection = self.selected_text.read().is_some();
+                // Clear all other selections within the `AIBlock`'s view sub-hierarchy to ensure
+                // only one component has a selection at a time.
                 self.clear_other_selections(None, ctx.window_id(), ctx);
                 // If we have a selection, we should use the default cursor, even if it's over a link.
                 ctx.reset_cursor();
-                self.dismiss_ai_tooltips(ctx);
+                if has_selection {
+                    self.dismiss_ai_tooltips(ctx);
+                }
+                // Notify the terminal view so it can keep the model's record of which rich
+                // content block has an active selection in sync (rich content selections are
+                // not tied to the point-based model selection used for regular blocks).
+                ctx.emit(AIBlockEvent::SelectionChanged);
             }
             AIBlockAction::CopyAIBlockCodeSnippet(text) => {
                 ctx.clipboard()
@@ -6709,6 +6871,34 @@ impl TypedActionView for AIBlock {
             }
             AIBlockAction::OpenCommentInGitHub { url } => {
                 ctx.open_url(url);
+            }
+            AIBlockAction::OpenRecordingArtifact { artifact_uid } => {
+                let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+                let artifact_uid = artifact_uid.clone();
+                let artifact_uid_for_error = artifact_uid.clone();
+                ctx.spawn(
+                    async move { ai_client.get_artifact_download(&artifact_uid).await },
+                    move |_, result, ctx| match result {
+                        Ok(artifact) => {
+                            ctx.open_url(artifact.download_url());
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "Failed to prepare recording artifact {artifact_uid_for_error}: {error:#}"
+                            );
+                            let window_id = ctx.window_id();
+                            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::error(
+                                        "Failed to open recording.".to_string(),
+                                    ),
+                                    window_id,
+                                    ctx,
+                                );
+                            });
+                        }
+                    },
+                );
             }
             AIBlockAction::ViewScreenshot { action_id } => {
                 // Collect all UseComputer action IDs across the entire conversation

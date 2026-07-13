@@ -91,7 +91,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         model_event_dispatcher: ModelHandle<ModelEventDispatcher>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&model_event_dispatcher, |me, event, ctx| {
+        ctx.subscribe_to_model(&model_event_dispatcher, |me, _, event, ctx| {
             if let ModelEvent::SshInitShell {
                 pending_session_info,
             } = event
@@ -101,7 +101,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         });
 
         let mgr = RemoteServerManager::handle(ctx);
-        ctx.subscribe_to_model(&mgr, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&mgr, |me, _, event, ctx| match event {
             RemoteServerManagerEvent::BinaryCheckComplete {
                 session_id,
                 result,
@@ -138,7 +138,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::SessionDeregistered { .. }
             | RemoteServerManagerEvent::HostConnected { .. }
             | RemoteServerManagerEvent::HostDisconnected { .. }
-            | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
+            | RemoteServerManagerEvent::RemoteAgentContextSnapshot { .. }
             | RemoteServerManagerEvent::NavigatedToDirectory { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
@@ -159,8 +159,10 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::GitPushResponse { .. }
             | RemoteServerManagerEvent::CreatePrResponse { .. }
             | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
-            | RemoteServerManagerEvent::GetPrInfoResponse { .. }
-            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. } => {}
+            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
+            | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => {}
         });
 
         Self {

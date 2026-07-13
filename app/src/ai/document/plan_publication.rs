@@ -5,6 +5,7 @@
 //! proceeding with work that requires the plans to be server-backed.
 use std::time::Duration;
 
+use warp_errors::report_error;
 use warpui::r#async::FutureExt as WarpFutureExt;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
@@ -36,7 +37,7 @@ pub(in crate::ai) fn prepare_plan_publications<E: Entity>(
         .into_iter()
         .filter_map(|document_id| {
             let (save_tx, save_rx) = async_channel::bounded(1);
-            ctx.subscribe_to_model(&document_model, move |_, event, ctx| {
+            ctx.subscribe_to_model(&document_model, move |_, _, event, ctx| {
                 let AIDocumentModelEvent::DocumentSaveStatusUpdated(saved_document_id) = event
                 else {
                     return;
@@ -79,15 +80,15 @@ pub(in crate::ai) async fn wait_for_plan_publications(pending: Vec<PendingPlanPu
         {
             Ok(Ok(())) => {}
             Ok(Err(_)) => {
-                log::error!(
-                    "Stopped waiting for plan document {} before it became server-backed.",
-                    pending.document_id
+                report_error!(
+                    "Stopped waiting for plan document before it became server-backed.",
+                    extra: { "document_id" => %pending.document_id }
                 );
             }
             Err(_) => {
-                log::error!(
-                    "Timed out waiting for plan document {} to become server-backed before child-agent launch.",
-                    pending.document_id
+                report_error!(
+                    "Timed out waiting for plan document to become server-backed before child-agent launch.",
+                    extra: { "document_id" => %pending.document_id }
                 );
             }
         }

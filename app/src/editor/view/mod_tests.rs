@@ -3,6 +3,7 @@ use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use settings::ToggleableSetting;
 use unindent::Unindent;
+use warp_errors::report_if_error;
 use warpui::color::ColorU;
 use warpui::platform::WindowStyle;
 use warpui::text_layout::TextFrame;
@@ -14,7 +15,6 @@ use crate::auth::AuthStateProvider;
 use crate::editor::soft_wrap::FrameLayouts;
 use crate::editor::tests::sample_text;
 use crate::editor::EditorView;
-use crate::report_if_error;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
@@ -2788,7 +2788,7 @@ fn test_move_cursor() -> Result<()> {
                 ],
                 ctx,
             )?;
-            view.cursor_home(ctx);
+            view.move_to_visual_line_start(ctx);
             assert_eq!(
                 view.selected_ranges(ctx),
                 &[
@@ -2803,7 +2803,7 @@ fn test_move_cursor() -> Result<()> {
                 ],
                 ctx,
             )?;
-            view.cursor_end(ctx);
+            view.move_to_visual_line_end(ctx);
             assert_eq!(
                 view.selected_ranges(ctx),
                 &[
@@ -2831,12 +2831,12 @@ fn test_move_cursor() -> Result<()> {
 
         view.update(&mut app, |view, ctx| {
             view.select_ranges(vec![DisplayPoint::new(3, 5)..DisplayPoint::new(3, 6)], ctx)?;
-            view.cursor_home(ctx);
+            view.move_to_visual_line_start(ctx);
             assert_eq!(
                 view.selected_ranges(ctx),
                 &[DisplayPoint::new(3, 4)..DisplayPoint::new(3, 4)]
             );
-            view.cursor_home(ctx);
+            view.move_to_visual_line_start(ctx);
             assert_eq!(
                 view.selected_ranges(ctx),
                 &[DisplayPoint::new(3, 0)..DisplayPoint::new(3, 0)]
@@ -2846,6 +2846,162 @@ fn test_move_cursor() -> Result<()> {
 
         Ok(())
     })
+}
+
+/// Regression test: when the cursor is on a soft-wrapped continuation row,
+/// Home/End should move to the start/end of that visual row, not the logical
+/// line start/end.
+#[test]
+fn test_move_to_visual_line_start_and_end_on_soft_wrapped_row() -> Result<()> {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            // A single logical line (no newline) that soft-wraps onto three
+            // visual rows of four characters each.
+            EditorView::new_with_base_text("aaaabbbbcccc", Default::default(), ctx)
+        });
+
+        view.update(&mut app, |view, ctx| {
+            // One frame whose three lines carry continuous glyph indices:
+            // row 0 -> 0..=3, row 1 -> 4..=7, row 2 -> 8..=11.
+            let frame_layouts =
+                FrameLayouts::new(vec![Arc::new(TextFrame::mock("aaaa\nbbbb\ncccc"))], 0, 3);
+            view.editor_model
+                .as_ref(ctx)
+                .display_map(ctx)
+                .soft_wrap_state()
+                .update(frame_layouts);
+
+            // Caret in the middle of the third visual row.
+            view.select_ranges(
+                vec![DisplayPoint::new(0, 10)..DisplayPoint::new(0, 10)],
+                ctx,
+            )?;
+            view.move_to_visual_line_start(ctx);
+            // Home lands at the start of that visual row (column 8), not the
+            // start of the whole logical line (column 0).
+            assert_eq!(
+                view.selected_ranges(ctx),
+                &[DisplayPoint::new(0, 8)..DisplayPoint::new(0, 8)]
+            );
+
+            // Caret in the middle of the second visual row.
+            view.select_ranges(vec![DisplayPoint::new(0, 5)..DisplayPoint::new(0, 5)], ctx)?;
+            view.move_to_visual_line_end(ctx);
+            // End lands at the end of that visual row (column 8), not the end of
+            // the whole logical line (column 12).
+            assert_eq!(
+                view.selected_ranges(ctx),
+                &[DisplayPoint::new(0, 8)..DisplayPoint::new(0, 8)]
+            );
+            Ok::<(), Error>(())
+        })?;
+
+        Ok(())
+    })
+}
+
+/// On a non-soft-wrapped line, Home should still toggle between the first
+/// non-whitespace character and the start of the line.
+#[test]
+fn test_move_to_visual_line_start_non_wrapped_unchanged() -> Result<()> {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new_with_base_text("    echo", Default::default(), ctx)
+        });
+
+        view.update(&mut app, |view, ctx| {
+            // A single non-wrapped line; one frame with one line.
+            let frame_layouts =
+                FrameLayouts::new(vec![Arc::new(TextFrame::mock("    echo"))], 0, 1);
+            view.editor_model
+                .as_ref(ctx)
+                .display_map(ctx)
+                .soft_wrap_state()
+                .update(frame_layouts);
+
+            view.select_ranges(vec![DisplayPoint::new(0, 8)..DisplayPoint::new(0, 8)], ctx)?;
+            // First press -> first non-whitespace character (column 4).
+            view.move_to_visual_line_start(ctx);
+            assert_eq!(
+                view.selected_ranges(ctx),
+                &[DisplayPoint::new(0, 4)..DisplayPoint::new(0, 4)]
+            );
+            // Second press -> start of line (column 0).
+            view.move_to_visual_line_start(ctx);
+            assert_eq!(
+                view.selected_ranges(ctx),
+                &[DisplayPoint::new(0, 0)..DisplayPoint::new(0, 0)]
+            );
+            Ok::<(), Error>(())
+        })?;
+
+        Ok(())
+    })
+}
+
+/// Regression guard for the keybinding wiring (including the removal of the
+/// cross-platform Home/End `FixedBinding`s): on Linux/Windows the physical
+/// Home/End keys resolve to the visual-line action, while on macOS they resolve
+/// to document start/end and cmd-left/cmd-right resolve to the visual-line
+/// action.
+#[test]
+fn test_home_end_keybinding_resolution() {
+    use warpui::keymap::{Keystroke, Trigger};
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        // Register the EditorView key bindings.
+        app.update(super::init);
+
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new_with_base_text("hello", Default::default(), ctx)
+        });
+
+        view.read(&app, |_view, app| {
+            let window_id = view.window_id(app);
+            let view_id = view.id();
+            let resolve = |keystroke: &str| -> Option<String> {
+                let keystroke = Keystroke::parse(keystroke).expect("valid keystroke");
+                app.key_bindings_for_view(window_id, view_id)
+                    .into_iter()
+                    .find(|binding| {
+                        matches!(
+                            &binding.trigger,
+                            Trigger::Keystrokes(keystrokes)
+                                if keystrokes.len() == 1 && keystrokes[0] == keystroke
+                        )
+                    })
+                    .and_then(|binding| {
+                        binding
+                            .action
+                            .as_any()
+                            .downcast_ref::<EditorAction>()
+                            .map(|action| format!("{action:?}"))
+                    })
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                assert_eq!(resolve("home").as_deref(), Some("MoveToVisualLineStart"));
+                assert_eq!(resolve("end").as_deref(), Some("MoveToVisualLineEnd"));
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                assert_eq!(resolve("home").as_deref(), Some("MoveToBufferStart"));
+                assert_eq!(resolve("end").as_deref(), Some("MoveToBufferEnd"));
+                assert_eq!(
+                    resolve("cmd-left").as_deref(),
+                    Some("MoveToVisualLineStart")
+                );
+                assert_eq!(resolve("cmd-right").as_deref(), Some("MoveToVisualLineEnd"));
+            }
+        });
+    });
 }
 
 #[test]
@@ -3361,7 +3517,7 @@ fn test_autocomplete_symbols() {
             };
             let mut editor = EditorView::new_with_base_text("word warp word", options, ctx);
 
-            editor.cursor_end(ctx);
+            editor.move_to_visual_line_end(ctx);
             editor.user_insert("(", ctx);
             assert_eq!(editor.buffer_text(ctx), "word warp word(");
 

@@ -31,6 +31,8 @@ pub use noop_command_executor::NoOpCommandExecutor;
 pub use remote_command_executor::RemoteCommandExecutor;
 pub use shared::{shell_escape_single_quotes, shell_quote_arg, ExecutorCommandEvent};
 use warp_completer::completer::CommandOutput;
+#[cfg(feature = "local_tty")]
+use warp_errors::report_error;
 use warpui::ModelContext;
 
 use super::SessionInfo;
@@ -248,7 +250,7 @@ fn new_command_executor_for_local_tty_session(
                         false,
                         "Docker sandbox sessions should be routed through the in-band executor"
                     );
-                    log::error!(
+                    report_error!(
                         "Docker sandbox session reached the local-executor branch; \
                          falling back to a no-op command executor. \
                          `launch_data_needs_in_band_executor` routing may have drifted."

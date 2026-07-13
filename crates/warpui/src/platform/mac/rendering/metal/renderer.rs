@@ -22,6 +22,7 @@ use objc2_quartz_core::CAMetalDrawable;
 use pathfinder_color::{ColorF, ColorU};
 use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_errors::report_error;
 use warpui_core::fonts::{self, canvas, RasterizedGlyph, SubpixelAlignment};
 use warpui_core::platform::CapturedFrame;
 use warpui_core::rendering::texture_cache::TextureCache;
@@ -775,7 +776,10 @@ impl<'a> Frame<'a> {
                 }
                 Ok(None) => {}
                 Err(_) => {
-                    log::error!("Unable to get glyph out of glyph cache for glyph {glyph:?}");
+                    report_error!(
+                        "Unable to get glyph out of glyph cache",
+                        extra: { "glyph" => ?glyph }
+                    );
                     return;
                 }
             }
@@ -1058,7 +1062,7 @@ impl super::super::Renderer for Renderer {
             .device()
             .expect("render is only called for a window that has a real display")
         else {
-            log::error!("Metal renderer called with non-metal device");
+            report_error!("Metal renderer called with non-metal device");
             return;
         };
         let metal_device: &ProtocolObject<dyn MTLDevice> = metal_device;

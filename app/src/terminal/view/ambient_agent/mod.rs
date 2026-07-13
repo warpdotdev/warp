@@ -64,17 +64,17 @@ pub fn create_cloud_mode_view(
     // In Cloud Mode, ambient agent prompts are composed in an uninitialized session-sharing
     // viewer pane. This lets us reuse the terminal input without a backing session, and
     // then join the ambient agent session once it's ready.
-    let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = ctx.add_model(|ctx| {
-        Box::new(shared_session::viewer::TerminalManager::new_deferred(
-            resources,
-            view_bounds_size,
-            window_id,
-            enable_orchestration_polling,
-            ctx,
-        )) as Box<dyn TerminalManager>
-    });
-
-    let terminal_view = terminal_manager.as_ref(ctx).view();
+    let terminal_init = shared_session::viewer::TerminalManager::new_deferred(
+        resources,
+        view_bounds_size,
+        window_id,
+        enable_orchestration_polling,
+        ctx,
+    );
+    let viewer_manager = terminal_init.manager;
+    let terminal_view = terminal_init.view;
+    let terminal_manager: ModelHandle<Box<dyn TerminalManager>> =
+        ctx.add_model(|_ctx| Box::new(viewer_manager) as Box<dyn TerminalManager>);
 
     // Subscribe to the ambient agent view model to join the session once it's ready.
     // This ensures that we use the manager corresponding to this specific view.
@@ -86,9 +86,31 @@ pub fn create_cloud_mode_view(
         log::warn!("Cloud mode view was created without an ambient agent view model");
         return (terminal_view, terminal_manager);
     };
-    let view_model_for_subscription = view_model.clone();
+    wire_ambient_agent_session_events(&terminal_manager, &view_model, ctx);
+
+    (terminal_view, terminal_manager)
+}
+
+/// Wires an [`AmbientAgentViewModel`]'s session lifecycle events to the viewer
+/// [`shared_session::viewer::TerminalManager`] so the viewer connects/attaches to
+/// the right shared session as runs come and go:
+/// - [`AmbientAgentViewModelEvent::SessionReady`]: a freshly spawned run's session is
+///   ready, so connect the viewer to it (initial run).
+/// - [`AmbientAgentViewModelEvent::ExecutionSessionReady`]: a follow-up run started on a
+///   new VM after the previous one ended, so re-attach the viewer to the new session.
+///
+/// Shared by the compose path ([`create_cloud_mode_view`]) and the shared-session viewer
+/// path (`PaneGroup::create_shared_session_viewer`) so every ambient viewer re-attaches on
+/// follow-up runs — including a raw `shared_session` link join whose model is created lazily
+/// at `SessionJoined`.
+pub fn wire_ambient_agent_session_events(
+    terminal_manager: &ModelHandle<Box<dyn TerminalManager>>,
+    view_model: &ModelHandle<AmbientAgentViewModel>,
+    ctx: &mut AppContext,
+) {
+    let view_model = view_model.clone();
     terminal_manager.update(ctx, |_, ctx| {
-        ctx.subscribe_to_model(&view_model, move |manager, event, ctx| {
+        ctx.subscribe_to_model(&view_model, move |manager, view_model, event, ctx| {
             let Some(manager) = manager
                 .as_any_mut()
                 .downcast_mut::<shared_session::viewer::TerminalManager>()
@@ -101,9 +123,8 @@ pub fn create_cloud_mode_view(
                     // conversation on chip click. Use append-mode scrollback
                     // + replay suppression so the cloud agent's replay doesn't
                     // duplicate the blocks we already have.
-                    let append_followup_scrollback = view_model_for_subscription
-                        .as_ref(ctx)
-                        .is_local_to_cloud_handoff();
+                    let append_followup_scrollback =
+                        view_model.as_ref(ctx).is_local_to_cloud_handoff();
                     if manager.connect_to_session(*session_id, append_followup_scrollback, ctx) {
                         manager.start_cloud_mode_setup_command_tracking();
                     }
@@ -135,8 +156,6 @@ pub fn create_cloud_mode_view(
             }
         });
     });
-
-    (terminal_view, terminal_manager)
 }
 
 /// Returns `true` when a cloud agent shared session is in any pre-first-exchange phase —
@@ -173,8 +192,15 @@ pub fn is_cloud_agent_pre_first_exchange(
 
     // Handoff panes enter agent view with `RestoreExistingConversation` because they restore the
     // forked conversation, not `CloudAgent`. The `is_local_to_cloud_handoff` flag is the
-    // authoritative "this is a cloud agent pane" signal for that path, so accept either.
-    if !origin.is_cloud_agent() && !view_model.is_local_to_cloud_handoff() {
+    // authoritative "this is a cloud agent pane" signal for that path. Shared-session viewers of
+    // an ambient run (raw link join / attach-to-running) enter agent view via
+    // `SharedSessionSelection` / `ThirdPartyCloudAgent`, so `is_shared_ambient_agent_session()` is
+    // the authoritative signal for that path — e.g. a post-death cloud follow-up spinning up a new
+    // VM must still count as pre-first-exchange so the setup progress + prompt-queuing UI render.
+    if !origin.is_cloud_agent()
+        && !view_model.is_local_to_cloud_handoff()
+        && !terminal_model.is_shared_ambient_agent_session()
+    {
         return false;
     }
 

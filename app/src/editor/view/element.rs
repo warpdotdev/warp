@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use vim::vim::{MotionType, VimMode};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
+use warp_errors::report_error;
 use warp_util::user_input::UserInput;
 use warpui::elements::{
     AfterLayoutContext, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -1588,7 +1589,7 @@ impl Element for EditorElement {
             app,
         ) {
             Err(error) => {
-                log::error!("error laying out lines: {error}");
+                report_error!(error.context("error laying out lines"));
                 return size;
             }
             Ok(layouts) => layouts,

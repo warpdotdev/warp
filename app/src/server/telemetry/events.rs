@@ -66,7 +66,6 @@ use crate::terminal::model::terminal_model::BlockSelectionCardinality;
 use crate::terminal::settings::AltScreenPaddingMode;
 use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
 use crate::terminal::view::inline_banner::{
     ZeroStatePromptSuggestionTriggeredFrom, ZeroStatePromptSuggestionType,
 };
@@ -481,6 +480,7 @@ pub enum CLIAgentType {
     Goose,
     Hermes,
     Vibe,
+    Antigravity,
     Unknown,
 }
 
@@ -990,6 +990,12 @@ pub enum AgentModeCitation {
         #[serde(skip_serializing)]
         url: String,
     },
+    /// A fetched memory surfaced as a citation so we can track whether memory-backed
+    /// responses are shown to users and whether users open those memory citations.
+    AgentMemory {
+        memory_store_id: String,
+        memory_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -1018,7 +1024,6 @@ pub enum AIAgentInput {
     CreateNewProject { query: String },
     CloneRepository { url: String },
     CodeReview,
-    FetchReviewComments,
     SummarizeConversation,
     InvokeSkill { skill_name: String },
     StartFromAmbientRunPrompt,
@@ -1051,7 +1056,6 @@ impl From<FullAIAgentInput> for AIAgentInput {
                 url: clone_repo_url.into_url(),
             },
             FullAIAgentInput::CodeReview { .. } => Self::CodeReview,
-            FullAIAgentInput::FetchReviewComments { .. } => Self::FetchReviewComments,
             FullAIAgentInput::SummarizeConversation { .. } => Self::SummarizeConversation,
             FullAIAgentInput::InvokeSkill { skill, .. } => Self::InvokeSkill {
                 skill_name: skill.name.clone(),
@@ -1090,6 +1094,7 @@ pub enum TelemetryAgentViewEntryOrigin {
     InlineCodeReview,
     AmbientAgent,
     Cli,
+    Tui,
     ImageAdded,
     SlashCommand,
     CodeReviewContext,
@@ -1142,6 +1147,7 @@ impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
             AgentViewEntryOrigin::CloudAgent => Self::AmbientAgent,
             AgentViewEntryOrigin::ThirdPartyCloudAgent => Self::ThirdPartyCloudAgent,
             AgentViewEntryOrigin::Cli => Self::Cli,
+            AgentViewEntryOrigin::Tui => Self::Tui,
             AgentViewEntryOrigin::ImageAdded => Self::ImageAdded,
             AgentViewEntryOrigin::SlashCommand { .. } => Self::SlashCommand,
             AgentViewEntryOrigin::CodeReviewContext => Self::CodeReviewContext,
@@ -1191,6 +1197,8 @@ pub enum TelemetryQueuedQueryOrigin {
     InitialCloudMode,
     QueueSlashCommand,
     AutoQueueToggle,
+    LrcAutoQueue,
+    PendingLrcAutoQueue,
     CompactAndSlashCommand,
     ForkAndCompactSlashCommand,
 }
@@ -1201,6 +1209,8 @@ impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
             QueuedQueryOrigin::InitialCloudMode => Self::InitialCloudMode,
             QueuedQueryOrigin::QueueSlashCommand => Self::QueueSlashCommand,
             QueuedQueryOrigin::AutoQueueToggle => Self::AutoQueueToggle,
+            QueuedQueryOrigin::LrcAutoQueue => Self::LrcAutoQueue,
+            QueuedQueryOrigin::PendingLrcAutoQueue => Self::PendingLrcAutoQueue,
             QueuedQueryOrigin::CompactAndSlashCommand => Self::CompactAndSlashCommand,
             QueuedQueryOrigin::ForkAndCompactSlashCommand => Self::ForkAndCompactSlashCommand,
         }
@@ -1587,6 +1597,22 @@ pub enum TelemetryEvent {
     },
     GlobalSearchOpened,
     GlobalSearchQueryStarted,
+    GlobalSearchQueryCompleted {
+        duration_ms: u64,
+        /// Number of distinct remote hosts searched via the remote server
+        /// daemon (0 for purely local searches).
+        remote_host_count: usize,
+        total_match_count: usize,
+        /// Whether the result set was capped (locally or by a remote
+        /// server-side cap).
+        capped: bool,
+        /// Whether the local search source failed while another source
+        /// completed.
+        local_source_failed: bool,
+        /// Number of remote host search sources that failed while another
+        /// source completed.
+        remote_source_failures: usize,
+    },
     AICommandSearchOpened {
         entrypoint: AICommandSearchEntrypoint,
     },
@@ -2148,11 +2174,6 @@ pub enum TelemetryEvent {
         is_autoindexing_enabled: bool,
     },
 
-    ActiveIndexedReposChanged {
-        updated_number_of_codebase_indices: usize,
-        hit_max_indices: bool,
-    },
-
     /// Emitted when the user toggles active AI.
     ToggleActiveAI {
         is_active_ai_enabled: bool,
@@ -2317,9 +2338,6 @@ pub enum TelemetryEvent {
     },
     AutoexecutedAgentModeRequestedCommand {
         reason: CommandExecutionPermissionAllowedReason,
-    },
-    AgenticOnboardingBlockSelected {
-        block_type: OnboardingChipType,
     },
     KnowledgePaneOpened {
         entrypoint: KnowledgePaneEntrypoint,
@@ -2818,12 +2836,6 @@ pub enum TelemetryEvent {
     },
     /// Emitted when a warp://linear deeplink is opened.
     LinearIssueLinkOpened,
-    /// Emitted when the free tier limit hit interstitial is displayed.
-    FreeTierLimitHitInterstitialDisplayed,
-    /// Emitted when the user clicks the "Upgrade" button in the free tier limit hit interstitial.
-    FreeTierLimitHitInterstitialUpgradeButtonClicked,
-    /// Emitted when the user clicks close on the free tier limit hit interstitial.
-    FreeTierLimitHitInterstitialClosed,
     /// Emitted when the remote server binary check completes.
     RemoteServerBinaryCheck {
         found: bool,
@@ -3871,13 +3883,6 @@ impl TelemetryEvent {
             } => Some(json!({
                 "is_autoindexing_enabled": is_autoindexing_enabled
             })),
-            TelemetryEvent::ActiveIndexedReposChanged {
-                updated_number_of_codebase_indices,
-                hit_max_indices,
-            } => Some(json!({
-                "updated_number_of_codebase_indices": updated_number_of_codebase_indices,
-                "hit_max_indices": hit_max_indices
-            })),
             TelemetryEvent::ToggleLigatureRendering { enabled } => {
                 Some(json!({"enabled": enabled}))
             }
@@ -3957,9 +3962,6 @@ impl TelemetryEvent {
             })),
             TelemetryEvent::AutoexecutedAgentModeRequestedCommand { reason } => Some(json!({
                 "reason": reason,
-            })),
-            TelemetryEvent::AgenticOnboardingBlockSelected { block_type } => Some(json!({
-                "block_type": block_type,
             })),
             TelemetryEvent::AttachedImagesToAgentModeQuery {
                 num_images,
@@ -4230,6 +4232,21 @@ impl TelemetryEvent {
             | TelemetryEvent::GlobalSearchOpened
             | TelemetryEvent::GlobalSearchQueryStarted
             | TelemetryEvent::GetStartedSkipToTerminal => None,
+            TelemetryEvent::GlobalSearchQueryCompleted {
+                duration_ms,
+                remote_host_count,
+                total_match_count,
+                capped,
+                local_source_failed,
+                remote_source_failures,
+            } => Some(json!({
+                "duration_ms": duration_ms,
+                "remote_host_count": remote_host_count,
+                "total_match_count": total_match_count,
+                "capped": capped,
+                "local_source_failed": local_source_failed,
+                "remote_source_failures": remote_source_failures,
+            })),
             TelemetryEvent::SSHControlMasterError { has_remote_server } => Some(json!({
                 "has_remote_server": has_remote_server,
             })),
@@ -4753,9 +4770,6 @@ impl TelemetryEvent {
                 "server_conversation_id": server_conversation_id,
                 "ambient_agent_task_id": ambient_agent_task_id.map(|id| id.to_string()),
             })),
-            TelemetryEvent::FreeTierLimitHitInterstitialDisplayed => None,
-            TelemetryEvent::FreeTierLimitHitInterstitialUpgradeButtonClicked => None,
-            TelemetryEvent::FreeTierLimitHitInterstitialClosed => None,
             TelemetryEvent::LoginButtonClicked { source }
             | TelemetryEvent::LoginLaterButtonClicked { source }
             | TelemetryEvent::LoginLaterConfirmationButtonClicked { source }
@@ -4953,6 +4967,7 @@ impl TelemetryEvent {
             | TelemetryEvent::KeybindingsPageOpened
             | TelemetryEvent::GlobalSearchOpened
             | TelemetryEvent::GlobalSearchQueryStarted
+            | TelemetryEvent::GlobalSearchQueryCompleted { .. }
             | TelemetryEvent::CommandSearchOpened { .. }
             | TelemetryEvent::CommandSearchExited { .. }
             | TelemetryEvent::CommandSearchResultAccepted { .. }
@@ -5119,7 +5134,6 @@ impl TelemetryEvent {
             | TelemetryEvent::RepoOutlineConstructionSuccess { .. }
             | TelemetryEvent::RepoOutlineConstructionFailed { .. }
             | TelemetryEvent::AutoexecutedAgentModeRequestedCommand { .. }
-            | TelemetryEvent::AgenticOnboardingBlockSelected { .. }
             | TelemetryEvent::KnowledgePaneOpened { .. }
             | TelemetryEvent::MCPServerCollectionPaneOpened { .. }
             | TelemetryEvent::MCPServerAdded { .. }
@@ -5161,7 +5175,6 @@ impl TelemetryEvent {
             | TelemetryEvent::VoiceInputUsed { .. }
             | TelemetryEvent::AtMenuInteracted { .. }
             | TelemetryEvent::UserMenuUpgradeClicked
-            | TelemetryEvent::ActiveIndexedReposChanged { .. }
             | TelemetryEvent::TabCloseButtonPositionUpdated { .. }
             | TelemetryEvent::ExpandedCodeSuggestions { .. }
             | TelemetryEvent::AIExecutionProfileCreated
@@ -5238,9 +5251,6 @@ impl TelemetryEvent {
             | TelemetryEvent::CloudAgentCapacityModalUpgradeClicked
             | TelemetryEvent::ComputerUseApproved { .. }
             | TelemetryEvent::ComputerUseCancelled { .. }
-            | TelemetryEvent::FreeTierLimitHitInterstitialDisplayed
-            | TelemetryEvent::FreeTierLimitHitInterstitialUpgradeButtonClicked
-            | TelemetryEvent::FreeTierLimitHitInterstitialClosed
             | TelemetryEvent::RemoteServerBinaryCheck { .. }
             | TelemetryEvent::RemoteServerInstallation { .. }
             | TelemetryEvent::RemoteServerInitialization { .. }
@@ -5511,6 +5521,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::KeybindingsPageOpened => EnablementState::Always,
             Self::GlobalSearchOpened => EnablementState::Always,
             Self::GlobalSearchQueryStarted => EnablementState::Always,
+            Self::GlobalSearchQueryCompleted => EnablementState::Always,
             Self::CommandSearchOpened => EnablementState::Always,
             Self::CommandSearchExited => EnablementState::Always,
             Self::CommandSearchResultAccepted => EnablementState::Always,
@@ -5622,7 +5633,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 EnablementState::Flag(FeatureFlag::SuperGrok)
             }
             Self::ToggleActiveAI => EnablementState::Always,
-            Self::AgenticOnboardingBlockSelected => EnablementState::Always,
             Self::MemoryUsageStats => EnablementState::ChannelSpecific {
                 channels: vec![Channel::Local, Channel::Dev],
             },
@@ -5723,9 +5733,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ContextChipInteracted { .. } => EnablementState::Always,
             Self::VoiceInputUsed { .. } => EnablementState::Always,
             Self::AtMenuInteracted { .. } => EnablementState::Always,
-            Self::ActiveIndexedReposChanged { .. } => {
-                EnablementState::Flag(FeatureFlag::FullSourceCodeEmbedding)
-            }
             Self::UserMenuUpgradeClicked => EnablementState::Always,
             Self::TabCloseButtonPositionUpdated { .. } => EnablementState::Always,
             Self::ExpandedCodeSuggestions { .. } => EnablementState::Always,
@@ -5803,11 +5810,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ComputerUseApproved | Self::ComputerUseCancelled => {
                 EnablementState::Flag(FeatureFlag::AgentModeComputerUse)
             }
-            Self::FreeTierLimitHitInterstitialDisplayed { .. } => EnablementState::Always,
-            Self::FreeTierLimitHitInterstitialUpgradeButtonClicked { .. } => {
-                EnablementState::Always
-            }
-            Self::FreeTierLimitHitInterstitialClosed { .. } => EnablementState::Always,
             Self::RemoteServerBinaryCheck
             | Self::RemoteServerInstallation
             | Self::RemoteServerInitialization
@@ -6009,6 +6011,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::KeybindingsPageOpened => "Resource Center Keybindings Page Opened",
             Self::GlobalSearchOpened => "Global Search Opened",
             Self::GlobalSearchQueryStarted => "Global Search Query Started",
+            Self::GlobalSearchQueryCompleted => "Global Search Query Completed",
             Self::CommandSearchOpened => "Command Search Opened",
             Self::CommandSearchExited => "Command Search Exited",
             Self::CommandSearchResultAccepted => "Command Search Result Accepted",
@@ -6217,7 +6220,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AutoexecutedAgentModeRequestedCommand => {
                 "AIAutonomy.AutoexecutedRequestedCommand"
             }
-            Self::AgenticOnboardingBlockSelected => "AgenticOnboarding.BlockSelected",
             Self::RemoteServerBinaryCheck => "RemoteServer.BinaryCheck",
             Self::RemoteServerInstallation => "RemoteServer.Installation",
             Self::RemoteServerInitialization => "RemoteServer.Initialization",
@@ -6254,7 +6256,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ToggleCodebaseContext => "Toggle Agent Mode Codebase Context",
             Self::ToggleAutoIndexing => "Toggle Codebase Context Autoindexing",
-            Self::ActiveIndexedReposChanged => "Active Indexed Repos Changed",
             Self::AttachedImagesToAgentModeQuery => "AgentMode.AttachedImages",
             Self::AgentModeRatedResponse => "AgentMode.RatedResponse",
             Self::ExecutedWarpDrivePrompt => "AgentMode.ExecutedWarpDrivePrompt",
@@ -6373,15 +6374,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ComputerUseApproved => "ComputerUse.Approved",
             Self::ComputerUseCancelled => "ComputerUse.Cancelled",
-            Self::FreeTierLimitHitInterstitialDisplayed { .. } => {
-                "FreeTierLimitHitInterstitial.Displayed"
-            }
-            Self::FreeTierLimitHitInterstitialUpgradeButtonClicked { .. } => {
-                "FreeTierLimitHitInterstitial.UpgradeButtonClicked"
-            }
-            Self::FreeTierLimitHitInterstitialClosed { .. } => {
-                "FreeTierLimitHitInterstitial.Closed"
-            }
         }
     }
 
@@ -6944,6 +6936,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::FileTreeToggled => "Opened the file tree/project explorer",
             Self::GlobalSearchOpened => "Opened the global search view",
             Self::GlobalSearchQueryStarted => "Started a global search (warp_ripgrep) search",
+            Self::GlobalSearchQueryCompleted => {
+                "Completed a global search across local and remote sources"
+            }
             Self::FileTreeItemAttachedAsContext => {
                 "Attached a file or directory as context from the file tree"
             }
@@ -7032,9 +7027,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AutoexecutedAgentModeRequestedCommand => {
                 "Autoexecuted an Agent Mode requested command"
             }
-            Self::AgenticOnboardingBlockSelected => {
-                "Selected an agentic onboarding block to execute"
-            }
             Self::AttachedImagesToAgentModeQuery => "Attached images to an Agent Mode query",
             #[cfg(windows)]
             Self::WSLRegistryError => {
@@ -7065,9 +7057,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ToggleAutoIndexing => {
                 "Toggled on/off the enablement of autoindexing for codebase context."
-            }
-            Self::ActiveIndexedReposChanged => {
-                "Active indexed repositories changed, affecting codebase context."
             }
             Self::ExecutedWarpDrivePrompt => "Executed a saved prompt.",
             Self::ImageReceived => "Received an image through an image protocol over the pty",
@@ -7235,15 +7224,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "A RequestComputerUse action was approved (manually or auto-executed)"
             }
             Self::ComputerUseCancelled => "A RequestComputerUse action was cancelled/rejected",
-            Self::FreeTierLimitHitInterstitialDisplayed { .. } => {
-                "The free tier limit hit interstitial was displayed"
-            }
-            Self::FreeTierLimitHitInterstitialUpgradeButtonClicked { .. } => {
-                "User clicked the 'Upgrade' button in the free tier limit hit interstitial"
-            }
-            Self::FreeTierLimitHitInterstitialClosed { .. } => {
-                "User closed the free tier limit hit interstitial"
-            }
             Self::RemoteServerBinaryCheck => {
                 "Remote server binary check completed (found, not found, or error)"
             }

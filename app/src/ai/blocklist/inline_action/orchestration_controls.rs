@@ -15,6 +15,7 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting;
 use warp_cli::agent::Harness;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
@@ -52,7 +53,7 @@ use crate::view_components::dropdown::{
 };
 use crate::view_components::FilterableDropdown;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_if_error, LLMPreferences};
+use crate::LLMPreferences;
 
 /// Env var override for the workspace default host (developer testing).
 /// Mirrors the single-agent ambient flow.
@@ -928,11 +929,6 @@ pub fn populate_host_picker<V: View>(
     };
     let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
         .worker_hosts_excluding(default_host.as_deref());
-    if !initial.eq_ignore_ascii_case(ORCHESTRATION_WARP_WORKER_HOST)
-        && default_host.as_deref() != Some(initial.as_str())
-    {
-        connected_hosts.push(initial.clone());
-    }
     connected_hosts.sort();
     connected_hosts.dedup();
     picker.update(ctx, |picker, picker_ctx| {

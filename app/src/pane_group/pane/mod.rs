@@ -13,6 +13,7 @@ pub(super) mod ai_fact_pane;
 pub(super) mod code_diff_pane;
 pub(super) mod code_diff_pane_model;
 pub(super) mod code_pane;
+pub(super) mod custom_router_editor_pane;
 pub(super) mod env_var_collection_pane;
 pub(crate) mod environment_management_pane;
 pub(super) mod execution_profile_editor_pane;
@@ -26,8 +27,6 @@ pub(super) mod notebook_pane;
 pub(super) mod settings_pane;
 pub(super) mod terminal_pane;
 pub mod view;
-pub(super) mod welcome_pane;
-pub(crate) mod welcome_view;
 pub mod workflow_pane;
 
 use std::any::Any;
@@ -42,7 +41,6 @@ use warpui::{
     Action, AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
     View, ViewContext, ViewHandle, WeakModelHandle,
 };
-use welcome_view::WelcomeView;
 
 pub use self::view::{PaneHeaderAction, PaneHeaderCustomAction, PaneView, PaneViewEvent};
 use super::{ActivationReason, LeafContents, PaneGroup, PaneGroupAction};
@@ -72,7 +70,6 @@ use crate::workflows::workflow_view::WorkflowView;
 
 pub(super) fn init(app: &mut AppContext) {
     self::view::init(app);
-    welcome_view::init(app);
     get_started_view::init(app);
 }
 
@@ -145,10 +142,10 @@ pub(crate) enum IPaneType {
     Settings,
     AIFact,
     AIDocument,
+    CustomRouterEditor,
     ExecutionProfileEditor,
     GetStarted,
     NetworkLog,
-    Welcome,
     DeferredPlaceholder,
     /// A pane type only for tests.
     #[cfg(test)]
@@ -169,10 +166,10 @@ impl Display for IPaneType {
             IPaneType::Settings => write!(f, "Settings"),
             IPaneType::AIFact => write!(f, "AI Fact"),
             IPaneType::AIDocument => write!(f, "AI Document"),
+            IPaneType::CustomRouterEditor => write!(f, "Custom Router Editor"),
             IPaneType::ExecutionProfileEditor => write!(f, "Execution Profile Editor"),
             IPaneType::GetStarted => write!(f, "GetStarted"),
             IPaneType::NetworkLog => write!(f, "Network Log"),
-            IPaneType::Welcome => write!(f, "Welcome"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             #[cfg(test)]
             IPaneType::Dummy => write!(f, "Dummy"),
@@ -254,15 +251,18 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::AIDocument, ctx)
     }
 
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<CustomRouterEditorView>>`]
+    pub fn from_custom_router_editor_pane_ctx(
+        ctx: &ViewContext<PaneView<crate::ai::custom_model_router_editor::CustomRouterEditorView>>,
+    ) -> Self {
+        Self::new_from_ctx(IPaneType::CustomRouterEditor, ctx)
+    }
+
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<ExecutionProfileEditorView>>`]
     pub fn from_execution_profile_editor_pane_ctx(
         ctx: &ViewContext<PaneView<ExecutionProfileEditorView>>,
     ) -> Self {
         Self::new_from_ctx(IPaneType::ExecutionProfileEditor, ctx)
-    }
-
-    pub fn from_welcome_pane_ctx(ctx: &ViewContext<PaneView<WelcomeView>>) -> Self {
-        Self::new_from_ctx(IPaneType::Welcome, ctx)
     }
 
     pub fn from_get_started_pane_ctx(ctx: &ViewContext<PaneView<GetStartedView>>) -> Self {
@@ -348,6 +348,13 @@ impl PaneId {
         Self::new(IPaneType::AIDocument, ai_document_pane_view)
     }
 
+    /// Creates a [`PaneId`] from a [`PaneView<CustomRouterEditorView>`] entity ID.
+    pub fn from_custom_router_editor_pane_view(
+        view: &ViewHandle<PaneView<crate::ai::custom_model_router_editor::CustomRouterEditorView>>,
+    ) -> Self {
+        Self::new(IPaneType::CustomRouterEditor, view)
+    }
+
     /// Creates a [`PaneId`] from a [`PaneView<ExecutionProfileEditorView>`] entity ID.
     pub fn from_execution_profile_editor_pane_view(
         execution_profile_editor_pane_view: &ViewHandle<PaneView<ExecutionProfileEditorView>>,
@@ -362,10 +369,6 @@ impl PaneId {
         get_started_pane_view: &ViewHandle<PaneView<GetStartedView>>,
     ) -> Self {
         Self::new(IPaneType::GetStarted, get_started_pane_view)
-    }
-
-    pub fn from_welcome_pane_view(welcome_pane_view: &ViewHandle<PaneView<WelcomeView>>) -> Self {
-        Self::new(IPaneType::Welcome, welcome_pane_view)
     }
 
     /// Creates a [`PaneId`] from a [`PaneView<NetworkLogView>`] entity ID.
@@ -480,6 +483,10 @@ impl PaneId {
             IPaneType::AIDocument => {
                 ChildView::<PaneView<AIDocumentView>>::with_id(self.0.pane_view_id).finish()
             }
+            IPaneType::CustomRouterEditor => ChildView::<
+                PaneView<crate::ai::custom_model_router_editor::CustomRouterEditorView>,
+            >::with_id(self.0.pane_view_id)
+            .finish(),
             IPaneType::ExecutionProfileEditor => {
                 ChildView::<PaneView<ExecutionProfileEditorView>>::with_id(self.0.pane_view_id)
                     .finish()
@@ -489,9 +496,6 @@ impl PaneId {
             }
             IPaneType::NetworkLog => {
                 ChildView::<PaneView<NetworkLogView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::Welcome => {
-                ChildView::<PaneView<WelcomeView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::DeferredPlaceholder => warpui::elements::Empty::new().finish(),
             #[cfg(test)]

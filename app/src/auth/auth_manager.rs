@@ -9,6 +9,7 @@ use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::{report_error, report_if_error};
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
@@ -44,8 +45,8 @@ use crate::terminal::shared_session::manager::Manager as SharedSessionManager;
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::{
-    persistence, report_error, report_if_error, send_telemetry_from_ctx,
-    send_telemetry_sync_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent,
+    persistence, send_telemetry_from_ctx, send_telemetry_sync_from_ctx,
+    GlobalResourceHandlesProvider, TelemetryEvent,
 };
 
 #[derive(Debug)]
@@ -422,7 +423,8 @@ impl AuthManager {
                             },
                         })
                     {
-                        log::error!("Error persisting user information to database: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error persisting user information to database"));
                     };
                 }
 
@@ -729,9 +731,9 @@ impl AuthManager {
                         ctx.open_url(&url);
                     }
                     Err(e) => {
-                        report_error!(anyhow!(
-                        "Failed to fetch custom token for authenticating anonymous user in browser: {e:?}"
-                    ))
+                        report_error!(anyhow::Error::new(e).context(
+                            "Failed to fetch custom token for authenticating anonymous user in browser"
+                        ))
                 }
                 };
             },

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Fill, Flex,
@@ -660,7 +661,7 @@ impl KeybindingsView {
                     ctx.notify();
                 }
                 None => {
-                    log::error!("Modifying row should exist");
+                    report_error!("Modifying row should exist");
                 }
             }
         }
@@ -692,7 +693,7 @@ impl KeybindingsView {
                     ctx.notify();
                 }
                 None => {
-                    log::error!("Modifying row should exist");
+                    report_error!("Modifying row should exist");
                 }
             }
         }
@@ -710,7 +711,7 @@ impl KeybindingsView {
                     keybinding_state.unsaved_binding = Some(key.clone());
                 }
                 None => {
-                    log::error!("Modifying row does not exist when it should");
+                    report_error!("Modifying row does not exist when it should");
                 }
             }
 

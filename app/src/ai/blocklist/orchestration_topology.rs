@@ -21,7 +21,10 @@ fn pill_status_sort_key(status: Option<&ConversationStatus>) -> u8 {
     match status {
         Some(ConversationStatus::Blocked { .. }) => 0,
         Some(ConversationStatus::Error) => 1,
-        Some(ConversationStatus::InProgress) | Some(ConversationStatus::WaitingForEvents) => 2,
+        // A recovering conversation sorts with the actively-running ones.
+        Some(ConversationStatus::InProgress)
+        | Some(ConversationStatus::TransientError)
+        | Some(ConversationStatus::WaitingForEvents) => 2,
         Some(ConversationStatus::Cancelled) | Some(ConversationStatus::Success) => DONE_STATUS_KEY,
         None => 2,
     }
@@ -65,6 +68,32 @@ pub fn collect_descendant_conversation_ids_in_spawn_order(
         descendants.push(*child_id);
         collect_descendant_conversation_ids_in_spawn_order(history, *child_id, descendants);
     }
+}
+
+/// Returns `true` if `orchestrator_id` has at least one **active local** child
+/// agent in its orchestration subtree.
+///
+/// "Local" means the child runs in this client (`!is_remote_child()`); a
+/// remote/cloud child is owned by its worker and is unaffected by handing the
+/// parent off to the cloud. "Active" means the child is not in a terminal state
+/// (`!ConversationStatus::is_done()`), so a session whose children have all
+/// finished is not treated as still orchestrating.
+///
+/// This is used to keep automatic cloud handoff from forking only the
+/// orchestrator to the cloud and orphaning its still-running local children.
+/// Descendants whose `AIConversation` is not loaded are ignored — active local
+/// children are always loaded in this client.
+pub fn has_local_orchestrated_children(
+    history: &BlocklistAIHistoryModel,
+    orchestrator_id: AIConversationId,
+) -> bool {
+    descendant_conversation_ids_in_spawn_order(history, orchestrator_id)
+        .iter()
+        .any(|id| {
+            history.conversation(id).is_some_and(|conversation| {
+                !conversation.is_remote_child() && !conversation.status().is_done()
+            })
+        })
 }
 
 /// Returns descendants in the canonical orchestration pill order:
@@ -201,7 +230,10 @@ pub fn aggregated_orchestrator_status(
             orchestrator_status = Some(status.clone());
         }
         match status {
-            ConversationStatus::InProgress => any_in_progress = true,
+            // A recovering node counts as still running for aggregation purposes.
+            ConversationStatus::InProgress | ConversationStatus::TransientError => {
+                any_in_progress = true
+            }
             ConversationStatus::WaitingForEvents => any_waiting = true,
             ConversationStatus::Blocked { .. } => {
                 if first_blocked.is_none() {

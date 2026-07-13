@@ -12,7 +12,7 @@ use super::{
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
-    sort_summary_primary_labels_status_first, summary_overflow_count,
+    should_show_tab_group_header, sort_summary_primary_labels_status_first, summary_overflow_count,
     summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
     terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
@@ -636,6 +636,62 @@ fn tabs_granularity_does_not_use_outer_group_container() {
     ));
 }
 
+// Regression coverage for #9098 ("Tab names not rendered in tab bar, only
+// first tab shows name"). The header gate previously read `has_custom_title
+// || is_being_renamed`, which collapsed to `false` for every tab without a
+// user-set rename — leaving multi-pane tabs with auto-generated names
+// looking like they had no tab label at all. The new gate keeps the existing
+// triggers and adds "any multi-pane tab", so every multi-pane group has a
+// stable tab-level identifier in `Panes` granularity.
+#[test]
+fn tab_group_header_shows_for_custom_title() {
+    assert!(should_show_tab_group_header(true, false, 1));
+    assert!(should_show_tab_group_header(true, false, 3));
+}
+
+#[test]
+fn tab_group_header_shows_while_renaming() {
+    // The inline rename editor must always be reachable, even on
+    // single-pane tabs with no prior custom title.
+    assert!(should_show_tab_group_header(false, true, 1));
+}
+
+#[test]
+fn tab_group_header_shows_for_multi_pane_tabs_without_custom_title() {
+    // The #9098 case: an auto-named multi-pane tab. Each row only shows the
+    // per-pane title (e.g. `travelplan` + `main`), so without a group header
+    // there is no way to tell two such tabs apart in the sidebar.
+    assert!(should_show_tab_group_header(false, false, 2));
+    assert!(should_show_tab_group_header(false, false, 5));
+}
+
+#[test]
+fn tab_group_header_hidden_for_single_pane_without_custom_title() {
+    // Single-pane groups already surface the pane title in their only row.
+    // Rendering the same string again as a header would duplicate it
+    // immediately above itself, so the gate stays closed in this shape.
+    assert!(!should_show_tab_group_header(false, false, 1));
+    // Defensive: `0` should not crash or accidentally render a header for
+    // an empty group (this shape shouldn't reach the renderer in practice,
+    // but the helper is total and stays closed).
+    assert!(!should_show_tab_group_header(false, false, 0));
+}
+
+#[test]
+fn tab_group_header_distinguishes_two_auto_named_multi_pane_tabs() {
+    // Models the screenshot in #9098: tab 1 has a custom title
+    // ("Humanfigure"), tabs 2 and 3 are auto-named multi-pane groups
+    // ("travelplan + main", "deponti + release/development"). Before the
+    // fix only tab 1 showed a header; after the fix every multi-pane tab
+    // gets one so the user can tell them apart at a glance.
+    let renders_header: Vec<bool> = vec![
+        should_show_tab_group_header(true, false, 2),  // tab 1
+        should_show_tab_group_header(false, false, 2), // tab 2
+        should_show_tab_group_header(false, false, 2), // tab 3
+    ];
+    assert_eq!(renders_header, vec![true, true, true]);
+}
+
 #[test]
 fn terminal_primary_line_prefers_cli_agent_display_title() {
     let line = terminal_primary_line_data(
@@ -916,6 +972,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
             branch_name: "main".to_string(),
             diff_stats: None,
             pull_request_label: None,
+            pull_request_url: None,
         },
         VerticalTabsSummaryBranchEntry {
             repo_path: repo_a.clone(),
@@ -926,6 +983,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                 lines_removed: 3,
             }),
             pull_request_label: Some("#123".to_string()),
+            pull_request_url: Some("https://github.com/acme/repo-a/pull/123".to_string()),
         },
         VerticalTabsSummaryBranchEntry {
             repo_path: repo_b.clone(),
@@ -936,6 +994,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                 lines_removed: 6,
             }),
             pull_request_label: Some("#456".to_string()),
+            pull_request_url: Some("https://github.com/acme/repo-b/pull/456".to_string()),
         },
     ];
 
@@ -951,6 +1010,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                     lines_removed: 3,
                 }),
                 pull_request_label: Some("#123".to_string()),
+                pull_request_url: Some("https://github.com/acme/repo-a/pull/123".to_string()),
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: repo_b,
@@ -961,6 +1021,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                     lines_removed: 6,
                 }),
                 pull_request_label: Some("#456".to_string()),
+                pull_request_url: Some("https://github.com/acme/repo-b/pull/456".to_string()),
             },
         ]
     );
@@ -1109,24 +1170,28 @@ fn summary_search_fragments_include_hidden_overflow_values() {
                     lines_removed: 3,
                 }),
                 pull_request_label: Some("#123".to_string()),
+                pull_request_url: Some("https://github.com/acme/repo-a/pull/123".to_string()),
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: PathBuf::from("/tmp/repo-b"),
                 branch_name: "feature/hidden".to_string(),
                 diff_stats: None,
                 pull_request_label: None,
+                pull_request_url: None,
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: PathBuf::from("/tmp/repo-c"),
                 branch_name: "cleanup".to_string(),
                 diff_stats: None,
                 pull_request_label: None,
+                pull_request_url: None,
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: PathBuf::from("/tmp/repo-d"),
                 branch_name: "hidden-branch".to_string(),
                 diff_stats: None,
                 pull_request_label: Some("#789".to_string()),
+                pull_request_url: Some("https://github.com/acme/repo-d/pull/789".to_string()),
             },
         ],
         has_unread_activity: false,

@@ -11,12 +11,12 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
@@ -176,6 +176,7 @@ pub fn init(app: &mut AppContext) {
 #[derive(Default)]
 struct StateHandles {
     invalid_api_key_button_handle: MouseStateHandle,
+    subscribe_button_handle: MouseStateHandle,
     debug_copy_button_handle: MouseStateHandle,
     submit_issue_button_handle: MouseStateHandle,
     query_selection_handle: SelectionHandle,
@@ -1187,57 +1188,65 @@ impl View for CLISubagentView {
 
         let mut output_border = Border::all(1.).with_border_fill(internal_colors::neutral_3(theme));
         if let AIBlockOutputStatus::Failed { error, .. } = &status {
-            output_border = Border::all(1.).with_border_color(theme.ui_error_color());
-            output_items.add_child(render_failed_output(
-                FailedOutputProps {
-                    error,
-                    is_ai_input_enabled: false,
-                    invalid_api_key_button_handle: &self
-                        .state_handles
-                        .invalid_api_key_button_handle,
-                    aws_bedrock_credentials_error_view: None,
-                    icon_right_margin: AVATAR_RIGHT_MARGIN,
-                },
-                app,
-            ));
+            // While an automatic resume is still in flight, keep the failed exchange
+            // quiet: don't switch to the error border, and skip the banner, the "won't
+            // count towards usage" notice, and the debug footer. The full failure UI is
+            // surfaced only once recovery has actually failed. Dogfood builds (Local/Dev)
+            // opt out so developers still see every transport failure aggressively.
+            if !error.should_suppress_during_recovery() {
+                output_border = Border::all(1.).with_border_color(theme.ui_error_color());
+                output_items.add_child(render_failed_output(
+                    FailedOutputProps {
+                        error,
+                        is_ai_input_enabled: false,
+                        invalid_api_key_button_handle: &self
+                            .state_handles
+                            .invalid_api_key_button_handle,
+                        subscribe_button_handle: &self.state_handles.subscribe_button_handle,
+                        aws_bedrock_credentials_error_view: None,
+                        icon_right_margin: AVATAR_RIGHT_MARGIN,
+                    },
+                    app,
+                ));
 
-            if !self.model.is_restored() && !error.is_invalid_api_key() {
-                output_items.add_child(
-                    Container::new(render_informational_footer(
-                        app,
-                        "This response won't count towards your usage. \"Take over\" to continue."
-                            .to_string(),
-                    ))
-                    .with_margin_top(8.)
-                    .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
-                    .finish(),
-                );
+                if !self.model.is_restored() && !error.is_invalid_api_key() {
+                    output_items.add_child(
+                        Container::new(render_informational_footer(
+                            app,
+                            "This response won't count towards your usage. \"Take over\" to continue."
+                                .to_string(),
+                        ))
+                        .with_margin_top(8.)
+                        .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
+                        .finish(),
+                    );
 
-                output_items.add_child(
-                    Container::new(render_debug_footer(
-                        DebugFooterProps {
-                            conversation: self.model.conversation(app),
-                            model: self.model.as_ref(),
-                            debug_copy_button_handle: self
-                                .state_handles
-                                .debug_copy_button_handle
-                                .clone(),
-                            submit_issue_button_handle: self
-                                .state_handles
-                                .submit_issue_button_handle
-                                .clone(),
-                            should_render_feedback_below: true,
-                        },
-                        |debug_id, ctx| {
-                            ctx.dispatch_typed_action(CLISubagentAction::CopyDebugId(debug_id))
-                        },
-                        |ctx| ctx.dispatch_typed_action(CLISubagentAction::OpenFeedbackDocs),
-                        app,
-                    ))
-                    .with_margin_top(8.)
-                    .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
-                    .finish(),
-                );
+                    output_items.add_child(
+                        Container::new(render_debug_footer(
+                            DebugFooterProps {
+                                conversation: self.model.conversation(app),
+                                model: self.model.as_ref(),
+                                debug_copy_button_handle: self
+                                    .state_handles
+                                    .debug_copy_button_handle
+                                    .clone(),
+                                submit_issue_button_handle: self
+                                    .state_handles
+                                    .submit_issue_button_handle
+                                    .clone(),
+                                should_render_feedback_below: true,
+                            },
+                            |debug_id, ctx| {
+                                ctx.dispatch_typed_action(CLISubagentAction::CopyDebugId(debug_id))
+                            },
+                            |ctx| ctx.dispatch_typed_action(CLISubagentAction::OpenFeedbackDocs),
+                            app,
+                        ))
+                        .with_margin_top(8.)
+                        .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
+                        .finish(),
+                    );
+                }
             }
         }
 

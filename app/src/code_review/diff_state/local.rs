@@ -59,6 +59,9 @@ cfg_if::cfg_if! {
     }
 }
 #[cfg(feature = "local_fs")]
+use warp_errors::report_error;
+
+#[cfg(feature = "local_fs")]
 use super::DiffOperation;
 use super::{
     BackendOrigin, CommitChainMode, DiffHunk, DiffLine, DiffLineType, DiffMetadata,
@@ -252,7 +255,7 @@ impl LocalDiffStateModel {
                         ctx.emit(DiffStateModelEvent::SingleFileUpdated { path, diff });
                     }
                     Err(err) => {
-                        warp_core::report_error!(err.as_ref());
+                        err.report_and_log();
                         send_telemetry_from_ctx!(
                             CodeReviewTelemetryEvent::LoadDiffFailed {
                                 backend_origin: me.backend_origin,
@@ -804,8 +807,9 @@ impl LocalDiffStateModel {
                         if let Err(e) =
                             run_git_command(&repo_path, &["checkout", branch, "--", old_path]).await
                         {
-                            log::error!(
-                                "Failed to restore old file '{old_path}' from branch '{branch}': {e}"
+                            report_error!(
+                                e.context("Failed to restore old file from branch"),
+                                extra: { "old_path" => %old_path, "branch" => %branch }
                             );
                         }
                     }
@@ -865,7 +869,7 @@ impl LocalDiffStateModel {
                     me.refresh_diff_metadata_for_current_repo(false, ctx);
                 }
                 Err(err) => {
-                    log::error!("Failed to restore files: {err}");
+                    report_error!(err.context("Failed to restore files"));
                 }
             },
         );
@@ -1199,10 +1203,13 @@ impl LocalDiffStateModel {
                 async move { Self::compute_merge_base(&repo_path, &diff_mode).await },
                 |me, result, ctx| {
                     me.file_invalidation.merge_base_handle = None;
-                    if let Ok(merge_base) = &result {
-                        me.file_invalidation.merge_base = Some(merge_base.clone());
-                    } else if let Err(e) = &result {
-                        log::error!("Failed to compute merge base: {e}");
+                    match result {
+                        Ok(merge_base) => {
+                            me.file_invalidation.merge_base = Some(merge_base);
+                        }
+                        Err(e) => {
+                            report_error!(e.context("Failed to compute merge base"));
+                        }
                     }
                     me.flush_pending_invalidations(ctx);
                 },
@@ -1571,7 +1578,6 @@ impl LocalDiffStateModel {
             has_head_commit,
             unpushed_commits,
             upstream_ref,
-            pr_info: None,
         })
     }
 
@@ -1637,7 +1643,7 @@ impl LocalDiffStateModel {
             }
             Err(e) => {
                 let err = DiffStateError::from(e);
-                warp_core::report_error!(&err);
+                err.report_and_log();
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadMetadataFailed {
                         backend_origin: self.backend_origin,
@@ -1684,7 +1690,7 @@ impl LocalDiffStateModel {
                     .take()
                     .map(|start| start.elapsed());
                 let err = DiffStateError::from_message(e);
-                warp_core::report_error!(&err);
+                err.report_and_log();
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadDiffFailed {
                         backend_origin: self.backend_origin,

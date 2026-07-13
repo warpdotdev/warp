@@ -11,6 +11,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_errors::{report_error, report_if_error};
 use warpui::elements::{
     Align, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -40,6 +41,7 @@ use crate::appearance::Appearance;
 use crate::auth::auth_manager::AuthManager;
 use crate::channel::ChannelState;
 use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{AISettings, CustomSecretRegex, PrivacySettings, RegexDisplayInfo};
 use crate::settings_view::privacy::AddRegexModalViewState;
@@ -57,7 +59,6 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, CustomerType, UgcCollectionEnablementSetting,
 };
-use crate::{report_if_error, send_telemetry_from_ctx};
 
 const FONT_SIZE: f32 = 12.;
 
@@ -80,8 +81,6 @@ const TELEMETRY_TITLE: &str = "Help improve Warp";
 const TELEMETRY_DESCRIPTION: &str =
     "App analytics help us make the product better for you. We may collect \
     certain console interactions to improve Warp's AI capabilities.";
-const TELEMETRY_FREE_TIER_NOTE: &str =
-    "On the free tier, analytics must be enabled to use AI features.";
 const TELEMETRY_DOCS_URL: &str =
     "https://docs.warp.dev/support-and-community/privacy-and-security/privacy#what-telemetry-data-does-warp-collect-and-why";
 
@@ -452,11 +451,14 @@ impl PrivacyPageView {
                     .set_value(new_user_secret_regex_list, ctx)
                     .is_err()
                 {
-                    log::error!("Failed to add custom regex to secret regex list");
+                    report_error!("Failed to add custom regex to secret regex list");
                 }
                 ctx.notify();
             } else {
-                log::error!("Invalid regex pattern: {pattern}");
+                report_error!(
+                    "Invalid regex pattern",
+                    extra: { "pattern" => %pattern }
+                );
             }
         });
     }
@@ -554,7 +556,7 @@ impl TypedActionView for PrivacyPageView {
                                 .set_value(new_user_secret_regex_list, ctx)
                                 .is_err()
                             {
-                                log::error!(
+                                report_error!(
                                     "Failed to add recommended regex to custom secret regex list"
                                 );
                             }
@@ -1517,13 +1519,6 @@ impl SettingsWidget for AppAnalyticsWidget {
                 .finish()
         };
 
-        // Check if user is on free tier to show the AI requirement note
-        // Fail safe: if billing status is unknown, assume paid (don't show free tier note)
-        let is_on_paid_plan = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .map(|w| w.billing_metadata.is_user_on_paid_plan())
-            .unwrap_or(true);
-
         let mut column = Flex::column();
         column.add_child(super::settings_page::build_toggle_element(
             zdr_label_component,
@@ -1546,23 +1541,6 @@ impl SettingsWidget for AppAnalyticsWidget {
                 .build()
                 .finish(),
         );
-
-        // Show free tier note only for non-paid users
-        if !is_on_paid_plan {
-            column.add_child(
-                ui_builder
-                    .paragraph(TELEMETRY_FREE_TIER_NOTE)
-                    .with_style(UiComponentStyles {
-                        font_color: Some(description_text_color),
-                        margin: Some(
-                            Coords::default().bottom(styles::DESCRIPTION_LINE_MARGIN_BOTTOM),
-                        ),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish(),
-            );
-        }
 
         column.add_child(
             Align::new(

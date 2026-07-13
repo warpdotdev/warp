@@ -55,6 +55,10 @@ fi
 # Install a version of cargo-bundle that supports the --profile flag
 cargo install cargo-bundle --git=https://github.com/burtonageo/cargo-bundle --rev ae4c76e92c08774bf54ff077b1c52e3d1cd6c16d
 
+# Homebrew asks for confirmation before installing by default; opt out so
+# bootstrap runs non-interactively.
+export HOMEBREW_NO_ASK=1
+
 # Update brew
 brew update
 

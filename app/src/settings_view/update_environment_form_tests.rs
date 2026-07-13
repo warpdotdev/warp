@@ -13,7 +13,7 @@ use super::{
 };
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::ambient_agents::github_auth_url::{self, AuthSource, GithubAuthRedirectTarget};
-use crate::ai::cloud_environments::GithubRepo;
+use crate::ai::cloud_environments::{BaseImage, GithubRepo};
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
@@ -360,7 +360,7 @@ fn test_submit_button_disabled_until_required_fields_present() {
             assert!(is_disabled, "Expected submit button disabled initially");
         });
 
-        // Only name set -> still disabled.
+        // Name set (docker image optional) -> enabled.
         app.update(|ctx| {
             view_handle.update(ctx, |form, ctx| {
                 form.form_state.name = "My Env".to_string();
@@ -372,16 +372,79 @@ fn test_submit_button_disabled_until_required_fields_present() {
                 .submit_button
                 .read(ctx, |button, _| button.is_disabled());
             assert!(
-                is_disabled,
-                "Expected submit button disabled without docker image"
+                !is_disabled,
+                "Expected submit button enabled once the name is set"
             );
         });
+    })
+}
 
-        // Name + docker image set -> enabled.
+#[test]
+fn test_is_valid_requires_only_name() {
+    let values = EnvironmentFormValues {
+        name: "env".to_string(),
+        description: String::new(),
+        selected_repos: vec![],
+        docker_image: String::new(),
+        setup_commands: vec![],
+    };
+
+    // The docker image is optional; a name alone is valid.
+    assert!(values.is_valid());
+
+    // An empty name is invalid.
+    let no_name = EnvironmentFormValues {
+        name: "  ".to_string(),
+        ..values
+    };
+    assert!(!no_name.is_valid());
+}
+
+#[test]
+fn test_empty_docker_image_produces_none_base_image() {
+    let values = EnvironmentFormValues {
+        name: "env".to_string(),
+        description: String::new(),
+        selected_repos: vec![],
+        docker_image: "  ".to_string(),
+        setup_commands: vec![],
+    };
+    assert_eq!(values.to_ambient_agent_environment().base_image, None);
+
+    let with_image = EnvironmentFormValues {
+        docker_image: "ubuntu:latest".to_string(),
+        ..values
+    };
+    assert_eq!(
+        with_image.to_ambient_agent_environment().base_image,
+        Some(BaseImage::DockerImage("ubuntu:latest".to_string()))
+    );
+}
+
+#[test]
+fn test_edit_mode_allows_saving_environment_without_docker_image() {
+    App::test((), |mut app| async move {
+        init_update_environment_form_test_models(&mut app);
+        let window_id = create_test_window(&mut app);
+
         app.update(|ctx| {
-            view_handle.update(ctx, |form, ctx| {
-                form.form_state.docker_image = "ubuntu:latest".to_string();
-                form.update_button_state(ctx);
+            let env_id = SyncId::ClientId(ClientId::new());
+            let initial_values = EnvironmentFormValues {
+                name: "No image env".to_string(),
+                description: String::new(),
+                selected_repos: vec![],
+                docker_image: String::new(),
+                setup_commands: vec![],
+            };
+
+            let view_handle = ctx.add_typed_action_view(window_id, |ctx| {
+                UpdateEnvironmentForm::new_for_test(
+                    EnvironmentFormInitArgs::Edit {
+                        env_id,
+                        initial_values: Box::new(initial_values),
+                    },
+                    ctx,
+                )
             });
 
             let is_disabled = view_handle
@@ -390,7 +453,7 @@ fn test_submit_button_disabled_until_required_fields_present() {
                 .read(ctx, |button, _| button.is_disabled());
             assert!(
                 !is_disabled,
-                "Expected submit button enabled when required fields set"
+                "Expected save enabled when editing a no-image environment"
             );
         });
     })

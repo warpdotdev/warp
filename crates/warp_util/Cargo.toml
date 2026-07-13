@@ -29,6 +29,7 @@ serde_json.workspace = true
 pin-project.workspace = true
 futures-util.workspace = true
 log.workspace = true
+warp_errors.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

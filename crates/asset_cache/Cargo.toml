@@ -7,9 +7,11 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+warp_errors.workspace = true
 anyhow.workspace = true
 async-compat.workspace = true
 async-fs.workspace = true
+base64.workspace = true
 bytes.workspace = true
 cfg-if.workspace = true
 futures.workspace = true

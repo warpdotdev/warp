@@ -276,6 +276,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_color_overrides_in_prompt_dont_crash);
     register_test!(test_copy_prompt_from_block_honor_ps1_disabled);
     register_test!(test_copy_prompt_from_block_honor_ps1_enabled);
+    register_test!(test_copy_block_command_and_output_honor_ps1_disabled);
+    register_test!(test_copy_block_command_and_output_honor_ps1_enabled);
     register_test!(test_copy_prompt_from_input_honor_ps1_disabled);
     register_test!(test_warp_prompt_unsets_zsh_rprompt);
     register_test!(test_copy_prompt_from_input_honor_ps1_enabled);
@@ -297,6 +299,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_code_review_scroll_preserved_deleted_range);
     register_test!(test_code_review_scroll_preserved_header_range);
     register_test!(test_code_review_scroll_preserved_footer_range);
+    register_test!(test_code_review_double_click_fully_expands_hidden_section);
     register_test!(test_alt_screen_context_menu_with_sgr_with_mouse_reporting);
     register_test!(test_alt_screen_context_menu_with_sgr_without_mouse_reporting);
     register_test!(test_alt_screen_context_menu_without_sgr_with_mouse_reporting);
@@ -360,6 +363,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_detach_tab_to_new_window_with_drag);
     register_test!(test_attach_tab_to_other_window_and_continue_drag);
     register_test!(test_single_tab_handoff_continues_drag);
+    register_test!(test_multi_tab_drag_back_to_source_and_out_again);
 
     register_test!(test_restore_single_closed_pane);
     register_test!(test_restore_multiple_closed_panes);
@@ -403,6 +407,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     register_test!(test_middle_click_paste);
 
+    register_test!(test_copy_selection_within_ai_block);
     register_test!(test_selection_first_to_last_through_ai_simple);
     register_test!(test_copy_on_select_first_to_last_through_ai_simple);
     register_test!(test_selection_first_to_last_through_ai_semantic);
@@ -446,6 +451,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_file_tree_non_openable_files);
     register_test!(test_file_tree_nested_file_opening);
 
+    // Copy current path command-palette action
+    register_test!(test_copy_current_path_copies_terminal_pwd);
+
     // Go to Line tests
     register_test!(test_goto_line_dialog_open_close);
     register_test!(test_goto_line_jumps_to_line);
@@ -453,6 +461,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_goto_line_clamps_out_of_range);
     register_test!(test_code_editor_line_numbers_default_to_absolute);
     register_test!(test_code_editor_relative_line_numbers_follow_cursor);
+
+    // AI document tests
+    register_test!(test_copy_ai_document_as_markdown_from_overflow_menu);
 
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);

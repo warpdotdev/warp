@@ -56,6 +56,7 @@ test = false
 [dependencies]
 addr = "0.15.6"
 ai.workspace = true
+alphanumeric-sort = "1.5.7"
 anyhow.workspace = true
 arrayvec.workspace = true
 asset_cache.workspace = true
@@ -231,8 +232,10 @@ vte.workspace = true
 walkdir.workspace = true
 warp-workflows.workspace = true
 warp_assets.workspace = true
+warp_channel_config.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
+warp_errors = { workspace = true, features = ["reqwest-errors"] }
 warp_editor.workspace = true
 warp_graphql.workspace = true
 warp_js = { workspace = true, optional = true }
@@ -268,6 +271,7 @@ rmcp.workspace = true
 warp_isolation_platform.workspace = true
 warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
+warp_multi_agent_client.workspace = true
 local_control.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -325,6 +329,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
+warp_errors = { workspace = true, features = ["tokio-errors", "websocket-errors"] }
 
 # AWS SDK (loading credentials for BYO LLM)
 aws-config = { version = "1.8.16", features = ["credentials-login"] }
@@ -418,6 +423,7 @@ winreg.workspace = true
 [dev-dependencies]
 ai = { workspace = true, features = ["test-util"] }
 async-process.workspace = true
+computer_use = { workspace = true, features = ["test-util"] }
 firebase.workspace = true
 jsonschema = { workspace = true, default-features = false }
 async-executor = "1.5.1"
@@ -460,6 +466,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
+tui = ["warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -468,6 +475,7 @@ supergrok = []
 gemini_enterprise = []
 agent_mode = []
 agent_mode_computer_use = []
+background_computer_use = []
 agent_mode_debug = []
 agent_mode_primary_xml = []
 agent_mode_pre_plan_xml = []
@@ -493,6 +501,7 @@ crash_reporting = [
     "dep:minidumper",
     "dep:crash-handler",
     "warp_logging/crash_reporting",
+    "warp_errors/crash_reporting",
     "ai/crash_reporting",
 ]
 creating_shared_sessions = []
@@ -643,7 +652,6 @@ default = [
     "blocklist_markdown_table_rendering",
     "markdown_mermaid",
     "blocklist_markdown_images",
-    "pr_comments_slash_command",
     "pr_comments_v2",
     "pr_comments_skill",
     "revert_to_checkpoints",
@@ -659,10 +667,12 @@ default = [
     "vertical_tabs",
     "vertical_tabs_summary_mode",
     "tab_configs",
+    "grouped_tabs",
     "agent_harness",
     "hoa_onboarding_flow",
     "hoa_remote_control",
     "codex_notifications",
+    "codex_plugin",
     "trim_trailing_blank_lines",
     "open_warp_new_settings_modes",
     "skip_firebase_anonymous_user",
@@ -682,7 +692,7 @@ default = [
     "handoff_cloud_cloud",
     "remote_codebase_indexing",
     "solo_user_byok",
-    "custom_inference_endpoints",
+    "custom_model_routers",
     "supergrok",
     "billing_and_usage_page_v2",
     "remote_code_review",
@@ -721,21 +731,24 @@ nld_classifier_v2 = ["input_classifier/nld_classifier_v2"]
 nld_classifier_v3 = ["input_classifier/nld_classifier_v3"]
 nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
 nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
+nld_prompt_history_match = []
 msys2_shells = []
 file_retrieval_tools = []
-welcome_tab = []
 get_started_tab = []
 code_mode_chip = []
 github_pr_prompt_chip = []
 create_project_flow = []
 agent_mode_evals = [
     "integration_tests",
+    "warpui/defer_scene_build",
     "full_source_code_embedding",
     "cross_repo_context",
     "cloud_object_models/agent_mode_evals",
     "rust-embed/debug-embed",
     "warpui/log_named_telemetry_events",
     "warp_logging/agent_mode_evals",
+    "warp_multi_agent_client/agent_mode_evals",
+    "warp_server_client/agent_mode_evals",
 ]
 ambient_agents_command_line = []
 ambient_agents_image_upload = []
@@ -780,6 +793,7 @@ local_fs = [
     "warp_core/local_fs",
 ]
 log_expensive_frames_in_sentry = []
+jupyter_notebook_rendering = []
 markdown_tables = []
 markdown_mermaid = []
 mcp_server = []
@@ -825,7 +839,7 @@ session_sharing = []
 session_sharing_acls = []
 skip_login = ["warp_server_client/skip_login"]
 # This feature should only be enabled when building a self-contained binary with the bundle script.
-standalone = ["warp_assets/standalone"]
+standalone = ["warp_assets/standalone", "warp_core/standalone"]
 prompt_suggestions_via_maa = []
 voice_input = ["dep:voice_input"]
 system_theme = []
@@ -898,7 +912,6 @@ tabbed_editor_view = []
 selection_as_context = []
 send_telemetry_to_file = []
 multi_profile = []
-pr_comments_slash_command = []
 pr_comments_v2 = []
 pr_comments_skill = []
 conversation_artifacts = []
@@ -926,6 +939,7 @@ inline_code_review = []
 integration_command = []
 artifact_command = []
 cloud_environments = []
+cloud_runners = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
@@ -933,6 +947,7 @@ web_search_ui = []
 web_fetch_ui = []
 fork_from_command = []
 context_window_usage_v2 = []
+context_window_usage_breakdown = []
 global_search = []
 file_and_diff_set_comments = []
 revert_to_checkpoints = []
@@ -974,6 +989,7 @@ incremental_auto_reload = []
 run_agents_tool = []
 orchestration_viewer_streamer = []
 owner_orchestration_ancestor_streamer = []
+wait_for_events_parent_registration = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
@@ -994,7 +1010,7 @@ hoa_notifications = []
 open_code_notifications = []
 transfer_control_tool = []
 skip_firebase_anonymous_user = []
-custom_inference_endpoints = []
+custom_model_routers = []
 solo_user_byok = []
 billing_and_usage_page_v2 = []
 gpt_configurable_context_window = []
@@ -1009,6 +1025,7 @@ cloud_mode_setup_v2 = ["cloud_mode"]
 cloud_mode_input_v2 = ["cloud_mode"]
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
+prompt_cache_expiry_warning = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

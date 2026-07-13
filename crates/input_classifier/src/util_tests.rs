@@ -26,6 +26,11 @@ async fn one_off_keyword_short_circuits() {
     let word_tokens_count = token.parsed_tokens.len();
     clear_all_token_descriptions(&mut token);
     assert!(is_likely_shell_command(&token, word_tokens_count).await);
+
+    let mut token = mock_parsed_input_token("agy doctor".to_string()).await;
+    let word_tokens_count = token.parsed_tokens.len();
+    clear_all_token_descriptions(&mut token);
+    assert!(is_likely_shell_command(&token, word_tokens_count).await);
 }
 
 async fn first_token_with_description_short_input_is_shell() {

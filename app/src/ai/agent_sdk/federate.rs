@@ -6,7 +6,7 @@ use warp_cli::agent::OutputFormat;
 use warp_cli::federate::{FederateCommand, IssueGcpTokenArgs, IssueTokenArgs};
 use warp_cli::GlobalOptions;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity as _};
@@ -33,7 +33,7 @@ fn issue_token(
     args: IssueTokenArgs,
     output_format: OutputFormat,
 ) -> Result<()> {
-    // Set the task ID so the ambient workload token header is sent.
+    // Set the task ID so the ambient agent workload token header is sent.
     set_ambient_task_context_from_run_id(ctx, &args.run_id)?;
 
     let duration: std::time::Duration = args.duration.into();
@@ -87,7 +87,7 @@ fn issue_token(
     Ok(())
 }
 fn issue_gcp_token(ctx: &mut AppContext, args: IssueGcpTokenArgs) -> Result<()> {
-    // Set the task ID so the ambient workload token header is sent.
+    // Set the task ID so the ambient agent workload token header is sent.
     set_ambient_task_context_from_run_id(ctx, &args.run_id)?;
 
     let duration: std::time::Duration = args.duration.into();

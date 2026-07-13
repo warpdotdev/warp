@@ -2,6 +2,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bimap::BiMap;
@@ -265,16 +266,15 @@ pub enum GlobalBufferModelEvent {
     },
     FileSaved {
         file_id: FileId,
+        content_version: ContentVersion,
     },
     FailedToSave {
         file_id: FileId,
-        error: Rc<FileSaveError>,
+        error: Arc<FileSaveError>,
     },
     /// A remote buffer update conflicted with local edits.
     /// The UI should present a resolution dialog.
-    RemoteBufferConflict {
-        file_id: FileId,
-    },
+    RemoteBufferConflict { file_id: FileId },
     /// A server-local buffer was updated from a file-watcher event.
     /// Carries the incremental diff edits for the ServerModel to push
     /// to connected clients as `BufferUpdatedPush`.
@@ -338,7 +338,7 @@ impl GlobalBufferModel {
         if FeatureFlag::SshRemoteServer.is_enabled() {
             use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
             let mgr = RemoteServerManager::handle(_ctx);
-            _ctx.subscribe_to_model(&mgr, |me, event, ctx| match event {
+            _ctx.subscribe_to_model(&mgr, |me, _, event, ctx| match event {
                 RemoteServerManagerEvent::BufferUpdated {
                     host_id,
                     path,
@@ -677,7 +677,12 @@ impl GlobalBufferModel {
     }
 
     #[cfg(feature = "local_fs")]
-    fn handle_file_model_events(&mut self, event: &FileModelEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_file_model_events(
+        &mut self,
+        _: ModelHandle<FileModel>,
+        event: &FileModelEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             FileModelEvent::FileLoaded {
                 content,
@@ -778,7 +783,10 @@ impl GlobalBufferModel {
                 if let Some(state) = self.buffers.get_mut(id) {
                     state.set_base_content_version(*version);
                 }
-                ctx.emit(GlobalBufferModelEvent::FileSaved { file_id: *id });
+                ctx.emit(GlobalBufferModelEvent::FileSaved {
+                    file_id: *id,
+                    content_version: *version,
+                });
             }
             FileModelEvent::FailedToSave { id, error } => {
                 ctx.emit(GlobalBufferModelEvent::FailedToSave {
@@ -834,13 +842,16 @@ impl GlobalBufferModel {
                     async move { handle.save_buffer(path).await },
                     move |_me, result, ctx| match result {
                         Ok(()) => {
-                            ctx.emit(GlobalBufferModelEvent::FileSaved { file_id });
+                            ctx.emit(GlobalBufferModelEvent::FileSaved {
+                                file_id,
+                                content_version: version,
+                            });
                         }
                         Err(error) => {
                             log::warn!("Remote save failed: {error}");
                             ctx.emit(GlobalBufferModelEvent::FailedToSave {
                                 file_id,
-                                error: Rc::new(FileSaveError::RemoteError(error.to_string())),
+                                error: Arc::new(FileSaveError::RemoteError(error.to_string())),
                             });
                         }
                     },
@@ -849,9 +860,12 @@ impl GlobalBufferModel {
             }
         }
 
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.save(file_id, content, version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the save future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.save(file_id, content, version, ctx)
+            })
+            .map(drop)
     }
 
     /// Rename a file and save its content via FileModel.
@@ -864,9 +878,12 @@ impl GlobalBufferModel {
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), FileSaveError> {
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.rename_and_save(file_id, new_path, content, version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the save future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.rename_and_save(file_id, new_path, content, version, ctx)
+            })
+            .map(drop)
     }
 
     /// Delete a file via FileModel.
@@ -877,9 +894,12 @@ impl GlobalBufferModel {
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), FileSaveError> {
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.delete(file_id, version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the delete future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.delete(file_id, version, ctx)
+            })
+            .map(drop)
     }
 
     /// Remove a tracked buffer, cleaning up FileModel and LSP state.
@@ -1057,7 +1077,7 @@ impl GlobalBufferModel {
 
         // Subscribe to buffer events for LSP sync.
         let path_clone = path.clone();
-        ctx.subscribe_to_model(&buffer, move |me, event, ctx| {
+        ctx.subscribe_to_model(&buffer, move |me, _, event, ctx| {
             use warp_editor::content::buffer::BufferEvent;
 
             let Some(state) = me.buffers.get(&file_id) else {
@@ -1196,7 +1216,7 @@ impl GlobalBufferModel {
         });
 
         let path_clone = path.to_path_buf();
-        ctx.subscribe_to_model(&buffer, move |me, event, ctx| {
+        ctx.subscribe_to_model(&buffer, move |me, _, event, ctx| {
             use warp_editor::content::buffer::BufferEvent;
 
             let Some(state) = me.buffers.get(&file_id) else {
@@ -1491,6 +1511,7 @@ impl GlobalBufferModel {
     #[cfg(feature = "local_fs")]
     fn handle_lsp_manager_events(
         &mut self,
+        _: ModelHandle<LspManagerModel>,
         event: &LspManagerModelEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1679,7 +1700,7 @@ impl GlobalBufferModel {
         if let Some(client) = &client_for_sub {
             let client = client.clone();
             let path_for_edit = path_str.clone();
-            ctx.subscribe_to_model(&buffer, move |me, event, ctx| {
+            ctx.subscribe_to_model(&buffer, move |me, _, event, ctx| {
                 use warp_editor::content::buffer::BufferEvent;
                 if let BufferEvent::ContentChanged { delta, origin, .. } = event {
                     // Skip server-originated changes to prevent echo loop.
@@ -1966,9 +1987,12 @@ impl GlobalBufferModel {
         };
         let content = buffer.as_ref(ctx).text().into_string();
         let version = buffer.as_ref(ctx).version();
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.save(file_id, content, version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the save future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.save(file_id, content, version, ctx)
+            })
+            .map(drop)
     }
 
     /// Resolve a conflict by accepting the client's content.
@@ -2012,9 +2036,12 @@ impl GlobalBufferModel {
         let content = client_content.to_string();
         let save_version = ContentVersion::new();
         state.set_base_content_version(save_version);
-        FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.save(file_id, content, save_version, ctx)
-        })
+        // Completion is observed via `FileModelEvent`s; drop the save future.
+        FileModel::handle(ctx)
+            .update(ctx, |file_model, ctx| {
+                file_model.save(file_id, content, save_version, ctx)
+            })
+            .map(drop)
     }
 
     // ── Public accessors ──────────────────────────────────────────────

@@ -9,6 +9,7 @@ use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::elements::{
     resizable_state_handle, Align, AnchorPair, Border, ConstrainedBox, Container, CornerRadius,
@@ -189,7 +190,7 @@ impl CommandSearchView {
             .as_ref(ctx)
             .get_handle(ctx.window_id(), ModalType::UniversalSearchWidth)
             .unwrap_or_else(|| {
-                log::error!("Couldn't retrieve universal search resizable state handle.");
+                report_error!("Couldn't retrieve universal search resizable state handle.");
                 resizable_state_handle(DEFAULT_UNIVERSAL_SEARCH_WIDTH)
             });
 
@@ -310,8 +311,9 @@ impl CommandSearchView {
                     ctx,
                 );
             } else {
-                ctx.subscribe_to_model(&History::handle(ctx), move |mixer, history_event, ctx| {
-                    match history_event {
+                ctx.subscribe_to_model(
+                    &History::handle(ctx),
+                    move |mixer, _, history_event, ctx| match history_event {
                         HistoryEvent::Initialized(id) => {
                             if id == &session_id {
                                 let source = history_data_source_for_session(
@@ -335,8 +337,8 @@ impl CommandSearchView {
                                 ctx.notify();
                             }
                         }
-                    }
-                });
+                    },
+                );
             }
         })
     }

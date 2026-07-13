@@ -14,7 +14,7 @@ use cloud_object_client::{
 pub use cloud_object_client::{GuestIdentifier, ObjectClient};
 use cloud_object_models::JsonSerializer;
 use cynic::{MutationBuilder, QueryBuilder, SubscriptionBuilder};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::error::UserFacingErrorInterface;
 use warp_graphql::generic_string_object::GenericStringObjectInput;
 use warp_graphql::mutations::add_object_guests::{
@@ -699,11 +699,7 @@ impl ObjectClient for ServerApi {
             },
             message_sender,
             stream_ready_sender,
-            self.iap_state
-                .as_ref()
-                .and_then(|state| state.proxy_auth_header())
-                .into_iter()
-                .collect(),
+            self.iap_proxy_auth_header().into_iter().collect(),
         )
         .await;
 
@@ -836,6 +832,11 @@ impl ObjectClient for ServerApi {
                                     gso,
                                 );
                             }
+                            // GSO formats unknown to this client build (e.g. the
+                            // server-only `JsonRunner`) are skipped so syncing of
+                            // known objects still succeeds instead of failing to
+                            // decode the whole response.
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::Unknown => {}
                         }
                     }
                 }

@@ -30,6 +30,10 @@ strum.workspace = true
 strum_macros.workspace = true
 uuid.workspace = true
 warp_core = { workspace = true }
+warp_errors.workspace = true
 warpui.workspace = true
 warpui_core.workspace = true
 warp_logging.workspace = true
+
+[dev-dependencies]
+warp_core = { workspace = true, features = ["test-util"] }

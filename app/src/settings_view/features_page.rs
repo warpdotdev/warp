@@ -11,6 +11,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::semantic_selection::{
     SemanticSelection, SemanticSelectionChangedEvent, SmartSelectEnabled,
 };
+use warp_errors::{report_error, report_if_error};
 use warpui::elements::{
     Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
     DispatchEventResult, Element, Empty, EventHandler, Fill, Flex, Hoverable, MainAxisAlignment,
@@ -108,7 +109,7 @@ use crate::util::bindings::{
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 use crate::workspace::tab_settings::{NewTabPlacement, TabSettings, TabSettingsChangedEvent};
 use crate::workspace::WorkspaceAction;
-use crate::{report_if_error, send_telemetry_from_ctx, themes, GlobalResourceHandles};
+use crate::{send_telemetry_from_ctx, themes, GlobalResourceHandles};
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "macos")] {
@@ -1704,7 +1705,7 @@ impl TypedActionView for FeaturesPageView {
                     };
 
                     if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Failed to persist Notifications setting: {e}");
+                        report_error!(e.context("Failed to persist Notifications setting"));
                     }
                 });
                 ctx.notify();
@@ -1728,7 +1729,7 @@ impl TypedActionView for FeaturesPageView {
                                 ..current_settings
                             };
                             if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                                log::error!("Error persisting notifications setting: {e}");
+                                report_error!(e.context("Error persisting notifications setting"));
                             }
                         });
                     }
@@ -1744,7 +1745,7 @@ impl TypedActionView for FeaturesPageView {
                         ..current_settings
                     };
                     if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notifications setting: {e}");
+                        report_error!(e.context("Error persisting notifications setting"));
                     }
                 });
                 ctx.notify();
@@ -1760,7 +1761,7 @@ impl TypedActionView for FeaturesPageView {
                         ..current_settings
                     };
                     if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notifications setting: {e}");
+                        report_error!(e.context("Error persisting notifications setting"));
                     }
                 });
                 ctx.notify();
@@ -1775,7 +1776,7 @@ impl TypedActionView for FeaturesPageView {
                         ..current_settings
                     };
                     if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notifications setting: {e}");
+                        report_error!(e.context("Error persisting notifications setting"));
                     }
                 });
                 ctx.notify();
@@ -1790,7 +1791,7 @@ impl TypedActionView for FeaturesPageView {
                         ..current_settings
                     };
                     if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notification sound setting: {e}");
+                        report_error!(e.context("Error persisting notification sound setting"));
                     }
                 });
                 ctx.notify();
@@ -2095,7 +2096,9 @@ impl TypedActionView for FeaturesPageView {
                                 .notification_toast_duration_secs
                                 .set_value(duration_secs, ctx)
                             {
-                                log::error!("Error persisting notification toast duration: {e}");
+                                report_error!(
+                                    e.context("Error persisting notification toast duration")
+                                );
                             }
                         });
                     }
@@ -3063,7 +3066,7 @@ impl FeaturesPageView {
                 .iter()
                 .position(|val| *val == current_value)
                 .unwrap_or_else(|| {
-                    log::error!(
+                    report_error!(
                         "Could not find current Ctrl-Tab behavior value in dropdown option list"
                     );
                     0
@@ -3100,7 +3103,7 @@ impl FeaturesPageView {
                 .iter()
                 .position(|val| *val == current_value)
                 .unwrap_or_else(|| {
-                    log::error!(
+                    report_error!(
                         "Could not find current NewTabPlacement value in dropdown option list"
                     );
                     0
@@ -5585,6 +5588,13 @@ impl SettingsWidget for ExtraMetaKeysWidget {
             ))
             .finish()
     }
+}
+
+/// Stable `&'static str` id for the global-hotkey settings widget, exposed for
+/// the `warp://settings?widget=global_hotkey` deeplink (see
+/// `settings_widget_deeplink_target`).
+pub(crate) fn global_hotkey_widget_id() -> &'static str {
+    GlobalHotkeyWidget::static_widget_id()
 }
 
 #[derive(Default)]

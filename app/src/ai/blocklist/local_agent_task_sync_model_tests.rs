@@ -12,10 +12,17 @@ use super::{
     LocalAgentTaskSyncModel,
 };
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
-use crate::ai::agent::RenderableAIError;
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput,
+    RenderableAIError, TransientNetworkErrorKind,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::llms::LLMId;
 use crate::server::server_api::ai::{AIClient, MockAIClient, TaskStatusUpdate};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+};
+use crate::terminal::CLIAgent;
 
 /// Helper to assert a (state, Option<TaskStatusUpdate>) tuple.
 fn assert_update(
@@ -118,10 +125,50 @@ fn other_error_is_error_with_internal() {
             error_message: "something broke".into(),
             will_attempt_resume: false,
             waiting_for_network: false,
+            is_user_error: false,
         }),
         AgentTaskState::Error,
         Some(PlatformErrorCode::InternalError),
         Some("something broke"),
+    );
+}
+
+#[test]
+fn other_user_error_is_failed_with_invalid_request() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::Other {
+            error_message: "Model not allowed for your current plan.".into(),
+            will_attempt_resume: false,
+            waiting_for_network: false,
+            is_user_error: true,
+        }),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::InvalidRequest),
+        Some("Model not allowed"),
+    )
+}
+
+#[test]
+fn transient_network_error_is_error_with_internal_and_debug_details() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::transient_network_error(
+            false,
+            false,
+            TransientNetworkErrorKind::UnfinishedExchange,
+        )),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+        Some("Debug info: stream completed with an unfinished exchange"),
+    );
+}
+
+#[test]
+fn agent_exited_shell_is_failed_with_invalid_request() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::AgentExitedShell),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::InvalidRequest),
+        Some("shell exited"),
     );
 }
 
@@ -133,7 +180,8 @@ fn other_error_is_error_with_internal() {
 #[test]
 fn map_conversation_status_waiting_for_events_reports_in_progress_with_no_message() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let conversation = AIConversation::new(false, false);
         let conversation_id = conversation.id();
@@ -174,6 +222,185 @@ fn map_conversation_status_in_progress_reports_in_progress_with_no_message() {
 
     assert_eq!(state, AgentTaskState::InProgress);
     assert!(update.is_none());
+}
+
+#[test]
+fn transient_error_status_maps_to_in_progress_with_no_message() {
+    // Recovery stays IN_PROGRESS with no status message; see the rationale in
+    // `map_conversation_status`.
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_status_for_test(ConversationStatus::TransientError);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::InProgress,
+        None,
+        None,
+    );
+}
+
+// --- map_conversation_status (Error path) ---
+
+/// Builds a finished-with-error root exchange so the `Error` arm of
+/// `map_conversation_status` can be exercised end-to-end.
+fn error_exchange(error: RenderableAIError) -> AIAgentExchange {
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Error {
+                output: None,
+                error,
+            },
+        },
+        added_message_ids: Default::default(),
+        start_time: chrono::Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-model"),
+        cli_agent_model_id: LLMId::from("test-model"),
+        computer_use_model_id: LLMId::from("test-model"),
+        response_initiator: None,
+    }
+}
+
+/// Drives the production `Error` path end-to-end: `map_conversation_status` must
+/// extract the `RenderableAIError` from the last root exchange and classify it.
+#[test]
+fn map_conversation_status_error_classifies_exchange_error() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.append_root_exchange_for_test(error_exchange(RenderableAIError::QuotaLimit {
+        user_display_message: None,
+    }));
+    conversation.set_status_for_test(ConversationStatus::Error);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::InsufficientCredits),
+        Some("credits"),
+    );
+}
+
+/// The `will_attempt_resume` rendering hint must not affect terminal classification.
+#[test]
+fn map_conversation_status_error_ignores_will_attempt_resume() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.append_root_exchange_for_test(error_exchange(RenderableAIError::Other {
+        error_message: "connection reset".into(),
+        will_attempt_resume: true,
+        waiting_for_network: false,
+        is_user_error: false,
+    }));
+    conversation.set_status_for_test(ConversationStatus::Error);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+        Some("connection reset"),
+    );
+}
+
+/// An `Error` status with no extractable exchange error falls back to a generic message.
+#[test]
+fn map_conversation_status_error_without_exchange_error_is_generic() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_status_for_test(ConversationStatus::Error);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Error,
+        None,
+        Some("Agent encountered an error"),
+    );
+}
+
+/// A shell-exit failure surfaced on the last exchange classifies as FAILED with
+/// the shell-exit message — the run must not report "Cancelled by user".
+#[test]
+fn map_conversation_status_error_classifies_agent_exited_shell() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.append_root_exchange_for_test(error_exchange(RenderableAIError::AgentExitedShell));
+    conversation.set_status_for_test(ConversationStatus::Error);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::InvalidRequest),
+        Some("shell exited"),
+    );
+}
+
+/// Driving the real `update_status_with_error` setter (via the history model)
+/// records the structured error so `map_conversation_status` classifies it —
+/// here a shell-exit failure reports FAILED with the shell-exit message.
+#[test]
+fn map_conversation_status_error_classifies_status_error_via_setter() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+        history_model.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just restored");
+            conv.update_status_with_error(
+                ConversationStatus::Error,
+                Some(RenderableAIError::AgentExitedShell),
+                terminal_view_id,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |model, _| {
+            let conv = model.conversation(&conversation_id).unwrap();
+            assert_update(
+                map_conversation_status(conv),
+                AgentTaskState::Failed,
+                Some(PlatformErrorCode::InvalidRequest),
+                Some("shell exited"),
+            );
+        });
+    });
+}
+
+/// An out-of-band `status_error` with `is_user_error: false` (e.g. a child-launch
+/// or skill-resolution failure) classifies as ERROR and surfaces its message.
+#[test]
+fn map_conversation_status_error_classifies_status_error_other_as_error() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_status_for_test(ConversationStatus::Error);
+    conversation.set_status_error_for_test(Some(RenderableAIError::other(
+        "Out of credits. Upgrade your Warp plan to continue running cloud agents.",
+        false,
+    )));
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+        Some("Out of credits"),
+    );
+}
+
+/// An out-of-band `status_error` with no exchange (the shell-exit-with-no-stream
+/// path) classifies via the structured error — FAILED with the shell-exit code —
+/// not the generic ERROR fallback.
+#[test]
+fn map_conversation_status_error_classifies_status_error() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_status_for_test(ConversationStatus::Error);
+    conversation.set_status_error_for_test(Some(RenderableAIError::AgentExitedShell));
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::InvalidRequest),
+        Some("shell exited"),
+    );
 }
 
 // --- map_cli_session_status ---
@@ -264,10 +491,73 @@ fn register_cli_agent_sessions_model(app: &mut App) {
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
 }
 
+/// A pane-scoped CLI session can end during setup without ending the driver run,
+/// while explicit driver cleanup prevents later status updates.
+#[test]
+fn cli_task_mapping_survives_cli_session_end() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let cli_sessions_model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let succeeded_updates = Arc::new(AtomicUsize::new(0));
+        let succeeded_updates_for_mock = succeeded_updates.clone();
+        let mut mock = MockAIClient::new();
+        mock.expect_update_agent_task()
+            .returning(move |_, task_state, _, _, _| {
+                if task_state == Some(AgentTaskState::Succeeded) {
+                    succeeded_updates_for_mock.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(())
+            });
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let model = app.add_singleton_model(|ctx| {
+            LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
+        });
+        let terminal_view_id = warpui::EntityId::new();
+
+        model.update(&mut app, |model, ctx| {
+            model.register_cli_session(terminal_view_id, fixed_task_id(), ctx);
+        });
+        cli_sessions_model.update(&mut app, |_, ctx| {
+            ctx.emit(CLIAgentSessionsModelEvent::Ended {
+                terminal_view_id,
+                agent: CLIAgent::Claude,
+            });
+        });
+        cli_sessions_model.update(&mut app, |_, ctx| {
+            ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
+                terminal_view_id,
+                agent: CLIAgent::Claude,
+                status: CLIAgentSessionStatus::Success,
+                session_context: Box::default(),
+            });
+        });
+        model.update(&mut app, |model, _| {
+            model.unregister_cli_session(terminal_view_id);
+        });
+        cli_sessions_model.update(&mut app, |_, ctx| {
+            ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
+                terminal_view_id,
+                agent: CLIAgent::Claude,
+                status: CLIAgentSessionStatus::Success,
+                session_context: Box::default(),
+            });
+        });
+
+        pump_spawned_tasks().await;
+
+        assert_eq!(
+            succeeded_updates.load(Ordering::SeqCst),
+            1,
+            "the accepted success must drain, but a status emitted after unregister must be ignored"
+        );
+    });
+}
+
 #[test]
 fn shared_session_link_fires_update_agent_task_with_session_id() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // A local orchestrator conversation owned by this client: not a
         // viewer, not a remote-child placeholder, and has a `task_id`.
@@ -303,7 +593,8 @@ fn shared_session_link_fires_update_agent_task_with_session_id() {
 #[test]
 fn shared_session_link_uses_correct_argument_order() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         let task_id = fixed_task_id();
@@ -351,7 +642,8 @@ fn shared_session_link_uses_correct_argument_order() {
 #[test]
 fn shared_session_link_skips_viewer_conversations() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // A viewer-side conversation: even if it carries a task_id, this
         // client does not own the task and must not link.
@@ -386,7 +678,8 @@ fn shared_session_link_skips_viewer_conversations() {
 #[test]
 fn shared_session_link_skips_remote_child_conversations() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(fixed_task_id().to_string());
@@ -419,7 +712,8 @@ fn shared_session_link_skips_remote_child_conversations() {
 #[test]
 fn shared_session_link_skips_when_task_id_missing() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // No set_run_id call: the conversation has no task_id yet.
         let conversation = AIConversation::new(false, false);
@@ -451,7 +745,8 @@ fn shared_session_link_skips_when_task_id_missing() {
 #[test]
 fn shared_session_link_skips_unknown_conversation() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let (_model, counter) = install_model_with_call_counter(&mut app);
 
@@ -478,7 +773,8 @@ fn shared_session_link_skips_unknown_conversation() {
 #[test]
 fn conversation_server_token_assigned_fires_update_with_conversation_id() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         let task_id = fixed_task_id();
@@ -514,7 +810,7 @@ fn conversation_server_token_assigned_fires_update_with_conversation_id() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 
@@ -526,7 +822,8 @@ fn conversation_server_token_assigned_fires_update_with_conversation_id() {
 #[test]
 fn conversation_server_token_assigned_skips_viewer_conversations() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation =
             AIConversation::new(/* is_viewing_shared_session */ true, false);
@@ -543,7 +840,7 @@ fn conversation_server_token_assigned_skips_viewer_conversations() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 
@@ -560,7 +857,8 @@ fn conversation_server_token_assigned_skips_viewer_conversations() {
 #[test]
 fn conversation_server_token_assigned_skips_remote_child_conversations() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(fixed_task_id().to_string());
@@ -577,7 +875,7 @@ fn conversation_server_token_assigned_skips_remote_child_conversations() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 
@@ -594,7 +892,8 @@ fn conversation_server_token_assigned_skips_remote_child_conversations() {
 #[test]
 fn conversation_server_token_assigned_skips_without_task_id() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_server_conversation_token("server-conversation-id".to_string());
@@ -609,7 +908,7 @@ fn conversation_server_token_assigned_skips_without_task_id() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 

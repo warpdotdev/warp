@@ -144,7 +144,7 @@ impl EnvironmentDisplayData {
             id: env.id,
             name: model.name.clone(),
             description: model.description.clone(),
-            docker_image: model.base_image.to_string(),
+            docker_image: model.base_image_display(),
             github_repos: model
                 .github_repos
                 .iter()
@@ -270,7 +270,7 @@ impl EnvironmentsPageView {
                         name: model.name.clone(),
                         description: model.description.clone().unwrap_or_default(),
                         selected_repos: model.github_repos.clone(),
-                        docker_image: model.base_image.to_string(),
+                        docker_image: model.base_image_display(),
                         setup_commands: model.setup_commands.clone(),
                     }
                 });

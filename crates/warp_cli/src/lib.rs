@@ -31,6 +31,7 @@ pub mod integration;
 pub mod json_filter;
 pub mod local_control;
 pub mod mcp;
+pub mod memory_store;
 pub mod model;
 pub mod provider;
 pub mod schedule;
@@ -66,6 +67,17 @@ pub struct ParentOpts {
     pub handle: Option<process_handle::ProcessHandle>,
 }
 
+/// Returns whether an argument requests one of Warp's hidden worker modes.
+pub fn is_worker_invocation(arg: &str) -> bool {
+    let command = WorkerCommand::augment_subcommands(clap::Command::new("worker"));
+    command.find_subcommand(arg).is_some()
+        || arg.strip_prefix("--").is_some_and(|long_flag| {
+            command
+                .get_subcommands()
+                .any(|subcommand| subcommand.get_long_flag() == Some(long_flag))
+        })
+}
+
 /// Hidden worker args used to scope remote-server proxy/daemon sockets by
 /// Warp identity without exposing credentials.
 #[derive(Debug, Clone, Default, clap::Args)]
@@ -93,7 +105,11 @@ pub struct GlobalOptions {
     pub output_format: OutputFormat,
 }
 
-/// Command-line argument parser for the main Warp binary. This is used across all channels.
+/// Normal argument parser for the shared Warp executable across all channels.
+///
+/// Oz commands are subcommands of this parser, so invoking an `oz` symlink does
+/// not require a mode flag. Warp Control uses its separate [`local_control::ControlArgs`]
+/// parser, selected before this parser sees the arguments.
 #[derive(Debug, Default, Parser, Clone)]
 #[command(
     name = "oz",
@@ -311,6 +327,20 @@ impl Args {
             });
         }
 
+        // Hide the third-party harness flags on `run-cloud` when the harness
+        // feature is off, so `--help` matches the runtime gating (a non-oz
+        // `--harness` is rejected unless AgentHarness is enabled).
+        if !FeatureFlag::AgentHarness.is_enabled() {
+            command = command.mut_subcommand("agent", |agent_cmd| {
+                agent_cmd.mut_subcommand("run-cloud", |cloud_cmd| {
+                    cloud_cmd
+                        .mut_arg("harness", |arg| arg.hide(true))
+                        .mut_arg("claude_auth_secret", |arg| arg.hide(true))
+                        .mut_arg("codex_auth_secret", |arg| arg.hide(true))
+                })
+            });
+        }
+
         // Hide the provider subcommand from help text
         if !FeatureFlag::ProviderCommand.is_enabled() {
             command = command.mut_subcommand("provider", |c| c.hide(true));
@@ -512,6 +542,12 @@ pub enum CliCommand {
     /// Manage available models.
     #[command(subcommand)]
     Model(crate::model::ModelCommand),
+    /// Manage memory stores.
+    #[command(subcommand, alias = "memory-stores")]
+    MemoryStore(crate::memory_store::MemoryStoreCommand),
+    /// Manage memories.
+    #[command(subcommand)]
+    Memory(crate::memory_store::MemoryCommand),
 
     /// Log in to Warp.
     Login,
@@ -552,6 +588,32 @@ pub enum CliCommand {
     /// Manage API keys.
     #[command(subcommand)]
     ApiKey(crate::api_key::ApiKeyCommand),
+}
+
+impl CliCommand {
+    /// Returns the command path used to identify this invocation in tracing.
+    pub fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            CliCommand::Agent(command) => command.as_str_for_tracing(),
+            CliCommand::Environment(command) => command.as_str_for_tracing(),
+            CliCommand::MCP(command) => command.as_str_for_tracing(),
+            CliCommand::Run(command) => command.as_str_for_tracing(),
+            CliCommand::Model(command) => command.as_str_for_tracing(),
+            CliCommand::Login => "login",
+            CliCommand::Logout => "logout",
+            CliCommand::Whoami => "whoami",
+            CliCommand::Provider(command) => command.as_str_for_tracing(),
+            CliCommand::Integration(command) => command.as_str_for_tracing(),
+            CliCommand::Schedule(command) => command.as_str_for_tracing(),
+            CliCommand::Secret(command) => command.as_str_for_tracing(),
+            CliCommand::Federate(command) => command.as_str_for_tracing(),
+            CliCommand::HarnessSupport(args) => args.command.as_str_for_tracing(),
+            CliCommand::Artifact(command) => command.as_str_for_tracing(),
+            CliCommand::ApiKey(command) => command.as_str_for_tracing(),
+            CliCommand::MemoryStore(command) => command.as_str_for_tracing(),
+            CliCommand::Memory(command) => command.as_str_for_tracing(),
+        }
+    }
 }
 
 /// A subcommand of the main Warp application. This includes all [`WorkerCommand`]s as well as app-specific debugging tools.

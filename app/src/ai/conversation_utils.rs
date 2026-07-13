@@ -1,4 +1,6 @@
+use anyhow::Context as _;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::{AppContext, EntityId, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -24,8 +26,12 @@ pub fn delete_conversation(
                 let server_api = server_api.clone();
                 model_ctx.spawn(
                     async move {
-                        if let Err(e) = server_api.delete_ai_conversation(token.clone()).await {
-                            log::error!("Failed to delete conversation from cloud: {e:?}");
+                        if let Err(e) = server_api
+                            .delete_ai_conversation(token.clone())
+                            .await
+                            .context("Failed to delete conversation from cloud")
+                        {
+                            report_error!(e);
                         } else {
                             log::info!("Successfully deleted conversation from cloud: {token}");
                         }

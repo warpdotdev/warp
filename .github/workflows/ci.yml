@@ -49,7 +49,8 @@ jobs:
     # we'll want to make sure that the conflict resolution doesn't introduce any issues.
     if: >-
       github.event.pull_request.draft == false &&
-      (!startsWith(github.event.pull_request.head.ref, 'repo-sync/') || contains(github.event.pull_request.labels.*.name, 'repo-sync:conflict'))
+      (!startsWith(github.event.pull_request.head.ref, 'repo-sync/') || contains(github.event.pull_request.labels.*.name, 'repo-sync:conflict')) &&
+      github.repository_owner == 'warpdotdev'
     outputs:
       affects-database-schema: ${{ github.ref == 'master' || steps.filter.outputs.affects-database-schema }}
       affects-rust-sources: ${{ github.ref == 'master' || steps.filter.outputs.affects-rust-sources }}
@@ -57,7 +58,7 @@ jobs:
       wasm-runner: ${{ steps.wasm_runner_type.outputs.value }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Check changed files
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
@@ -133,7 +134,7 @@ jobs:
       contents: 'read'
       id-token: 'write'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -206,7 +207,7 @@ jobs:
 
       - name: Install cargo nextest
         if: ${{ matrix.is_self_hosted == false }}
-        uses: taiki-e/install-action@9a29ce630c67077a359246f3e4f84941e05f28b5 # v1
+        uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2.79.3
         with:
           tool: nextest
 
@@ -459,7 +460,7 @@ jobs:
       contents: 'read'
       id-token: 'write'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -482,7 +483,7 @@ jobs:
           echo "::notice title=Remote Server Tests - Default Bash Version::$DEFAULT_BASH_VERSION"
 
       - name: Install cargo nextest
-        uses: taiki-e/install-action@9a29ce630c67077a359246f3e4f84941e05f28b5 # v1
+        uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2.79.3
         with:
           tool: nextest
 
@@ -501,19 +502,10 @@ jobs:
         shell: bash
         run: |
           sudo apt-get install -y curl sshpass xz-utils
-          MUSL_CROSS_TAG="20250929"
           MUSL_CROSS_TARGET="x86_64-unknown-linux-musl"
-          MUSL_CROSS_SHA256="6534870abd7dc327fd2e14cc53972d0552b21f47db5769505534f788537e3544"
-          MUSL_CROSS_ARCHIVE="$MUSL_CROSS_TARGET.tar.xz"
-          curl -fsSLO "https://github.com/cross-tools/musl-cross/releases/download/$MUSL_CROSS_TAG/$MUSL_CROSS_ARCHIVE"
-          echo "$MUSL_CROSS_SHA256  $MUSL_CROSS_ARCHIVE" | sha256sum -c -
-          sudo mkdir -p /opt/x-tools
-          sudo tar -xf "$MUSL_CROSS_ARCHIVE" -C /opt/x-tools
-          MUSL_CROSS_BIN="/opt/x-tools/$MUSL_CROSS_TARGET/bin"
+          source script/linux/configure_musl_toolchain "$MUSL_CROSS_TARGET"
+          MUSL_CROSS_BIN="$(dirname "$WARP_MUSL_CC")"
           echo "$MUSL_CROSS_BIN" >> "$GITHUB_PATH"
-          export PATH="$MUSL_CROSS_BIN:$PATH"
-          command -v "$MUSL_CROSS_TARGET-gcc"
-          command -v "$MUSL_CROSS_TARGET-g++"
           rustup target add x86_64-unknown-linux-musl
 
       - name: Deploy remote server binary to test VM
@@ -548,7 +540,7 @@ jobs:
     if: ${{ needs.params.outputs.affects-database-schema == 'true' }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@dc19f1e48450eefe5a29b8da6c6b00a87d730b37 # v1.18.1
@@ -602,7 +594,7 @@ jobs:
     needs: params
     #    if: ${{ needs.params.outputs.affects-rust-sources == 'true' }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -654,7 +646,7 @@ jobs:
     needs: params
     steps:
       - name: Checkout sources
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -717,7 +709,7 @@ jobs:
           IS_SELF_HOSTED="${{ contains(fromJSON(needs.params.outputs.wasm-runner), 'self-hosted') }}"
           echo "value=$IS_SELF_HOSTED" >> $GITHUB_OUTPUT
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -779,7 +771,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: params
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
