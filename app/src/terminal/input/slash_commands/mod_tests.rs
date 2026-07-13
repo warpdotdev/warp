@@ -1,5 +1,4 @@
 use super::{
-    conversation_cost_validation_error, conversation_cost_validation_error_for_state,
     slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui, TuiSlashCommand,
 };
 use crate::features::FeatureFlag;
@@ -39,7 +38,7 @@ fn slash_command_is_submitted_as_prompt_only_for_prompt_commands() {
 }
 
 #[test]
-fn tui_supports_the_selected_low_effort_commands_but_not_orchestrate() {
+fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
     for (command, expected) in [
         (&*commands::AGENT, TuiSlashCommand::Agent),
         (&*commands::NEW, TuiSlashCommand::New),
@@ -54,7 +53,6 @@ fn tui_supports_the_selected_low_effort_commands_but_not_orchestrate() {
             TuiSlashCommand::ExportToClipboard,
         ),
         (&*commands::EXPORT_TO_FILE, TuiSlashCommand::ExportToFile),
-        (&commands::COST, TuiSlashCommand::Cost),
     ] {
         assert_eq!(
             TuiSlashCommand::from_static_command(command),
@@ -69,31 +67,10 @@ fn tui_supports_the_selected_low_effort_commands_but_not_orchestrate() {
         );
     }
 
-    assert_eq!(
-        TuiSlashCommand::from_static_command(&commands::ORCHESTRATE),
-        None
-    );
-    assert!(!slash_command_is_supported_in_tui(&commands::ORCHESTRATE));
-}
-
-#[test]
-fn conversation_cost_validation_matches_gui_and_tui_states() {
-    assert_eq!(
-        conversation_cost_validation_error(None),
-        Some("Cannot show conversation cost: no active conversation")
-    );
-    assert_eq!(
-        conversation_cost_validation_error_for_state(true, false),
-        Some("Cannot show conversation cost: conversation is empty")
-    );
-    assert_eq!(
-        conversation_cost_validation_error_for_state(false, false),
-        Some("Cannot show conversation cost: conversation is in progress")
-    );
-    assert_eq!(
-        conversation_cost_validation_error_for_state(false, true),
-        None
-    );
+    for command in [&commands::COST, &*commands::ORCHESTRATE] {
+        assert_eq!(TuiSlashCommand::from_static_command(command), None);
+        assert!(!slash_command_is_supported_in_tui(command));
+    }
 }
 
 #[test]

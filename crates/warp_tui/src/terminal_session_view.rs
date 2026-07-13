@@ -10,9 +10,9 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    build_slash_command_mixer, conversation_cost_validation_error, detect_possible_git_repo,
-    export_conversation_markdown, prepare_conversation_block_restoration,
-    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown,
+    prepare_conversation_block_restoration, record_saved_prompt_accepted,
+    record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle, AIAgentActionId, AIAgentPtyWriteMode,
     AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AgentInteractionMetadata,
     AgentViewEntryOrigin, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
@@ -23,11 +23,11 @@ use warp::tui_export::{
     ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
     GitStatusMetadata, LLMPreferences, LLMPreferencesEvent, ModelEvent, ParsedSlashCommandInput,
     PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
-    ServerConversationToken, ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
-    SlashCommandSelectionBehavior, StaticCommand, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TranscriptScope, TuiSlashCommand, TuiSlashCommandDataSource,
-    TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, COMMAND_REGISTRY,
-    WAKEUP_THROTTLE_PERIOD,
+    ServerConversationToken, ShellCommandExecutorEvent, SkillReference,
+    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
+    TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
+    COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
@@ -1344,19 +1344,6 @@ impl TuiTerminalSessionView {
                         );
                         self.show_transient_hint(message, ctx);
                     }
-                }
-                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-                record_static_slash_command_accepted(command.name, true, ctx);
-            }
-            TuiSlashCommand::Cost => {
-                let conversation = self
-                    .conversation_selection
-                    .as_ref(ctx)
-                    .selected_conversation(ctx);
-                if let Some(error) = conversation_cost_validation_error(conversation) {
-                    self.show_transient_hint(error.to_owned(), ctx);
-                } else {
-                    self.toggle_usage_display(ctx);
                 }
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
