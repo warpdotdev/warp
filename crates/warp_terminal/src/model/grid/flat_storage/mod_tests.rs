@@ -326,3 +326,31 @@ fn has_cursor_cell_materializes_empty_cells_before_it() {
 
     assert!(storage.content_offset_at_point(Point::new(0, 4)).is_ok());
 }
+
+#[test]
+fn has_cursor_cell_does_not_extend_contentful_row_blank_tail() {
+    let mut cursor_cell = Cell::default();
+    cursor_cell.flags.insert(Flags::HAS_CURSOR);
+
+    let row = Row::from_vec(
+        vec![
+            Cell::from('d'),
+            Cell::from('e'),
+            Cell::from('f'),
+            Cell::default(),
+            cursor_cell,
+        ],
+        5,
+    );
+
+    let mut storage = FlatStorage::new(5, None, Some(1));
+    storage.push_rows([&row]);
+
+    assert!(storage.content_offset_at_point(Point::new(0, 4)).is_err());
+    assert_eq!(
+        storage.content_offset_at_point_or_before(Point::new(0, 4)),
+        storage
+            .content_offset_at_point(Point::new(0, 2))
+            .expect("last content cell should map to a content offset")
+    );
+}

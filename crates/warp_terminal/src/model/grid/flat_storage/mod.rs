@@ -204,6 +204,7 @@ impl FlatStorage {
                 continue;
             }
 
+            let row_has_content = row.line_length() > 0;
             let mut last_cell: isize = -1;
 
             // Use an empty but pre-allocated buffer to collect characters from
@@ -231,6 +232,9 @@ impl FlatStorage {
                 }
 
                 let mut needs_processing = !cell.is_empty();
+                if row_has_content && Self::is_only_cursor_marker(cell) {
+                    needs_processing = false;
+                }
                 if cell.fg != fg_color {
                     needs_processing = true;
                     fg_color = cell.fg;
@@ -298,7 +302,8 @@ impl FlatStorage {
             cell.flags().intersects(
                 cell::Flags::WIDE_CHAR
                     | cell::Flags::WIDE_CHAR_SPACER
-                    | cell::Flags::LEADING_WIDE_CHAR_SPACER,
+                    | cell::Flags::LEADING_WIDE_CHAR_SPACER
+                    | cell::Flags::HAS_CURSOR,
             )
         }) {
             return false;
@@ -340,6 +345,14 @@ impl FlatStorage {
         entry_builder.flush_to_index(&mut self.index);
 
         true
+    }
+
+    fn is_only_cursor_marker(cell: &cell::Cell) -> bool {
+        cell.c == cell::DEFAULT_CHAR
+            && cell.fg == DEFAULT_FG_COLOR
+            && cell.bg == ansi::Color::Named(ansi::NamedColor::Background)
+            && *cell.flags() == cell::Flags::HAS_CURSOR
+            && cell.end_of_prompt_marker().is_none()
     }
 
     /// Clears out the contents of flat storage.
