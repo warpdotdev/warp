@@ -2875,6 +2875,63 @@ fn test_copy_on_select() {
     })
 }
 
+// #13480: copying a *block* selection (not a text selection) with Ctrl+C must
+// clear the selection and return focus to the prompt, matching the Escape /
+// FocusInputAndClearSelection gesture. Before the fix, `copy` wrote the
+// clipboard but left the block selected and focus off the input.
+#[test]
+fn test_copy_selected_block_refocuses_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // Build a finished command block, then select the whole block (a
+        // block-level selection, distinct from an in-block text selection) and
+        // move focus off the input onto the terminal grid.
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.start_command_execution();
+                let blocks = model.block_list_mut();
+                blocks.input('f');
+                blocks.input('o');
+                blocks.input('o');
+                blocks.linefeed();
+                blocks.preexec(PreexecValue::default());
+                blocks.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+            }
+            view.selected_blocks.reset_to_single(BlockIndex::zero());
+            view.focus_terminal(ctx);
+        });
+
+        // Precondition: the block is selected and the prompt editor is not
+        // focused. `input.editor().is_focused` is how the view itself checks
+        // prompt focus (see `paste`).
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.selected_blocks.cardinality().as_keymap_context_value(),
+                BlockSelectionCardinality::One.as_keymap_context_value(),
+            );
+            assert!(!view.input.as_ref(ctx).editor().is_focused(ctx));
+        });
+
+        // Ctrl+C dispatches TerminalAction::Copy -> `copy`.
+        terminal.update(&mut app, |view, ctx| {
+            view.copy(ctx);
+        });
+
+        // After the copy the selection is cleared and the prompt is focused.
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.selected_blocks.cardinality().as_keymap_context_value(),
+                BlockSelectionCardinality::None.as_keymap_context_value(),
+            );
+            assert!(view.input.as_ref(ctx).editor().is_focused(ctx));
+        });
+    })
+}
+
 #[test]
 fn test_alt_screen_copy_on_select() {
     App::test((), |mut app| async move {

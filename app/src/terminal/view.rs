@@ -16527,6 +16527,14 @@ impl TerminalView {
 
         if !self.selected_blocks.is_empty() {
             self.copy_blocks(BlockEntity::CommandAndOutput, ctx);
+            // Copying a selected block via Ctrl+C returns the user to the
+            // prompt, matching Escape / FocusInputAndClearSelection: clear the
+            // block selection and refocus the input (#13480). `focus_input_box`
+            // keeps selected blocks when AI-input / AgentView is active, since
+            // there they are attachable context — so this doesn't regress that
+            // path. The context-menu "Copy" path goes through `copy_blocks`
+            // directly and is intentionally left as-is.
+            self.focus_input_box(ctx);
         }
     }
 
