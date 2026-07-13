@@ -328,9 +328,6 @@ pub enum FeatureFlag {
     /// Enables code symbols in AI context menu
     AIContextMenuCode,
 
-    /// Enables Warp Drive objects (like workflows) as context in AI context menu
-    DriveObjectsAsContext,
-
     /// Expands code diff edits to replace the current pane instead of opening in a new tab.
     ExpandEditToPane,
     /// Enables fallback model load output messaging in the warping indicator.

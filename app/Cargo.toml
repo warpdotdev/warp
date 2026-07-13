@@ -556,7 +556,6 @@ default = [
     "ai_context_menu_code",
     "agent_decides_command_execution",
     "linked_code_blocks",
-    "drive_objects_as_context",
     "search_codebase_ui",
     "profiles_design_revamp",
     "multi_profile",
@@ -878,7 +877,6 @@ cycle_next_command_suggestion = []
 multi_workspace = []
 ime_marked_text = []
 partial_next_command_suggestions = []
-drive_objects_as_context = []
 iterm_images = []
 validate_autosuggestions = []
 autoupdate_ui_revamp = []

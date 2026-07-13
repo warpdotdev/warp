@@ -423,11 +423,9 @@ impl AIContextMenu {
         if is_in_ambient_agent {
             let mut categories = vec![];
             if show_warp_drive {
-                if FeatureFlag::DriveObjectsAsContext.is_enabled() {
-                    categories.push(AIContextMenuCategory::Workflows);
-                    categories.push(AIContextMenuCategory::Notebooks);
-                    categories.push(AIContextMenuCategory::Plans);
-                }
+                categories.push(AIContextMenuCategory::Workflows);
+                categories.push(AIContextMenuCategory::Notebooks);
+                categories.push(AIContextMenuCategory::Plans);
                 categories.push(AIContextMenuCategory::Rules);
             }
             return categories;
@@ -458,7 +456,7 @@ impl AIContextMenu {
             {
                 categories.push(AIContextMenuCategory::Code);
             }
-            if show_warp_drive && FeatureFlag::DriveObjectsAsContext.is_enabled() {
+            if show_warp_drive {
                 categories.push(AIContextMenuCategory::Workflows);
                 categories.push(AIContextMenuCategory::Notebooks);
                 categories.push(AIContextMenuCategory::Plans);
