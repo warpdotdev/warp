@@ -47,16 +47,18 @@ impl Iterator for RowIterator<'_> {
 
         let mut fg_color_iter = self.storage.fg_color_map.iter_from(start_offset);
         let mut bg_and_style_iter = self.storage.bg_and_style_map.iter_from(start_offset);
+        let mut content_cursor = self.storage.content().cursor_at(start_offset);
 
         let row = Rc::make_mut(&mut self.row);
         row.reset(&self.template);
 
         let mut current_offset = start_offset;
         for grapheme_info in self.storage.index.grapheme_infos_for_row(self.row_index)? {
-            let content = {
-                let start = current_offset;
-                let end = start + grapheme_info.utf8_bytes.get() as usize;
-                &self.storage.content()[start..end]
+            let grapheme_len = grapheme_info.utf8_bytes.get() as usize;
+            let content = if grapheme_len == 1 {
+                content_cursor.next_slice(1)
+            } else {
+                content_cursor.next_slice(grapheme_len)
             };
             let grapheme = Grapheme::new_from_str_and_info(content, grapheme_info);
 
@@ -74,8 +76,16 @@ impl Iterator for RowIterator<'_> {
             // incorrect (but easy to get wrong).  This works, but I wonder if the
             // iterator returned by `AttributeMap` shouldn't actually implement
             // `Iterator` and should provide its own `next(&Grapheme)` function.
-            let fg = next_attribute(&mut fg_color_iter, &grapheme);
-            let BgAndStyle { bg, flags } = next_attribute(&mut bg_and_style_iter, &grapheme);
+            let fg = fg_color_iter
+                .next()
+                .expect("should never fail to provide value");
+            let BgAndStyle { bg, flags } = bg_and_style_iter
+                .next()
+                .expect("should never fail to provide value");
+            if grapheme_len > 1 {
+                fg_color_iter.skip_by(grapheme_len - 1);
+                bg_and_style_iter.skip_by(grapheme_len - 1);
+            }
 
             let cell_width = grapheme.cell_width();
             if cell_width == 0 {
@@ -153,14 +163,4 @@ impl Iterator for RowIterator<'_> {
         self.row_index += 1;
         Some(self.row.clone())
     }
-}
-
-/// Returns the next value for the given attribute iterator, given the current
-/// grapheme.
-///
-/// This must be used instead of [`Iterator::next`] in order to handle
-/// multi-byte graphemes properly.
-fn next_attribute<T>(iter: &mut impl Iterator<Item = T>, grapheme: &Grapheme) -> T {
-    iter.nth(grapheme.len().as_usize() - 1)
-        .expect("should never fail to provide value")
 }

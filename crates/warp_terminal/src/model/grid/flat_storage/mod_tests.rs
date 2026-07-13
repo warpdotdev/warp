@@ -119,6 +119,22 @@ fn test_push_rows_with_color() {
 }
 
 #[test]
+fn test_push_rows_dense_single_width_row_does_not_panic() {
+    let num_cols = 12;
+    let rows = "hello world\n".to_rows(num_cols);
+
+    let mut storage = FlatStorage::new(num_cols, None, Some(2));
+    storage.push_rows(&rows);
+
+    let flat_rows = storage
+        .rows_from(0)
+        .map(|row| row.as_ref().clone())
+        .collect_vec();
+
+    assert_rows_equal(&flat_rows, &rows);
+}
+
+#[test]
 fn test_push_rows_with_color_and_multibyte_chars() {
     let mut storage = FlatStorage::new(5, None, Some(2));
 
