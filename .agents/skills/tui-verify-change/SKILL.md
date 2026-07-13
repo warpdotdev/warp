@@ -302,23 +302,19 @@ those cover authoring TUI UI and writing durable tests.
 GUI-only counterparts (do **not** use for TUI work): `gui-integration-test`,
 `gui-integration-test-video`, `gui-onboarding-verification-skill`.
 
-## Final step — improve this skill when it falls short (self-improvement loop)
+## Improving this skill over time (self-improvement loop)
 
-This skill should get **better every time it's used**. As a required final step,
-reflect on the run you just did and ask: was any part of this skill unclear,
-wrong, out of date, or did any step **not work** as written — a command that
-failed, a path that moved, missing local-vs-cloud or tmux handling, or an
-assumption that didn't hold?
+The aim is for this skill to get better **over time** — **not** for every run to
+end in an edit. Most runs should need no change here; don't manufacture trivial
+wording tweaks just to have improved something, and never let this step turn into
+busywork.
 
-- **If everything worked**, note that briefly and you're done.
-- **If something was unclear or broke**, don't just work around it silently.
-  Capture the specific gap (what you expected vs. what actually happened) and
-  **propose a fix to this skill in a _separate_ PR** — separate from the change
-  you were actually verifying, so the skill improvement is reviewable on its own
-  and the original PR stays scoped. Make the smallest correct edit to
-  `.agents/skills/tui-verify-change/SKILL.md` (follow the `update-skill`
-  conventions) that would have made this run go smoothly, and open it as its own
-  PR.
-
-Treat this as a standing feedback loop: each imperfect run should leave the skill
-a little more accurate for the next one.
+Act only when a run surfaces a **genuine, notable gap** — a step that **didn't
+work** as written, a command that failed, a path that moved, missing
+local-vs-cloud or tmux handling, or an assumption that didn't hold. When that
+happens, don't just work around it silently: capture the specific problem (what
+you expected vs. what actually happened) and **propose the fix in a _separate_
+PR** — separate from the change you were verifying, so the skill improvement is
+reviewable on its own and the original PR stays scoped. Make the smallest correct
+edit to `.agents/skills/tui-verify-change/SKILL.md` (follow the `update-skill`
+conventions) that would have made the run go smoothly.
