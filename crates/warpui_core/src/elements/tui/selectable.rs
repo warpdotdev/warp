@@ -30,15 +30,14 @@ mod state;
 
 pub(crate) use cells::{cell_span, row_glyphs, row_text};
 pub use cells::{point_after_col, TuiRowGlyph, TuiSelectionSpan};
+use state::auto_scroll_edge;
 pub use state::TuiSelectionHandle;
+
+/// How long between continuous auto-scroll steps while a drag is held past an edge.
+const AUTO_SCROLL_INTERVAL: Duration = Duration::from_millis(100);
 
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
 type CopyCallback = Box<dyn FnMut(String, &mut TuiEventContext, &AppContext)>;
-
-/// How long between continuous auto-scroll steps while a drag is held past an
-/// edge. Each repaint tick advances the scroll one row and extends the
-/// selection toward that edge.
-const AUTO_SCROLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// A content row range before layout and its height afterward.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,6 +57,16 @@ pub trait TuiSelectableElement: TuiElement {
         area: TuiRect,
         clamp_outside: bool,
     ) -> Option<TuiGridPoint>;
+
+    /// Scrolls content rows while extending a selection past an edge.
+    fn scroll_for_selection(&mut self, _rows: isize, _viewport_height: usize) -> bool {
+        false
+    }
+
+    /// Returns whether the latest selection scroll reached its directional boundary.
+    fn selection_scroll_reached_boundary(&self, _rows: isize) -> bool {
+        false
+    }
 
     /// Returns rendered glyphs for one selectable content row.
     fn selection_row_glyphs(
@@ -130,14 +139,12 @@ where
         self
     }
 
-    /// Advances a parked-past-edge drag one auto-scroll step: re-resolves the
-    /// selection edge at the last drag position (which scrolls the viewport one
-    /// row) and extends the moving endpoint toward that edge. Disarms once the
-    /// endpoint stops advancing, i.e. the content start/end has been reached.
+    /// Advances a parked-past-edge drag and extends its moving endpoint.
     fn tick_auto_scroll(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        let now = Instant::now();
         let Some(target) = self
             .selection
-            .due_auto_scroll_target(Instant::now(), AUTO_SCROLL_INTERVAL)
+            .due_auto_scroll_target(now, AUTO_SCROLL_INTERVAL)
         else {
             return;
         };
@@ -145,6 +152,18 @@ where
             self.selection.clear_auto_scroll();
             return;
         };
+        let Some(rows) = target.scroll_delta(now) else {
+            self.selection.clear_auto_scroll();
+            return;
+        };
+        if !self
+            .child
+            .scroll_for_selection(rows, usize::from(target.area.height))
+        {
+            self.selection.clear_auto_scroll();
+            return;
+        }
+        let reached_boundary = self.child.selection_scroll_reached_boundary(rows);
         let Some(extent_span) = self.selection_span_at(
             target.position,
             interaction.selection_type,
@@ -156,9 +175,8 @@ where
             self.selection.clear_auto_scroll();
             return;
         };
-        // The parked pointer no longer produces a new edge: content boundary
-        // reached, so stop ticking (and repainting).
-        if !self.selection.update_extent(extent_span) {
+        self.selection.update_extent(extent_span);
+        if reached_boundary {
             self.selection.clear_auto_scroll();
         }
     }
@@ -275,7 +293,8 @@ where
         // Keep the frames coming while a drag is parked past an edge, so
         // auto-scroll continues even without new mouse events. The layout tick
         // disarms this once the content boundary is reached.
-        self.selection.request_auto_scroll_repaint(ctx);
+        self.selection
+            .request_auto_scroll_repaint(ctx, AUTO_SCROLL_INTERVAL, Instant::now());
     }
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         self.child.cursor_position(area, ctx)
@@ -328,14 +347,33 @@ where
                 true
             }
             TuiEvent::LeftMouseDragged { position, .. } if self.selection.is_selecting() => {
-                if position.y < area.y || position.y >= area.bottom() {
+                if auto_scroll_edge(*position, area).is_some() {
                     // Past-edge scrolling is exclusively repaint-driven. Repeated
                     // drag events only refresh the parked pointer so they stay
                     // cheap and cannot queue full redraws ahead of mouse-up.
-                    if self
-                        .selection
-                        .update_auto_scroll(*position, area, Instant::now())
-                    {
+                    let changed =
+                        self.selection
+                            .update_auto_scroll(*position, area, Instant::now());
+                    if changed {
+                        if let Some(interaction) = self.selection.interaction() {
+                            if let Some(extent_span) = self.selection_span_at(
+                                *position,
+                                interaction.selection_type,
+                                area,
+                                true,
+                                ctx,
+                                app,
+                            ) {
+                                let is_unchanged_initial_cell = matches!(
+                                    interaction.selection_type,
+                                    SelectionType::Simple | SelectionType::Rect
+                                ) && !interaction.has_extent
+                                    && extent_span.start == interaction.anchor_span.start;
+                                if !is_unchanged_initial_cell {
+                                    self.selection.update_extent(extent_span);
+                                }
+                            }
+                        }
                         event_ctx.notify();
                     }
                     return true;

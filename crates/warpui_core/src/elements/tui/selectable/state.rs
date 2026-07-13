@@ -9,6 +9,11 @@ use instant::Instant;
 use super::{TuiGridPoint, TuiPaintContext, TuiPoint, TuiRect, TuiRowResize, TuiSelectionSpan};
 use crate::text::SelectionType;
 
+// Hold thresholds for the 1 → 2 → 4 → 8 row auto-scroll acceleration ramp.
+const AUTO_SCROLL_TWO_ROWS_AFTER: Duration = Duration::from_millis(500);
+const AUTO_SCROLL_FOUR_ROWS_AFTER: Duration = Duration::from_millis(1_500);
+const AUTO_SCROLL_EIGHT_ROWS_AFTER: Duration = Duration::from_millis(3_000);
+
 /// The parked-pointer target that drives continuous auto-scroll while a drag
 /// gesture is held past an edge of the selectable's slot. Records the last
 /// drag position and the slot rect it was resolved against, so a repaint tick
@@ -17,7 +22,46 @@ use crate::text::SelectionType;
 pub(super) struct TuiAutoScrollTarget {
     pub(super) position: TuiPoint,
     pub(super) area: TuiRect,
+    pub(super) started_at: Instant,
     pub(super) next_step_at: Instant,
+}
+
+impl TuiAutoScrollTarget {
+    /// Returns a signed adaptive row step toward the parked edge.
+    pub(super) fn scroll_delta(self, now: Instant) -> Option<isize> {
+        let (direction, overshoot) = auto_scroll_edge(self.position, self.area)?;
+        let held_for = now.saturating_duration_since(self.started_at);
+        let time_rows = if held_for >= AUTO_SCROLL_EIGHT_ROWS_AFTER {
+            8
+        } else if held_for >= AUTO_SCROLL_FOUR_ROWS_AFTER {
+            4
+        } else if held_for >= AUTO_SCROLL_TWO_ROWS_AFTER {
+            2
+        } else {
+            1
+        };
+        let distance_rows = 1 + usize::from(overshoot.saturating_sub(1)) / 2;
+        let max_rows = (usize::from(self.area.height) / 2).max(1);
+        let rows = time_rows.max(distance_rows).min(max_rows) as isize;
+        Some(direction * rows)
+    }
+}
+
+/// Returns the auto-scroll direction and distance for a parked pointer.
+pub(super) fn auto_scroll_edge(position: TuiPoint, area: TuiRect) -> Option<(isize, u16)> {
+    if area.is_empty() {
+        return None;
+    }
+    if position.y <= area.y {
+        Some((-1, area.y.saturating_sub(position.y).saturating_add(1)))
+    } else if position.y >= area.bottom() {
+        Some((
+            1,
+            position.y.saturating_sub(area.bottom()).saturating_add(1),
+        ))
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -98,9 +142,12 @@ impl TuiSelectionHandle {
         let Some(selection) = slot.as_mut() else {
             return false;
         };
+        let Some((direction, _)) = auto_scroll_edge(position, area) else {
+            return false;
+        };
         let same_edge = selection.auto_scroll.is_some_and(|target| {
-            (target.position.y < target.area.y && position.y < area.y)
-                || (target.position.y >= target.area.bottom() && position.y >= area.bottom())
+            auto_scroll_edge(target.position, target.area)
+                .is_some_and(|(target_direction, _)| target_direction == direction)
         });
         if same_edge {
             let target = selection
@@ -114,6 +161,7 @@ impl TuiSelectionHandle {
         selection.auto_scroll = Some(TuiAutoScrollTarget {
             position,
             area,
+            started_at: now,
             next_step_at: now,
         });
         true
@@ -128,18 +176,29 @@ impl TuiSelectionHandle {
             .is_some()
     }
 
-    /// Requests the next repaint for an active parked drag.
-    pub(super) fn request_auto_scroll_repaint(&self, ctx: &mut TuiPaintContext) {
+    /// Requests the next repaint without reusing an overdue cadence deadline.
+    pub(super) fn request_auto_scroll_repaint(
+        &self,
+        ctx: &mut TuiPaintContext,
+        interval: Duration,
+        now: Instant,
+    ) {
         let slot = self.0.borrow();
         let Some(selection) = slot.as_ref() else {
             return;
         };
         if selection.is_selecting {
             if let Some(target) = selection.auto_scroll {
-                ctx.repaint_at(target.next_step_at);
+                let repaint_at = if target.next_step_at <= now {
+                    now + interval
+                } else {
+                    target.next_step_at
+                };
+                ctx.repaint_at(repaint_at);
             }
         }
     }
+
     /// Returns a due target and schedules its next step.
     pub(super) fn due_auto_scroll_target(
         &self,

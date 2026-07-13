@@ -106,17 +106,19 @@ where
         area: TuiRect,
         clamp_outside: bool,
     ) -> Option<TuiGridPoint> {
-        if clamp_outside {
-            let delta = if position.y < area.y {
-                -1
-            } else if position.y >= area.bottom() {
-                1
-            } else {
-                0
-            };
-            self.scroll_by(delta, usize::from(area.height));
-        }
         self.resolve_selection_point(position, area, clamp_outside)
+    }
+
+    fn scroll_for_selection(&mut self, rows: isize, viewport_height: usize) -> bool {
+        self.scroll_by(rows, viewport_height)
+    }
+
+    fn selection_scroll_reached_boundary(&self, rows: isize) -> bool {
+        match self.state.position() {
+            TuiViewportPosition::End => rows > 0,
+            TuiViewportPosition::RowsFromTop(0) => rows < 0,
+            TuiViewportPosition::RowsFromTop(_) => false,
+        }
     }
 
     fn selection_row_glyphs(
@@ -399,11 +401,14 @@ where
 {
     /// Creates a generalized viewport over `content`.
     pub fn new(state: TuiViewportedListState, content: Content) -> Self {
+        let content_height = state
+            .resolved_viewport()
+            .map_or(0, |resolved| resolved.content_height);
         Self {
             state,
             content,
             visible_elements: Vec::new(),
-            content_height: 0,
+            content_height,
             size: TuiSize::ZERO,
             vertical_alignment: TuiViewportVerticalAlignment::Top,
             selection_snapshot: RefCell::new(None),
