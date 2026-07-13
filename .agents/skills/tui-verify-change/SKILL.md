@@ -56,11 +56,19 @@ path below.
   non-interactive `WARP_API_KEY` login below is a *cloud-runner* affordance, not
   a local one, so don't let a missing key block you locally.
 - **Cloud context** — you're a headless cloud agent (e.g. the factory-client
-  runner) with no browser to complete a device-auth login. Here `./script/run-tui`
-  alone **can't** reach the logged-in state, so to verify a signed-in surface you
-  build a **dogfood** binary and rely on the `WARP_API_KEY` already present in the
-  environment (see **Logging in non-interactively** below). `WARP_API_KEY` is the
-  cloud path; `./script/run-tui`'s device-auth is the local one.
+  runner) with no browser for device-auth, so reaching a **signed-in** surface
+  relies on the non-interactive `WARP_API_KEY` already in the environment. That
+  does **not** mean bypassing `./script/run-tui`: when the `warp-channel-config`
+  generator is available, `./script/run-tui` selects the internal **`local`
+  dogfood** binary, and with `WARP_API_KEY` inherited that binary logs in through
+  the **same** API-key path described below — so prefer `./script/run-tui`
+  whenever it resolves to a dogfood channel, rather than skipping the maintained
+  runner. Build and run a dogfood binary **explicitly** (`warp-tui-dev`, see
+  **Logging in non-interactively** below) only when `./script/run-tui` would fall
+  back to **`warp-tui-oss`** (no generator / no repo access) — OSS isn't a dogfood
+  channel and silently drops the key — or when you need a specific binary or
+  profile. Either way, in the cloud it's the inherited `WARP_API_KEY` that signs
+  you in; the browser device-auth login is the local-only path.
 
 The logged-**out** surface (the `Sign in to continue` placeholder and any pure
 element/layout) needs neither login path — a plain OSS build is enough in either
