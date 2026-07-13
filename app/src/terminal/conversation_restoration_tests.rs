@@ -4,8 +4,9 @@ use chrono::{Local, TimeZone};
 use warp_multi_agent_api as api;
 use warp_terminal::model::BlockIndex;
 
-use super::{find_block_indices_for_exchange_timestamps, ConversationRestorationInNewPaneType};
-use crate::terminal::view::AIConversation;
+use super::find_block_indices_for_exchange_timestamps;
+use crate::ai::agent::conversation::AIConversation;
+use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::AIConversationId;
 
 /// Helper: create a `DateTime<Local>` from a unix timestamp in seconds.

@@ -484,7 +484,7 @@ impl BlocklistAIContextModel {
                         .block_list()
                         .block_with_id(block_id)
                         .map(|block| {
-                            block.can_be_ai_context(terminal_model.block_list().agent_view_state())
+                            block.can_be_ai_context(terminal_model.block_list().transcript_scope())
                         })
                         .unwrap_or(false)
                 })
@@ -765,7 +765,7 @@ impl BlocklistAIContextModel {
             .block_list()
             .blocks()
             .iter()
-            .any(|block| block.can_be_ai_context(terminal_model.block_list().agent_view_state()))
+            .any(|block| block.can_be_ai_context(terminal_model.block_list().transcript_scope()))
     }
 
     /// Register a diff hunk attachment that can be referenced in future queries

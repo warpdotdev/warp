@@ -8,8 +8,9 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
-    BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, ModelEventDispatcher, RichContentItem, RichContentType, TerminalModel,
+    BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, ConversationBlockRestorationPlan, ModelEventDispatcher,
+    RichContentItem, RichContentType, TerminalModel,
 };
 use warp_core::semantic_selection::SemanticSelection;
 use warpui_core::elements::tui::{
@@ -134,7 +135,7 @@ impl TuiTranscriptView {
                     .and_then(|conversation| conversation.get_task(task_id))
                     .is_some_and(should_show_task_in_blocklist);
                 if should_show {
-                    self.insert_agent_block(*conversation_id, *exchange_id, ctx);
+                    self.insert_agent_block(*conversation_id, *exchange_id, None, ctx);
                 }
             }
             BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => {
@@ -155,8 +156,20 @@ impl TuiTranscriptView {
                 conversation_id,
                 ..
             } => self.remove_conversation(*conversation_id, ctx),
-            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. } => {
-                self.clear_agent_blocks(ctx);
+            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                active_conversation_id,
+                cleared_conversation_ids,
+                ..
+            } => {
+                let mut conversation_ids = cleared_conversation_ids.clone();
+                if let Some(active_conversation_id) = active_conversation_id {
+                    if !conversation_ids.contains(active_conversation_id) {
+                        conversation_ids.push(*active_conversation_id);
+                    }
+                }
+                for conversation_id in conversation_ids {
+                    self.remove_conversation(conversation_id, ctx);
+                }
             }
             BlocklistAIHistoryEvent::StartedNewConversation { .. }
             | BlocklistAIHistoryEvent::CreatedSubtask { .. }
@@ -214,6 +227,7 @@ impl TuiTranscriptView {
         &mut self,
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
+        command_block_index: Option<BlockIndex>,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.view_id_for_exchange(exchange_id, ctx).is_some() {
@@ -256,11 +270,40 @@ impl TuiTranscriptView {
             }
         });
         self.agent_blocks.borrow_mut().insert(view_id, view);
-        self.model.lock().block_list_mut().append_rich_content(
-            RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
-            false,
-        );
+        let item = RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false);
+        let mut model = self.model.lock();
+        match command_block_index {
+            Some(command_block_index) => model
+                .block_list_mut()
+                .insert_rich_content_before_block_index(item, command_block_index),
+            None => model.block_list_mut().append_rich_content(item, false),
+        }
         ctx.notify();
+    }
+
+    /// Materializes a shared restoration plan as TUI agent-block views.
+    pub(super) fn restore_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        restoration_plan: ConversationBlockRestorationPlan,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for restored_exchange in restoration_plan.into_exchanges() {
+            self.insert_agent_block(
+                conversation_id,
+                restored_exchange.exchange().id,
+                restored_exchange.command_block_index(),
+                ctx,
+            );
+        }
+        self.viewport.scroll_to_end();
+        ctx.notify();
+    }
+
+    /// Clears agent rich content before replacing the sole conversation.
+    pub(super) fn clear_for_replacement(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_agent_blocks(ctx);
+        self.viewport.scroll_to_end();
     }
 
     fn mark_exchange_dirty(&mut self, exchange_id: AIAgentExchangeId, ctx: &mut ViewContext<Self>) {

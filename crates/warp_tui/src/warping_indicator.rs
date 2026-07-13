@@ -19,7 +19,7 @@ use warp::tui_export::format_credits;
 use warpui_core::elements::animation::{AnimationClock, Keyframe, KeyframeTimeline};
 use warpui_core::elements::shimmer_math::ShimmerConfig;
 use warpui_core::elements::tui::{
-    Modifier, TuiAnimated, TuiElement, TuiFlex, TuiShimmeringText, TuiText,
+    Modifier, TuiAnimated, TuiElement, TuiFlex, TuiShimmeringText, TuiStyle, TuiText,
 };
 use warpui_core::AppContext;
 
@@ -68,6 +68,17 @@ static SPINNER_TIMELINE: LazyLock<KeyframeTimeline<&'static str>> = LazyLock::ne
     ])
 });
 
+/// Renders the shared animated TUI spinner with the supplied clock and style.
+pub(crate) fn render_spinner(clock: AnimationClock, style: TuiStyle) -> Box<dyn TuiElement> {
+    TuiAnimated::new(Duration::from_millis(FAST_SPIN_FRAME_MILLIS), move || {
+        TuiText::new(*SPINNER_TIMELINE.value_at(clock.elapsed()))
+            .with_style(style)
+            .truncate()
+            .finish()
+    })
+    .finish()
+}
+
 /// Renders the `⋮ Warping... (Ns)` row for an exchange that has been running for
 /// `elapsed`.
 pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> Box<dyn TuiElement> {
@@ -78,13 +89,7 @@ pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> B
 
     // The spinner repaints at its timeline's shortest hold so the fast spins
     // don't skip frames; repaint requests coalesce to the earliest deadline.
-    let spinner_style = builder.warping_spinner_style();
-    let spinner = TuiAnimated::new(Duration::from_millis(FAST_SPIN_FRAME_MILLIS), move || {
-        TuiText::new(*SPINNER_TIMELINE.value_at(clock.elapsed()))
-            .with_style(spinner_style)
-            .truncate()
-            .finish()
-    });
+    let spinner = render_spinner(clock, builder.warping_spinner_style());
 
     let label = TuiShimmeringText::new(
         "Warping...",
@@ -104,7 +109,7 @@ pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> B
     });
 
     TuiFlex::row()
-        .child(spinner.finish())
+        .child(spinner)
         .child(TuiText::new(" ").truncate().finish())
         .child(label.finish())
         .child(TuiText::new(" ").truncate().finish())

@@ -458,6 +458,11 @@ impl BlocklistAIActionModel {
         }
     }
 
+    /// Clears action results restored from a previous conversation transcript.
+    pub fn clear_restored_action_results(&mut self) {
+        self.past_action_results.clear();
+    }
+
     fn try_to_execute_available_actions(
         &mut self,
         conversation_id: AIConversationId,

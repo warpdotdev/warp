@@ -10,7 +10,6 @@ use warpui::platform::WindowStyle;
 use warpui::units::Lines;
 use warpui::{App, SingletonEntity, ViewHandle};
 
-use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::{BlockId, BlockState, SerializedBlock};
@@ -115,12 +114,9 @@ fn test_terminal_model_is_correct() {
         });
 
         // Before we receive any events, the block list only contains hidden blocks.
-        assert!(model
-            .lock()
-            .block_list()
-            .blocks()
-            .iter()
-            .all(|block| block.height(&AgentViewState::Inactive) == Lines::zero()));
+        assert!(model.lock().block_list().blocks().iter().all(|block| block
+            .height(&crate::terminal::model::block::TranscriptScope::Terminal)
+            == Lines::zero()));
 
         // Load shared session scrollback.
         let scrollback = &[
@@ -133,15 +129,18 @@ fn test_terminal_model_is_correct() {
             // A hidden block, a completed scrollback block, then the active block.
             assert_eq!(model.block_list().blocks().len(), 3);
             assert_eq!(
-                model.block_list().blocks()[0].height(&AgentViewState::Inactive),
+                model.block_list().blocks()[0]
+                    .height(&crate::terminal::model::block::TranscriptScope::Terminal),
                 Lines::zero()
             );
             assert_ne!(
-                model.block_list().blocks()[1].height(&AgentViewState::Inactive),
+                model.block_list().blocks()[1]
+                    .height(&crate::terminal::model::block::TranscriptScope::Terminal),
                 Lines::zero()
             );
             assert_eq!(
-                model.block_list().blocks()[2].height(&AgentViewState::Inactive),
+                model.block_list().blocks()[2]
+                    .height(&crate::terminal::model::block::TranscriptScope::Terminal),
                 Lines::zero()
             );
         }
@@ -157,15 +156,18 @@ fn test_terminal_model_is_correct() {
         // After writing bytes, active block should no longer have height 0.
         assert_eq!(model.block_list().blocks().len(), 3);
         assert_eq!(
-            model.block_list().blocks()[0].height(&AgentViewState::Inactive),
+            model.block_list().blocks()[0]
+                .height(&crate::terminal::model::block::TranscriptScope::Terminal),
             Lines::zero()
         );
         assert_ne!(
-            model.block_list().blocks()[1].height(&AgentViewState::Inactive),
+            model.block_list().blocks()[1]
+                .height(&crate::terminal::model::block::TranscriptScope::Terminal),
             Lines::zero()
         );
         assert_ne!(
-            model.block_list().blocks()[2].height(&AgentViewState::Inactive),
+            model.block_list().blocks()[2]
+                .height(&crate::terminal::model::block::TranscriptScope::Terminal),
             Lines::zero()
         );
     })
@@ -486,7 +488,7 @@ fn test_append_followup_scrollback_with_completed_last_block_creates_active_bloc
             model
                 .block_list()
                 .active_block()
-                .height(&AgentViewState::Inactive),
+                .height(&crate::terminal::model::block::TranscriptScope::Terminal),
             Lines::zero()
         );
         assert!(!model.block_list().active_block().started());

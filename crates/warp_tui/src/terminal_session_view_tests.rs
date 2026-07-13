@@ -6,6 +6,7 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentActionId, AIConversationId, AgentInteractionMetadata, BlockId, TerminalModel,
+    TranscriptScope,
 };
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
@@ -16,6 +17,9 @@ use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
 fn model_with_finished_block(command: &str) -> (TerminalModel, BlockId) {
     let mut model = TerminalModel::mock(None, None);
+    model
+        .block_list_mut()
+        .set_transcript_scope(TranscriptScope::Unfiltered);
     model.simulate_block(command, "output\r\n");
     let block_id = model
         .block_list()
@@ -64,7 +68,7 @@ fn spawned_agent_requested_command_has_zero_top_level_height() {
         let block = block_list
             .block_with_id(&block_id)
             .expect("block should exist");
-        assert!(block.is_visible(block_list.agent_view_state()));
+        assert!(block.is_visible(block_list.transcript_scope()));
         assert!(block_list.block_heights().summary().height.as_f64() > 0.0);
     }
 
@@ -78,7 +82,7 @@ fn spawned_agent_requested_command_has_zero_top_level_height() {
     let block = block_list
         .block_with_id(&block_id)
         .expect("block should exist");
-    assert!(!block.is_visible(block_list.agent_view_state()));
+    assert!(!block.is_visible(block_list.transcript_scope()));
     assert_eq!(block_list.block_heights().summary().height.as_f64(), 0.0);
 }
 
@@ -101,7 +105,7 @@ fn spawned_user_command_keeps_its_top_level_height() {
     let block = block_list
         .block_with_id(&block_id)
         .expect("block should exist");
-    assert!(block.is_visible(block_list.agent_view_state()));
+    assert!(block.is_visible(block_list.transcript_scope()));
     assert_eq!(
         block_list.block_heights().summary().height.as_f64(),
         height_before
@@ -146,7 +150,7 @@ fn hidden_agent_requested_command_leaves_no_viewport_gap() {
                 block_list
                     .block_with_id(&user_block_id)
                     .expect("user block should exist")
-                    .height(block_list.agent_view_state())
+                    .height(block_list.transcript_scope())
                     .as_f64()
                     .ceil() as usize
             };
