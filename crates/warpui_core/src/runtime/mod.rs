@@ -125,6 +125,10 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         let mut frame = self.presenter.present(ctx, &self.root_view, area);
         self.replay_mouse_position(ctx);
 
+        // Mirrors the GUI's `build_scene` loop: pointer replay can invalidate
+        // hover-dependent layout, requiring another presentation and replay.
+        // Cap at three total presentations so a hover/layout feedback loop
+        // cannot hang the redraw.
         for _ in 2..=3 {
             let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
             if invalidation.updated.is_empty() && !invalidation.redraw_requested {
