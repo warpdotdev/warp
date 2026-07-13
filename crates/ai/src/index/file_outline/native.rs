@@ -18,6 +18,19 @@ use warp_util::standardized_path::StandardizedPath;
 use crate::index::file_outline::{FileOutline, Outline, Symbol};
 use crate::index::{Entry, FileId, FileMetadata, THREADPOOL};
 
+/// Maximum number of files to parse in a single parallel batch.
+///
+/// Tree-sitter allocates significant memory for each file's AST (up to the
+/// 3 MB `MAX_FILE_SIZE` limit). Parsing all files in one rayon
+/// `par_iter()` can cause jemalloc to accumulate many gigabytes of live or
+/// recently-freed (but not yet OS-reclaimed) pages simultaneously. By
+/// processing files in smaller batches, memory from one batch can be
+/// reclaimed before the next batch begins, keeping peak usage proportional
+/// to `PARSE_BATCH_SIZE` rather than to the total file count.
+///
+/// See Sentry issue 7259255054 for context.
+const PARSE_BATCH_SIZE: usize = 100;
+
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use crate::index::matches_gitignores;
@@ -66,19 +79,25 @@ pub async fn build_outline(
     };
 
     pool.spawn(move || {
-        // Parse each file in parallel. Note that we have to fold and then reduce given the parallelization.
-        let result = pool.install(|| {
-            files
-                .par_iter()
-                .map(|metadata| {
-                    let outline = parse_file_outline(&metadata.path.to_local_path_lossy())
-                        .ok()
-                        .unwrap_or_default();
+        // Parse files in parallel, but in batches to limit peak memory usage.
+        // Each batch is processed synchronously so jemalloc can reclaim freed
+        // pages between batches. See PARSE_BATCH_SIZE for details.
+        let mut result = HashMap::with_capacity(files.len());
+        for chunk in files.chunks(PARSE_BATCH_SIZE) {
+            let batch = pool.install(|| {
+                chunk
+                    .par_iter()
+                    .map(|metadata| {
+                        let outline = parse_file_outline(&metadata.path.to_local_path_lossy())
+                            .ok()
+                            .unwrap_or_default();
 
-                    (metadata.file_id, outline)
-                })
-                .collect::<HashMap<_, _>>()
-        });
+                        (metadata.file_id, outline)
+                    })
+                    .collect::<HashMap<_, _>>()
+            });
+            result.extend(batch);
+        }
 
         if let Err(e) = sender.send(result) {
             report_error!(anyhow::anyhow!("{e:?}")
@@ -204,29 +223,41 @@ impl Outline {
 
 /// Parse file symbols in parallel. This uses the [shared Rayon file-parsing pool](THREADPOOL),
 /// but is `async` because it MUST NOT be called from the main thread.
+///
+/// Files are processed in batches of [`PARSE_BATCH_SIZE`] to limit peak memory
+/// usage. Each `await` between batches gives jemalloc's background decay
+/// thread an opportunity to reclaim pages freed by the previous batch before
+/// the next one begins.
 async fn parse_symbols_for_files(files: Vec<FileMetadata>) -> Option<HashMap<FileId, FileOutline>> {
     let pool = THREADPOOL.as_ref()?;
+    let mut result = HashMap::with_capacity(files.len());
 
-    let (tx, rx) = oneshot::channel();
+    for chunk in files.chunks(PARSE_BATCH_SIZE) {
+        let chunk = chunk.to_vec();
+        let (tx, rx) = oneshot::channel();
 
-    pool.install(move || {
-        rayon::spawn(move || {
-            // Parse each file in parallel. Note that we have to fold and then reduce given the parallelization.
-            let result = files
-                .par_iter()
-                .map(|metadata| {
-                    let outline = parse_file_outline(&metadata.path.to_local_path_lossy())
-                        .ok()
-                        .unwrap_or_default();
+        pool.install(move || {
+            rayon::spawn(move || {
+                let batch = chunk
+                    .par_iter()
+                    .map(|metadata| {
+                        let outline = parse_file_outline(&metadata.path.to_local_path_lossy())
+                            .ok()
+                            .unwrap_or_default();
 
-                    (metadata.file_id, outline)
-                })
-                .collect::<HashMap<_, _>>();
-            let _ = tx.send(result);
+                        (metadata.file_id, outline)
+                    })
+                    .collect::<HashMap<_, _>>();
+                let _ = tx.send(batch);
+            });
         });
-    });
 
-    rx.await.ok()
+        if let Ok(batch) = rx.await {
+            result.extend(batch);
+        }
+    }
+
+    Some(result)
 }
 
 /// Given the path of a file, try to construct its outline.
