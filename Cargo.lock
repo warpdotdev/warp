@@ -15538,6 +15538,7 @@ dependencies = [
  "string-offset",
  "sum_tree",
  "thiserror 2.0.17",
+ "unicode-linebreak",
  "unicode-segmentation",
  "unicode-width 0.1.14",
  "urlocator",

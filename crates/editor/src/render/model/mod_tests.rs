@@ -1477,88 +1477,139 @@ fn test_first_hidden_section_line_range_none_without_hidden_sections() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 mod char_cell {
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use string_offset::CharOffset;
 
     use crate::render::model::{
-        ColumnUnit, LineCount, SoftWrapPoint, char_cell_display_widths, char_cell_line_row_starts,
-        char_cell_max_line, char_cell_offset_to_softwrap_point, char_cell_softwrap_point_to_offset,
+        CharCellState, ColumnUnit, LineCount, SoftWrapPoint, char_cell_display_widths,
+        char_cell_line_break_opportunities, char_cell_line_row_starts, char_cell_max_line,
+        char_cell_offset_to_softwrap_point, char_cell_softwrap_point_to_offset,
     };
 
-    /// Build the `(line_starts, char_widths)` pair from a text string (mirrors
-    /// `CharCellState::update_text` logic) so tests can construct the
-    /// char-cell layout inputs without a full `RenderState`. `char_widths` holds
-    /// the per-char display width (the derived data the layout actually needs).
-    fn line_starts_for(text: &str) -> (Vec<usize>, Vec<u8>) {
+    /// Build the `(line_starts, line_breaks, char_widths)` triple from a text
+    /// string (mirrors `CharCellState::update_text` logic) so tests can
+    /// construct the char-cell layout inputs without a full `RenderState`.
+    fn line_starts_for(text: &str) -> (Vec<CharOffset>, Vec<bool>, Vec<u8>) {
         let char_widths = char_cell_display_widths(text);
-        let mut starts = vec![0_usize];
+        let mut starts = vec![CharOffset::zero()];
         for (i, ch) in text.chars().enumerate() {
             if ch == '\n' {
-                starts.push(i + 1);
+                starts.push(CharOffset::from(i + 1));
             }
         }
-        (starts, char_widths)
+        (
+            starts,
+            char_cell_line_break_opportunities(text),
+            char_widths,
+        )
     }
 
     #[test]
     fn max_line_empty() {
-        let (starts, widths) = line_starts_for("");
+        let (starts, line_breaks, widths) = line_starts_for("");
         // Empty content → 1 visual row.
-        assert_eq!(char_cell_max_line(&starts, &widths, 80), LineCount(1));
+        assert_eq!(
+            char_cell_max_line(&starts, &line_breaks, &widths, 80),
+            LineCount(1)
+        );
     }
 
     #[test]
     fn max_line_single_short_line() {
-        let (starts, widths) = line_starts_for("hello");
-        assert_eq!(char_cell_max_line(&starts, &widths, 80), LineCount(1));
+        let (starts, line_breaks, widths) = line_starts_for("hello");
+        assert_eq!(
+            char_cell_max_line(&starts, &line_breaks, &widths, 80),
+            LineCount(1)
+        );
     }
 
     #[test]
     fn max_line_single_wrapping_line() {
-        // 10 chars, width 4 → ceil(10/4) = 3 rows.
-        let (starts, widths) = line_starts_for("0123456789");
-        assert_eq!(char_cell_max_line(&starts, &widths, 4), LineCount(3));
+        // 10 chars, width 4 → ceil(10/4) = 3 rows (no spaces → hard wrap).
+        let (starts, line_breaks, widths) = line_starts_for("0123456789");
+        assert_eq!(
+            char_cell_max_line(&starts, &line_breaks, &widths, 4),
+            LineCount(3)
+        );
     }
 
     #[test]
     fn max_line_two_logical_lines() {
         // "abc\ndef": line0 = 3 chars (1 row at width 10), line1 = 3 chars (1 row) → 2.
-        let (starts, widths) = line_starts_for("abc\ndef");
-        assert_eq!(char_cell_max_line(&starts, &widths, 10), LineCount(2));
+        let (starts, line_breaks, widths) = line_starts_for("abc\ndef");
+        assert_eq!(
+            char_cell_max_line(&starts, &line_breaks, &widths, 10),
+            LineCount(2)
+        );
     }
 
     #[test]
     fn max_line_empty_logical_line() {
         // "\n": two logical lines, both empty → 2 rows.
-        let (starts, widths) = line_starts_for("\n");
-        assert_eq!(char_cell_max_line(&starts, &widths, 80), LineCount(2));
+        let (starts, line_breaks, widths) = line_starts_for("\n");
+        assert_eq!(
+            char_cell_max_line(&starts, &line_breaks, &widths, 80),
+            LineCount(2)
+        );
     }
 
     #[test]
     fn offset_to_softwrap_single_line_short() {
         let text = "hello";
-        let (starts, widths) = line_starts_for(text);
+        let (starts, line_breaks, widths) = line_starts_for(text);
         // The softwrap API is 0-based, so char 'h' = index 0, 'e' = 1, ...
         // 'h' should be at (row=0, col=0).
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(0), &starts, &widths, 80);
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(0),
+            &starts,
+            &line_breaks,
+            &widths,
+            80,
+        );
         assert_eq!(pt, SoftWrapPoint::new(0, ColumnUnit::Chars(0)));
         // 'l' (3rd char, index 2) at col 2.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(2), &starts, &widths, 80);
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(2),
+            &starts,
+            &line_breaks,
+            &widths,
+            80,
+        );
         assert_eq!(pt, SoftWrapPoint::new(0, ColumnUnit::Chars(2)));
     }
 
     #[test]
     fn offset_to_softwrap_wrapping_line() {
-        // width=4, "0123456789" — char index 4 should be on row 1, col 0.
+        // width=4, "0123456789" — no spaces, so hard wrap: char index 4 on row 1.
         let text = "0123456789";
-        let (starts, widths) = line_starts_for(text);
-        // index 4 → row 4/4=1, col 0.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(4), &starts, &widths, 4);
+        let (starts, line_breaks, widths) = line_starts_for(text);
+        // index 4 → row 1, col 0.
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(4),
+            &starts,
+            &line_breaks,
+            &widths,
+            4,
+        );
         assert_eq!(pt, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
-        // index 7 → row 7/4=1, col 7%4=3.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(7), &starts, &widths, 4);
+        // index 7 → row 1, col 3.
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(7),
+            &starts,
+            &line_breaks,
+            &widths,
+            4,
+        );
         assert_eq!(pt, SoftWrapPoint::new(1, ColumnUnit::Chars(3)));
-        // index 9 → row 9/4=2, col 9%4=1.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(9), &starts, &widths, 4);
+        // index 9 → row 2, col 1.
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(9),
+            &starts,
+            &line_breaks,
+            &widths,
+            4,
+        );
         assert_eq!(pt, SoftWrapPoint::new(2, ColumnUnit::Chars(1)));
     }
 
@@ -1567,41 +1618,164 @@ mod char_cell {
         // "abc\ndef", width=10
         // 'a'=index0→(row0,col0), 'd'=index4→(row1,col0)
         let text = "abc\ndef";
-        let (starts, widths) = line_starts_for(text);
-        let pt_a = char_cell_offset_to_softwrap_point(CharOffset::from(0), &starts, &widths, 10);
+        let (starts, line_breaks, widths) = line_starts_for(text);
+        let pt_a = char_cell_offset_to_softwrap_point(
+            CharOffset::from(0),
+            &starts,
+            &line_breaks,
+            &widths,
+            10,
+        );
         assert_eq!(pt_a, SoftWrapPoint::new(0, ColumnUnit::Chars(0)));
         // 'd' = index 4 (after 'abc\n'). Logical line 1, offset_in_line=0.
-        let pt_d = char_cell_offset_to_softwrap_point(CharOffset::from(4), &starts, &widths, 10);
+        let pt_d = char_cell_offset_to_softwrap_point(
+            CharOffset::from(4),
+            &starts,
+            &line_breaks,
+            &widths,
+            10,
+        );
         assert_eq!(pt_d, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
+    }
+
+    #[test]
+    fn line_starts_use_character_offsets() {
+        // The second line begins after one multibyte character and a newline:
+        // character offset 2, not UTF-8 byte offset 4.
+        let (starts, line_breaks, widths) = line_starts_for("你\n好");
+        assert_eq!(starts, vec![CharOffset::zero(), CharOffset::from(2)]);
+        let point = char_cell_offset_to_softwrap_point(
+            CharOffset::from(2),
+            &starts,
+            &line_breaks,
+            &widths,
+            10,
+        );
+        assert_eq!(point, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
+    }
+
+    #[test]
+    fn cached_state_matches_uncached_reference_for_randomized_unicode_text() {
+        let alphabet = ['a', ' ', '-', '\n', '你', '好', 'é', '\u{301}', '🚀', '_'];
+        let mut rng = StdRng::seed_from_u64(0x5eed);
+        for _ in 0..100 {
+            let len = rng.gen_range(0..100);
+            let text: String = (0..len)
+                .map(|_| alphabet[rng.gen_range(0..alphabet.len())])
+                .collect();
+            let width = rng.gen_range(0..20);
+            let state = CharCellState::new(width, None);
+            state.update_text(&text);
+            let (starts, line_breaks, widths) = line_starts_for(&text);
+            assert_eq!(
+                state.max_line(),
+                char_cell_max_line(&starts, &line_breaks, &widths, width)
+            );
+
+            for index in 0..=widths.len() {
+                let offset = CharOffset::from(index);
+                let expected_point = char_cell_offset_to_softwrap_point(
+                    offset,
+                    &starts,
+                    &line_breaks,
+                    &widths,
+                    width,
+                );
+                assert_eq!(
+                    state.offset_to_softwrap_point(offset),
+                    expected_point,
+                    "point mismatch for {text:?} at {index}, width {width}"
+                );
+                assert_eq!(
+                    state.softwrap_point_to_offset(expected_point),
+                    char_cell_softwrap_point_to_offset(
+                        expected_point,
+                        &starts,
+                        &line_breaks,
+                        &widths,
+                        width,
+                    ),
+                    "inverse mismatch for {text:?} at {index}, width {width}"
+                );
+
+                let line_index = starts
+                    .partition_point(|&start| start <= offset)
+                    .saturating_sub(1);
+                let line_start = starts[line_index].as_usize();
+                let line_end = starts
+                    .get(line_index + 1)
+                    .map(|next| next.as_usize().saturating_sub(1))
+                    .unwrap_or(widths.len());
+                let line_widths = &widths[line_start..line_end];
+                let line_breaks = &line_breaks[line_start..=line_end];
+                let row_starts = char_cell_line_row_starts(line_breaks, line_widths, width);
+                let char_in_line = index.min(line_end).saturating_sub(line_start);
+                let row = row_starts
+                    .partition_point(|&start| start <= char_in_line)
+                    .saturating_sub(1);
+                let row_start = row_starts[row];
+                let row_end = row_starts
+                    .get(row + 1)
+                    .copied()
+                    .unwrap_or(line_widths.len());
+                assert_eq!(
+                    state.visual_row_char_range(offset),
+                    CharOffset::range((line_start + row_start)..(line_start + row_end)),
+                    "row range mismatch for {text:?} at {index}, width {width}"
+                );
+            }
+        }
     }
 
     #[test]
     fn softwrap_roundtrip_single_line() {
         let text = "hello world";
-        let (starts, widths) = line_starts_for(text);
+        let (starts, line_breaks, widths) = line_starts_for(text);
         for i in 0..=(widths.len() as u64) {
             let offset = CharOffset::from(i as usize);
-            let pt = char_cell_offset_to_softwrap_point(offset, &starts, &widths, 80);
+            let pt = char_cell_offset_to_softwrap_point(offset, &starts, &line_breaks, &widths, 80);
             // Verify the column is ColumnUnit::Chars
             assert!(
                 matches!(pt.column(), ColumnUnit::Chars(_)),
                 "index {i}: expected Chars variant"
             );
-            let back = char_cell_softwrap_point_to_offset(pt, &starts, &widths, 80);
+            let back = char_cell_softwrap_point_to_offset(pt, &starts, &line_breaks, &widths, 80);
             assert_eq!(back, offset, "round-trip failed at index {i}");
         }
     }
 
     #[test]
     fn softwrap_roundtrip_wrapping() {
-        let text = "abcdefghij"; // 10 chars
-        let (starts, widths) = line_starts_for(text);
+        let text = "abcdefghij"; // 10 chars, no spaces → hard wrap
+        let (starts, line_breaks, widths) = line_starts_for(text);
         for i in 0..10 {
             let offset = CharOffset::from(i);
-            let pt = char_cell_offset_to_softwrap_point(offset, &starts, &widths, 4);
-            let back = char_cell_softwrap_point_to_offset(pt, &starts, &widths, 4);
+            let pt = char_cell_offset_to_softwrap_point(offset, &starts, &line_breaks, &widths, 4);
+            let back = char_cell_softwrap_point_to_offset(pt, &starts, &line_breaks, &widths, 4);
             assert_eq!(back, offset, "round-trip failed at index {i} with width=4");
         }
+    }
+
+    #[test]
+    fn exact_width_eof_phantom_row_round_trips() {
+        let text = "abcd";
+        let width = 4;
+        let eof = CharOffset::from(text.len());
+        let state = CharCellState::new(width, None);
+        state.update_text(text);
+        let point = state.offset_to_softwrap_point(eof);
+        assert_eq!(point, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
+        assert_eq!(state.softwrap_point_to_offset(point), eof);
+        assert_eq!(
+            state.softwrap_point_to_offset(SoftWrapPoint::new(100, ColumnUnit::Chars(3),)),
+            eof
+        );
+
+        let (starts, line_breaks, widths) = line_starts_for(text);
+        assert_eq!(
+            char_cell_softwrap_point_to_offset(point, &starts, &line_breaks, &widths, width,),
+            eof
+        );
     }
 
     #[test]
@@ -1611,10 +1785,10 @@ mod char_cell {
         // but the final line only has 1 char — the result must clamp to the end
         // of the buffer (offset 6 = total chars), never past it.
         let text = "abcd\nx";
-        let (starts, widths) = line_starts_for(text);
+        let (starts, line_breaks, widths) = line_starts_for(text);
         assert_eq!(widths.len(), 6);
         let pt = SoftWrapPoint::new(1, ColumnUnit::Chars(3));
-        let offset = char_cell_softwrap_point_to_offset(pt, &starts, &widths, 80);
+        let offset = char_cell_softwrap_point_to_offset(pt, &starts, &line_breaks, &widths, 80);
         // Final line starts at char index 5 ("x"); clamped end is 5 + 1 = 6.
         assert_eq!(offset, CharOffset::from(6));
         assert!(
@@ -1627,8 +1801,14 @@ mod char_cell {
     #[test]
     fn softwrap_returns_chars_variant_not_pixels() {
         let text = "abc";
-        let (starts, widths) = line_starts_for(text);
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(0), &starts, &widths, 80);
+        let (starts, line_breaks, widths) = line_starts_for(text);
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(0),
+            &starts,
+            &line_breaks,
+            &widths,
+            80,
+        );
         assert!(
             matches!(pt.column(), ColumnUnit::Chars(_)),
             "CharCell path must return ColumnUnit::Chars, got {:?}",
@@ -1639,9 +1819,15 @@ mod char_cell {
     #[test]
     fn softwrap_point_zero_offset_is_row0_col0() {
         let text = "abc";
-        let (starts, widths) = line_starts_for(text);
+        let (starts, line_breaks, widths) = line_starts_for(text);
         // Index 0 = first char → (0, 0).
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(0), &starts, &widths, 80);
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(0),
+            &starts,
+            &line_breaks,
+            &widths,
+            80,
+        );
         assert_eq!(pt.row(), 0);
         assert_eq!(pt.column(), ColumnUnit::Chars(0));
     }
@@ -1664,11 +1850,21 @@ mod char_cell {
 
     #[test]
     fn grapheme_wraps_as_one_display_unit() {
-        let (starts, widths) = line_starts_for("abc\u{2328}\u{fe0f}");
-        let before_emoji =
-            char_cell_offset_to_softwrap_point(CharOffset::from(3), &starts, &widths, 4);
-        let after_emoji =
-            char_cell_offset_to_softwrap_point(CharOffset::from(5), &starts, &widths, 4);
+        let (starts, line_breaks, widths) = line_starts_for("abc\u{2328}\u{fe0f}");
+        let before_emoji = char_cell_offset_to_softwrap_point(
+            CharOffset::from(3),
+            &starts,
+            &line_breaks,
+            &widths,
+            4,
+        );
+        let after_emoji = char_cell_offset_to_softwrap_point(
+            CharOffset::from(5),
+            &starts,
+            &line_breaks,
+            &widths,
+            4,
+        );
         assert_eq!(before_emoji, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
         assert_eq!(after_emoji, SoftWrapPoint::new(1, ColumnUnit::Chars(2)));
     }
@@ -1677,8 +1873,14 @@ mod char_cell {
     fn wide_char_occupies_two_columns() {
         // "你好world": 你(2) 好(2) w o r l d. Index 2 ('w') sits at display col 4.
         let text = "你好world";
-        let (starts, widths) = line_starts_for(text);
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(2), &starts, &widths, 80);
+        let (starts, line_breaks, widths) = line_starts_for(text);
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(2),
+            &starts,
+            &line_breaks,
+            &widths,
+            80,
+        );
         assert_eq!(pt, SoftWrapPoint::new(0, ColumnUnit::Chars(4)));
     }
 
@@ -1687,16 +1889,25 @@ mod char_cell {
         // "你好你" at width 4: 你好 fill the first row (4 cols); the third 你
         // doesn't fit so it wraps to row 1.
         let text = "你好你";
-        let (starts, widths) = line_starts_for(text);
-        assert_eq!(char_cell_max_line(&starts, &widths, 4), LineCount(2));
+        let (starts, line_breaks, widths) = line_starts_for(text);
+        assert_eq!(
+            char_cell_max_line(&starts, &line_breaks, &widths, 4),
+            LineCount(2)
+        );
         // Cursor before the third 你 (index 2) is at the start of row 1.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(2), &starts, &widths, 4);
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(2),
+            &starts,
+            &line_breaks,
+            &widths,
+            4,
+        );
         assert_eq!(pt, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
         // Round-trips at each char boundary.
         for i in 0..=widths.len() {
             let offset = CharOffset::from(i);
-            let pt = char_cell_offset_to_softwrap_point(offset, &starts, &widths, 4);
-            let back = char_cell_softwrap_point_to_offset(pt, &starts, &widths, 4);
+            let pt = char_cell_offset_to_softwrap_point(offset, &starts, &line_breaks, &widths, 4);
+            let back = char_cell_softwrap_point_to_offset(pt, &starts, &line_breaks, &widths, 4);
             assert_eq!(back, offset, "wide-char round-trip failed at index {i}");
         }
     }
@@ -1706,35 +1917,140 @@ mod char_cell {
         // "a\u{0301}b": 'a' + combining acute (0 width) + 'b'. The combining
         // mark shares 'a's column, so 'b' sits at col 1 (not 2).
         let text = "a\u{0301}b";
-        let (starts, widths) = line_starts_for(text);
+        let (starts, line_breaks, widths) = line_starts_for(text);
         // Gap before 'b' (index 2) shares the accent's column.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(2), &starts, &widths, 80);
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(2),
+            &starts,
+            &line_breaks,
+            &widths,
+            80,
+        );
         assert_eq!(pt, SoftWrapPoint::new(0, ColumnUnit::Chars(1)));
         // End of line (index 3, after 'b') is at col 2.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(3), &starts, &widths, 80);
+        let pt = char_cell_offset_to_softwrap_point(
+            CharOffset::from(3),
+            &starts,
+            &line_breaks,
+            &widths,
+            80,
+        );
         assert_eq!(pt, SoftWrapPoint::new(0, ColumnUnit::Chars(2)));
     }
 
     #[test]
     fn line_row_starts_breaks_on_wide_chars() {
         // width 4, "你好你好": two wide chars per row → break before index 2.
-        let widths = char_cell_display_widths("你好你好");
-        assert_eq!(char_cell_line_row_starts(&widths, 4), vec![0, 2]);
+        let text = "你好你好";
+        let (_, line_breaks, widths) = line_starts_for(text);
+        assert_eq!(
+            char_cell_line_row_starts(&line_breaks, &widths, 4),
+            vec![0, 2]
+        );
         // width 0 disables wrapping.
-        assert_eq!(char_cell_line_row_starts(&widths, 0), vec![0]);
+        assert_eq!(char_cell_line_row_starts(&line_breaks, &widths, 0), vec![0]);
+    }
+
+    // ── Word-boundary wrap tests ───────────────────────────────────────────────
+
+    #[test]
+    fn word_wrap_breaks_at_space() {
+        // "hello world" at width 8: "hello " on row 0, "world" on row 1.
+        // The space (index 5) is the last space on row 0; new row starts at index 6.
+        let (_, line_breaks, widths) = line_starts_for("hello world");
+        let row_starts = char_cell_line_row_starts(&line_breaks, &widths, 8);
+        assert_eq!(row_starts, vec![0, 6], "should break before 'world'");
+    }
+
+    #[test]
+    fn word_wrap_preserves_words() {
+        // "hello world is great" at width 10:
+        // row 0: "hello " (6 chars, break before "world")
+        // row 1: "world is " (9 chars, break before "great")
+        // row 2: "great"
+        let (_, line_breaks, widths) = line_starts_for("hello world is great");
+        let row_starts = char_cell_line_row_starts(&line_breaks, &widths, 10);
+        // Row 0: indices 0..6, row 1: indices 6..15, row 2: indices 15..20
+        assert_eq!(row_starts, vec![0, 6, 15]);
+    }
+
+    #[test]
+    fn word_wrap_hard_wraps_long_word() {
+        // A word longer than the terminal width must be hard-wrapped.
+        let (_, line_breaks, widths) = line_starts_for("superlongword");
+        // At width 10: first 10 chars on row 0, remaining 3 on row 1.
+        let row_starts = char_cell_line_row_starts(&line_breaks, &widths, 10);
+        assert_eq!(row_starts, vec![0, 10]);
+    }
+
+    #[test]
+    fn word_wrap_uses_unicode_line_breaks() {
+        // Unicode line breaking permits a break after a hyphen even without
+        // whitespace, matching the GUI's WordOrGlyph wrapping behavior.
+        let (_, line_breaks, widths) = line_starts_for("hello-world");
+        assert_eq!(
+            char_cell_line_row_starts(&line_breaks, &widths, 8),
+            vec![0, 6]
+        );
+    }
+
+    #[test]
+    fn word_wrap_roundtrip() {
+        // Round-trip: every offset maps to a softwrap point and back.
+        let text = "hello world is great";
+        let (starts, line_breaks, widths) = line_starts_for(text);
+        for i in 0..=widths.len() {
+            let offset = CharOffset::from(i);
+            let pt = char_cell_offset_to_softwrap_point(offset, &starts, &line_breaks, &widths, 10);
+            let back = char_cell_softwrap_point_to_offset(pt, &starts, &line_breaks, &widths, 10);
+            assert_eq!(back, offset, "word-wrap round-trip failed at index {i}");
+        }
     }
 }
 
 mod char_cell_scroll {
     use string_offset::CharOffset;
 
-    use crate::render::model::CharCellState;
+    use crate::render::model::{CharCellState, ColumnUnit, LineCount, SoftWrapPoint};
 
     /// A 4-column state with five one-row logical lines ("l0".."l4").
     fn five_row_state() -> CharCellState {
         let state = CharCellState::new(4, None);
         state.update_text("l0\nl1\nl2\nl3\nl4");
         state
+    }
+
+    #[test]
+    fn text_index_rebuilds_as_one_valid_snapshot() {
+        let state = CharCellState::new(10, None);
+        state.update_text("你\nab");
+        let index = state.text_index.borrow();
+        assert_eq!(
+            index.line_starts,
+            vec![CharOffset::zero(), CharOffset::from(2)]
+        );
+        assert_eq!(index.char_widths, vec![2, 0, 1, 1]);
+        assert_eq!(index.line_breaks.len(), index.char_widths.len() + 1);
+        assert_eq!(index.line_visual_row_starts, vec![0, 1, 2]);
+        assert_eq!(
+            index.visual_row_char_starts,
+            vec![CharOffset::zero(), CharOffset::from(2)]
+        );
+    }
+
+    #[test]
+    fn terminal_width_rebuilds_only_visual_rows() {
+        let state = CharCellState::new(10, None);
+        state.update_text("abcdef");
+        assert_eq!(state.max_line(), LineCount(1));
+        state.set_terminal_width(4);
+        assert_eq!(state.max_line(), LineCount(2));
+        assert_eq!(
+            state.offset_to_softwrap_point(CharOffset::from(4)),
+            SoftWrapPoint::new(1, ColumnUnit::Chars(0))
+        );
+        state.set_terminal_width(10);
+        assert_eq!(state.max_line(), LineCount(1));
     }
 
     #[test]

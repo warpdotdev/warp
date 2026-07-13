@@ -333,6 +333,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-markdown",
 ] }
 unicode-general-category = "1.1.0"
+unicode-linebreak = "0.1.5"
 unicode-segmentation = "1.11.0"
 unicode-width = "0.1.12"
 uuid = { version = "1.1.2", features = ["v4", "serde", "js"] }
