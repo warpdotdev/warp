@@ -693,75 +693,18 @@ impl TuiTerminalSessionView {
         };
 
         ctx.notify();
-        let target_for_load = target.clone();
-        let (future, resident_conversation_id) =
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                let resident_conversation_id = match &target_for_load {
-                    TuiConversationRestoreTarget::Local(conversation_id) => history
-                        .conversation(conversation_id)
-                        .map(|conversation| conversation.id()),
-                    TuiConversationRestoreTarget::Server(server_token) => history
-                        .find_conversation_id_by_server_token(server_token)
-                        .filter(|conversation_id| history.conversation(conversation_id).is_some()),
-                };
-                let future = match &target_for_load {
-                    TuiConversationRestoreTarget::Local(conversation_id) => {
-                        history.load_conversation_data(*conversation_id, ctx)
-                    }
-                    TuiConversationRestoreTarget::Server(server_token) => {
-                        history.load_conversation_by_server_token(server_token, ctx)
-                    }
-                };
-                (future, resident_conversation_id)
+        let future =
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| match &target {
+                TuiConversationRestoreTarget::Local(conversation_id) => {
+                    history.load_conversation_data(*conversation_id, ctx)
+                }
+                TuiConversationRestoreTarget::Server(server_token) => {
+                    history.load_conversation_by_server_token(server_token, ctx)
+                }
             });
 
         let future_handle = ctx.spawn(future, move |view, result, ctx| {
-            if !view.is_current_restore_request(request_id) {
-                return;
-            }
-            match result {
-                Some(CloudConversationData::Oz(conversation)) => {
-                    let matches_target = match &target {
-                        TuiConversationRestoreTarget::Local(conversation_id) => {
-                            conversation.id() == *conversation_id
-                        }
-                        TuiConversationRestoreTarget::Server(server_token) => {
-                            conversation.server_conversation_token() == Some(server_token)
-                        }
-                    };
-                    if !matches_target {
-                        view.fail_conversation_restore(
-                            request_id,
-                            "The restored conversation did not match the requested conversation."
-                                .to_owned(),
-                            ctx,
-                        );
-                        return;
-                    }
-                    let is_resident = resident_conversation_id == Some(conversation.id());
-                    view.finish_conversation_restore(
-                        *conversation,
-                        is_resident,
-                        origin,
-                        request_id,
-                        ctx,
-                    );
-                }
-                Some(CloudConversationData::CLIAgent(_)) => {
-                    view.fail_conversation_restore(
-                        request_id,
-                        "The Warp TUI only supports Oz/Warp conversations.".to_owned(),
-                        ctx,
-                    );
-                }
-                None => {
-                    view.fail_conversation_restore(
-                        request_id,
-                        "The conversation could not be loaded.".to_owned(),
-                        ctx,
-                    );
-                }
-            }
+            view.handle_conversation_restore_result(target, origin, request_id, result, ctx);
         });
         match &mut self.conversation_restore_state {
             ConversationRestoreState::Loading {
@@ -777,17 +720,66 @@ impl TuiTerminalSessionView {
         }
     }
 
-    fn finish_conversation_restore(
+    /// Validates a completed load before starting synchronous surface replacement.
+    fn handle_conversation_restore_result(
         &mut self,
-        conversation: AIConversation,
-        is_resident: bool,
+        target: TuiConversationRestoreTarget,
         origin: TuiConversationRestoreOrigin,
         request_id: u64,
+        result: Option<CloudConversationData>,
         ctx: &mut ViewContext<Self>,
     ) {
         if !self.is_current_restore_request(request_id) {
             return;
         }
+
+        let conversation = match result {
+            Some(CloudConversationData::Oz(conversation)) => conversation,
+            Some(CloudConversationData::CLIAgent(_)) => {
+                self.fail_conversation_restore(
+                    request_id,
+                    "The Warp TUI only supports Oz/Warp conversations.".to_owned(),
+                    ctx,
+                );
+                return;
+            }
+            None => {
+                self.fail_conversation_restore(
+                    request_id,
+                    "The conversation could not be loaded.".to_owned(),
+                    ctx,
+                );
+                return;
+            }
+        };
+
+        let matches_target = match &target {
+            TuiConversationRestoreTarget::Local(conversation_id) => {
+                conversation.id() == *conversation_id
+            }
+            TuiConversationRestoreTarget::Server(server_token) => {
+                conversation.server_conversation_token() == Some(server_token)
+            }
+        };
+        if !matches_target {
+            self.fail_conversation_restore(
+                request_id,
+                "The restored conversation did not match the requested conversation.".to_owned(),
+                ctx,
+            );
+            return;
+        }
+
+        self.replace_conversation_surface(*conversation, origin, ctx);
+    }
+
+    /// Replaces the visible conversation and completes the restore state transition.
+    fn replace_conversation_surface(
+        &mut self,
+        conversation: AIConversation,
+        origin: TuiConversationRestoreOrigin,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let previous_conversation_id = self
             .conversation_selection
             .as_ref(ctx)
@@ -796,13 +788,16 @@ impl TuiTerminalSessionView {
             self.transcript.update(ctx, |transcript, ctx| {
                 transcript.clear_for_replacement(ctx);
             });
+
             self.terminal_model
                 .lock()
                 .block_list_mut()
                 .remove_command_blocks_for_conversation(previous_conversation_id);
+
             self.ai_action_model.update(ctx, |actions, _| {
                 actions.clear_restored_action_results();
             });
+
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
                 history.clear_conversations_for_terminal_surface(self.terminal_surface_id, ctx);
             });
@@ -813,26 +808,23 @@ impl TuiTerminalSessionView {
             let mut terminal_model = self.terminal_model.lock();
             prepare_conversation_block_restoration(&conversation, &mut terminal_model)
         };
+
         self.ai_action_model.update(ctx, |actions, _| {
             actions.restore_action_results_from_exchanges(restoration_plan.exchanges().collect());
         });
+
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            if !is_resident
-                || !history.attach_loaded_conversation_to_terminal_surface(
-                    conversation_id,
-                    self.terminal_surface_id,
-                    ctx,
-                )
-            {
-                history.restore_conversations(self.terminal_surface_id, vec![conversation], ctx);
-            }
+            history.restore_conversations(self.terminal_surface_id, vec![conversation], ctx);
         });
+
         self.transcript.update(ctx, |transcript, ctx| {
             transcript.restore_conversation(conversation_id, restoration_plan, ctx);
         });
+
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             history.set_active_conversation_id(conversation_id, self.terminal_surface_id, ctx);
         });
+
         self.conversation_selection.update(ctx, |selection, ctx| {
             selection.select_existing_conversation(
                 conversation_id,
@@ -840,6 +832,7 @@ impl TuiTerminalSessionView {
                 ctx,
             );
         });
+
         self.conversation_restore_state = ConversationRestoreState::Idle;
         self.refresh_exit_summary(ctx);
         ctx.focus(&self.input_view);

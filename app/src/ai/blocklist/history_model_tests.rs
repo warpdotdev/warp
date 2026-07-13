@@ -194,60 +194,6 @@ fn persisted_agent_conversation_from_update_event(event: ModelEvent) -> AgentCon
 }
 
 #[test]
-fn attach_loaded_conversation_preserves_canonical_state() {
-    App::test((), |mut app| async move {
-        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
-        let old_surface_id = EntityId::new();
-        let new_surface_id = EntityId::new();
-        let conversation_id = AIConversationId::new();
-        let conversation = AIConversation::new_restored(
-            conversation_id,
-            vec![warp_multi_agent_api::Task {
-                id: "root-task".to_owned(),
-                messages: Vec::new(),
-                dependencies: None,
-                description: "Canonical title".to_owned(),
-                summary: String::new(),
-                server_data: String::new(),
-            }],
-            None,
-        )
-        .unwrap();
-
-        history.update(&mut app, |history, ctx| {
-            history.restore_conversations(old_surface_id, vec![conversation], ctx);
-            history.clear_conversations_for_terminal_surface(old_surface_id, ctx);
-            assert!(history.attach_loaded_conversation_to_terminal_surface(
-                conversation_id,
-                new_surface_id,
-                ctx,
-            ));
-        });
-
-        history.read(&app, |history, _| {
-            assert_eq!(
-                history
-                    .conversation(&conversation_id)
-                    .and_then(|conversation| conversation.title())
-                    .as_deref(),
-                Some("Canonical title")
-            );
-            assert_eq!(
-                history
-                    .all_live_conversations_for_terminal_surface(new_surface_id)
-                    .map(|conversation| conversation.id())
-                    .collect::<Vec<_>>(),
-                vec![conversation_id]
-            );
-            assert!(!history
-                .all_cleared_conversations()
-                .iter()
-                .any(|(_, conversation)| conversation.id() == conversation_id));
-        });
-    });
-}
-
-#[test]
 fn begin_conversation_rename_updates_title_and_cached_metadata() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);

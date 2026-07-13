@@ -40,7 +40,7 @@ Figma: none provided. The existing TUI inline-menu styling is the visual referen
 5. If cloud conversation metadata cannot be loaded, the loading state ends, locally available conversations remain searchable, and the transient message area shows:
    `Could not load cloud conversations. Showing local conversations only.`
 
-6. A later successful refresh merges cloud conversations into the open menu without requiring it to be closed and reopened.
+6. Opening or reopening the menu after a cloud metadata failure continues to show local conversations and does not start a separate cloud refresh.
 
 ### Conversation universe
 
@@ -120,7 +120,7 @@ Figma: none provided. The existing TUI inline-menu styling is the visual referen
 
 33. Switching away does not delete the old conversation. Once eligible, it appears in the menu and can be selected again.
 
-34. A previously loaded target is restored from its current canonical in-memory state; switching must not replace newer conversation state with an older snapshot.
+34. Previously loaded and newly loaded targets use the same restoration behavior as the GUI.
 
 35. Only one list-originated restoration may run at a time. Late completion from a cancelled or superseded request must not replace the visible conversation.
 

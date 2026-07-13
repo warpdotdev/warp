@@ -125,13 +125,12 @@ enum TaskFetchState {
     TransientlyFailed { at: Instant, error: TaskFetchError },
 }
 
-/// Availability and retry state for cloud conversation metadata.
+/// Availability state for cloud conversation metadata.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum CloudMetadataLoadState {
+enum CloudConversationMetadataLoadState {
     #[default]
     Available,
     Failed,
-    Retrying,
 }
 
 /// Tracks the cooldown window for RTC-triggered task-list refreshes. Pending events keep
@@ -596,8 +595,8 @@ pub struct AgentConversationsModel {
     active_data_consumers_per_window: HashMap<WindowId, HashSet<EntityId>>,
     /// Whether we have finished the initial task load
     has_finished_initial_load: bool,
-    /// Availability and retry state for cloud conversation metadata.
-    cloud_metadata_load_state: CloudMetadataLoadState,
+    /// Availability state for cloud conversation metadata.
+    cloud_conversation_metadata_load_state: CloudConversationMetadataLoadState,
     /// Per-task fetch state for `get_or_async_fetch_task_data`. See [`TaskFetchState`] for
     /// the meaning of each variant. Tasks that have been successfully fetched live in `tasks`
     /// and are absent from this map.
@@ -653,7 +652,8 @@ impl AgentConversationsModel {
                 next_poll_abort_handle: None,
                 active_data_consumers_per_window: HashMap::new(),
                 has_finished_initial_load: true,
-                cloud_metadata_load_state: CloudMetadataLoadState::Available,
+                cloud_conversation_metadata_load_state:
+                    CloudConversationMetadataLoadState::Available,
                 task_fetch_state: HashMap::new(),
                 rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
                 dirty_since: None,
@@ -693,7 +693,7 @@ impl AgentConversationsModel {
             next_poll_abort_handle: None,
             active_data_consumers_per_window: HashMap::new(),
             has_finished_initial_load: false,
-            cloud_metadata_load_state: CloudMetadataLoadState::Available,
+            cloud_conversation_metadata_load_state: CloudConversationMetadataLoadState::Available,
             task_fetch_state: HashMap::new(),
             rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
             dirty_since: None,
@@ -714,13 +714,10 @@ impl AgentConversationsModel {
         !self.has_finished_initial_load
     }
 
-    /// Returns whether cloud conversation metadata is failed or retrying.
+    /// Returns whether cloud conversation metadata failed to load.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-    pub(crate) fn cloud_metadata_unavailable(&self) -> bool {
-        matches!(
-            self.cloud_metadata_load_state,
-            CloudMetadataLoadState::Failed | CloudMetadataLoadState::Retrying
-        )
+    pub(crate) fn cloud_conversation_metadata_load_failed(&self) -> bool {
+        self.cloud_conversation_metadata_load_state == CloudConversationMetadataLoadState::Failed
     }
 
     fn handle_network_status_changed(
@@ -1035,10 +1032,10 @@ impl AgentConversationsModel {
                 )) = result
                 {
                     model.has_finished_initial_load = true;
-                    model.cloud_metadata_load_state = if cloud_metadata_loaded {
-                        CloudMetadataLoadState::Available
+                    model.cloud_conversation_metadata_load_state = if cloud_metadata_loaded {
+                        CloudConversationMetadataLoadState::Available
                     } else {
-                        CloudMetadataLoadState::Failed
+                        CloudConversationMetadataLoadState::Failed
                     };
 
                     // Update tasks if we got any
@@ -1067,7 +1064,8 @@ impl AgentConversationsModel {
                     ctx.emit(AgentConversationsModelEvent::ConversationsLoaded);
                 } else if let RequestState::RequestFailed(e) = result {
                     model.has_finished_initial_load = true;
-                    model.cloud_metadata_load_state = CloudMetadataLoadState::Failed;
+                    model.cloud_conversation_metadata_load_state =
+                        CloudConversationMetadataLoadState::Failed;
                     model.update_polling_state(ctx);
                     report_error!(e);
                 }
@@ -1088,45 +1086,11 @@ impl AgentConversationsModel {
             .or_default()
             .insert(view_id);
         self.update_polling_state(ctx);
-        self.retry_cloud_conversation_metadata(ctx);
 
         // Flush dirty tasks accumulated while no list surface was open.
         if let Some(dirty_since) = self.dirty_since.take() {
             self.fetch_tasks_updated_after(dirty_since, ctx);
         }
-    }
-
-    /// Retries a failed cloud conversation metadata load while keeping local rows available.
-    fn retry_cloud_conversation_metadata(&mut self, ctx: &mut ModelContext<Self>) {
-        match self.cloud_metadata_load_state {
-            CloudMetadataLoadState::Available | CloudMetadataLoadState::Retrying => return,
-            CloudMetadataLoadState::Failed => {
-                self.cloud_metadata_load_state = CloudMetadataLoadState::Retrying;
-            }
-        }
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        ctx.spawn_with_retry_on_error(
-            move || {
-                let ai_client = ai_client.clone();
-                async move { ai_client.list_ai_conversation_metadata(None).await }
-            },
-            OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
-            |model, result, ctx| match result {
-                RequestState::RequestSucceeded(conversation_metadata) => {
-                    model.cloud_metadata_load_state = CloudMetadataLoadState::Available;
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, _| {
-                        history_model.merge_cloud_conversation_metadata(conversation_metadata);
-                    });
-                    model.sync_conversations(ctx);
-                }
-                RequestState::RequestFailed(error) => {
-                    model.cloud_metadata_load_state = CloudMetadataLoadState::Failed;
-                    report_error!(error);
-                    ctx.emit(AgentConversationsModelEvent::ConversationsLoaded);
-                }
-                RequestState::RequestFailedRetryPending(_) => {}
-            },
-        );
     }
 
     /// Called when a view that consumes this model's data becomes hidden.

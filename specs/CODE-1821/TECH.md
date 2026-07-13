@@ -6,8 +6,8 @@ Implements [`PRODUCT.md`](./PRODUCT.md) for [CODE-1821](https://linear.app/warpd
 
 This change builds on two parent branches whose APIs are already established:
 
-- [`crates/warp_tui/src/inline_menu.rs @ 067fd301`](https://github.com/warpdotdev/warp/blob/067fd301/crates/warp_tui/src/inline_menu.rs) and [`crates/warp_tui/src/input/view.rs @ 067fd301`](https://github.com/warpdotdev/warp/blob/067fd301/crates/warp_tui/src/input/view.rs) route navigation, acceptance, dismissal, and rendering through an ordered collection of TUI inline menus.
-- [`specs/frontend-neutral-conversation-list-policy/TECH.md`](../frontend-neutral-conversation-list-policy/TECH.md) documents the frontend-neutral list policy introduced by the next parent branch. [`AgentConversationsModel @ d55907a2`](https://github.com/warpdotdev/warp/blob/d55907a2/app/src/ai/agent_conversations_model.rs) supplies normalized entries, and the TUI’s `ConversationSelection` classifies them relative to its sole conversation surface.
+- [`crates/warp_tui/src/inline_menu.rs @ 053d02e1`](https://github.com/warpdotdev/warp/blob/053d02e1/crates/warp_tui/src/inline_menu.rs) and [`crates/warp_tui/src/input/view.rs @ 053d02e1`](https://github.com/warpdotdev/warp/blob/053d02e1/crates/warp_tui/src/input/view.rs) route navigation, acceptance, dismissal, and rendering through an ordered collection of type-erased TUI inline-menu handles.
+- [`specs/frontend-neutral-conversation-list-policy/TECH.md`](../frontend-neutral-conversation-list-policy/TECH.md) documents the frontend-neutral list policy introduced by the next parent branch. [`AgentConversationsModel @ 0f9eecda`](https://github.com/warpdotdev/warp/blob/0f9eecda/app/src/ai/agent_conversations_model.rs) supplies normalized entries, and the TUI’s `ConversationSelection` classifies them relative to its sole conversation surface.
 
 This spec does not repeat those parent-branch designs. This branch owns the `/conversations` menu, its loading/search/update lifecycle, acceptance-time validation, and safe replacement of the TUI’s selected conversation.
 
@@ -58,9 +58,9 @@ The currently selected conversation and unavailable entries are omitted by their
 
 Extend the initial `AgentConversationsModel` load result to distinguish successful cloud metadata loading from a request that returned usable local/task data without cloud metadata.
 
-Track cloud metadata with one exhaustive `CloudMetadataLoadState`: `Available`, `Failed`, or `Retrying`. Initial-load results transition atomically to `Available` or `Failed`; only `Failed` starts a retry, and retry completion returns to `Available` or `Failed`.
+Track cloud metadata with one exhaustive `CloudConversationMetadataLoadState`: `Available` or `Failed`. The shared initial request already uses `OUT_OF_BAND_REQUEST_RETRY_STRATEGY`; opening a GUI or TUI list does not add another retry lifecycle.
 
-When a list opens after a cloud metadata failure, retry the metadata request without hiding local results. A successful retry merges metadata into `BlocklistAIHistoryModel` and resynchronizes entries. Failed and retrying states both leave local entries available and cause the TUI to show the PRODUCT.md warning once per menu opening.
+When the shared request exhausts its retries, local entries remain available and the TUI shows the PRODUCT.md warning once per menu opening.
 
 ### Wire `/conversations`
 
@@ -95,9 +95,7 @@ Replace the server-token-only TUI restoration input with:
 
 Both paths return the same `CloudConversationData` result. The completion callback validates that the returned conversation matches the requested local ID or server token before mutating the visible surface.
 
-Determine whether the target was already resident before loading. For a resident target, attach its canonical in-memory conversation to the TUI surface instead of reinserting the cloned loader result. `BlocklistAIHistoryModel::attach_loaded_conversation_to_terminal_surface` removes the ID from cleared collections, marks it live for the new surface, and emits the same restoration events without replacing `conversations_by_id`.
-
-Newly loaded conversations continue through `restore_conversations`.
+Both local and server targets use the existing GUI restoration path: load an owned conversation value and register it on the destination surface through `BlocklistAIHistoryModel::restore_conversations`.
 
 ### Replace the visible conversation after loading
 
@@ -109,12 +107,12 @@ No current state is removed until loading and target validation succeed. Success
 4. Clear the terminal surface’s previous history association.
 5. Build the shared restoration plan.
 6. Restore action results required by historical blocks.
-7. Register or attach the target conversation.
+7. Register the target conversation.
 8. Materialize restored TUI blocks.
 9. Mark the target active and selected.
 10. Refresh the exit summary, focus input, and repaint.
 
-This preserves the existing CODE-1820 transcript ordering and continuation behavior while allowing repeated switching without overwriting newer canonical in-memory state.
+This preserves the existing CODE-1820 transcript ordering and continuation behavior while matching the GUI restoration path for repeated switching.
 
 ### Make restoration single-flight and cancelable
 
@@ -155,7 +153,7 @@ sequenceDiagram
     Session-->>User: retain current conversation
   else valid Oz conversation
     Session->>Transcript: clear previous visible content
-    Session->>History: attach or register target
+    Session->>History: register target
     Session->>Transcript: materialize restoration plan
     Session-->>User: focus restored conversation
   end
@@ -165,7 +163,6 @@ sequenceDiagram
 
 - Shared model tests cover the 50-row recent cap, fuzzy threshold, score/recency ordering, and 500-result cap; the TUI menu tests only its stable-ID selection preservation and nearest-index fallback.
 - TUI policy tests from the parent branch cover selected, terminal-state, active, unsupported-harness, and missing-identity classifications.
-- History-model tests verify that attaching a resident conversation preserves canonical state and removes stale cleared membership.
 - Input/menu tests continue to verify navigation, acceptance, and dismissal routing through the active menu.
 - UI tests verify the startup restoration cancellation hint.
 - Focused session tests should cover busy rejection, load failure rollback, successful local/server replacement, list cancellation, startup cancellation, and ignored late completion.
@@ -176,9 +173,8 @@ sequenceDiagram
 
 - **Partial destructive replacement:** Loading and identity validation finish before any transcript, history, command, or action state is removed.
 - **Stale async completion:** Abort handles and request generations prevent cancelled or superseded loads from replacing the visible conversation.
-- **Resident-state overwrite:** Already-loaded targets are attached by ID instead of reinserting loader clones.
 - **Menu churn:** Refreshes preserve stable entry identity and clamp selection and scroll state.
-- **Hidden cloud failure:** Local rows remain available while the explicit warning and list-open retry expose incomplete cloud metadata.
+- **Hidden cloud failure:** Local rows remain available and the explicit warning exposes incomplete cloud metadata after shared retries are exhausted.
 
 ## Parallelization
 

@@ -17,8 +17,8 @@ use super::query::{DEFAULT_RESULT_COUNT, MAX_SEARCH_RESULTS};
 use super::{
     query_conversation_entries, record_earliest_rtc_task_refresh_timestamp,
     AgentConversationsModel, AgentConversationsModelEvent, AgentManagementFilters,
-    AgentRunDisplayStatus, ArtifactFilter, CloudMetadataLoadState, ConversationMetadata,
-    ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
+    AgentRunDisplayStatus, ArtifactFilter, CloudConversationMetadataLoadState,
+    ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
     RtcTaskRefreshThrottleState, StatusFilter, TaskFetchError, TaskFetchState, MAX_PERSONAL_TASKS,
     MAX_TEAM_TASKS,
 };
@@ -666,7 +666,7 @@ fn create_test_model() -> AgentConversationsModel {
         next_poll_abort_handle: None,
         active_data_consumers_per_window: HashMap::new(),
         has_finished_initial_load: false,
-        cloud_metadata_load_state: CloudMetadataLoadState::Available,
+        cloud_conversation_metadata_load_state: CloudConversationMetadataLoadState::Available,
         task_fetch_state: Default::default(),
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
         dirty_since: None,
@@ -674,15 +674,12 @@ fn create_test_model() -> AgentConversationsModel {
 }
 
 #[test]
-fn cloud_metadata_is_unavailable_while_failed_or_retrying() {
+fn cloud_conversation_metadata_reports_failed_load() {
     let mut model = create_test_model();
-    assert!(!model.cloud_metadata_unavailable());
+    assert!(!model.cloud_conversation_metadata_load_failed());
 
-    model.cloud_metadata_load_state = CloudMetadataLoadState::Failed;
-    assert!(model.cloud_metadata_unavailable());
-
-    model.cloud_metadata_load_state = CloudMetadataLoadState::Retrying;
-    assert!(model.cloud_metadata_unavailable());
+    model.cloud_conversation_metadata_load_state = CloudConversationMetadataLoadState::Failed;
+    assert!(model.cloud_conversation_metadata_load_failed());
 }
 
 #[test]

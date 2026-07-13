@@ -1,8 +1,13 @@
-//! Searchable TUI conversation-menu state backed by `AgentConversationsModel`.
+//! Searchable `/conversations` menu state for the TUI.
+//!
+//! The model reads normalized entries from `AgentConversationsModel`, applies the TUI
+//! selection policy and shared query ranking, and preserves stable selection and scrolling
+//! across live model updates. It owns menu lifecycle and presentation only; the terminal
+//! session revalidates an accepted entry before restoring it.
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    agent_conversations_cloud_metadata_unavailable, query_conversation_entries,
+    agent_conversations_cloud_metadata_load_failed, query_conversation_entries,
     AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
     AgentConversationsModelEvent, AgentManagementFilters, ConversationSelectionHandle, Harness,
     HarnessFilter,
@@ -82,6 +87,7 @@ impl TuiConversationMenuModel {
         }
     }
 
+    /// Returns whether the conversation menu is currently open.
     pub(crate) fn is_open(&self) -> bool {
         matches!(self.state, TuiConversationMenuState::Open { .. })
     }
@@ -106,6 +112,7 @@ impl TuiConversationMenuModel {
         self.refresh_rows(ctx);
     }
 
+    /// Closes the menu and clears its query buffer.
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
         if !self.is_open() {
             return;
@@ -115,6 +122,7 @@ impl TuiConversationMenuModel {
             .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
     }
 
+    /// Moves selection to the previous row and keeps it visible.
     pub(crate) fn select_previous(&mut self, ctx: &mut ModelContext<Self>) {
         let TuiConversationMenuState::Open {
             rows,
@@ -131,6 +139,7 @@ impl TuiConversationMenuModel {
         ctx.emit(TuiConversationMenuEvent::Updated);
     }
 
+    /// Moves selection to the next row and keeps it visible.
     pub(crate) fn select_next(&mut self, ctx: &mut ModelContext<Self>) {
         let TuiConversationMenuState::Open {
             rows,
@@ -147,6 +156,7 @@ impl TuiConversationMenuModel {
         ctx.emit(TuiConversationMenuEvent::Updated);
     }
 
+    /// Returns the stable ID of the selected row without closing the menu.
     pub(crate) fn accept_selected(
         &mut self,
         _ctx: &mut ModelContext<Self>,
@@ -163,6 +173,7 @@ impl TuiConversationMenuModel {
         selected_id
     }
 
+    /// Returns the render snapshot for the open menu.
     pub(crate) fn snapshot(&self) -> Option<TuiInlineMenuSnapshot> {
         let TuiConversationMenuState::Open {
             rows,
@@ -203,6 +214,7 @@ impl TuiConversationMenuModel {
         })
     }
 
+    /// Closes the menu and unregisters its conversation-list consumer.
     fn close(&mut self, ctx: &mut ModelContext<Self>) {
         self.state = TuiConversationMenuState::Closed;
         let window_id = self.window_id;
@@ -213,6 +225,7 @@ impl TuiConversationMenuModel {
         ctx.emit(TuiConversationMenuEvent::Updated);
     }
 
+    /// Rebuilds rows from the current query while preserving stable selection.
     fn refresh_rows(&mut self, ctx: &mut ModelContext<Self>) {
         let previous_id = match &self.state {
             TuiConversationMenuState::Open {
@@ -229,7 +242,7 @@ impl TuiConversationMenuModel {
         };
         let conversations_model = AgentConversationsModel::as_ref(ctx);
         let is_loading = conversations_model.is_loading();
-        let cloud_metadata_unavailable = agent_conversations_cloud_metadata_unavailable(ctx);
+        let cloud_metadata_load_failed = agent_conversations_cloud_metadata_load_failed(ctx);
         let rows = if is_loading {
             Vec::new()
         } else {
@@ -265,7 +278,7 @@ impl TuiConversationMenuModel {
             scroll_offset,
             is_loading,
         };
-        if cloud_metadata_unavailable && !self.cloud_warning_shown {
+        if cloud_metadata_load_failed && !self.cloud_warning_shown {
             self.cloud_warning_shown = true;
             ctx.emit(TuiConversationMenuEvent::CloudMetadataUnavailable);
         }
@@ -273,6 +286,7 @@ impl TuiConversationMenuModel {
     }
 }
 
+/// Preserves selection by ID, falling back to the nearest valid index.
 fn reconcile_selection(
     rows: &[TuiConversationMenuRow],
     previous_id: Option<AgentConversationEntryId>,
@@ -298,6 +312,7 @@ impl Entity for TuiConversationMenuModel {
     type Event = TuiConversationMenuEvent;
 }
 
+/// Returns the input editor's current plain text.
 fn input_text(editor: &ModelHandle<CodeEditorModel>, app: &AppContext) -> String {
     let model = editor.as_ref(app);
     let buffer = model.content().as_ref(app);

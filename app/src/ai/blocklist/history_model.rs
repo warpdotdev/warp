@@ -1132,51 +1132,6 @@ impl BlocklistAIHistoryModel {
         });
     }
 
-    /// Attaches an already-loaded conversation to a terminal surface without replacing its state.
-    pub fn attach_loaded_conversation_to_terminal_surface(
-        &mut self,
-        conversation_id: AIConversationId,
-        terminal_surface_id: EntityId,
-        ctx: &mut ModelContext<Self>,
-    ) -> bool {
-        let Some(conversation) = self.conversations_by_id.get(&conversation_id) else {
-            return false;
-        };
-        let new_status = conversation.status().clone();
-
-        for cleared_ids in self
-            .cleared_conversation_ids_for_terminal_surface
-            .values_mut()
-        {
-            cleared_ids.retain(|id| *id != conversation_id);
-        }
-        self.cleared_conversation_ids_for_terminal_surface
-            .retain(|_, ids| !ids.is_empty());
-
-        let live_ids = self
-            .live_conversation_ids_for_terminal_surface
-            .entry(terminal_surface_id)
-            .or_default();
-        if !live_ids.contains(&conversation_id) {
-            live_ids.push(conversation_id);
-        }
-        self.terminal_surface_created_at
-            .entry(terminal_surface_id)
-            .or_insert_with(Local::now);
-
-        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
-            conversation_id,
-            terminal_surface_id,
-            update: ConversationStatusUpdate::Restored,
-            new_status,
-        });
-        ctx.emit(BlocklistAIHistoryEvent::RestoredConversations {
-            terminal_surface_id,
-            conversation_ids: vec![conversation_id],
-        });
-        true
-    }
-
     /// Sets the active conversation ID for a terminal surface and moves the conversation
     /// from any other terminal surface that currently contains it.
     ///
