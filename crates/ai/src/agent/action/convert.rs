@@ -506,6 +506,10 @@ impl From<api::message::tool_call::RequestComputerUse> for AIAgentActionType {
 impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
     fn from(value: api::message::tool_call::StartRecording) -> Self {
         let limits = value.limits;
+        let window = match convert_computer_use_target(value.target) {
+            target @ computer_use::Target::Window { .. } => Some(target),
+            computer_use::Target::Screen => None,
+        };
         AIAgentActionType::StartRecording {
             frame_rate: value.frame_rate.max(0) as u32,
             max_duration: limits
@@ -518,9 +522,7 @@ impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
                 .filter(|&bytes| bytes > 0)
                 .map(|bytes| bytes as u64),
             summary: (!value.summary.trim().is_empty()).then_some(value.summary),
-            // The recording tool schema does not yet carry a window target, so recordings default
-            // to whole-screen capture. When the server begins supplying one, wire it through here.
-            window: None,
+            window,
         }
     }
 }
