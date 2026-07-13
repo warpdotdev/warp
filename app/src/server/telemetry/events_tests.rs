@@ -30,10 +30,8 @@ fn telemetry_events_have_nonempty_name_and_description() -> Result<(), Telemetry
     Ok(())
 }
 
-/// `AgentMode.NaturalLanguageDetection.InputBufferSubmitted` is high-volume, so it must only be
-/// emitted on the internal-only dogfood channels (Dev + Local) — emitting it on release channels
-/// was exploding our telemetry budget. Gating lives in `enablement_state()`; if it ever regresses
-/// back to `Always` (or drops a dogfood channel), this test fails.
+/// Emits `AgentMode.NaturalLanguageDetection.InputBufferSubmitted` only in dogfood channels for
+/// cost control. Remove this test if the event is re-enabled across channels (e.g. a new NLD change).
 #[test]
 fn input_buffer_submitted_only_emits_on_dogfood_channels() {
     let EnablementState::ChannelSpecific { channels } =
