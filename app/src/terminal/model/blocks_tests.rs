@@ -1641,6 +1641,75 @@ fn test_remove_rich_content_block() {
 }
 
 #[test]
+fn test_update_rich_content_heights_in_lines_updates_changed_items_by_position() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+
+    insert_block(&mut block_list, "cmd", "output");
+
+    let view_id_a = EntityId::new();
+    block_list.append_rich_content(RichContentItem::new_for_test(None, view_id_a, None), false);
+
+    let second_block_index = insert_block(&mut block_list, "cmd", "output");
+    block_list.insert_inline_banner_before_block(
+        second_block_index,
+        InlineBannerItem::new(0, InlineBannerType::NotificationsDiscovery),
+        None,
+    );
+
+    let view_id_b = EntityId::new();
+    block_list.append_rich_content(RichContentItem::new_for_test(None, view_id_b, None), false);
+
+    let positions_before_update = block_list.removable_blocklist_item_positions.clone();
+    let item_count_before_update = block_list.block_heights.items().len();
+
+    block_list.update_rich_content_heights_in_lines(&HashMap::from([
+        (view_id_a, BlockHeight::from(3.0)),
+        (view_id_b, BlockHeight::from(4.0)),
+        (EntityId::new(), BlockHeight::from(8.0)),
+    ]));
+
+    let rich_content_height = |block_list: &BlockList, view_id| {
+        block_list
+            .block_heights
+            .items()
+            .iter()
+            .find_map(|item| match item {
+                BlockHeightItem::RichContent(rich_content) if rich_content.view_id == view_id => {
+                    Some(rich_content.last_laid_out_height)
+                }
+                _ => None,
+            })
+            .expect("rich content item should exist")
+    };
+
+    assert_eq!(
+        rich_content_height(&block_list, view_id_a),
+        BlockHeight::from(3.0)
+    );
+    assert_eq!(
+        rich_content_height(&block_list, view_id_b),
+        BlockHeight::from(4.0)
+    );
+    assert_eq!(
+        block_list.removable_blocklist_item_positions,
+        positions_before_update
+    );
+    assert_eq!(
+        block_list.block_heights.items().len(),
+        item_count_before_update
+    );
+
+    let items_after_update = block_list.block_heights.items();
+    block_list.update_rich_content_heights_in_lines(&HashMap::from([
+        (view_id_a, BlockHeight::from(3.0)),
+        (view_id_b, BlockHeight::from(4.0)),
+        (EntityId::new(), BlockHeight::from(8.0)),
+    ]));
+    assert_eq!(block_list.block_heights.items(), items_after_update);
+}
+
+#[test]
 fn test_conversation_scoped_rich_content_hidden_outside_fullscreen_agent_view() {
     FeatureFlag::AgentView.set_enabled(true);
     let mut block_list =

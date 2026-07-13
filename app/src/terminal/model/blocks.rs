@@ -1857,6 +1857,30 @@ impl BlockList {
         // from the "clear" block and reduces the gap, thinking "clear" is a block executed after. This means the "clear" block,
         // above the gap, is not fully cleared from the visible screen.
         // => By calculating the delta in height only after the gap, the gap will only shrink from blocks executed _after_ the gap.
+        let block_height = if let Some(block) = self.block_at(block_index) {
+            block.height(&self.transcript_scope).into()
+        } else {
+            report_error!(
+                "Tried to update height of block, but no such block exists",
+                extra: { "block_index" => ?block_index }
+            );
+            return;
+        };
+
+        let previous_block_height = {
+            let mut cursor = self.block_heights.cursor::<BlockIndex, ()>();
+            let next_index = block_index + BlockIndex(1);
+            cursor.seek(&next_index, SeekBias::Left);
+            match cursor.item() {
+                Some(BlockHeightItem::Block(height)) => Some(*height),
+                _ => None,
+            }
+        };
+        if previous_block_height == Some(block_height) {
+            return;
+        }
+        let previous_block_height = previous_block_height.unwrap_or_else(BlockHeight::zero);
+
         let previous_after_gap_height = match &self.active_gap {
             Some(gap) => {
                 let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
@@ -1873,24 +1897,10 @@ impl BlockList {
             }
             None => Lines::zero(),
         };
-        let mut previous_block_height = BlockHeight::zero();
-        let block_height = if let Some(block) = self.block_at(block_index) {
-            block.height(&self.transcript_scope).into()
-        } else {
-            report_error!(
-                "Tried to update height of block, but no such block exists",
-                extra: { "block_index" => ?block_index }
-            );
-            return;
-        };
-
         self.block_heights = {
             let mut cursor = self.block_heights.cursor::<BlockIndex, ()>();
             let next_index = block_index + BlockIndex(1);
             let mut tree_before_last_block = cursor.slice(&next_index, SeekBias::Left);
-            if let Some(BlockHeightItem::Block(height)) = cursor.item() {
-                previous_block_height = *height;
-            }
             tree_before_last_block.push(BlockHeightItem::Block(block_height));
 
             // Advance the cursor past the current block and take the suffix to get all the items
@@ -2401,6 +2411,10 @@ impl BlockList {
     /// Updates rich-content heights from GUI pixel measurements, converting to
     /// the canonical line unit at the boundary.
     pub fn update_rich_content_heights(&mut self, updated_heights: &HashMap<EntityId, f64>) {
+        if updated_heights.is_empty() {
+            return;
+        }
+
         let cell_height_px = self.size().cell_height_px();
         let updated_heights = updated_heights
             .iter()
@@ -2420,7 +2434,61 @@ impl BlockList {
         &mut self,
         updated_heights: &HashMap<EntityId, BlockHeight>,
     ) {
-        self.update_blocks_and_sumtree(None, Some(updated_heights), |_| {}, |_| {});
+        if updated_heights.is_empty() {
+            return;
+        }
+
+        let mut changed_rich_content_items = updated_heights
+            .iter()
+            .filter_map(|(view_id, updated_height)| {
+                let index = self
+                    .removable_blocklist_item_positions
+                    .get(&RemovableBlocklistItem::RichContent(*view_id))?;
+
+                let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
+                cursor.seek(index, SeekBias::Right);
+
+                let Some(BlockHeightItem::RichContent(item)) = cursor.item() else {
+                    return None;
+                };
+                if item.last_laid_out_height == *updated_height {
+                    return None;
+                }
+
+                Some((
+                    *index,
+                    RichContentItem {
+                        last_laid_out_height: *updated_height,
+                        ..*item
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        if changed_rich_content_items.is_empty() {
+            return;
+        }
+
+        changed_rich_content_items.sort_unstable_by_key(|(index, _)| *index);
+
+        self.block_heights = {
+            let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
+            let mut new_tree = SumTree::new();
+
+            for (index, updated_item) in changed_rich_content_items {
+                new_tree.push_tree(cursor.slice(&index, SeekBias::Right));
+                if matches!(
+                    cursor.item(),
+                    Some(BlockHeightItem::RichContent(item)) if item.view_id == updated_item.view_id
+                ) {
+                    new_tree.push(BlockHeightItem::RichContent(updated_item));
+                    cursor.next();
+                }
+            }
+
+            new_tree.push_tree(cursor.suffix());
+            new_tree
+        };
     }
 
     pub fn set_show_in_band_command_blocks(&mut self, should_show_in_band_command_blocks: bool) {
