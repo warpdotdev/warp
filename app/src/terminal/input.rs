@@ -11636,56 +11636,47 @@ impl Input {
             return true;
         }
 
+        // The current word is everything from the start of the replacement to the
+        // cursor.
+        let current_word = &editor_text[replacement_start..cursor_position.as_usize()];
+
+        // In classic completion mode, check if the user is actively cycling through
+        // completions (selected item matches current word). If so, keep the menu open
+        // without filtering, since cycling inserts the completion text directly.
+        if self.is_classic_completions_enabled(ctx) {
+            let current_selected_item =
+                self.input_suggestions.as_ref(ctx).get_selected_item_text();
+            if current_selected_item.is_some_and(|selected| selected == current_word) {
+                return false;
+            }
+        }
+
         // If the buffer no longer starts with the original buffer text,
         // then we should close the completion menu because the result set
-        // was based on a different query.
-        //
-        // For classic completions, this is a poor heuristic: when you cycle
-        // through fuzzy matches, the text up to the cursor might not start
-        // with the original buffer text anymore.
-        // TODO: there's a bug here where if you hit tab and backspace,
-        // the result set won't go away (stale).
-        if !text_up_to_cursor.starts_with(buffer_text_original)
-            && !self.is_classic_completions_enabled(ctx)
-        {
-            // Close the input suggestions since the buffer was edited to no longer
-            // contain the text that triggered tab completion.
-            true
-        } else {
-            // The current word is everything from the start of the replacement to the
-            // cursor
-            let current_word = &editor_text[replacement_start..cursor_position.as_usize()];
-
-            if self.is_classic_completions_enabled(ctx) {
-                let current_selected_item =
-                    self.input_suggestions.as_ref(ctx).get_selected_item_text();
-                if current_selected_item.is_some_and(|selected| selected == current_word) {
-                    // If we're in classic completion mode and the selected item is equal
-                    // to the current word, then we should keep the menu open; the user is cycling.
-                    // We early-return because we don't want to filter the menu based on the
-                    // selected item.
-                    return false;
-                }
-            }
-
-            // If the user continues to type with the tab suggestions open, we perform a
-            // prefix search on the original results to filter the suggestions.
-            let should_close = self.input_suggestions.update(ctx, |suggestions, ctx| {
-                suggestions.prefix_search_for_tab_completion(
-                    current_word,
-                    completion_results,
-                    TabCompletionsPreselectOption::Unchanged,
-                    ctx,
-                );
-
-                // We should close the menu if there aren't any results
-                // after filtering.
-                suggestions.items().is_empty()
-            });
-
-            ctx.notify();
-            should_close
+        // was based on a different query. This applies in both classic and
+        // non-classic modes: if the user has edited away from the original
+        // prefix, the cached suggestions are stale.
+        if !text_up_to_cursor.starts_with(buffer_text_original) {
+            return true;
         }
+
+        // If the user continues to type with the tab suggestions open, we perform a
+        // prefix search on the original results to filter the suggestions.
+        let should_close = self.input_suggestions.update(ctx, |suggestions, ctx| {
+            suggestions.prefix_search_for_tab_completion(
+                current_word,
+                completion_results,
+                TabCompletionsPreselectOption::Unchanged,
+                ctx,
+            );
+
+            // We should close the menu if there aren't any results
+            // after filtering.
+            suggestions.items().is_empty()
+        });
+
+        ctx.notify();
+        should_close
     }
 
     fn clear_screen(&mut self, ctx: &mut ViewContext<Self>) {
