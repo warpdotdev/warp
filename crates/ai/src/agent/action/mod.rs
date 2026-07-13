@@ -146,6 +146,12 @@ pub enum AIAgentActionType {
         max_duration: Option<Duration>,
         max_size_bytes: Option<u64>,
         summary: Option<String>,
+        /// The surface to record. `None` (the default, and the only value the
+        /// server currently supplies) records the whole screen; a `Window`
+        /// target records just that window via the client's Composite
+        /// per-frame capture. Applied by the client only when background
+        /// computer use is enabled.
+        window: Option<computer_use::Target>,
     },
 
     /// AI requested to stop an in-progress recording and publish the video.

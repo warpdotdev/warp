@@ -518,6 +518,9 @@ impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
                 .filter(|&bytes| bytes > 0)
                 .map(|bytes| bytes as u64),
             summary: (!value.summary.trim().is_empty()).then_some(value.summary),
+            // The recording tool schema does not yet carry a window target, so recordings default
+            // to whole-screen capture. When the server begins supplying one, wire it through here.
+            window: None,
         }
     }
 }

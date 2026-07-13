@@ -213,7 +213,7 @@ fn capture_via_composite(
 }
 
 /// Converts X11 image data (typically BGRA or BGR) to RGB.
-fn convert_x11_image_to_rgb(
+pub(crate) fn convert_x11_image_to_rgb(
     data: &[u8],
     width: usize,
     height: usize,

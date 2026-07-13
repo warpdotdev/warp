@@ -273,6 +273,10 @@ pub struct RecordingConfig {
     pub max_duration: Duration,
     /// Maximum output size in bytes before the runtime auto-stops recording.
     pub max_size_bytes: u64,
+    /// The surface to capture. `Screen` records the whole X display (legacy behavior);
+    /// `Window` records just the targeted window via the X Composite extension, so the window
+    /// is captured even while covered by another window.
+    pub target: Target,
 }
 
 impl Default for RecordingConfig {
@@ -283,6 +287,7 @@ impl Default for RecordingConfig {
             // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
             max_duration: Duration::from_secs(10 * 60),
             max_size_bytes: 1024 * 1024 * 1024,
+            target: Target::Screen,
         }
     }
 }
@@ -307,6 +312,14 @@ pub struct RecordingHandle {
     // validates the file and transfers its path to `RecordingOutput`.
     #[cfg(linux)]
     cleanup_on_drop: bool,
+    // Populated only by the Linux window-capture path (Composite per-frame
+    // capture): the flag stops the background capture loop and the task feeds
+    // frames into ffmpeg's stdin. The x11grab (screen) path leaves both `None`
+    // and finalizes via SIGINT instead.
+    #[cfg(linux)]
+    capture_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    #[cfg(linux)]
+    capture_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RecordingHandle {
@@ -364,6 +377,10 @@ impl RecordingHandle {
             process: None,
             #[cfg(linux)]
             cleanup_on_drop: false,
+            #[cfg(linux)]
+            capture_stop: None,
+            #[cfg(linux)]
+            capture_task: None,
         };
         (handle, exit_state)
     }

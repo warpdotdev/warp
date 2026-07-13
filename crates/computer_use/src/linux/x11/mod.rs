@@ -10,7 +10,11 @@ mod keyboard;
 mod mouse;
 mod screenshot;
 mod seat;
-mod windows;
+pub(crate) mod windows;
+
+// Re-exported for the window-capture recording path, which reuses the same X11 image-to-RGB
+// conversion as window screenshots rather than duplicating it.
+pub(crate) use screenshot::convert_x11_image_to_rgb;
 
 use std::time::Duration;
 
