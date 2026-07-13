@@ -2,7 +2,6 @@
 use std::ops::Range;
 
 use string_offset::CharOffset;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp::tui_export::AcceptSlashCommandOrSavedPrompt;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiFlex,
@@ -13,13 +12,17 @@ use warpui_core::{AppContext, ModelAsRef, ModelHandle, UpdateModel};
 
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
+use crate::tui_column_layout::{
+    format_tui_first_column, tui_two_column_layout, TuiTwoColumnConstraints, TuiTwoColumnLayout,
+};
 
-const SLASH_COMMAND_PREFERRED_TITLE_COLUMNS: usize = 29;
-const SLASH_COMMAND_MIN_TITLE_COLUMNS_WITH_DESCRIPTION: usize = 8;
-const SLASH_COMMAND_MIN_DESCRIPTION_COLUMNS: usize = 12;
-const SLASH_COMMAND_PREFERRED_DESCRIPTION_COLUMNS: usize = 21;
-const SLASH_COMMAND_DESCRIPTION_GAP_COLUMNS: usize = 1;
-const SLASH_COMMAND_TITLE_ELLIPSIS: &str = "...";
+const SLASH_COMMAND_COLUMN_CONSTRAINTS: TuiTwoColumnConstraints = TuiTwoColumnConstraints {
+    preferred_first_columns: 29,
+    minimum_first_columns: 8,
+    minimum_second_columns: 12,
+    preferred_maximum_second_columns: 21,
+    gap_columns: 1,
+};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,7 +201,16 @@ fn build_inline_menu(
     allocated_width: u16,
     allocated_height: u16,
 ) -> Box<dyn TuiElement> {
-    let slash_command_columns = slash_command_column_layout(snapshot, allocated_width);
+    let slash_command_columns = tui_two_column_layout(
+        usize::from(allocated_width),
+        snapshot.rows.iter().filter_map(|row| {
+            if row.style != TuiInlineMenuRowStyle::SlashCommand {
+                return None;
+            }
+            Some((row.title.as_str(), row.description.as_deref()?))
+        }),
+        SLASH_COMMAND_COLUMN_CONSTRAINTS,
+    );
     let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     if let Some(header) = &snapshot.header {
         if let Some(title) = &header.title {
@@ -303,119 +315,10 @@ fn menu_status_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
     .finish()
 }
 
-/// Shared title/description allocation for every slash-command row in one menu.
-#[derive(Clone, Copy)]
-struct SlashCommandColumnLayout {
-    available_columns: usize,
-    title_columns: usize,
-    show_descriptions: bool,
-}
-
-fn slash_command_column_layout(
-    snapshot: &TuiInlineMenuSnapshot,
-    allocated_width: u16,
-) -> SlashCommandColumnLayout {
-    let available_columns = usize::from(allocated_width);
-    let described_slash_command_rows = snapshot.rows.iter().filter(|row| {
-        row.style == TuiInlineMenuRowStyle::SlashCommand && row.description.is_some()
-    });
-    let longest_title_columns = described_slash_command_rows
-        .clone()
-        .map(|row| UnicodeWidthStr::width(row.title.as_str()))
-        .max();
-    let longest_description_columns = described_slash_command_rows
-        .filter_map(|row| row.description.as_deref())
-        .map(UnicodeWidthStr::width)
-        .max();
-    let min_two_column_width =
-        SLASH_COMMAND_MIN_TITLE_COLUMNS_WITH_DESCRIPTION + SLASH_COMMAND_MIN_DESCRIPTION_COLUMNS;
-    let Some((longest_title_columns, longest_description_columns)) =
-        longest_title_columns.zip(longest_description_columns)
-    else {
-        return SlashCommandColumnLayout {
-            available_columns,
-            title_columns: available_columns,
-            show_descriptions: false,
-        };
-    };
-    if available_columns < min_two_column_width {
-        return SlashCommandColumnLayout {
-            available_columns,
-            title_columns: available_columns,
-            show_descriptions: false,
-        };
-    }
-
-    let preferred_title_columns = SLASH_COMMAND_PREFERRED_TITLE_COLUMNS
-        .max(longest_title_columns.saturating_add(SLASH_COMMAND_DESCRIPTION_GAP_COLUMNS));
-    let preferred_description_columns = longest_description_columns.clamp(
-        SLASH_COMMAND_MIN_DESCRIPTION_COLUMNS,
-        SLASH_COMMAND_PREFERRED_DESCRIPTION_COLUMNS,
-    );
-    // Retain the established 29-column title alignment until descriptions
-    // have their useful width, then spend surplus columns on long titles.
-    let baseline_width = SLASH_COMMAND_PREFERRED_TITLE_COLUMNS + preferred_description_columns;
-    let title_columns = if available_columns >= baseline_width {
-        let growth_columns = available_columns - baseline_width;
-        preferred_title_columns
-            .min(SLASH_COMMAND_PREFERRED_TITLE_COLUMNS.saturating_add(growth_columns))
-    } else {
-        SLASH_COMMAND_PREFERRED_TITLE_COLUMNS
-            .min(available_columns.saturating_sub(SLASH_COMMAND_MIN_DESCRIPTION_COLUMNS))
-    };
-    SlashCommandColumnLayout {
-        available_columns,
-        title_columns: title_columns.max(SLASH_COMMAND_MIN_TITLE_COLUMNS_WITH_DESCRIPTION),
-        show_descriptions: true,
-    }
-}
-
-fn format_slash_command_title(
-    title: &str,
-    title_columns: usize,
-    include_description_gap: bool,
-) -> String {
-    let description_gap_columns = if include_description_gap {
-        SLASH_COMMAND_DESCRIPTION_GAP_COLUMNS
-    } else {
-        0
-    };
-    let available_title_columns = title_columns.saturating_sub(description_gap_columns);
-    let title_width = UnicodeWidthStr::width(title);
-    if title_width <= available_title_columns {
-        return if include_description_gap {
-            format!("{title}{}", " ".repeat(title_columns - title_width))
-        } else {
-            title.to_owned()
-        };
-    }
-
-    let ellipsis_columns =
-        UnicodeWidthStr::width(SLASH_COMMAND_TITLE_ELLIPSIS).min(available_title_columns);
-    let ellipsis = &SLASH_COMMAND_TITLE_ELLIPSIS[..ellipsis_columns];
-    let prefix_columns = available_title_columns - ellipsis_columns;
-    let mut prefix = String::new();
-    let mut prefix_width = 0;
-    for character in title.chars() {
-        let character_width = UnicodeWidthChar::width(character).unwrap_or_default();
-        if prefix_width + character_width > prefix_columns {
-            break;
-        }
-        prefix.push(character);
-        prefix_width += character_width;
-    }
-
-    format!(
-        "{prefix}{ellipsis}{}{}",
-        " ".repeat(prefix_columns - prefix_width),
-        " ".repeat(description_gap_columns),
-    )
-}
-
 fn menu_result_row(
     row: &TuiInlineMenuRow,
     is_selected: bool,
-    slash_command_columns: SlashCommandColumnLayout,
+    slash_command_columns: TuiTwoColumnLayout,
     builder: &TuiUiBuilder,
 ) -> Box<dyn TuiElement> {
     let title_style = if is_selected {
@@ -432,19 +335,20 @@ fn menu_result_row(
     let show_description = match row.style {
         TuiInlineMenuRowStyle::Default => row.description.is_some(),
         TuiInlineMenuRowStyle::SlashCommand => {
-            slash_command_columns.show_descriptions && row.description.is_some()
+            slash_command_columns.show_second && row.description.is_some()
         }
     };
     let title_columns = if show_description {
-        slash_command_columns.title_columns
+        slash_command_columns.first_columns
     } else {
         slash_command_columns.available_columns
     };
     let title = match row.style {
         TuiInlineMenuRowStyle::Default => row.title.clone(),
-        TuiInlineMenuRowStyle::SlashCommand => {
-            format_slash_command_title(&row.title, title_columns, show_description)
-        }
+        TuiInlineMenuRowStyle::SlashCommand => format_tui_first_column(
+            &row.title,
+            slash_command_columns.with_second_visible(show_description),
+        ),
     };
     let title = TuiText::new(title)
         .with_style(title_style)

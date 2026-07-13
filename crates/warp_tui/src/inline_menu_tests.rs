@@ -4,8 +4,8 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::App;
 
 use super::{
-    format_slash_command_title, render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuRow,
-    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab,
+    render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -321,17 +321,4 @@ fn narrow_slash_command_rows_use_the_full_width_for_titles() {
     );
 
     assert_eq!(lines[0], "/123456789012345...");
-}
-
-#[test]
-fn ellipsis_follows_wide_character_prefix_without_padding() {
-    assert_eq!(
-        format_slash_command_title("/12345678901234567890123界suffix", 29, true),
-        "/12345678901234567890123...  "
-    );
-}
-
-#[test]
-fn ellipsis_scales_down_for_extremely_narrow_titles() {
-    assert_eq!(format_slash_command_title("/agent", 2, false), "..");
 }
