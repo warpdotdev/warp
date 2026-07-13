@@ -892,7 +892,7 @@ impl BlocklistAIActionExecutor {
                 AIAgentActionType::StartRecording { .. }
             ) {
                 RecordingController::handle(ctx).update(ctx, |controller, _| {
-                    controller.abort_start();
+                    controller.abort_start(running.conversation_id);
                 });
             } else if let AIAgentActionType::WaitForEvents { tool_call_id, .. } =
                 &running.action.action

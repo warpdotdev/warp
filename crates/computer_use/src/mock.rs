@@ -5,7 +5,7 @@
 //! at `WARP_MOCK_RECORDING_FIXTURE`, and `WARP_MOCK_RECORDING_STOPPED_EARLY`
 //! exercises the partial-recording copy.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
 use instant::Instant;
@@ -37,6 +37,7 @@ impl crate::Recorder for Recorder {
         Ok(RecordingHandle {
             width: 1280,
             height: 720,
+            exit_state: Arc::new(Mutex::new(None)),
         })
     }
 

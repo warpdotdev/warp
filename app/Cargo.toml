@@ -423,6 +423,7 @@ winreg.workspace = true
 [dev-dependencies]
 ai = { workspace = true, features = ["test-util"] }
 async-process.workspace = true
+computer_use = { workspace = true, features = ["test-util"] }
 firebase.workspace = true
 jsonschema = { workspace = true, default-features = false }
 async-executor = "1.5.1"

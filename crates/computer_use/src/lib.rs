@@ -13,6 +13,7 @@ mod screenshot_utils;
 
 use std::borrow::Cow;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -42,6 +43,14 @@ pub fn is_supported_on_current_platform() -> bool {
         imp::is_supported_on_current_platform()
     }
 }
+/// Why a capture process exited before an explicit stop.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RecordingExitKind {
+    LimitReached,
+    Crashed,
+}
+
+pub type RecordingExitState = Arc<Mutex<Option<RecordingExitKind>>>;
 
 #[derive(Debug, Error)]
 pub enum RecordingError {
@@ -284,6 +293,7 @@ impl Default for RecordingConfig {
 pub struct RecordingHandle {
     width: u32,
     height: u32,
+    exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
     // populated by the real Linux recorder; the no-op recorders never construct
     // a handle.
@@ -292,7 +302,11 @@ pub struct RecordingHandle {
     #[cfg(linux)]
     started_at: instant::Instant,
     #[cfg(linux)]
-    process: tokio::process::Child,
+    process: Option<tokio::process::Child>,
+    // The handle owns and deletes partial output until `Recorder::stop`
+    // validates the file and transfers its path to `RecordingOutput`.
+    #[cfg(linux)]
+    cleanup_on_drop: bool,
 }
 
 impl RecordingHandle {
@@ -304,6 +318,68 @@ impl RecordingHandle {
     /// The applied capture height in pixels.
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    /// Checks whether capture exited without an explicit stop.
+    pub fn poll_exit(&mut self) -> Option<RecordingExitKind> {
+        if let Some(kind) = *self
+            .exit_state
+            .lock()
+            .expect("recording exit state poisoned")
+        {
+            return Some(kind);
+        }
+
+        #[cfg(linux)]
+        if let Some(process) = self.process.as_mut()
+            && let Ok(Some(status)) = process.try_wait()
+        {
+            let kind = if status.success() {
+                RecordingExitKind::LimitReached
+            } else {
+                RecordingExitKind::Crashed
+            };
+            *self
+                .exit_state
+                .lock()
+                .expect("recording exit state poisoned") = Some(kind);
+            return Some(kind);
+        }
+
+        None
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn new_test(width: u32, height: u32) -> (Self, RecordingExitState) {
+        let exit_state = Arc::new(Mutex::new(None));
+        let handle = Self {
+            width,
+            height,
+            exit_state: exit_state.clone(),
+            #[cfg(linux)]
+            path: PathBuf::new(),
+            #[cfg(linux)]
+            started_at: instant::Instant::now(),
+            #[cfg(linux)]
+            process: None,
+            #[cfg(linux)]
+            cleanup_on_drop: false,
+        };
+        (handle, exit_state)
+    }
+}
+
+#[cfg(linux)]
+impl Drop for RecordingHandle {
+    fn drop(&mut self) {
+        // A handle can be abandoned without reaching `Recorder::stop`, notably
+        // when a start action finishes after cancellation. The child process's
+        // kill-on-drop handles ffmpeg; this removes its partial output. A
+        // successful stop disables cleanup and transfers file ownership.
+        if self.cleanup_on_drop {
+            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(self.path.with_extension("log"));
+        }
     }
 }
 
@@ -325,6 +401,10 @@ pub enum RecordingCompletionStatus {
     Completed,
     StoppedEarly,
 }
+
+#[cfg(test)]
+#[path = "recording_tests.rs"]
+mod recording_tests;
 
 /// A key that can be pressed or released.
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]

@@ -57,7 +57,8 @@ use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
+    finalize_recording_for_conversation, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    BlocklistAIPermissions, FinalizeReason,
 };
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo, SourceRepo,
@@ -895,12 +896,30 @@ impl AgentDriver {
                     .spawn(|me, ctx| me.unregister_streamer_consumer(ctx))
                     .await;
 
-                // Run the snapshot upload before signaling the caller. The caller resumes and
-                // triggers process termination as soon as it receives `result`; the snapshot
-                // upload depends on the event loop that termination tears down, so anything
-                // async it awaits (presigned URL fetch, uploads, timers) would get abandoned
-                // mid-flight. Provider cleanup is just local temp-file teardown, so it's safe
-                // to run after the send.
+                // The caller may terminate the process as soon as it receives
+                // `result`, so all durable artifact work must finish before the
+                // send below. First start or join finalization for this
+                // conversation and wait for ffmpeg stop plus upload to finish.
+                // This also waits for work already started by an early exit or
+                // cancellation path.
+                if let Ok(Some(finalization)) = foreground
+                    .spawn(|me, ctx| {
+                        me.run_conversation_id.and_then(|conversation_id| {
+                            finalize_recording_for_conversation(
+                                conversation_id,
+                                FinalizeReason::AgentFinished,
+                                true,
+                                ctx,
+                            )
+                        })
+                    })
+                    .await
+                {
+                    let finalization_result = finalization.resolve().await;
+                    log::info!(
+                        "Recording finalization completed before agent driver exit: {finalization_result:?}"
+                    );
+                }
                 Self::run_snapshot_upload(&foreground).await;
 
                 if tx.send(result).is_err() {
