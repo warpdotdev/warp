@@ -21,6 +21,7 @@ OS_TYPE="$(uname -s)"
 FEATURES="gui"
 INSTALL_COMMON_SKILLS=1
 FORCE_COMMON_SKILLS=0
+INSTALL_WARP_SKILLS=1
 COMMON_SKILLS_TARGET="${WARP_COMMON_SKILLS_INSTALL_TARGET:-}"
 
 ./script/install_channel_config || echo "Skipping internal channel config installation (no repo access)."
@@ -71,6 +72,10 @@ while (( "$#" )); do
       FORCE_COMMON_SKILLS=1
       shift
       ;;
+    --skip-warp-skills)
+      INSTALL_WARP_SKILLS=0
+      shift
+      ;;
     --release)
       CARGO_PARAMS+=("$1")
       MAC_ARGS+=("$1")
@@ -119,6 +124,16 @@ if [[ "$INSTALL_COMMON_SKILLS" -eq 1 ]]; then
     else
       install_common_skills_or_continue --if-needed --prompt-for-target --quiet
     fi
+  fi
+fi
+
+# Optionally install the internal warp-skills after the common-skills step, via
+# the shared install_warp_skills wrapper resolved from warpdotdev/common-skills.
+# Best-effort: a missing lock or no access is a clean no-op. Surface a warning on
+# any unexpected failure, but never abort run.
+if [[ "${INSTALL_WARP_SKILLS}" -eq 1 && "${WARP_SKIP_WARP_SKILLS_INSTALL:-}" != "1" ]]; then
+  if ! ./script/resolve_common_skills install_warp_skills -- --repo-root "${REPO_ROOT}" --if-needed; then
+    echo "warning: warp-skills install did not complete; continuing without it." >&2
   fi
 fi
 

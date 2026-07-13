@@ -9,6 +9,7 @@ set -eo pipefail
 OS_TYPE="$(uname -s)"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 INSTALL_COMMON_SKILLS=1
+INSTALL_WARP_SKILLS=1
 COMMON_SKILLS_TARGET="${WARP_COMMON_SKILLS_INSTALL_TARGET:-}"
 PLATFORM_ARGS=()
 
@@ -28,10 +29,13 @@ Options:
   --install-common-skills-globally
                             Install or update common agent skills in ~/.agents/skills.
   --skip-common-skills     Skip installing common agent skills.
+  --skip-warp-skills       Skip installing team-specific warp-skills.
 
 Environment:
   WARP_SKIP_COMMON_SKILLS_INSTALL=1
       Skip installing common agent skills, even when --install-common-skills is provided.
+  WARP_SKIP_WARP_SKILLS_INSTALL=1
+      Skip installing team-specific warp-skills.
   WARP_COMMON_SKILLS_INSTALL_TARGET=project|global
       Choose the install target when no explicit prompt answer is provided.
       Target prompting and duplicate checks are delegated to
@@ -75,6 +79,13 @@ print_bootstrap_preview() {
   if [[ "${INSTALL_COMMON_SKILLS}" -eq 1 && "${WARP_SKIP_COMMON_SKILLS_INSTALL:-}" != "1" ]]; then
     echo "  - Verify installed common skills match skills-lock.json."
   fi
+  if [[ "${INSTALL_WARP_SKILLS}" -eq 0 ]]; then
+    echo "  - Skip the internal warp-skills because --skip-warp-skills was provided."
+  elif [[ "${WARP_SKIP_WARP_SKILLS_INSTALL:-}" = "1" ]]; then
+    echo "  - Skip the internal warp-skills because WARP_SKIP_WARP_SKILLS_INSTALL=1."
+  else
+    echo "  - Install the internal warp-skills pinned in warp-skills-lock.json if accessible (best-effort; optional)."
+  fi
   echo "Run ./script/bootstrap --help to see options and environment overrides."
   echo
 }
@@ -106,6 +117,9 @@ for arg in "$@"; do
     --skip-common-skills)
       INSTALL_COMMON_SKILLS=0
       ;;
+    --skip-warp-skills)
+      INSTALL_WARP_SKILLS=0
+      ;;
     *)
       PLATFORM_ARGS+=("${arg}")
       ;;
@@ -127,6 +141,21 @@ maybe_install_common_skills() {
       if ! ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" --if-needed --prompt-for-target; then
         echo "error: unable to install common skills; continuing without them." >&2
       fi
+    fi
+  fi
+}
+
+# Optionally install the internal warp-skills after the common-skills step, via
+# the shared install_warp_skills wrapper resolved from warpdotdev/common-skills.
+# Best-effort: a missing lock or no access is a clean no-op. Surface a warning on
+# any unexpected failure, but never abort bootstrap.
+maybe_install_warp_skills() {
+  if [[ "${INSTALL_WARP_SKILLS}" -eq 1 ]]; then
+    if [[ "${WARP_SKIP_WARP_SKILLS_INSTALL:-}" = "1" ]]; then
+      return
+    fi
+    if ! ./script/resolve_common_skills install_warp_skills -- --repo-root "${REPO_ROOT}" --if-needed; then
+      echo "warning: warp-skills install did not complete; continuing without it." >&2
     fi
   fi
 }
@@ -156,11 +185,15 @@ if [[ "$OS_TYPE" = "Darwin" ]]; then
   print_bootstrap_preview "macOS"
   ./script/macos/bootstrap "${PLATFORM_ARGS[@]}"
   maybe_install_common_skills
+  maybe_install_warp_skills
 elif [[ "$OS_TYPE" = "Linux" ]]; then
   print_bootstrap_preview "Linux"
   ./script/linux/bootstrap "${PLATFORM_ARGS[@]}"
   maybe_install_common_skills
+  maybe_install_warp_skills
 elif [[ "$OS_TYPE" =~ ^(MINGW64_NT|MSYS_NT) ]]; then
+  # The Windows bootstrap runs through bootstrap.ps1, which installs common
+  # skills but does not yet wire up the internal warp-skills step.
   if [[ "${INSTALL_COMMON_SKILLS}" -eq 1 ]]; then
     if [[ -n "${COMMON_SKILLS_TARGET}" ]]; then
       ./script/windows/bootstrap.ps1 "${PLATFORM_ARGS[@]}" -InstallCommonSkills -CommonSkillsTarget "${COMMON_SKILLS_TARGET}"
