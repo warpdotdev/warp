@@ -4,11 +4,17 @@ use warpui::{AppContext, EntityId, ModelContext, ModelHandle, SingletonEntity};
 use super::{
     AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin, EnterAgentViewError,
 };
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversationAutoexecuteMode, AIConversationId};
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentConversationEntryId, AgentConversationListEntryState,
+    AgentConversationListPolicy,
+};
 use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::workspace::RestoreConversationLayout;
 
 /// GUI conversation selection backed unconditionally by Agent View.
 pub(crate) struct AgentViewConversationSelection {
@@ -57,6 +63,34 @@ impl AgentViewConversationSelection {
         Self {
             terminal_surface_id,
             agent_view_controller,
+        }
+    }
+}
+
+impl AgentConversationListPolicy for AgentViewConversationSelection {
+    fn classify_entry(
+        &self,
+        entry: &AgentConversationEntry,
+        app: &AppContext,
+    ) -> AgentConversationListEntryState {
+        let selected_entry_id = self
+            .selected_conversation_id(app)
+            .map(AgentConversationEntryId::Conversation);
+        if selected_entry_id == Some(entry.id) {
+            return AgentConversationListEntryState::Selected;
+        }
+
+        if ActiveAgentViewsModel::as_ref(app)
+            .get_terminal_view_id_for_entry(entry, app)
+            .is_some_and(|terminal_view_id| terminal_view_id != self.terminal_surface_id)
+        {
+            return AgentConversationListEntryState::OpenElsewhere;
+        }
+
+        if entry.has_open_action(Some(RestoreConversationLayout::ActivePane), app) {
+            AgentConversationListEntryState::Available
+        } else {
+            AgentConversationListEntryState::Unavailable
         }
     }
 }

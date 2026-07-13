@@ -1,6 +1,7 @@
 //! Public app APIs used by the `warp_tui` frontend.
 
 pub use repo_metadata::repositories::RepoDetectionSource;
+pub use warp_cli::agent::Harness;
 
 pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
@@ -18,6 +19,10 @@ pub use crate::ai::agent::{
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
     StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, TodoOperation,
     UserQueryMode,
+};
+pub use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentConversationListEntryState, AgentConversationListPolicy,
+    AgentRunDisplayStatus,
 };
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
