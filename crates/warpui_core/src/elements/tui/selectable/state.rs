@@ -2,67 +2,12 @@ use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::ops::Range;
 use std::rc::Rc;
-use std::time::Duration;
 
 use instant::Instant;
 
-use super::{TuiGridPoint, TuiPaintContext, TuiPoint, TuiRect, TuiRowResize, TuiSelectionSpan};
+use super::auto_scroll::{TuiAutoScrollDragUpdate, TuiAutoScrollState, TuiAutoScrollStep};
+use super::{TuiGridPoint, TuiPoint, TuiRect, TuiRowResize, TuiSelectionSpan};
 use crate::text::SelectionType;
-
-// Hold thresholds for the 1 → 2 → 4 → 8 row auto-scroll acceleration ramp.
-const AUTO_SCROLL_TWO_ROWS_AFTER: Duration = Duration::from_millis(500);
-const AUTO_SCROLL_FOUR_ROWS_AFTER: Duration = Duration::from_millis(1_500);
-const AUTO_SCROLL_EIGHT_ROWS_AFTER: Duration = Duration::from_millis(3_000);
-
-/// The parked-pointer target that drives continuous auto-scroll while a drag
-/// gesture is held past an edge of the selectable's slot. Records the last
-/// drag position and the slot rect it was resolved against, so a repaint tick
-/// can re-resolve the selection edge without a new mouse event.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct TuiAutoScrollTarget {
-    pub(super) position: TuiPoint,
-    pub(super) area: TuiRect,
-    pub(super) started_at: Instant,
-    pub(super) next_step_at: Instant,
-}
-
-impl TuiAutoScrollTarget {
-    /// Returns a signed adaptive row step toward the parked edge.
-    pub(super) fn scroll_delta(self, now: Instant) -> Option<isize> {
-        let (direction, overshoot) = auto_scroll_edge(self.position, self.area)?;
-        let held_for = now.saturating_duration_since(self.started_at);
-        let time_rows = if held_for >= AUTO_SCROLL_EIGHT_ROWS_AFTER {
-            8
-        } else if held_for >= AUTO_SCROLL_FOUR_ROWS_AFTER {
-            4
-        } else if held_for >= AUTO_SCROLL_TWO_ROWS_AFTER {
-            2
-        } else {
-            1
-        };
-        let distance_rows = 1 + usize::from(overshoot.saturating_sub(1)) / 2;
-        let max_rows = (usize::from(self.area.height) / 2).max(1);
-        let rows = time_rows.max(distance_rows).min(max_rows) as isize;
-        Some(direction * rows)
-    }
-}
-
-/// Returns the auto-scroll direction and distance for a parked pointer.
-pub(super) fn auto_scroll_edge(position: TuiPoint, area: TuiRect) -> Option<(isize, u16)> {
-    if area.is_empty() {
-        return None;
-    }
-    if position.y <= area.y {
-        Some((-1, area.y.saturating_sub(position.y).saturating_add(1)))
-    } else if position.y >= area.bottom() {
-        Some((
-            1,
-            position.y.saturating_sub(area.bottom()).saturating_add(1),
-        ))
-    } else {
-        None
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TuiSelectionState {
@@ -71,10 +16,7 @@ struct TuiSelectionState {
     selection_type: SelectionType,
     is_selecting: bool,
     width: u16,
-    /// Set while the gesture is held past an edge; drives continuous
-    /// auto-scroll on repaint ticks. Cleared when the pointer returns inside,
-    /// when the gesture ends, or when scrolling reaches the content boundary.
-    auto_scroll: Option<TuiAutoScrollTarget>,
+    auto_scroll: TuiAutoScrollState,
 }
 
 impl TuiSelectionState {
@@ -126,116 +68,63 @@ impl TuiSelectionHandle {
             selection_type,
             is_selecting: true,
             width,
-            auto_scroll: None,
+            auto_scroll: TuiAutoScrollState::default(),
         });
     }
 
-    /// Updates the parked target, returning whether scrolling was newly armed
-    /// or changed direction.
-    pub(super) fn update_auto_scroll(
+    /// Tracks one drag position for repaint-driven auto-scroll.
+    pub(super) fn track_auto_scroll_drag(
         &self,
         position: TuiPoint,
         area: TuiRect,
         now: Instant,
-    ) -> bool {
+    ) -> TuiAutoScrollDragUpdate {
         let mut slot = self.0.borrow_mut();
         let Some(selection) = slot.as_mut() else {
-            return false;
+            return TuiAutoScrollDragUpdate::InBounds;
         };
-        let Some((direction, _)) = auto_scroll_edge(position, area) else {
-            return false;
-        };
-        let same_edge = selection.auto_scroll.is_some_and(|target| {
-            auto_scroll_edge(target.position, target.area)
-                .is_some_and(|(target_direction, _)| target_direction == direction)
-        });
-        if same_edge {
-            let target = selection
-                .auto_scroll
-                .as_mut()
-                .expect("same-edge auto-scroll has an existing target");
-            target.position = position;
-            target.area = area;
-            return false;
-        }
-        selection.auto_scroll = Some(TuiAutoScrollTarget {
-            position,
-            area,
-            started_at: now,
-            next_step_at: now,
-        });
-        true
+        selection.auto_scroll.track_drag(position, area, now)
     }
 
-    /// Disarms continuous auto-scroll, returning whether it was armed.
-    pub(super) fn clear_auto_scroll(&self) -> bool {
-        self.0
-            .borrow_mut()
-            .as_mut()
-            .and_then(|selection| selection.auto_scroll.take())
-            .is_some()
-    }
-
-    /// Requests the next repaint without reusing an overdue cadence deadline.
-    pub(super) fn request_auto_scroll_repaint(
-        &self,
-        ctx: &mut TuiPaintContext,
-        interval: Duration,
-        now: Instant,
-    ) {
-        let slot = self.0.borrow();
-        let Some(selection) = slot.as_ref() else {
-            return;
-        };
-        if selection.is_selecting {
-            if let Some(target) = selection.auto_scroll {
-                let repaint_at = if target.next_step_at <= now {
-                    now + interval
-                } else {
-                    target.next_step_at
-                };
-                ctx.repaint_at(repaint_at);
-            }
-        }
-    }
-
-    /// Returns a due target and schedules its next step.
-    pub(super) fn due_auto_scroll_target(
-        &self,
-        now: Instant,
-        interval: Duration,
-    ) -> Option<TuiAutoScrollTarget> {
+    /// Takes one due repaint-driven auto-scroll step.
+    pub(super) fn take_auto_scroll_step(&self, now: Instant) -> Option<TuiAutoScrollStep> {
         let mut slot = self.0.borrow_mut();
         let selection = slot.as_mut()?;
         if !selection.is_selecting {
             return None;
         }
-        let target = selection.auto_scroll.as_mut()?;
-        if now < target.next_step_at {
-            return None;
-        }
-        target.next_step_at = now + interval;
-        Some(*target)
+        selection.auto_scroll.take_due_step(now)
     }
 
-    /// Updates the moving selection endpoint, returning whether it changed.
-    pub(super) fn update_extent(&self, extent_span: TuiSelectionSpan) -> bool {
+    /// Returns whether repaint-driven auto-scroll is active.
+    pub(super) fn is_auto_scrolling(&self) -> bool {
+        self.0
+            .borrow()
+            .as_ref()
+            .is_some_and(|selection| selection.is_selecting && selection.auto_scroll.is_active())
+    }
+
+    /// Stops repaint-driven auto-scroll.
+    pub(super) fn stop_auto_scroll(&self) {
+        if let Some(selection) = self.0.borrow_mut().as_mut() {
+            selection.auto_scroll.stop();
+        }
+    }
+
+    /// Sets the moving selection endpoint.
+    pub(super) fn set_extent(&self, extent_span: TuiSelectionSpan) {
         let mut slot = self.0.borrow_mut();
         let Some(selection) = slot.as_mut() else {
-            return false;
+            return;
         };
-        if selection.extent_span == Some(extent_span) {
-            return false;
-        }
         selection.extent_span = Some(extent_span);
-        true
     }
 
     /// Ends the active gesture without clearing its range.
     pub(crate) fn finish(&self) {
         if let Some(selection) = self.0.borrow_mut().as_mut() {
             selection.is_selecting = false;
-            selection.auto_scroll = None;
+            selection.auto_scroll.stop();
         }
     }
 

@@ -845,7 +845,10 @@ fn auto_scroll_continues_while_parked_past_edge_without_new_events() {
         mouse_in_area(&app, &mut element, size, area, left_down(0, 2, 1, false));
         render_in_area(&app, &mut element, size, area);
         mouse_in_area(&app, &mut element, size, area, left_drag(2, 9));
-        render_in_area(&app, &mut element, size, area);
+        let before_repaint = Instant::now();
+        let repaint_at = render_in_area_repaint_at(&app, &mut element, size, area)
+            .expect("active auto-scroll should request another repaint");
+        assert!(repaint_at >= before_repaint + Duration::from_millis(100));
         assert!(selection.is_selecting());
         assert_eq!(
             state.position(),
