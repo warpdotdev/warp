@@ -318,6 +318,10 @@ integration_tests! {
     test_rule_pane_opening,
     test_undo_close_stack_timeout_cleanup,
 
+    // Files palette search tests
+    test_files_palette_streaming_search,
+    test_files_palette_eager_search,
+
     test_file_tree_opens_files_in_warp,
     test_file_tree_open_in_new_pane,
     test_file_tree_open_in_new_tab,

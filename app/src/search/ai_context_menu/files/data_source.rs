@@ -18,11 +18,18 @@ use crate::search::async_snapshot_data_source::AsyncSnapshotDataSource;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::files::model::FileSearchModel;
 use crate::search::files::search_item::FileSearchResult;
+#[cfg(feature = "local_fs")]
+use crate::search::files::streaming::StreamingFileSearchSession;
 use crate::search::mixer::{BoxFuture, DataSourceRunErrorWrapper};
 #[cfg(feature = "local_fs")]
 use crate::workspace::ActiveSession;
 
 const MAX_RESULTS: usize = 200;
+
+/// How many nucleo-ranked candidates to overfetch from the streaming engine
+/// before the precision re-ranking pass reduces them to `MAX_RESULTS`.
+#[cfg(feature = "local_fs")]
+const STREAMING_OVERFETCH_FACTOR: usize = 5;
 
 pub(crate) struct FileSnapshot {
     pub(crate) contents: Arc<Vec<FileSearchResult>>,
@@ -32,26 +39,65 @@ pub(crate) struct FileSnapshot {
     /// `OpenedFilesModel` at snapshot time. Used as a secondary recency
     /// signal within each scoring tier.
     pub(crate) last_opened: HashMap<String, instant::Instant>,
+    /// When set, `contents` is empty at snapshot time and is collected from
+    /// the streaming engine during the async match phase (gated by
+    /// `FeatureFlag::StreamingFileSearch`).
+    #[cfg(feature = "local_fs")]
+    pub(crate) streaming_session: Option<Arc<StreamingFileSearchSession>>,
+}
+
+impl FileSnapshot {
+    fn empty(query_text: String) -> Self {
+        FileSnapshot {
+            contents: Arc::new(Vec::new()),
+            git_changed_files: HashSet::new(),
+            query_text,
+            last_opened: HashMap::new(),
+            #[cfg(feature = "local_fs")]
+            streaming_session: None,
+        }
+    }
 }
 
 /// Builds the repository-backed file search source used by the AI context menu.
 /// For empty queries, snapshots repo contents with git-change status to prioritize modified files,
 /// and for non-empty queries snapshots repo contents only for faster fuzzy matching.
+///
+/// When `FeatureFlag::StreamingFileSearch` is enabled and the active repo is
+/// local, a streaming search session is created instead (per menu open) and
+/// candidates are collected on the fly during matching.
 pub fn file_data_source_for_current_repo(
+    app: &AppContext,
 ) -> AsyncSnapshotDataSource<FileSnapshot, AIContextMenuSearchableAction> {
+    #[cfg(feature = "local_fs")]
+    let streaming_session = StreamingFileSearchSession::for_active_local_repo(app);
+    #[cfg(not(feature = "local_fs"))]
+    let _ = app;
     AsyncSnapshotDataSource::new(
-        |query: &Query, app: &AppContext| {
+        move |query: &Query, app: &AppContext| {
             if FileSearchModel::should_skip_overly_broad_query(&query.text) {
+                return FileSnapshot::empty(query.text.clone());
+            }
+
+            let last_opened = snapshot_last_opened(app);
+
+            #[cfg(feature = "local_fs")]
+            if let Some(session) = &streaming_session {
+                let git_changed_files = if query.text.is_empty() {
+                    session.git_changed_files().clone()
+                } else {
+                    HashSet::new()
+                };
                 return FileSnapshot {
                     contents: Arc::new(Vec::new()),
-                    git_changed_files: HashSet::new(),
+                    git_changed_files,
                     query_text: query.text.clone(),
-                    last_opened: HashMap::new(),
+                    last_opened,
+                    streaming_session: Some(session.clone()),
                 };
             }
 
             let file_search_model = FileSearchModel::as_ref(app);
-            let last_opened = snapshot_last_opened(app);
             if query.text.is_empty() {
                 let (contents, git_changed_files) =
                     file_search_model.get_repo_contents_with_git_status(app);
@@ -60,6 +106,8 @@ pub fn file_data_source_for_current_repo(
                     git_changed_files,
                     query_text: query.text.clone(),
                     last_opened,
+                    #[cfg(feature = "local_fs")]
+                    streaming_session: None,
                 }
             } else {
                 let contents = file_search_model.get_repo_contents(&query.text, app);
@@ -68,6 +116,8 @@ pub fn file_data_source_for_current_repo(
                     git_changed_files: HashSet::new(),
                     query_text: query.text.clone(),
                     last_opened,
+                    #[cfg(feature = "local_fs")]
+                    streaming_session: None,
                 }
             }
         },
@@ -87,12 +137,7 @@ pub fn file_data_source_for_pwd(
     AsyncSnapshotDataSource::new(
         move |query: &Query, _app: &AppContext| {
             if FileSearchModel::should_skip_overly_broad_query(&query.text) {
-                return FileSnapshot {
-                    contents: Arc::new(Vec::new()),
-                    git_changed_files: HashSet::new(),
-                    query_text: query.text.clone(),
-                    last_opened: HashMap::new(),
-                };
+                return FileSnapshot::empty(query.text.clone());
             }
 
             FileSnapshot {
@@ -100,6 +145,8 @@ pub fn file_data_source_for_pwd(
                 git_changed_files: HashSet::new(),
                 query_text: query.text.clone(),
                 last_opened: HashMap::new(),
+                #[cfg(feature = "local_fs")]
+                streaming_session: None,
             }
         },
         fuzzy_match_files,
@@ -146,12 +193,42 @@ pub(crate) fn fuzzy_match_files(
     Result<Vec<QueryResult<AIContextMenuSearchableAction>>, DataSourceRunErrorWrapper>,
 > {
     Box::pin(async move {
+        let snapshot = resolve_streaming_contents(snapshot).await;
         if snapshot.query_text.is_empty() {
             Ok(fuzzy_match_files_zero_state(snapshot).await)
         } else {
             Ok(fuzzy_match_files_query(snapshot).await)
         }
     })
+}
+
+/// Collects candidates from the streaming engine when the snapshot was taken
+/// on the streaming path; otherwise returns the snapshot unchanged. Empty and
+/// wildcard queries need every candidate (zero-state ordering and wildcard
+/// matching happen in the scoring passes below); fuzzy queries re-rank a
+/// nucleo-ranked overfetch.
+#[cfg(feature = "local_fs")]
+async fn resolve_streaming_contents(mut snapshot: FileSnapshot) -> FileSnapshot {
+    if let Some(session) = &snapshot.streaming_session {
+        let max_results = if snapshot.query_text.is_empty()
+            || fuzzy_match::contains_wildcards(&snapshot.query_text)
+        {
+            usize::MAX
+        } else {
+            MAX_RESULTS * STREAMING_OVERFETCH_FACTOR
+        };
+        snapshot.contents = Arc::new(
+            session
+                .collect_candidates(&snapshot.query_text, max_results)
+                .await,
+        );
+    }
+    snapshot
+}
+
+#[cfg(not(feature = "local_fs"))]
+async fn resolve_streaming_contents(snapshot: FileSnapshot) -> FileSnapshot {
+    snapshot
 }
 
 /// Build a recency index: sort files by last-opened timestamp (ascending,

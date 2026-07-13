@@ -345,6 +345,7 @@ sysinfo.workspace = true
 warp-command-signatures = { workspace = true, features = ["embed-signatures"] }
 is_executable = "1.0.1"
 gethostname = "1.1.0"
+streaming_file_search.workspace = true
 watcher.workspace = true
 warp_files.workspace = true
 

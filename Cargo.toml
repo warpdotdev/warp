@@ -68,6 +68,7 @@ settings = { path = "crates/settings" }
 settings_value = { path = "crates/settings_value", default-features = false }
 settings_value_derive = { path = "crates/settings_value_derive" }
 simple_logger = { path = "crates/simple_logger" }
+streaming_file_search = { path = "crates/streaming_file_search" }
 string-offset = { path = "crates/string-offset" }
 sum_tree = { path = "crates/sum_tree" }
 syntax_tree = { path = "crates/syntax_tree" }
@@ -167,6 +168,7 @@ gloo = { version = "0.11.0", default-features = false, features = [
 ] }
 graphql-ws-client = { version = "0.11.1", default-features = false }
 hex = "0.4.3"
+ignore = "0.4"
 # This matches the version of hyper used by reqwest.
 hyper = "1.6.0"
 html5ever = "0.35.0"
@@ -200,6 +202,7 @@ minimp4 = "0.1.2"
 nix = { version = "0.26.4", default-features = false, features = ["signal"] }
 notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "91b719849bc04ef251bcb2cc61076b099204e970" }
 nom = "7.1.1"
+nucleo = "0.5"
 num-traits = "0.2"
 oauth2 = { version = "5.0.0", default-features = false }
 opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"] }

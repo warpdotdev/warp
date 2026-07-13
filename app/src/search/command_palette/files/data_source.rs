@@ -18,9 +18,16 @@ use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::files::model::FileSearchModel;
 use crate::search::files::search_item::FileSearchResult;
+#[cfg(feature = "local_fs")]
+use crate::search::files::streaming::StreamingFileSearchSession;
 use crate::search::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
 
 const MAX_RESULTS: usize = 100;
+
+/// How many nucleo-ranked candidates to overfetch from the streaming engine
+/// before the precision re-ranking pass reduces them to `MAX_RESULTS`.
+#[cfg(feature = "local_fs")]
+const STREAMING_OVERFETCH_FACTOR: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum FileRanking {
@@ -36,15 +43,68 @@ pub struct FileDataSource {
 enum FileDataSourceMode {
     /// Search across the repository (existing behavior)
     Repo,
+    /// Search across the repository via the on-the-fly streaming engine
+    /// (gated by `FeatureFlag::StreamingFileSearch`)
+    #[cfg(feature = "local_fs")]
+    RepoStreaming {
+        session: Arc<StreamingFileSearchSession>,
+    },
     /// Search within the current folder only, using cached contents computed at creation time
     CurrentFolder {
         cached_contents: Vec<FileSearchResult>,
     },
 }
 
+/// The candidate set a query runs against: either an already-materialized
+/// list (eager index / current-folder cache) or a streaming session that is
+/// queried asynchronously.
+enum CandidateFetch {
+    Ready {
+        contents: Arc<Vec<FileSearchResult>>,
+        git_changed_files: HashSet<String>,
+    },
+    #[cfg(feature = "local_fs")]
+    Streaming {
+        session: Arc<StreamingFileSearchSession>,
+        query: String,
+        max_results: usize,
+    },
+}
+
+impl CandidateFetch {
+    async fn resolve(self) -> (Arc<Vec<FileSearchResult>>, HashSet<String>) {
+        match self {
+            CandidateFetch::Ready {
+                contents,
+                git_changed_files,
+            } => (contents, git_changed_files),
+            #[cfg(feature = "local_fs")]
+            CandidateFetch::Streaming {
+                session,
+                query,
+                max_results,
+            } => {
+                let contents = session.collect_candidates(&query, max_results).await;
+                let git_changed_files = session.git_changed_files().clone();
+                (Arc::new(contents), git_changed_files)
+            }
+        }
+    }
+}
+
 impl FileDataSource {
-    pub fn new() -> Self {
-        // Default to repo search to preserve existing call sites
+    /// Create a data source that searches across the active repository. Uses
+    /// the streaming engine when `FeatureFlag::StreamingFileSearch` is enabled
+    /// for a local repo, and the eager repo index otherwise.
+    pub fn new_repo(app: &AppContext) -> Self {
+        #[cfg(feature = "local_fs")]
+        if let Some(session) = StreamingFileSearchSession::for_active_local_repo(app) {
+            return Self {
+                mode: FileDataSourceMode::RepoStreaming { session },
+            };
+        }
+        #[cfg(not(feature = "local_fs"))]
+        let _ = app;
         Self {
             mode: FileDataSourceMode::Repo,
         }
@@ -94,30 +154,59 @@ impl AsyncDataSource for FileDataSource {
 }
 
 impl FileDataSource {
-    fn contents_with_git_changes(
-        &self,
-        app: &AppContext,
-    ) -> (Arc<Vec<FileSearchResult>>, HashSet<String>) {
+    fn contents_with_git_changes(&self, app: &AppContext) -> CandidateFetch {
         match &self.mode {
             FileDataSourceMode::Repo => {
                 let file_search_model = FileSearchModel::as_ref(app);
-                file_search_model.get_repo_contents_with_git_status(app)
+                let (contents, git_changed_files) =
+                    file_search_model.get_repo_contents_with_git_status(app);
+                CandidateFetch::Ready {
+                    contents,
+                    git_changed_files,
+                }
             }
-            FileDataSourceMode::CurrentFolder { cached_contents } => {
-                (Arc::new(cached_contents.clone()), HashSet::new())
-            }
+            #[cfg(feature = "local_fs")]
+            FileDataSourceMode::RepoStreaming { session } => CandidateFetch::Streaming {
+                session: session.clone(),
+                query: String::new(),
+                max_results: usize::MAX,
+            },
+            FileDataSourceMode::CurrentFolder { cached_contents } => CandidateFetch::Ready {
+                contents: Arc::new(cached_contents.clone()),
+                git_changed_files: HashSet::new(),
+            },
         }
     }
 
-    fn contents(&self, query: &str, app: &AppContext) -> Arc<Vec<FileSearchResult>> {
+    fn contents(&self, query: &str, app: &AppContext) -> CandidateFetch {
         match &self.mode {
             FileDataSourceMode::Repo => {
                 let file_search_model = FileSearchModel::as_ref(app);
-                file_search_model.get_repo_contents(query, app)
+                CandidateFetch::Ready {
+                    contents: file_search_model.get_repo_contents(query, app),
+                    git_changed_files: HashSet::new(),
+                }
             }
-            FileDataSourceMode::CurrentFolder { cached_contents } => {
-                Arc::new(cached_contents.clone())
+            #[cfg(feature = "local_fs")]
+            FileDataSourceMode::RepoStreaming { session } => {
+                // Wildcard queries are matched by the re-ranking pass below,
+                // so all candidates are needed; fuzzy queries re-rank a
+                // nucleo-ranked overfetch.
+                let max_results = if fuzzy_match::contains_wildcards(query) {
+                    usize::MAX
+                } else {
+                    MAX_RESULTS * STREAMING_OVERFETCH_FACTOR
+                };
+                CandidateFetch::Streaming {
+                    session: session.clone(),
+                    query: query.to_string(),
+                    max_results,
+                }
             }
+            FileDataSourceMode::CurrentFolder { cached_contents } => CandidateFetch::Ready {
+                contents: Arc::new(cached_contents.clone()),
+                git_changed_files: HashSet::new(),
+            },
         }
     }
 
@@ -131,7 +220,7 @@ impl FileDataSource {
     > {
         let file_search_model = FileSearchModel::as_ref(app);
 
-        let (contents, git_changed_files) = self.contents_with_git_changes(app);
+        let fetch = self.contents_with_git_changes(app);
 
         let opened_files = OpenedFilesModel::as_ref(app);
 
@@ -141,6 +230,7 @@ impl FileDataSource {
             .cloned();
 
         Box::pin(async move {
+            let (contents, git_changed_files) = fetch.resolve().await;
             let mut results = Vec::new();
 
             for chunk in contents.chunks(50) {
@@ -242,13 +332,14 @@ impl FileDataSource {
             .cloned();
 
         // Fetch contents using the finalized query so it is pushed down into
-        // the repo-metadata traversal as a filter (matching files are not
-        // truncated away before fuzzy matching).
-        let contents = self.contents(&query_file_content, app);
+        // the repo-metadata traversal (or the streaming engine) as a filter
+        // (matching files are not truncated away before fuzzy matching).
+        let fetch = self.contents(&query_file_content, app);
 
         const CHUNK_SIZE: usize = 50;
 
         Box::pin(async move {
+            let (contents, _) = fetch.resolve().await;
             let mut results = Vec::with_capacity(contents.len());
 
             // Iterate in chunks of 50, yielding at the end of each chunk to

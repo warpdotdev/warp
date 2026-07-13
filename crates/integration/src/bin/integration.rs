@@ -443,6 +443,10 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_rule_pane_opening);
     register_test!(test_undo_close_stack_timeout_cleanup);
 
+    // Files palette search tests
+    register_test!(test_files_palette_streaming_search);
+    register_test!(test_files_palette_eager_search);
+
     // File tree tests
     register_test!(test_file_tree_opens_files_in_warp);
     register_test!(test_file_tree_open_in_new_pane);

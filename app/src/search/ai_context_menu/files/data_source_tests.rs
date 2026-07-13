@@ -620,6 +620,22 @@ fn make_dir(path: &str) -> FileSearchResult {
     }
 }
 
+fn make_snapshot(
+    contents: Vec<FileSearchResult>,
+    git_changed_files: HashSet<String>,
+    query_text: &str,
+    last_opened: HashMap<String, instant::Instant>,
+) -> FileSnapshot {
+    FileSnapshot {
+        contents: Arc::new(contents),
+        git_changed_files,
+        query_text: query_text.to_string(),
+        last_opened,
+        #[cfg(feature = "local_fs")]
+        streaming_session: None,
+    }
+}
+
 #[test]
 fn test_fuzzy_match_files_zero_state_git_changed_first() {
     let contents = vec![
@@ -629,12 +645,12 @@ fn test_fuzzy_match_files_zero_state_git_changed_first() {
     ];
     let git_changed_files = HashSet::from(["src/changed.rs".to_string()]);
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
         git_changed_files,
-        query_text: String::new(),
-        last_opened: HashMap::new(),
-    }))
+        "",
+        HashMap::new(),
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 3);
@@ -652,12 +668,12 @@ fn test_fuzzy_match_files_zero_state_git_changed_first() {
 fn test_fuzzy_match_files_zero_state_no_git_changes() {
     let contents = vec![make_file("src/main.rs"), make_file("src/lib.rs")];
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: String::new(),
-        last_opened: HashMap::new(),
-    }))
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
+        HashSet::new(),
+        "",
+        HashMap::new(),
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 2);
@@ -671,12 +687,12 @@ fn test_fuzzy_match_files_non_empty_query() {
         make_file("src/utils/helpers.rs"),
     ];
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: "button".to_string(),
-        last_opened: HashMap::new(),
-    }))
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
+        HashSet::new(),
+        "button",
+        HashMap::new(),
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 1);
@@ -692,12 +708,12 @@ fn test_fuzzy_match_files_non_empty_query() {
 fn test_fuzzy_match_files_directory_boost() {
     let contents = vec![make_dir("src/components"), make_file("src/components.rs")];
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: "components".to_string(),
-        last_opened: HashMap::new(),
-    }))
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
+        HashSet::new(),
+        "components",
+        HashMap::new(),
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 2);
@@ -729,12 +745,12 @@ fn test_fuzzy_match_files_respects_max_results() {
         .map(|i| make_file(&format!("src/file_{i}.rs")))
         .collect();
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: String::new(),
-        last_opened: HashMap::new(),
-    }))
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
+        HashSet::new(),
+        "",
+        HashMap::new(),
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 200);
@@ -821,12 +837,12 @@ fn test_zero_state_recently_opened_files_rank_above_untouched() {
 
     let contents = vec![make_file("src/untouched.rs"), make_file("src/opened.rs")];
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: String::new(),
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
+        HashSet::new(),
+        "",
         last_opened,
-    }))
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 2);
@@ -864,12 +880,12 @@ fn test_zero_state_git_changed_ranks_above_recently_opened() {
     let contents = vec![make_file("src/changed.rs"), make_file("src/opened.rs")];
     let git_changed_files = HashSet::from(["src/changed.rs".to_string()]);
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
         git_changed_files,
-        query_text: String::new(),
+        "",
         last_opened,
-    }))
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 2);
@@ -912,12 +928,12 @@ fn test_zero_state_recently_opened_ordered_by_recency() {
 
     let contents = vec![make_file("src/older.rs"), make_file("src/newer.rs")];
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: String::new(),
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
+        HashSet::new(),
+        "",
         last_opened,
-    }))
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 2);
@@ -966,12 +982,12 @@ fn test_zero_state_git_changed_also_ordered_by_recency() {
         "src/changed_newer.rs".to_string(),
     ]);
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
         git_changed_files,
-        query_text: String::new(),
+        "",
         last_opened,
-    }))
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 2);
@@ -1011,12 +1027,12 @@ fn test_fuzzy_query_recently_opened_bonus() {
         make_file("src/components/other_button.rs"),
     ];
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: "button".to_string(),
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
+        HashSet::new(),
+        "button",
         last_opened,
-    }))
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 2);
@@ -1070,12 +1086,12 @@ fn test_zero_state_full_ordering_end_to_end() {
         "src/changed_opened.rs".to_string(),
     ]);
 
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
+    let results = block_on(fuzzy_match_files(make_snapshot(
+        contents,
         git_changed_files,
-        query_text: String::new(),
+        "",
         last_opened,
-    }))
+    )))
     .unwrap();
 
     assert_eq!(results.len(), 5);

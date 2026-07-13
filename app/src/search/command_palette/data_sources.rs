@@ -125,7 +125,8 @@ impl DataSourceStore {
                 let is_in_git_repo = file_search_model.repo_root_location(ctx).is_some();
 
                 let files_data_source = if is_in_git_repo {
-                    ctx.add_model(|_| files::data_source::FileDataSource::new())
+                    let data_source = files::data_source::FileDataSource::new_repo(ctx);
+                    ctx.add_model(|_| data_source)
                 } else {
                     ctx.add_model(|ctx| files::data_source::FileDataSource::new_current_folder(ctx))
                 };

@@ -854,7 +854,7 @@ impl AIContextMenu {
             NavigationState::Category(AIContextMenuCategory::RepoFiles) => {
                 self.mixer.update(ctx, |mixer, ctx| {
                     mixer.add_async_source(
-                        file_data_source_for_current_repo(),
+                        file_data_source_for_current_repo(ctx),
                         [QueryFilter::Files],
                         AddAsyncSourceOptions {
                             debounce_interval: Some(Duration::from_millis(50)),
@@ -1073,7 +1073,7 @@ impl AIContextMenu {
                 AIContextMenuCategory::RepoFiles => {
                     self.mixer.update(ctx, |mixer, ctx| {
                         mixer.add_async_source(
-                            file_data_source_for_current_repo(),
+                            file_data_source_for_current_repo(ctx),
                             [QueryFilter::Files],
                             AddAsyncSourceOptions {
                                 debounce_interval: Some(Duration::from_millis(50)),

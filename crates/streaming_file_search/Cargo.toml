@@ -1,0 +1,18 @@
+[package]
+name = "streaming_file_search"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2021"
+description = "On-the-fly streaming fuzzy file search (producer + nucleo matcher) for cmd-O and the @ context menu"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+command.workspace = true
+ignore.workspace = true
+log.workspace = true
+nucleo.workspace = true
+
+[dev-dependencies]
+instant.workspace = true
+tempfile.workspace = true
