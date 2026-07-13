@@ -36,13 +36,14 @@ use warpui_core::elements::tui::{
     TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiText,
 };
 use warpui_core::keymap::macros::*;
-use warpui_core::keymap::FixedBinding;
+use warpui_core::keymap::{self, FixedBinding};
 use warpui_core::platform::TerminationMode;
 use warpui_core::r#async::Timer;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::alt_screen::TuiAltScreenElement;
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_selection::TuiConversationSelection;
@@ -75,6 +76,11 @@ pub(crate) enum TuiTerminalSessionEvent {
         bytes: Cow<'static, [u8]>,
         mode: AIAgentPtyWriteMode,
     },
+    /// Raw bytes to write to the PTY, used to forward user input (keystrokes,
+    /// mouse events, scroll) to an alt-screen app.
+    WriteBytes {
+        bytes: Cow<'static, [u8]>,
+    },
 }
 
 impl PtyIntentEvent for TuiTerminalSessionEvent {
@@ -85,6 +91,7 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
                 bytes: bytes.clone(),
                 mode: *mode,
             }),
+            Self::WriteBytes { bytes } => Some(PtyIntent::WriteBytes(bytes.clone())),
         }
     }
 }
@@ -131,6 +138,9 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Click on the footer's usage entry: flips the persisted credits⇄cost
     /// display-mode setting.
     ToggleUsageDisplay,
+    /// Forward raw bytes to the PTY. Raised by the alt-screen element for
+    /// keystrokes/mouse/scroll that should reach the running alt-screen app.
+    ForwardBytes(Vec<u8>),
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -161,6 +171,10 @@ pub(crate) struct TuiTerminalSessionView {
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
     /// shell submission).
     transient_hint: TransientHint,
+    /// Whether the terminal is currently showing an alt-screen app (vim, less,
+    /// htop, …). When true, the session renders [`TuiAltScreenElement`] and
+    /// routes input to the PTY instead of the transcript/input/footer.
+    alt_screen_active: bool,
 }
 
 /// Registers the session surface's keybindings. Called once at TUI startup
@@ -426,6 +440,16 @@ impl TuiTerminalSessionView {
             | ModelEvent::FinishUpdate(_) => ctx.notify(),
             _ => {}
         });
+        // Alt-screen enter/exit swaps the whole surface: re-render, and move
+        // focus between the input view and the session view so keystrokes reach
+        // the right target (the alt-screen element via element-tree dispatch,
+        // or the prompt editor via the input view's bindings). See
+        // [`Self::on_alt_screen_state_changed`].
+        ctx.subscribe_to_model(&model_events, |view, _, event, ctx| {
+            if matches!(event, ModelEvent::TerminalModeSwapped(_)) {
+                view.on_alt_screen_state_changed(ctx);
+            }
+        });
         // The footer shows the active model, working directory, and usage
         // entry: re-render when the TUI model or usage-display-mode settings
         // change (click or settings-file hot reload), when model display
@@ -537,7 +561,35 @@ impl TuiTerminalSessionView {
             ai_input_model,
             terminal_model: model,
             transient_hint: TransientHint::default(),
+            alt_screen_active: false,
         }
+    }
+
+    /// Reacts to the terminal switching between the block list and the
+    /// alternate screen. While the alt-screen is active the session view takes
+    /// focus (so the input view's readline bindings don't swallow keys meant
+    /// for the running app) and the keymap contexts drop their `ctrl-c`
+    /// intercepts, letting every keystroke fall through to the alt-screen
+    /// element which forwards it to the PTY. Leaving the alt-screen restores
+    /// input focus and the normal keymap.
+    fn on_alt_screen_state_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        let active = self.terminal_model.lock().is_alt_screen_active();
+        if self.alt_screen_active == active {
+            return;
+        }
+        self.alt_screen_active = active;
+        if active {
+            ctx.focus_self();
+        } else {
+            ctx.focus(&self.input_view);
+        }
+        ctx.notify();
+    }
+
+    /// Whether the terminal is currently showing an alt-screen app. Read by the
+    /// root view to keep its keymap context in sync (see [`RootTuiView`]).
+    pub(crate) fn is_alt_screen_active(&self) -> bool {
+        self.alt_screen_active
     }
 
     /// Re-renders on history events that can change the warping indicator:
@@ -1136,10 +1188,35 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn child_view_ids(&self, _ctx: &AppContext) -> Vec<EntityId> {
+        // While an alt-screen app owns the pane, the transcript/input views
+        // aren't rendered and don't participate in focus/event routing.
+        if self.alt_screen_active {
+            return Vec::new();
+        }
         vec![self.transcript.id(), self.input_view.id()]
     }
 
+    fn keymap_context(&self, _ctx: &AppContext) -> keymap::Context {
+        // While the alt-screen is active, drop this view's identifier so the
+        // fixed `ctrl-c` → `Interrupt` binding doesn't swallow the keypress —
+        // it must fall through to the alt-screen element and reach the app.
+        let mut context = keymap::Context::default();
+        if self.alt_screen_active {
+            context.set.insert("TuiAltScreenActive");
+        } else {
+            context.set.insert(Self::ui_name());
+        }
+        context
+    }
+
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        // An alt-screen app (vim, less, htop, …) takes over the whole pane:
+        // render its grid directly and forward input to it (see
+        // [`TuiAltScreenElement`]). No padding/footer so the app fills the
+        // terminal like a real terminal would.
+        if self.alt_screen_active {
+            return TuiAltScreenElement::new(self.terminal_model.clone()).finish();
+        }
         let inline_menu = self.inline_menu.render(ctx);
         // The border takes the shell-mode accent while in shell mode.
         let builder = TuiUiBuilder::from_app(ctx);
@@ -1247,6 +1324,11 @@ impl TypedActionView for TuiTerminalSessionView {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
+            TuiTerminalSessionAction::ForwardBytes(bytes) => {
+                ctx.emit(TuiTerminalSessionEvent::WriteBytes {
+                    bytes: Cow::Owned(bytes.clone()),
+                });
+            }
         }
     }
 }

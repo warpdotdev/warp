@@ -110,10 +110,21 @@ impl TuiView for RootTuiView {
         }
     }
 
-    fn keymap_context(&self, _ctx: &AppContext) -> keymap::Context {
+    fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
         // Propagate focus context into the input view so keystrokes reach it.
         let mut context = keymap::Context::default();
-        context.set.insert("RootTuiView");
+        // While a session is showing an alt-screen app, drop this view's
+        // identifier so the fixed `ctrl-c` → `ExitApp` binding doesn't swallow
+        // the keypress — it must fall through to the alt-screen element and
+        // reach the running app. The session view does the same for its own
+        // `ctrl-c` → `Interrupt` binding.
+        let alt_screen_active = matches!(&self.state, RootTuiState::Terminal(session)
+            if session.as_ref(ctx).is_alt_screen_active());
+        if alt_screen_active {
+            context.set.insert("TuiAltScreenActive");
+        } else {
+            context.set.insert("RootTuiView");
+        }
         context
     }
 }
