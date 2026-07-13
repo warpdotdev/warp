@@ -238,6 +238,32 @@ impl AmbientAgentEnvironment {
             .unwrap_or_default()
     }
 
+    /// Returns the effective GitHub-compatible repo list for display and editing.
+    ///
+    /// When `source_repos` is set and contains only GitHub repos, those are
+    /// returned (converted to the simpler `GithubRepo` type). Otherwise falls
+    /// back to `github_repos`. This lets the edit form show the correct repo
+    /// list for environments that were created via the newer `source_repos` path.
+    pub fn effective_github_repos(&self) -> Vec<GithubRepo> {
+        let code_forge = self.effective_code_forge();
+        match &self.source_repos {
+            Some(source_repos) => {
+                let all_github = source_repos
+                    .iter()
+                    .all(|r| r.code_forge.unwrap_or(code_forge) == CodeForge::GitHub);
+                if all_github {
+                    source_repos
+                        .iter()
+                        .map(|r| GithubRepo::new(r.owner.clone(), r.repo.clone()))
+                        .collect()
+                } else {
+                    self.github_repos.clone()
+                }
+            }
+            None => self.github_repos.clone(),
+        }
+    }
+
     /// Returns the authoritative provider-neutral repository list.
     pub fn effective_repos(&self) -> Vec<SourceRepo> {
         let code_forge = self.effective_code_forge();
