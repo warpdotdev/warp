@@ -161,6 +161,17 @@ fn viewport_with_state(
     TuiViewportedList::new(state, content)
 }
 
+/// Verifies viewport geometry is unavailable until layout establishes it.
+#[test]
+fn retained_size_is_absent_before_layout() {
+    let viewport = viewport_with_state(
+        TuiViewportedListState::new_at_end(),
+        FakeContent::new(Vec::new()),
+    );
+
+    assert_eq!(viewport.size(), None);
+}
+
 fn render_viewport(app: &App, viewport: &mut impl TuiElement, size: TuiSize) -> Vec<String> {
     app.read(|app_ctx| {
         let mut rendered_views = EntityIdMap::default();

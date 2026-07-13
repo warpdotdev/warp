@@ -2,8 +2,9 @@
 
 use warp::tui_export::AcceptSlashCommandOrSavedPrompt;
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext,
-    TuiPoint, TuiScreenPoint, TuiSize, TuiText,
+    TuiBuffer, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
+    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiSize,
+    TuiText,
 };
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::{AppContext, ModelAsRef, ModelHandle, UpdateModel};
@@ -170,6 +171,25 @@ impl TuiElement for TuiInlineMenuElement {
     /// Returns the painted content origin.
     fn origin(&self) -> Option<TuiScreenPoint> {
         self.content.as_ref()?.origin()
+    }
+
+    /// Delegates child-view presentation to the laid-out content.
+    fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
+        if let Some(content) = self.content.as_mut() {
+            content.present(ctx);
+        }
+    }
+
+    /// Delegates event dispatch to the laid-out content.
+    fn dispatch_event(
+        &mut self,
+        event: &TuiEvent,
+        event_ctx: &mut TuiEventContext<'_>,
+        app: &AppContext,
+    ) -> bool {
+        self.content
+            .as_mut()
+            .is_some_and(|content| content.dispatch_event(event, event_ctx, app))
     }
 }
 

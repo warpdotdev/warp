@@ -414,7 +414,7 @@ where
     content: Content,
     visible_elements: Vec<VisibleElement>,
     content_height: usize,
-    size: TuiSize,
+    size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
     vertical_alignment: TuiViewportVerticalAlignment,
     selection_snapshot: RefCell<Option<(TuiResolvedViewport, TuiBuffer)>>,
@@ -431,7 +431,7 @@ where
             content,
             visible_elements: Vec::new(),
             content_height: 0,
-            size: TuiSize::ZERO,
+            size: None,
             origin: None,
             vertical_alignment: TuiViewportVerticalAlignment::Top,
             selection_snapshot: RefCell::new(None),
@@ -740,8 +740,9 @@ where
         app: &AppContext,
     ) -> TuiSize {
         self.layout_visible_elements(constraint, ctx, app);
-        self.size = constraint.max;
-        self.size
+        let size = constraint.max;
+        self.size = Some(size);
+        size
     }
 
     fn render(
@@ -751,17 +752,15 @@ where
         ctx: &mut TuiPaintContext,
     ) {
         self.origin = Some(ctx.screen_point(buffer_origin));
-        let area = TuiRect::new(
-            buffer_origin.x,
-            buffer_origin.y,
-            self.size.width,
-            self.size.height,
-        );
+        let Some(size) = self.size else {
+            return;
+        };
+        let area = TuiRect::new(buffer_origin.x, buffer_origin.y, size.width, size.height);
         render_visible_elements(&mut self.visible_elements, area, buffer, ctx);
     }
 
     fn size(&self) -> Option<TuiSize> {
-        Some(self.size)
+        self.size
     }
 
     fn origin(&self) -> Option<TuiScreenPoint> {
