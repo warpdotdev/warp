@@ -703,6 +703,15 @@ impl QueuedPromptsPanelView {
             editor.set_buffer_text(text, ctx);
         });
     }
+
+    pub(crate) fn edit_buffer_text_for_test(&self, ctx: &AppContext) -> String {
+        self.edit_editor
+            .read(ctx, |editor, ctx| editor.buffer_text(ctx))
+    }
+
+    pub(crate) fn edit_editor_for_test(&self) -> ViewHandle<EditorView> {
+        self.edit_editor.clone()
+    }
 }
 
 impl TypedActionView for QueuedPromptsPanelView {

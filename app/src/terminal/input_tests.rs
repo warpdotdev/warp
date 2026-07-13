@@ -1448,6 +1448,113 @@ fn seed_active_conversation(app: &mut App, terminal_view_id: EntityId) -> AIConv
         id
     })
 }
+#[test]
+fn question_mark_edits_queued_prompt_instead_of_opening_agent_help() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let (window_id, terminal) =
+            add_window_with_bootstrapped_terminal_and_window_id(&mut app, None, None).await;
+        let (conversation_id, input, panel) = terminal.update(&mut app, |view, ctx| {
+            let conversation_id = view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("should enter agent view")
+            });
+            let input = view.input().clone();
+            let panel = input
+                .as_ref(ctx)
+                .queued_prompts_panel()
+                .cloned()
+                .expect("queue flag should create a queued prompts panel");
+            (conversation_id, input, panel)
+        });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new("Why".to_owned(), QueuedQueryOrigin::QueueSlashCommand),
+                ctx,
+            )
+        });
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(
+                &crate::terminal::view::queued_prompts_panel::QueuedPromptsPanelAction::StartEditingRow(
+                    query_id,
+                ),
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+            assert!(!input
+                .agent_shortcut_view_model
+                .as_ref(ctx)
+                .is_shortcut_view_open());
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.is_inline_edit_editor_focused(ctx));
+        });
+
+        let edit_editor = panel.read(&app, |panel, _| panel.edit_editor_for_test());
+        let question_mark =
+            Keystroke::parse("shift-?").expect("question mark keystroke should parse");
+        let keydown_handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[terminal.id(), input.id(), panel.id(), edit_editor.id()],
+                &question_mark,
+                false,
+            )
+            .expect("question mark dispatch should succeed");
+        assert!(
+            !keydown_handled,
+            "the Agent View help binding should defer to the queued prompt editor"
+        );
+        input.read(&app, |input, ctx| {
+            assert!(!input
+                .agent_shortcut_view_model
+                .as_ref(ctx)
+                .is_shortcut_view_open());
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.is_inline_edit_editor_focused(ctx));
+        });
+        // Once the keymap leaves the key unhandled, the platform's typed-character event
+        // reaches the focused editor and invokes this same insertion path.
+        edit_editor.update(&mut app, |editor, ctx| {
+            editor.user_insert("?", ctx);
+        });
+        input.read(&app, |input, ctx| {
+            assert!(
+                input.buffer_text(ctx).is_empty(),
+                "typed characters should not reach the host input"
+            );
+        });
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(panel.edit_buffer_text_for_test(ctx), "Why?");
+        });
+        input.read(&app, |input, ctx| {
+            assert!(!input
+                .agent_shortcut_view_model
+                .as_ref(ctx)
+                .is_shortcut_view_open());
+        });
+
+        panel.update(&mut app, |panel, ctx| panel.commit_edit(ctx));
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(model.queue(conversation_id)[0].text(), "Why?");
+        });
+    });
+}
 
 /// Enter on an empty buffer sends the top queued prompt; a second Enter sends the next row.
 /// The buffer stays empty throughout.
