@@ -67,6 +67,7 @@ impl AgentViewConversationSelection {
     }
 }
 
+/// Classifies entries relative to this GUI Agent View terminal surface.
 impl AgentConversationListPolicy for AgentViewConversationSelection {
     fn classify_entry(
         &self,

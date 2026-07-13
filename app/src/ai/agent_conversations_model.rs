@@ -294,7 +294,7 @@ pub enum AgentConversationListEntryState {
 
 /// Per-frontend policy for classifying normalized conversation-list entries.
 pub trait AgentConversationListPolicy: 'static {
-    /// Returns how this frontend can present and navigate to `entry`.
+    /// Classifies `entry` as selected, open elsewhere, available, or unavailable.
     fn classify_entry(
         &self,
         entry: &AgentConversationEntry,
