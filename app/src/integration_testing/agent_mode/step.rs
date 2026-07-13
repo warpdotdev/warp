@@ -71,7 +71,7 @@ pub fn exit_agent_view() -> TestStep {
                         .read(app, |input, app| input.input_type(app).is_ai());
                     let transcript_scope = {
                         let model = terminal_view.model.lock();
-                        model.block_list().transcript_scope().clone()
+                        *model.block_list().transcript_scope()
                     };
                     async_assert!(
                         !is_ai_input_mode && !transcript_scope.is_conversation(),
