@@ -278,3 +278,89 @@ fn extracts_multiple_mermaid_code_blocks_in_order() {
         _ => panic!("expected second section to be MermaidDiagram"),
     }
 }
+
+#[test]
+fn extracts_multiline_display_math_into_math_section() {
+    let input = "The energy is:\n$$\nE = mc^2\n$$\nas shown.";
+    let sections = parse_markdown_into_text_and_code_sections(input);
+
+    assert_eq!(sections.len(), 3);
+    match &sections[1] {
+        AIAgentTextSection::Math { math } => {
+            assert_eq!(math.latex, "E = mc^2");
+            assert_eq!(math.markdown_source, "$$E = mc^2$$");
+        }
+        section => panic!("expected Math section, got {section:?}"),
+    }
+}
+
+#[test]
+fn extracts_single_line_display_math_into_math_section() {
+    let input = "Before\n$$\\sigma(x) = \\frac{1}{1+e^{-x}}$$\nAfter";
+    let sections = parse_markdown_into_text_and_code_sections(input);
+
+    assert_eq!(sections.len(), 3);
+    match &sections[1] {
+        AIAgentTextSection::Math { math } => {
+            assert_eq!(math.latex, "\\sigma(x) = \\frac{1}{1+e^{-x}}");
+        }
+        section => panic!("expected Math section, got {section:?}"),
+    }
+}
+
+#[test]
+fn unterminated_display_math_stays_plain_text() {
+    // Mid-stream, before the closing `$$` has arrived, the block must render
+    // as its raw source rather than a partially-typeset section.
+    let input = "Deriving:\n$$\nE = mc";
+    let sections = parse_markdown_into_text_and_code_sections(input);
+
+    assert!(
+        sections
+            .iter()
+            .all(|section| matches!(section, AIAgentTextSection::PlainText { .. })),
+        "unterminated math must remain plain text, got {sections:?}"
+    );
+    match &sections[1] {
+        AIAgentTextSection::PlainText { text } => {
+            assert_eq!(text.text(), "$$\nE = mc");
+        }
+        section => panic!("expected PlainText section, got {section:?}"),
+    }
+}
+
+#[test]
+fn dollar_lines_inside_code_fences_are_not_math() {
+    let input = "```sh\necho $$\n$$\n```";
+    let sections = parse_markdown_into_text_and_code_sections(input);
+
+    assert_eq!(sections.len(), 1);
+    match &sections[0] {
+        AIAgentTextSection::Code { code, .. } => {
+            assert_eq!(code, "echo $$\n$$");
+        }
+        section => panic!("expected Code section, got {section:?}"),
+    }
+}
+
+#[test]
+fn empty_display_math_is_not_a_math_section() {
+    for input in ["$$$$", "$$ $$", "$$\n$$"] {
+        let sections = parse_markdown_into_text_and_code_sections(input);
+        assert!(
+            sections
+                .iter()
+                .all(|section| !matches!(section, AIAgentTextSection::Math { .. })),
+            "{input:?} should not produce a Math section, got {sections:?}"
+        );
+    }
+}
+
+#[test]
+fn inline_math_stays_in_plain_text() {
+    let input = "The bound is $O(n \\log n)$ overall.";
+    let sections = parse_markdown_into_text_and_code_sections(input);
+
+    assert_eq!(sections.len(), 1);
+    assert!(matches!(&sections[0], AIAgentTextSection::PlainText { .. }));
+}

@@ -2697,7 +2697,8 @@ impl AIBlock {
                             image_tooltip_handles.push(MouseStateHandle::default());
                         }
                         AIAgentTextSection::PlainText { .. }
-                        | AIAgentTextSection::MermaidDiagram { .. } => {}
+                        | AIAgentTextSection::MermaidDiagram { .. }
+                        | AIAgentTextSection::Math { .. } => {}
                     }
                     (code_buttons, table_handles, image_tooltip_handles)
                 },

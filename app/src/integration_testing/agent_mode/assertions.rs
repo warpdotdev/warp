@@ -1027,6 +1027,7 @@ fn get_exchange_output(
                     AIAgentTextSection::MermaidDiagram { diagram } => {
                         Some(diagram.markdown_source.clone())
                     }
+                    AIAgentTextSection::Math { math } => Some(math.markdown_source.clone()),
                 })
                 .collect::<Vec<_>>()
                 .join("");

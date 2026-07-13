@@ -341,6 +341,15 @@ pub struct FormattedImage {
     pub title: Option<String>,
 }
 
+/// How a LaTeX math fragment should be typeset.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum MathMode {
+    /// Math within a line of text (`$...$`), baseline-aligned with the surrounding text.
+    Inline,
+    /// Display-style math (`$$...$$`), typeset on its own centered line.
+    Display,
+}
+
 /// Column alignment for table cells
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default, Hash)]
 pub enum TableAlignment {
@@ -471,6 +480,17 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
             continue;
         }
 
+        if let Some(mode) = fragment.styles.math {
+            let delimiter = match mode {
+                MathMode::Inline => "$",
+                MathMode::Display => "$$",
+            };
+            result.push_str(delimiter);
+            result.push_str(&text);
+            result.push_str(delimiter);
+            continue;
+        }
+
         if let Some(Hyperlink::Url(url)) = &fragment.styles.hyperlink {
             text = format!("[{text}]({url})");
         }
@@ -549,6 +569,9 @@ pub struct FormattedTextStyles {
     pub strikethrough: bool,
     pub inline_code: bool,
     pub hyperlink: Option<Hyperlink>,
+    /// When set, the fragment's text is LaTeX math source to be typeset.
+    /// Renderers that don't support math fall back to showing the raw source.
+    pub math: Option<MathMode>,
 }
 
 impl FormattedTextFragment {
@@ -636,6 +659,18 @@ impl FormattedTextFragment {
         }
     }
 
+    /// Constructs a LaTeX math fragment. The fragment's text is the raw LaTeX
+    /// source (without the `$`/`$$` delimiters), so copying yields the source.
+    pub fn math(latex: impl Into<String>, mode: MathMode) -> Self {
+        Self {
+            text: latex.into(),
+            styles: FormattedTextStyles {
+                math: Some(mode),
+                ..Default::default()
+            },
+        }
+    }
+
     pub fn strikethrough(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
@@ -704,6 +739,14 @@ impl fmt::Debug for FormattedTextStyles {
             }
 
             write!(f, "Hyperlink({link:?})")?;
+            first = false;
+        }
+
+        if let Some(mode) = self.math {
+            if !first {
+                f.write_str(" | ")?;
+            }
+            write!(f, "Math({mode:?})")?;
             first = false;
         }
 

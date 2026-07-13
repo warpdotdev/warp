@@ -113,6 +113,9 @@ impl FindableRichContentView for AIBlock {
                     AIAgentTextSection::MermaidDiagram { diagram } => {
                         vec![compute_find_matches(&diagram.markdown_source, options)]
                     }
+                    AIAgentTextSection::Math { math } => {
+                        vec![compute_find_matches(&math.markdown_source, options)]
+                    }
                 };
 
                 for (line_index, frame_matches) in section_matches.into_iter().enumerate() {

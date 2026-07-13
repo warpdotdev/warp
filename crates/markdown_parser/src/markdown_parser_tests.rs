@@ -2848,3 +2848,226 @@ fn test_parse_table_with_strikethrough() {
         panic!("Expected table");
     }
 }
+
+#[test]
+fn test_inline_math() {
+    assert_eq!(
+        test_parse_markdown(r"The sigmoid $\sigma(x) = \frac{1}{1+e^{-x}}$ is smooth"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("The sigmoid "),
+            FormattedTextFragment::math(r"\sigma(x) = \frac{1}{1+e^{-x}}", MathMode::Inline),
+            FormattedTextFragment::plain_text(" is smooth"),
+        ])]
+    );
+}
+
+#[test]
+fn test_display_math() {
+    assert_eq!(
+        test_parse_markdown(r"$$E = mc^2$$"),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::math(
+            "E = mc^2",
+            MathMode::Display
+        )])]
+    );
+    // Display math embedded in a line of text.
+    assert_eq!(
+        test_parse_markdown(r"Einstein: $$E = mc^2$$ wow"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Einstein: "),
+            FormattedTextFragment::math("E = mc^2", MathMode::Display),
+            FormattedTextFragment::plain_text(" wow"),
+        ])]
+    );
+    // Unlike inline math, display math may have interior whitespace padding.
+    assert_eq!(
+        test_parse_markdown(r"$$ E = mc^2 $$"),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::math(
+            " E = mc^2 ",
+            MathMode::Display
+        )])]
+    );
+}
+
+#[test]
+fn test_math_content_is_not_parsed_as_markdown() {
+    // `*`, `_`, and `~` inside math must not create emphasis; the LaTeX source
+    // is preserved verbatim.
+    assert_eq!(
+        test_parse_markdown(r"$x_i * y_j \sim z$"),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::math(
+            r"x_i * y_j \sim z",
+            MathMode::Inline
+        )])]
+    );
+}
+
+#[test]
+fn test_currency_is_not_math() {
+    // A closing `$` immediately followed by a digit does not close a span
+    // (pandoc's convention), so money amounts parse as plain text.
+    assert_eq!(
+        test_parse_markdown("It costs $20,000 and $30,000 total"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("It costs $20,000 and $30,000 total"),
+        ])]
+    );
+}
+
+#[test]
+fn test_math_opener_requires_non_whitespace() {
+    // The opening `$` must be immediately followed by non-whitespace.
+    assert_eq!(
+        test_parse_markdown("I have $ 5 and you have 3$"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("I have $ 5 and you have 3$"),
+        ])]
+    );
+}
+
+#[test]
+fn test_math_closer_requires_non_whitespace() {
+    // The closing `$` must be immediately preceded by non-whitespace.
+    assert_eq!(
+        test_parse_markdown("$x $ y"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("$x $ y"),
+        ])]
+    );
+}
+
+#[test]
+fn test_unclosed_math_is_literal_text() {
+    assert_eq!(
+        test_parse_markdown("An unclosed $span of math"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("An unclosed $span of math"),
+        ])]
+    );
+    assert_eq!(
+        test_parse_markdown("An unclosed $$display block"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("An unclosed $$display block"),
+        ])]
+    );
+}
+
+#[test]
+fn test_escaped_dollar_is_not_math() {
+    assert_eq!(
+        test_parse_markdown(r"\$5 is five dollars\$"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("$5 is five dollars$"),
+        ])]
+    );
+}
+
+#[test]
+fn test_escaped_dollar_inside_math() {
+    // A `\$` inside a span does not close it; the escape is preserved in the
+    // LaTeX source for the typesetter to handle.
+    assert_eq!(
+        test_parse_markdown(r"$a \$ b$"),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::math(
+            r"a \$ b",
+            MathMode::Inline
+        )])]
+    );
+}
+
+#[test]
+fn test_dollar_in_code_span_is_not_math() {
+    // Code spans have higher precedence than math.
+    assert_eq!(
+        test_parse_markdown("`$HOME` and `$PATH$` are variables"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::inline_code("$HOME"),
+            FormattedTextFragment::plain_text(" and "),
+            FormattedTextFragment::inline_code("$PATH$"),
+            FormattedTextFragment::plain_text(" are variables"),
+        ])]
+    );
+}
+
+#[test]
+fn test_dollar_in_code_block_is_not_math() {
+    assert_eq!(
+        test_parse_markdown("```sh\necho $FOO $BAR\n```"),
+        vec![FormattedTextLine::CodeBlock(CodeBlockText {
+            lang: "sh".to_string(),
+            code: "echo $FOO $BAR\n".to_string(),
+        })]
+    );
+}
+
+#[test]
+fn test_empty_math_is_not_math() {
+    assert_eq!(
+        test_parse_markdown("$$$$"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("$$$$"),
+        ])]
+    );
+    // `$ $` fails the opener rule; whitespace-only display math is rejected.
+    assert_eq!(
+        test_parse_markdown("$$ $$"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("$$ $$"),
+        ])]
+    );
+}
+
+#[test]
+fn test_math_with_greedy_delimiters() {
+    // An extra leading `$` degrades to a literal `$` followed by inline math.
+    assert_eq!(
+        test_parse_markdown("$$$a$$"),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::math(
+            "$a",
+            MathMode::Display
+        ),])]
+    );
+}
+
+#[test]
+fn test_math_in_table_cells() {
+    let source = "| Formula | Name |\n| --- | --- |\n| $e^{i\\pi} = -1$ | Euler |\n";
+    let result = test_parse_markdown_with_gfm_tables(source);
+    assert_eq!(result.len(), 1);
+
+    if let FormattedTextLine::Table(table) = &result[0] {
+        let cell = &table.rows[0][0];
+        assert_eq!(cell.len(), 1);
+        assert_eq!(cell[0].styles.math, Some(MathMode::Inline));
+        assert_eq!(cell[0].text, "e^{i\\pi} = -1");
+    } else {
+        panic!("Expected table");
+    }
+}
+
+#[test]
+fn test_math_in_header_and_list() {
+    assert_eq!(
+        test_parse_markdown("# The $\\ell_2$ norm"),
+        vec![FormattedTextLine::Heading(FormattedTextHeader {
+            heading_size: 1,
+            text: vec![
+                FormattedTextFragment::plain_text("The "),
+                FormattedTextFragment::math("\\ell_2", MathMode::Inline),
+                FormattedTextFragment::plain_text(" norm"),
+            ],
+        })]
+    );
+    assert_eq!(
+        test_parse_markdown("- item $x^2$"),
+        vec![FormattedTextLine::UnorderedList(
+            FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![
+                    FormattedTextFragment::plain_text("item "),
+                    FormattedTextFragment::math("x^2", MathMode::Inline),
+                ],
+            }
+        )]
+    );
+}

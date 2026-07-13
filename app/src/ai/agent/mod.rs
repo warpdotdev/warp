@@ -601,7 +601,8 @@ impl AIAgentOutput {
                             AIAgentTextSection::Code { .. }
                             | AIAgentTextSection::Table { .. }
                             | AIAgentTextSection::Image { .. }
-                            | AIAgentTextSection::MermaidDiagram { .. } => {
+                            | AIAgentTextSection::MermaidDiagram { .. }
+                            | AIAgentTextSection::Math { .. } => {
                                 result.push(format!("{}", MarkdownTextSection(section)));
                             }
                         }
@@ -1180,6 +1181,9 @@ impl<'a> std::fmt::Display for MarkdownTextSection<'a> {
             AIAgentTextSection::MermaidDiagram { diagram } => {
                 write!(f, "{}", diagram.markdown_source)
             }
+            AIAgentTextSection::Math { math } => {
+                write!(f, "{}", math.markdown_source)
+            }
         }
     }
 }
@@ -1626,6 +1630,14 @@ pub struct AgentOutputMermaidDiagram {
     pub source: String,
     pub markdown_source: String,
 }
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct AgentOutputMath {
+    /// Math-mode LaTeX source, without the `$$` delimiters.
+    pub latex: String,
+    /// The original markdown (`$$...$$`), used for copy and fallbacks.
+    pub markdown_source: String,
+}
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum AIAgentTextSection {
     /// Plain textual output from the AI.
@@ -1642,6 +1654,8 @@ pub enum AIAgentTextSection {
     Image { image: AgentOutputImage },
     /// A Mermaid diagram rendered as a visual block.
     MermaidDiagram { diagram: AgentOutputMermaidDiagram },
+    /// A display-math (`$$...$$`) block typeset as a visual block.
+    Math { math: AgentOutputMath },
 }
 
 impl AIAgentTextSection {
@@ -1652,6 +1666,7 @@ impl AIAgentTextSection {
             AIAgentTextSection::Table { table } => table.markdown_source.is_empty(),
             AIAgentTextSection::Image { image } => image.markdown_source.is_empty(),
             AIAgentTextSection::MermaidDiagram { diagram } => diagram.markdown_source.is_empty(),
+            AIAgentTextSection::Math { math } => math.markdown_source.is_empty(),
         }
     }
 }
@@ -1969,6 +1984,7 @@ impl Display for AIAgentOutputMessage {
                         AIAgentTextSection::MermaidDiagram { diagram } => {
                             write!(f, "{}", diagram.markdown_source)?
                         }
+                        AIAgentTextSection::Math { math } => write!(f, "{}", math.markdown_source)?,
                     }
                 }
             }

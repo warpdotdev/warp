@@ -1,0 +1,12 @@
+[package]
+name = "math_render"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ratex-parser = "0.1.13"
+ratex-layout = "0.1.13"
+ratex-svg = { version = "0.1.13", features = ["standalone", "embed-fonts"] }
+ratex-types = "0.1.13"
+thiserror.workspace = true

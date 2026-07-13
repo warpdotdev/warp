@@ -1395,6 +1395,10 @@ fn format_agent_text<W: Write>(text: &AIAgentText, w: &mut W) -> io::Result<()> 
                 write!(w, "{}", diagram.markdown_source)?;
                 wrote_newline = diagram.markdown_source.ends_with('\n');
             }
+            AIAgentTextSection::Math { math } => {
+                write!(w, "{}", math.markdown_source)?;
+                wrote_newline = math.markdown_source.ends_with('\n');
+            }
         }
     }
     if !wrote_newline {

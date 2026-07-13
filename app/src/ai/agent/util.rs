@@ -12,8 +12,8 @@ use regex::Regex;
 use warp_util::path::LineAndColumnArg;
 
 use super::{
-    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
-    AgentOutputTable, ProgrammingLanguage,
+    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMath,
+    AgentOutputMermaidDiagram, AgentOutputTable, ProgrammingLanguage,
 };
 use crate::code::editor_management::CodeSource;
 use crate::features::FeatureFlag;
@@ -71,6 +71,28 @@ pub(super) fn parse_markdown_into_text_and_code_sections(
                     continue;
                 }
 
+                // Detect display-math blocks. A lone `$$` line opens a
+                // multi-line block; a whole line of the form `$$...$$` is a
+                // single-line block. Anything else (including inline `$...$`)
+                // stays in the plain-text section for the markdown parser.
+                if line.trim() == "$$" {
+                    if !text.is_empty() {
+                        flush_plain_text_sections(text, &mut sections);
+                    }
+                    current_section = CurrentSection::Math {
+                        latex: String::new(),
+                    };
+                    continue;
+                }
+                if let Some(latex) = single_line_display_math(line) {
+                    if !text.is_empty() {
+                        flush_plain_text_sections(text, &mut sections);
+                    }
+                    push_math_section(latex.to_owned(), &mut sections);
+                    current_section = CurrentSection::PlainText(String::new());
+                    continue;
+                }
+
                 if let Some((_, [language, param_str])) = CODE_START_REGEX
                     .captures(line)
                     .map(|capture_group| capture_group.extract())
@@ -119,6 +141,19 @@ pub(super) fn parse_markdown_into_text_and_code_sections(
                     text.push_str(line);
                 }
             }
+            CurrentSection::Math { latex } => {
+                if line.trim() == "$$" {
+                    if !latex.trim().is_empty() {
+                        push_math_section(std::mem::take(latex), &mut sections);
+                    }
+                    current_section = CurrentSection::PlainText(String::new());
+                } else {
+                    if !latex.is_empty() {
+                        latex.push('\n');
+                    }
+                    latex.push_str(line);
+                }
+            }
             CurrentSection::Code {
                 code,
                 language,
@@ -160,6 +195,17 @@ pub(super) fn parse_markdown_into_text_and_code_sections(
     match current_section {
         CurrentSection::PlainText(text) => {
             flush_plain_text_sections(&text, &mut sections);
+        }
+        CurrentSection::Math { latex } => {
+            // An unterminated `$$` block (e.g. mid-stream) is shown as its
+            // raw source; it becomes a Math section once the closing `$$`
+            // arrives and the full text is re-split.
+            let mut raw = String::from("$$");
+            if !latex.is_empty() {
+                raw.push('\n');
+                raw.push_str(&latex);
+            }
+            flush_plain_text_sections(&raw, &mut sections);
         }
         CurrentSection::Code {
             code,
@@ -204,12 +250,37 @@ fn parse_agent_output_table(markdown_source: &str) -> Option<AgentOutputTable> {
 
 enum CurrentSection {
     PlainText(String),
+    Math {
+        latex: String,
+    },
     Code {
         code: String,
         language_token: Option<String>,
         language: Option<ProgrammingLanguage>,
         source: Option<CodeSource>,
     },
+}
+
+/// Matches a line that is entirely a single-line display-math block,
+/// `$$<non-empty latex>$$`, returning the inner LaTeX.
+fn single_line_display_math(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let latex = trimmed.strip_prefix("$$")?.strip_suffix("$$")?;
+    // Reject `$$$$` and `$$ $$` (no content), and `$$$x$$`-style strays where
+    // the inner content itself starts/ends with `$`.
+    if latex.trim().is_empty() || latex.starts_with('$') || latex.ends_with('$') {
+        return None;
+    }
+    Some(latex)
+}
+
+fn push_math_section(latex: String, sections: &mut Vec<AIAgentTextSection>) {
+    sections.push(AIAgentTextSection::Math {
+        math: AgentOutputMath {
+            markdown_source: format!("$${latex}$$"),
+            latex,
+        },
+    });
 }
 
 fn flush_plain_text_sections(markdown_text: &str, sections: &mut Vec<AIAgentTextSection>) {
