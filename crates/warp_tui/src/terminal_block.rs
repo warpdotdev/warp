@@ -4,7 +4,9 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warp::tui_export::{Block, BlockGrid, BlockId, BlockList, TerminalColorList, TerminalModel};
+use warp::tui_export::{
+    Block, BlockGrid, BlockId, BlockList, GridHandler, TerminalColorList, TerminalModel,
+};
 use warp_terminal::model::ansi::{Color, NamedColor};
 use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
@@ -215,6 +217,35 @@ fn render_block_rows(
             surface,
             colors,
         );
+    }
+}
+
+/// Paints the visible rows of a raw [`GridHandler`] (e.g. the alt screen,
+/// which has no scrollback) into `area`, reusing the same per-cell styling as
+/// the block renderer. Unlike a block grid, the alt screen is a plain viewport,
+/// so rows map directly to screen rows (offset past any history defensively).
+pub(super) fn render_grid_handler(
+    grid: &GridHandler,
+    area: TuiRect,
+    buffer: &mut TuiBuffer,
+    colors: &TerminalColorList,
+) {
+    let history = grid.history_size();
+    let rows = grid.visible_rows().min(usize::from(area.height));
+    let cols = grid.columns().min(usize::from(area.width));
+    for screen_row in 0..rows {
+        let Some(row) = grid.row(history + screen_row) else {
+            continue;
+        };
+        let y = area.y.saturating_add(screen_row as u16);
+        for column in 0..cols {
+            let cell = &row[column];
+            if let Some(buffer_cell) = buffer.cell_mut((area.x.saturating_add(column as u16), y)) {
+                buffer_cell
+                    .set_symbol(&sanitized_symbol(cell))
+                    .set_style(cell_to_style(cell, colors));
+            }
+        }
     }
 }
 
