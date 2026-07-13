@@ -1,10 +1,12 @@
 use std::cell::RefCell;
 use std::cmp::{max, min};
-use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
+use std::time::Duration;
 
-use super::{TuiGridPoint, TuiPoint, TuiRect, TuiRowResize, TuiSelectionSpan};
+use instant::Instant;
+
+use super::{TuiGridPoint, TuiPaintContext, TuiPoint, TuiRect, TuiRowResize, TuiSelectionSpan};
 use crate::text::SelectionType;
 
 /// The parked-pointer target that drives continuous auto-scroll while a drag
@@ -12,19 +14,19 @@ use crate::text::SelectionType;
 /// drag position and the slot rect it was resolved against, so a repaint tick
 /// can re-resolve the selection edge without a new mouse event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TuiAutoScrollTarget {
-    pub(crate) position: TuiPoint,
-    pub(crate) area: TuiRect,
+pub(super) struct TuiAutoScrollTarget {
+    pub(super) position: TuiPoint,
+    pub(super) area: TuiRect,
+    pub(super) next_step_at: Instant,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TuiSelectionState {
     anchor_span: TuiSelectionSpan,
-    focus_span: Option<TuiSelectionSpan>,
+    extent_span: Option<TuiSelectionSpan>,
     selection_type: SelectionType,
     is_selecting: bool,
     width: u16,
-    cell_snapshot: BTreeMap<TuiGridPoint, String>,
     /// Set while the gesture is held past an edge; drives continuous
     /// auto-scroll on repaint ticks. Cleared when the pointer returns inside,
     /// when the gesture ends, or when scrolling reaches the content boundary.
@@ -34,18 +36,18 @@ struct TuiSelectionState {
 impl TuiSelectionState {
     /// Returns the ordered non-empty selection range.
     fn range(&self) -> Option<TuiSelectionSpan> {
-        let focus_span = self.focus_span?;
-        let start = min(self.anchor_span.start, focus_span.start);
-        let end = max(self.anchor_span.end, focus_span.end);
+        let extent_span = self.extent_span?;
+        let start = min(self.anchor_span.start, extent_span.start);
+        let end = max(self.anchor_span.end, extent_span.end);
         (start < end).then_some(TuiSelectionSpan { start, end })
     }
 }
 
 /// Selection data needed while extending an active gesture.
-pub(crate) struct TuiSelectionInteraction {
-    pub(crate) selection_type: SelectionType,
-    pub(crate) anchor_span: TuiSelectionSpan,
-    pub(crate) has_focus: bool,
+pub(super) struct TuiSelectionInteraction {
+    pub(super) selection_type: SelectionType,
+    pub(super) anchor_span: TuiSelectionSpan,
+    pub(super) has_extent: bool,
 }
 
 /// Persistent state shared across selectable element rebuilds.
@@ -70,35 +72,55 @@ impl TuiSelectionHandle {
     pub(crate) fn start(
         &self,
         anchor_span: TuiSelectionSpan,
-        focus_span: Option<TuiSelectionSpan>,
+        extent_span: Option<TuiSelectionSpan>,
         selection_type: SelectionType,
         width: u16,
     ) {
         *self.0.borrow_mut() = Some(TuiSelectionState {
             anchor_span,
-            focus_span,
+            extent_span,
             selection_type,
             is_selecting: true,
             width,
-            cell_snapshot: BTreeMap::new(),
             auto_scroll: None,
         });
     }
 
-    /// Returns the current focus span, if a gesture has established one.
-    pub(crate) fn focus_span(&self) -> Option<TuiSelectionSpan> {
-        self.0.borrow().as_ref().and_then(|s| s.focus_span)
-    }
-
-    /// Arms continuous auto-scroll toward the edge `position` sits past.
-    pub(crate) fn set_auto_scroll(&self, position: TuiPoint, area: TuiRect) {
-        if let Some(selection) = self.0.borrow_mut().as_mut() {
-            selection.auto_scroll = Some(TuiAutoScrollTarget { position, area });
+    /// Updates the parked target, returning whether scrolling was newly armed
+    /// or changed direction.
+    pub(super) fn update_auto_scroll(
+        &self,
+        position: TuiPoint,
+        area: TuiRect,
+        now: Instant,
+    ) -> bool {
+        let mut slot = self.0.borrow_mut();
+        let Some(selection) = slot.as_mut() else {
+            return false;
+        };
+        let same_edge = selection.auto_scroll.is_some_and(|target| {
+            (target.position.y < target.area.y && position.y < area.y)
+                || (target.position.y >= target.area.bottom() && position.y >= area.bottom())
+        });
+        if same_edge {
+            let target = selection
+                .auto_scroll
+                .as_mut()
+                .expect("same-edge auto-scroll has an existing target");
+            target.position = position;
+            target.area = area;
+            return false;
         }
+        selection.auto_scroll = Some(TuiAutoScrollTarget {
+            position,
+            area,
+            next_step_at: now,
+        });
+        true
     }
 
     /// Disarms continuous auto-scroll, returning whether it was armed.
-    pub(crate) fn clear_auto_scroll(&self) -> bool {
+    pub(super) fn clear_auto_scroll(&self) -> bool {
         self.0
             .borrow_mut()
             .as_mut()
@@ -106,18 +128,48 @@ impl TuiSelectionHandle {
             .is_some()
     }
 
-    /// The armed parked-pointer auto-scroll target, if any.
-    pub(crate) fn auto_scroll_target(&self) -> Option<TuiAutoScrollTarget> {
-        self.0.borrow().as_ref().and_then(|s| s.auto_scroll)
-    }
-
-    /// Updates the selection focus while preserving existing glyph baselines.
-    pub(crate) fn update_focus(&self, focus_span: TuiSelectionSpan) {
-        let mut slot = self.0.borrow_mut();
-        let Some(selection) = slot.as_mut() else {
+    /// Requests the next repaint for an active parked drag.
+    pub(super) fn request_auto_scroll_repaint(&self, ctx: &mut TuiPaintContext) {
+        let slot = self.0.borrow();
+        let Some(selection) = slot.as_ref() else {
             return;
         };
-        selection.focus_span = Some(focus_span);
+        if selection.is_selecting {
+            if let Some(target) = selection.auto_scroll {
+                ctx.repaint_at(target.next_step_at);
+            }
+        }
+    }
+    /// Returns a due target and schedules its next step.
+    pub(super) fn due_auto_scroll_target(
+        &self,
+        now: Instant,
+        interval: Duration,
+    ) -> Option<TuiAutoScrollTarget> {
+        let mut slot = self.0.borrow_mut();
+        let selection = slot.as_mut()?;
+        if !selection.is_selecting {
+            return None;
+        }
+        let target = selection.auto_scroll.as_mut()?;
+        if now < target.next_step_at {
+            return None;
+        }
+        target.next_step_at = now + interval;
+        Some(*target)
+    }
+
+    /// Updates the moving selection endpoint, returning whether it changed.
+    pub(super) fn update_extent(&self, extent_span: TuiSelectionSpan) -> bool {
+        let mut slot = self.0.borrow_mut();
+        let Some(selection) = slot.as_mut() else {
+            return false;
+        };
+        if selection.extent_span == Some(extent_span) {
+            return false;
+        }
+        selection.extent_span = Some(extent_span);
+        true
     }
 
     /// Ends the active gesture without clearing its range.
@@ -129,14 +181,14 @@ impl TuiSelectionHandle {
     }
 
     /// Returns data needed to extend the current gesture.
-    pub(crate) fn interaction(&self) -> Option<TuiSelectionInteraction> {
+    pub(super) fn interaction(&self) -> Option<TuiSelectionInteraction> {
         self.0
             .borrow()
             .as_ref()
             .map(|selection| TuiSelectionInteraction {
                 selection_type: selection.selection_type,
                 anchor_span: selection.anchor_span,
-                has_focus: selection.focus_span.is_some(),
+                has_extent: selection.extent_span.is_some(),
             })
     }
 
@@ -156,31 +208,6 @@ impl TuiSelectionHandle {
         }
         *slot = None;
         false
-    }
-
-    /// Validates visible cells and records newly visible selected glyphs.
-    pub(crate) fn validate_and_snapshot(&self, cells: BTreeMap<TuiGridPoint, String>) -> bool {
-        let mut slot = self.0.borrow_mut();
-        let Some(selection) = slot.as_mut() else {
-            return false;
-        };
-        let changed = cells.iter().any(|(point, symbol)| {
-            selection
-                .cell_snapshot
-                .get(point)
-                .is_some_and(|previous| previous != symbol)
-        });
-        // An in-progress gesture is authoritative and follows the pointer; a
-        // cosmetic re-render (e.g. auto-scroll during a drag-past-edge, or
-        // streaming content behind the drag) must not clear it. Only invalidate
-        // a settled selection, whose highlight would otherwise point at content
-        // that has since changed underneath it.
-        if changed && !selection.is_selecting {
-            *slot = None;
-            return false;
-        }
-        selection.cell_snapshot.extend(cells);
-        true
     }
 
     /// Rebases selection rows around one resized content range.
@@ -231,13 +258,9 @@ impl TuiSelectionHandle {
             old_height,
             new_height,
         );
-        selection.focus_span = selection
-            .focus_span
+        selection.extent_span = selection
+            .extent_span
             .map(|span| rebase_span(span, old_end, new_end, old_height, new_height));
-        selection.cell_snapshot = std::mem::take(&mut selection.cell_snapshot)
-            .into_iter()
-            .map(|(point, symbol)| (rebase_point(point, old_end, old_height, new_height), symbol))
-            .collect();
         true
     }
 

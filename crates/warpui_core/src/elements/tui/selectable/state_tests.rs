@@ -1,71 +1,98 @@
-use std::collections::BTreeMap;
+use std::time::Duration;
 
-use super::{TuiGridPoint, TuiRowResize, TuiSelectionHandle, TuiSelectionSpan};
+use instant::Instant;
+
+use super::{TuiGridPoint, TuiPoint, TuiRect, TuiRowResize, TuiSelectionHandle, TuiSelectionSpan};
 use crate::text::SelectionType;
 
-/// Regression for drag-past-edge clearing: while a gesture is still active
-/// (`is_selecting`), a cosmetic symbol change for a still-visible selected cell
-/// (as produced by the auto-scroll re-render, or streaming content behind the
-/// drag) must NOT clear the selection.
+/// Repeated pointer updates on one edge preserve the cadence deadline instead
+/// of making auto-scroll advance once per event.
 #[test]
-fn snapshot_symbol_change_preserves_active_selection() {
+fn auto_scroll_deadline_survives_same_edge_updates() {
     let handle = TuiSelectionHandle::default();
     handle.start(
         TuiSelectionSpan {
             start: TuiGridPoint { row: 0, col: 0 },
             end: TuiGridPoint { row: 0, col: 1 },
         },
-        Some(TuiSelectionSpan {
-            start: TuiGridPoint { row: 1, col: 0 },
-            end: TuiGridPoint { row: 2, col: 0 },
-        }),
+        None,
         SelectionType::Simple,
         10,
     );
-    // The gesture is still in progress (no `finish()`): the user is dragging.
-    assert!(handle.is_selecting());
+    let area = TuiRect::new(0, 2, 10, 4);
+    let interval = Duration::from_millis(50);
+    let now = Instant::now();
 
-    let mut first = BTreeMap::new();
-    first.insert(TuiGridPoint { row: 0, col: 0 }, "a".to_owned());
-    assert!(handle.validate_and_snapshot(first));
-    assert!(handle.range().is_some());
+    assert!(handle.update_auto_scroll(TuiPoint::new(1, 7), area, now));
+    assert!(handle.due_auto_scroll_target(now, interval).is_some());
+    let deadline = now + interval;
 
-    // Next frame (post auto-scroll): the same visible selected cell now renders
-    // a different glyph. An active gesture must survive this.
-    let mut changed = BTreeMap::new();
-    changed.insert(TuiGridPoint { row: 0, col: 0 }, "b".to_owned());
-    assert!(handle.validate_and_snapshot(changed));
-    assert!(handle.range().is_some());
-    assert!(handle.is_selecting());
+    assert!(!handle.update_auto_scroll(TuiPoint::new(3, 9), area, now + Duration::from_millis(10),));
+    assert!(handle
+        .due_auto_scroll_target(now + Duration::from_millis(49), interval)
+        .is_none());
+    assert_eq!(
+        handle
+            .due_auto_scroll_target(deadline, interval)
+            .unwrap()
+            .position,
+        TuiPoint::new(3, 9)
+    );
 }
 
-/// A settled (finished) selection is still invalidated when a selected cell's
-/// glyph changes, so a stale highlight never points at wrong content.
+/// Changing the parked edge starts a new cadence immediately, while finishing
+/// the gesture clears it.
 #[test]
-fn snapshot_symbol_change_clears_settled_selection() {
+fn auto_scroll_edge_change_resets_deadline_and_finish_disarms() {
     let handle = TuiSelectionHandle::default();
     handle.start(
         TuiSelectionSpan {
             start: TuiGridPoint { row: 0, col: 0 },
             end: TuiGridPoint { row: 0, col: 1 },
         },
-        Some(TuiSelectionSpan {
-            start: TuiGridPoint { row: 1, col: 0 },
-            end: TuiGridPoint { row: 2, col: 0 },
-        }),
+        None,
         SelectionType::Simple,
         10,
     );
+    let area = TuiRect::new(0, 2, 10, 4);
+    let interval = Duration::from_millis(50);
+    let now = Instant::now();
+
+    assert!(handle.update_auto_scroll(TuiPoint::new(1, 7), area, now));
+    assert!(handle.due_auto_scroll_target(now, interval).is_some());
+
+    let changed_at = now + Duration::from_millis(10);
+    assert!(handle.update_auto_scroll(TuiPoint::new(1, 0), area, changed_at));
+    assert!(handle
+        .due_auto_scroll_target(changed_at, interval)
+        .is_some());
+
     handle.finish();
+    assert!(handle
+        .due_auto_scroll_target(changed_at + interval, interval)
+        .is_none());
+}
 
-    let mut first = BTreeMap::new();
-    first.insert(TuiGridPoint { row: 0, col: 0 }, "a".to_owned());
-    assert!(handle.validate_and_snapshot(first));
+/// Extent updates distinguish movement from a repeated endpoint.
+#[test]
+fn update_extent_reports_whether_endpoint_changed() {
+    let handle = TuiSelectionHandle::default();
+    handle.start(
+        TuiSelectionSpan {
+            start: TuiGridPoint { row: 0, col: 0 },
+            end: TuiGridPoint { row: 0, col: 1 },
+        },
+        None,
+        SelectionType::Simple,
+        10,
+    );
+    let extent_span = TuiSelectionSpan {
+        start: TuiGridPoint { row: 1, col: 0 },
+        end: TuiGridPoint { row: 2, col: 0 },
+    };
 
-    let mut changed = BTreeMap::new();
-    changed.insert(TuiGridPoint { row: 0, col: 0 }, "b".to_owned());
-    assert!(!handle.validate_and_snapshot(changed));
-    assert!(handle.range().is_none());
+    assert!(handle.update_extent(extent_span));
+    assert!(!handle.update_extent(extent_span));
 }
 
 /// Verifies multiple row resizes are applied in original content order.

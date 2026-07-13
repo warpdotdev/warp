@@ -12,6 +12,7 @@
 use std::ops::Range;
 use std::time::Duration;
 
+use instant::Instant;
 use string_offset::{ByteOffset, CharOffset};
 
 use super::{
@@ -128,21 +129,23 @@ where
         self.smart_select_fn = smart_select_fn;
         self
     }
+
     /// Advances a parked-past-edge drag one auto-scroll step: re-resolves the
     /// selection edge at the last drag position (which scrolls the viewport one
-    /// row) and extends the focus toward that edge. Disarms once the focus stops
-    /// advancing, i.e. the content start/end has been reached.
+    /// row) and extends the moving endpoint toward that edge. Disarms once the
+    /// endpoint stops advancing, i.e. the content start/end has been reached.
     fn tick_auto_scroll(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
-        if !self.selection.is_selecting() {
-            return;
-        }
-        let Some(target) = self.selection.auto_scroll_target() else {
+        let Some(target) = self
+            .selection
+            .due_auto_scroll_target(Instant::now(), AUTO_SCROLL_INTERVAL)
+        else {
             return;
         };
         let Some(interaction) = self.selection.interaction() else {
+            self.selection.clear_auto_scroll();
             return;
         };
-        let Some(focus_span) = self.selection_span_at(
+        let Some(extent_span) = self.selection_span_at(
             target.position,
             interaction.selection_type,
             target.area,
@@ -150,15 +153,14 @@ where
             ctx,
             app,
         ) else {
+            self.selection.clear_auto_scroll();
             return;
         };
         // The parked pointer no longer produces a new edge: content boundary
         // reached, so stop ticking (and repainting).
-        if self.selection.focus_span() == Some(focus_span) {
+        if !self.selection.update_extent(extent_span) {
             self.selection.clear_auto_scroll();
-            return;
         }
-        self.selection.update_focus(focus_span);
     }
 
     /// Resolves one screen position into the configured selection unit.
@@ -273,9 +275,7 @@ where
         // Keep the frames coming while a drag is parked past an edge, so
         // auto-scroll continues even without new mouse events. The layout tick
         // disarms this once the content boundary is reached.
-        if self.selection.is_selecting() && self.selection.auto_scroll_target().is_some() {
-            ctx.repaint_after(AUTO_SCROLL_INTERVAL);
-        }
+        self.selection.request_auto_scroll_repaint(ctx);
     }
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         self.child.cursor_position(area, ctx)
@@ -315,12 +315,12 @@ where
                 else {
                     return false;
                 };
-                let focus_span = match selection_type {
+                let extent_span = match selection_type {
                     SelectionType::Simple | SelectionType::Rect => None,
                     SelectionType::Semantic | SelectionType::Lines => Some(anchor_span),
                 };
                 self.selection
-                    .start(anchor_span, focus_span, selection_type, area.width);
+                    .start(anchor_span, extent_span, selection_type, area.width);
                 if let Some(callback) = self.on_selection_start.as_mut() {
                     callback(event_ctx, app);
                 }
@@ -328,18 +328,23 @@ where
                 true
             }
             TuiEvent::LeftMouseDragged { position, .. } if self.selection.is_selecting() => {
+                if position.y < area.y || position.y >= area.bottom() {
+                    // Past-edge scrolling is exclusively repaint-driven. Repeated
+                    // drag events only refresh the parked pointer so they stay
+                    // cheap and cannot queue full redraws ahead of mouse-up.
+                    if self
+                        .selection
+                        .update_auto_scroll(*position, area, Instant::now())
+                    {
+                        event_ctx.notify();
+                    }
+                    return true;
+                }
+                self.selection.clear_auto_scroll();
                 let Some(interaction) = self.selection.interaction() else {
                     return false;
                 };
-                // Arm/disarm continuous auto-scroll: while the pointer is held
-                // past the top or bottom edge, later repaint ticks keep
-                // scrolling and extending the selection even without new events.
-                if position.y < area.y || position.y >= area.bottom() {
-                    self.selection.set_auto_scroll(*position, area);
-                } else {
-                    self.selection.clear_auto_scroll();
-                }
-                let Some(focus_span) = self.selection_span_at(
+                let Some(extent_span) = self.selection_span_at(
                     *position,
                     interaction.selection_type,
                     area,
@@ -352,13 +357,13 @@ where
                 if matches!(
                     interaction.selection_type,
                     SelectionType::Simple | SelectionType::Rect
-                ) && !interaction.has_focus
-                    && focus_span.start == interaction.anchor_span.start
+                ) && !interaction.has_extent
+                    && extent_span.start == interaction.anchor_span.start
                 {
                     event_ctx.notify();
                     return true;
                 }
-                self.selection.update_focus(focus_span);
+                self.selection.update_extent(extent_span);
                 event_ctx.notify();
                 true
             }
