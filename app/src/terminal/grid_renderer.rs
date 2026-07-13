@@ -2028,13 +2028,17 @@ fn render_native_glyph(native_glyph: NativeGlyph, ctx: &mut PaintContext, app: &
     let svg_data = match glyph_type {
         NativeGlyphType::BoxDrawing(c) => {
             let scale_factor = ctx.scene.scale_factor();
+            let metrics = box_drawing::StrokeMetrics::new(
+                cell_bounds.width() * scale_factor,
+                cell_bounds.height() * scale_factor,
+            );
             // Snap the cell box to the integer device-pixel grid so adjacent
             // cells share exact edges and the strokes tile with no seam.
             let left = (cell_bounds.origin().x() * scale_factor).round();
             let right = ((cell_bounds.origin().x() + cell_bounds.width()) * scale_factor).round();
             let top = (cell_bounds.origin().y() * scale_factor).round();
             let bottom = ((cell_bounds.origin().y() + cell_bounds.height()) * scale_factor).round();
-            for cell_rect in box_drawing::rects(c, right - left, bottom - top) {
+            for cell_rect in box_drawing::rects(c, right - left, bottom - top, metrics) {
                 let origin = cell_rect.origin();
                 let rect = RectF::new(
                     vec2f(

@@ -61,6 +61,32 @@ const L: Option<Weight> = Some(Weight::Light);
 const H: Option<Weight> = Some(Weight::Heavy);
 const N: Option<Weight> = None;
 
+/// Stroke thicknesses derived from a box-drawing cell's nominal device-pixel size.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct StrokeMetrics {
+    light: f32,
+    heavy: f32,
+}
+
+impl StrokeMetrics {
+    /// Computes stable light and heavy stroke thicknesses.
+    pub(super) fn new(cell_width: f32, cell_height: f32) -> Self {
+        let light = (cell_width.min(cell_height) / 8.0).round().max(1.0);
+        Self {
+            light,
+            heavy: (light * 2.0).max(light + 1.0),
+        }
+    }
+
+    /// Returns the thickness for a box-drawing weight.
+    fn thickness(self, weight: Weight) -> f32 {
+        match weight {
+            Weight::Light => self.light,
+            Weight::Heavy => self.heavy,
+        }
+    }
+}
+
 /// Returns the heavier of two optional weights.
 fn heavier(a: Option<Weight>, b: Option<Weight>) -> Weight {
     if a == Some(Weight::Heavy) || b == Some(Weight::Heavy) {
@@ -76,14 +102,19 @@ pub(super) fn is_supported(c: char) -> bool {
 }
 
 /// Computes non-overlapping, cell-local rectangles for a box-drawing glyph.
-pub(super) fn rects(c: char, cell_width: f32, cell_height: f32) -> SmallVec<[RectF; 3]> {
+pub(super) fn rects(
+    c: char,
+    cell_width: f32,
+    cell_height: f32,
+    metrics: StrokeMetrics,
+) -> SmallVec<[RectF; 3]> {
     let mut rects = SmallVec::new();
     if cell_width <= 0.0 || cell_height <= 0.0 {
         return rects;
     }
 
     if let Some(edges) = edges(c) {
-        push_line_rects(&mut rects, edges, cell_width, cell_height);
+        push_line_rects(&mut rects, edges, cell_width, cell_height, metrics);
     }
 
     debug_assert!(
@@ -100,33 +131,76 @@ fn push_rect(rects: &mut SmallVec<[RectF; 3]>, x0: f32, y0: f32, x1: f32, y1: f3
     }
 }
 
-/// Returns a device-pixel stroke thickness for the given weight.
-fn thickness(weight: Weight, cell_width: f32, cell_height: f32) -> f32 {
-    let light = (cell_width.min(cell_height) / 8.0).round().max(1.0);
-    match weight {
-        Weight::Light => light,
-        Weight::Heavy => (light * 2.0).max(light + 1.0),
-    }
-}
-
 /// Returns a centered device-pixel-aligned band.
 fn band(center: f32, thickness: f32) -> (f32, f32) {
     let low = (center - thickness / 2.0).round();
     (low, low + thickness)
 }
 
+/// Draws a straight glyph whose two opposing arms have different weights.
+fn push_straight_transition_rects(
+    rects: &mut SmallVec<[RectF; 3]>,
+    edges: Edges,
+    width: f32,
+    height: f32,
+    metrics: StrokeMetrics,
+) -> bool {
+    if !edges.has_horizontal() {
+        if let (Some(up), Some(down)) = (edges.up, edges.down) {
+            if up != down {
+                let center_x = width / 2.0;
+                let split_y = (height / 2.0).round();
+                let (up_low, up_high) = band(center_x, metrics.thickness(up));
+                let (down_low, down_high) = band(center_x, metrics.thickness(down));
+                push_rect(rects, up_low.max(0.0), 0.0, up_high.min(width), split_y);
+                push_rect(
+                    rects,
+                    down_low.max(0.0),
+                    split_y,
+                    down_high.min(width),
+                    height,
+                );
+                return true;
+            }
+        }
+    }
+
+    if !edges.has_vertical() {
+        if let (Some(left), Some(right)) = (edges.left, edges.right) {
+            if left != right {
+                let center_y = height / 2.0;
+                let split_x = (width / 2.0).round();
+                let (left_low, left_high) = band(center_y, metrics.thickness(left));
+                let (right_low, right_high) = band(center_y, metrics.thickness(right));
+                push_rect(rects, 0.0, left_low, split_x, left_high);
+                push_rect(rects, split_x, right_low, width, right_high);
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Appends the disjoint rectangles making up a box-drawing glyph.
-fn push_line_rects(rects: &mut SmallVec<[RectF; 3]>, edges: Edges, width: f32, height: f32) {
+fn push_line_rects(
+    rects: &mut SmallVec<[RectF; 3]>,
+    edges: Edges,
+    width: f32,
+    height: f32,
+    metrics: StrokeMetrics,
+) {
+    if push_straight_transition_rects(rects, edges, width, height, metrics) {
+        return;
+    }
     let center_x = width / 2.0;
     let center_y = height / 2.0;
 
     if edges.has_vertical() {
         let (vertical_low, vertical_high) =
-            band(center_x, thickness(edges.vertical_weight(), width, height));
-        let (horizontal_low, horizontal_high) = band(
-            center_y,
-            thickness(edges.horizontal_weight(), width, height),
-        );
+            band(center_x, metrics.thickness(edges.vertical_weight()));
+        let (horizontal_low, horizontal_high) =
+            band(center_y, metrics.thickness(edges.horizontal_weight()));
         let top = if edges.up.is_some() {
             0.0
         } else {
@@ -154,7 +228,7 @@ fn push_line_rects(rects: &mut SmallVec<[RectF; 3]>, edges: Edges, width: f32, h
             push_rect(rects, vertical_high, horizontal_low, width, horizontal_high);
         }
     } else if edges.has_horizontal() {
-        let line_thickness = thickness(edges.horizontal_weight(), width, height);
+        let line_thickness = metrics.thickness(edges.horizontal_weight());
         let (horizontal_low, horizontal_high) = band(center_y, line_thickness);
         let (center_low, center_high) = band(center_x, line_thickness);
         let left = if edges.left.is_some() {
