@@ -58,24 +58,24 @@ cargo install cargo-bundle --git=https://github.com/burtonageo/cargo-bundle --re
 # Update brew
 brew update
 
-brew install jq
-brew install getsentry/tools/sentry-cli
-brew install clang-format
-brew install create-dmg
-brew install multitime
-brew install powershell
-brew install pkgconf
-brew install llvm
+brew install --no-ask jq
+brew install --no-ask getsentry/tools/sentry-cli
+brew install --no-ask clang-format
+brew install --no-ask create-dmg
+brew install --no-ask multitime
+brew install --no-ask powershell
+brew install --no-ask pkgconf
+brew install --no-ask llvm
 
 # Install PSScriptAnalyzer for PowerShell linting
 pwsh -Command "Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser"
 
 if ! [ "$(command -v docker)" ]; then
-    brew install --cask docker
+    brew install --no-ask --cask docker
 fi
 
 if ! [ "$(command -v gcloud)" ]; then
-    brew install google-cloud-sdk
+    brew install --no-ask google-cloud-sdk
 fi
 
 if [[ -z $(gcloud auth print-identity-token) ]]; then
