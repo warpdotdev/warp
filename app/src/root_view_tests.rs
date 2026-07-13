@@ -90,6 +90,105 @@ fn test_sync_noop_when_local_onboarding_not_completed() {
     });
 }
 
+/// Regression test for #13514: a regular window opened from the dedicated
+/// hotkey (quake) window must land on that window's current screen, centered at
+/// the default size — not on the primary display via a stale last-closed
+/// position, and not inheriting the quake panel's pinned-strip geometry.
+///
+/// Given a secondary display at `x = 1920`, the new window's bounds must be
+/// centered inside that display and stay fully within it horizontally.
+#[test]
+fn test_centered_default_window_bounds_centers_on_the_given_screen() {
+    use pathfinder_geometry::rect::RectF;
+    use pathfinder_geometry::vector::vec2f;
+    use warpui::platform::WindowBounds;
+
+    let secondary = RectF::new(vec2f(1920.0, 0.0), vec2f(1920.0, 1080.0));
+
+    let WindowBounds::ExactPosition(rect) = super::centered_default_window_bounds(secondary) else {
+        panic!("expected ExactPosition bounds on the active screen");
+    };
+
+    // Default size (fits within the 1920x1080 display).
+    assert_eq!(rect.size(), vec2f(1280.0, 800.0));
+    // Centered within the secondary display.
+    assert_eq!(
+        rect.origin(),
+        vec2f(1920.0 + (1920.0 - 1280.0) / 2.0, (1080.0 - 800.0) / 2.0)
+    );
+    // The window stays on the secondary display, not the primary one at x < 1920.
+    assert!(rect.origin().x() >= 1920.0);
+    assert!(rect.origin().x() + rect.size().x() <= 1920.0 + 1920.0);
+}
+
+/// The default window size is clamped to fit displays smaller than the default,
+/// so the new window never overflows the active screen.
+#[test]
+fn test_centered_default_window_bounds_clamps_to_small_screen() {
+    use pathfinder_geometry::rect::RectF;
+    use pathfinder_geometry::vector::vec2f;
+    use warpui::platform::WindowBounds;
+
+    let small = RectF::new(vec2f(0.0, 0.0), vec2f(1000.0, 600.0));
+
+    let WindowBounds::ExactPosition(rect) = super::centered_default_window_bounds(small) else {
+        panic!("expected ExactPosition bounds on the active screen");
+    };
+
+    assert_eq!(rect.size(), vec2f(1000.0, 600.0));
+    assert_eq!(rect.origin(), vec2f(0.0, 0.0));
+}
+
+/// A configured custom window size larger than the hotkey window's display must
+/// still be clamped to that display and re-centered, so a large rows/columns
+/// setting can't push the new window off the screen (#13514 follow-up).
+#[test]
+fn test_window_bounds_centered_on_clamps_and_recenters_oversized_size() {
+    use pathfinder_geometry::rect::RectF;
+    use pathfinder_geometry::vector::vec2f;
+    use warpui::platform::WindowBounds;
+
+    let secondary = RectF::new(vec2f(1920.0, 0.0), vec2f(1920.0, 1080.0));
+    // A custom size wider/taller than the display.
+    let oversized = vec2f(4000.0, 3000.0);
+
+    let WindowBounds::ExactPosition(rect) = super::window_bounds_centered_on(oversized, secondary)
+    else {
+        panic!("expected ExactPosition bounds on the active screen");
+    };
+
+    // Clamped to the display size...
+    assert_eq!(rect.size(), vec2f(1920.0, 1080.0));
+    // ...and pinned to the display's origin (centered for the clamped size).
+    assert_eq!(rect.origin(), vec2f(1920.0, 0.0));
+    // Never overflows the secondary display.
+    assert!(rect.origin().x() >= 1920.0);
+    assert!(rect.origin().x() + rect.size().x() <= 1920.0 + 1920.0);
+}
+
+/// A custom size smaller than the display stays centered on it (not pinned to a
+/// stale default-size origin).
+#[test]
+fn test_window_bounds_centered_on_centers_custom_size() {
+    use pathfinder_geometry::rect::RectF;
+    use pathfinder_geometry::vector::vec2f;
+    use warpui::platform::WindowBounds;
+
+    let secondary = RectF::new(vec2f(1920.0, 0.0), vec2f(1920.0, 1080.0));
+    let custom = vec2f(900.0, 500.0);
+
+    let WindowBounds::ExactPosition(rect) = super::window_bounds_centered_on(custom, secondary)
+    else {
+        panic!("expected ExactPosition bounds on the active screen");
+    };
+
+    assert_eq!(rect.size(), vec2f(900.0, 500.0));
+    assert_eq!(
+        rect.origin(),
+        vec2f(1920.0 + (1920.0 - 900.0) / 2.0, (1080.0 - 500.0) / 2.0)
+    );
+}
+
 /// The server-side flag should also be left untouched when it is already set,
 /// even if local onboarding is complete — avoids redundant server calls.
 #[test]
