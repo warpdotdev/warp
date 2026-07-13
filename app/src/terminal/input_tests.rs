@@ -7923,6 +7923,36 @@ fn test_ai_context_menu_closes_when_space_immediately_after_at_symbol() {
 }
 
 #[test]
+fn test_ai_context_menu_opens_after_multibyte_prefix_before_at_symbol() {
+    let _ai_context_menu_enabled = FeatureFlag::AIContextMenuEnabled.override_enabled(true);
+    let _at_menu_outside_ai_mode = FeatureFlag::AtMenuOutsideOfAIMode.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("→", ctx);
+            input.user_insert("@", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "→@");
+            assert!(matches!(
+                input.suggestions_mode_model().as_ref(ctx).mode(),
+                InputSuggestionsMode::AIContextMenu { .. }
+            ));
+        });
+    });
+}
+
+#[test]
 fn test_ai_context_menu_preserves_lock_state() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

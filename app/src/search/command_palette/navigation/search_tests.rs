@@ -1,5 +1,15 @@
+use warpui::{EntityId, WindowId};
+
 use super::full_text_searcher::byte_indices_to_char_indices;
-use super::{SearchableSessionStringRanges, SessionHighlightIndices};
+use super::{
+    searchable_session_string_and_ranges, SearchableSessionStringRanges, SessionHighlightIndices,
+};
+use crate::pane_group::PaneId;
+use crate::session_management::{
+    CommandContext, SessionNavigationData, SessionNavigationPromptElements,
+};
+use crate::terminal::shared_session::SharedSessionStatus;
+use crate::workspace::PaneViewLocator;
 
 // ── byte_indices_to_char_indices ─────────────────────────────────────
 
@@ -66,6 +76,35 @@ fn out_of_bounds_byte_indices_are_dropped() {
         byte_indices_to_char_indices(text, vec![0, 1, 99]),
         vec![0, 1]
     );
+}
+
+#[test]
+fn ascii_searchable_session_ranges_use_byte_lengths() {
+    let session = SessionNavigationData::new(
+        "abc".to_string(),
+        SessionNavigationPromptElements {
+            ps1_prompt_grid: None,
+            prompt_chip_snapshot: None,
+        },
+        CommandContext::LastRunCommand {
+            last_run_command: "ls".to_string(),
+            mins_since_completion: Some(3),
+        },
+        PaneViewLocator {
+            pane_group_id: EntityId::new(),
+            pane_id: PaneId::dummy_pane_id(),
+        },
+        None,
+        false,
+        WindowId::new(),
+        SharedSessionStatus::NotShared,
+    );
+
+    let (searchable, ranges) = searchable_session_string_and_ranges(&session);
+
+    assert_eq!(searchable, "abc ls Completed 3 minutes ago");
+    assert_eq!(ranges.command_range, Some(4..6));
+    assert_eq!(ranges.hint_text_range, 7..30);
 }
 
 // ── End-to-end: highlight pipeline with multi-byte prompt ────────────
