@@ -162,8 +162,9 @@ fn conversation_like_snapshot_keeps_selection_visible_within_production_height()
     let rendered = lines.join("\n");
     assert!(rendered.contains("Conversations"));
     assert!(rendered.contains("[All]  Pinned"));
-    assert!(rendered.contains("Conversation 0"));
-    assert!(rendered.contains("Conversation 1"));
+    assert!(!rendered.contains("Conversation 0"));
+    assert!(!rendered.contains("Conversation 1"));
+    assert!(rendered.contains("Conversation 2"));
     assert!(rendered.contains("Conversation 7"));
 }
 
@@ -197,34 +198,34 @@ fn slash_command_rows_match_figma_layout_and_colors() {
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 render_inline_menu(&snapshot, &builder),
-                TuiRect::new(0, 0, 50, 2),
+                TuiRect::new(0, 0, 52, 4),
                 ctx,
             );
             let lines = frame.buffer.to_lines();
 
-            assert!(lines[0].starts_with("/agent                       Start"));
-            assert!(lines[1].starts_with("/plan                        Create"));
+            assert!(lines[1].starts_with("│/agent                       Start"));
+            assert!(lines[2].starts_with("│/plan                        Create"));
             assert_eq!(
-                frame.buffer[(0, 0)].bg,
+                frame.buffer[(1, 1)].bg,
                 builder.slash_command_selection_background()
             );
             assert_eq!(
-                frame.buffer[(0, 0)].fg,
+                frame.buffer[(1, 1)].fg,
                 builder
                     .slash_command_selection_text_style()
                     .fg
                     .expect("selected slash-command text has a foreground")
             );
-            assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+            assert!(frame.buffer[(1, 1)].modifier.contains(Modifier::BOLD));
             assert_eq!(
-                frame.buffer[(0, 1)].fg,
+                frame.buffer[(1, 2)].fg,
                 builder
                     .slash_command_text_style()
                     .fg
                     .expect("slash-command text has a foreground")
             );
             assert_eq!(
-                frame.buffer[(29, 1)].fg,
+                frame.buffer[(30, 2)].fg,
                 builder
                     .primary_text_style()
                     .fg
@@ -250,7 +251,7 @@ fn long_slash_command_titles_are_ellipsized_before_the_description() {
         status: None,
     });
 
-    assert!(lines[0].starts_with("/respond-to-pr-comments-i... Walk users"));
+    assert!(lines[1].starts_with("│/respond-to-pr-comments-i... Walk users"));
 }
 
 #[test]
@@ -269,12 +270,13 @@ fn wide_slash_command_rows_expand_to_show_long_titles() {
             max_visible_rows: 8,
             status: None,
         },
-        80,
-        1,
+        82,
+        3,
     );
 
-    assert!(lines[0]
-        .starts_with("/respond-to-pr-comments-in-blocklist Walk users through PR review comments"));
+    assert!(lines[1].starts_with(
+        "│/respond-to-pr-comments-in-blocklist Walk users through PR review comments"
+    ));
 }
 
 #[test]
@@ -293,11 +295,11 @@ fn boundary_width_preserves_useful_title_and_description_columns() {
             max_visible_rows: 8,
             status: None,
         },
-        20,
-        1,
+        22,
+        3,
     );
 
-    assert!(lines[0].starts_with("/agent  Start a new"));
+    assert!(lines[1].starts_with("│/agent  Start a new"));
 }
 
 #[test]
@@ -316,9 +318,9 @@ fn narrow_slash_command_rows_use_the_full_width_for_titles() {
             max_visible_rows: 8,
             status: None,
         },
-        19,
-        1,
+        21,
+        3,
     );
 
-    assert_eq!(lines[0], "/123456789012345...");
+    assert_eq!(lines[1], "│/123456789012345...│");
 }

@@ -127,7 +127,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         },
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            TuiInputView::new(model, input_mode, None, ctx)
+            TuiInputView::new(model, input_mode, Vec::new(), ctx)
         },
     );
     view
@@ -157,13 +157,13 @@ fn build_view_with_inline_menu(
         .collect();
     let menu_model =
         ctx.add_model(|_| TuiSlashCommandModel::new_for_test(input_model.clone(), mixer, rows, 0));
-    let inline_menu = TuiInlineMenu::SlashCommands(menu_model.clone());
+    let inline_menu = TuiInlineMenu::new(menu_model.clone());
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,
             ..Default::default()
         },
-        move |ctx| TuiInputView::new(input_model, input_mode, Some(inline_menu), ctx),
+        move |ctx| TuiInputView::new(input_model, input_mode, vec![inline_menu], ctx),
     );
     (view, menu_model, ids)
 }

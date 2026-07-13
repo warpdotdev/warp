@@ -22,11 +22,11 @@ use warp_search_core::inline_menu::{
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
-    keep_selected_visible, TuiInlineMenuRow, TuiInlineMenuRowStyle, TuiInlineMenuSnapshot,
-    TuiInlineMenuStatus,
+    keep_selected_visible, result_row_capacity, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
 };
 
-const MAX_VISIBLE_ROWS: usize = 8;
+const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, false, false);
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
