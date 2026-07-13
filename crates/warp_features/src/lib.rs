@@ -953,6 +953,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::GeminiEnterprise,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
