@@ -5821,7 +5821,7 @@ impl Input {
         let path_origin = self.ai_controller.as_ref(ctx).skill_path_origin(ctx);
         let skill = match SkillManager::handle(ctx)
             .as_ref(ctx)
-            .active_skill_by_reference_with_origin(&reference, &path_origin, ctx)
+            .active_skill_by_reference_with_origin(&reference, &path_origin, None, ctx)
         {
             Ok(skill) => skill.clone(),
             Err(error) => {

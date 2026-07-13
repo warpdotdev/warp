@@ -58,6 +58,7 @@ impl SkillManager {
         &self,
         reference: &SkillReference,
         path_origin: &SkillPathOrigin,
+        _working_directory: Option<&LocalOrRemotePath>,
         _ctx: &AppContext,
     ) -> Result<&ParsedSkill, ActiveSkillLookupError> {
         Err(ActiveSkillLookupError::for_reference(

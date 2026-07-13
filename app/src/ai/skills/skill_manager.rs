@@ -379,15 +379,21 @@ impl SkillManager {
         reference: &SkillReference,
         ctx: &AppContext,
     ) -> Option<&ParsedSkill> {
-        self.active_skill_by_reference_with_origin(reference, &SkillPathOrigin::Local, ctx)
+        self.active_skill_by_reference_with_origin(reference, &SkillPathOrigin::Local, None, ctx)
             .ok()
     }
 
     /// Get the definition of a skill for the selected execution host only if it is active.
+    ///
+    /// `working_directory` scopes the bundled-id fallback (see below) to the
+    /// skills advertised for that directory. Pass `None` when there is no
+    /// working-directory context; the fallback then only considers
+    /// home/global skills.
     pub fn active_skill_by_reference_with_origin(
         &self,
         reference: &SkillReference,
         path_origin: &SkillPathOrigin,
+        working_directory: Option<&LocalOrRemotePath>,
         ctx: &AppContext,
     ) -> Result<&ParsedSkill, ActiveSkillLookupError> {
         let skill = match reference {
@@ -402,10 +408,56 @@ impl SkillManager {
                 self.bundled_skills.remote_active_skill_by_path(remote, ctx)
             }),
             SkillReference::BundledSkillId(id) => {
-                self.bundled_skills.active_skill(id, path_origin, ctx)
+                self.bundled_skills
+                    .active_skill(id, path_origin, ctx)
+                    .or_else(|| {
+                        // The model sometimes calls `read_skill` with `bundled_skill_id`
+                        // set to the NAME of a file-based (`.agents/skills`) skill instead
+                        // of a real bundled catalog id. Fall back to a same-named skill
+                        // from the set advertised to the agent for this working directory
+                        // so the read succeeds instead of surfacing a spurious
+                        // `@warp-skill:<id>` error.
+                        self.advertised_skill_by_name(id, working_directory, path_origin, ctx)
+                    })
             }
         };
         skill.ok_or_else(|| ActiveSkillLookupError::for_reference(reference, path_origin))
+    }
+
+    /// Finds a file-based skill by its `name` from the set advertised to the
+    /// agent for the given working directory (home/global skills plus the
+    /// project skills in scope for that directory), resolved to the cached
+    /// [`ParsedSkill`].
+    ///
+    /// This backs the bundled-id fallback: when the model puts a file skill's
+    /// NAME into `bundled_skill_id`, it is resolved only against the exact set
+    /// of skills [`get_skills_for_working_directory_with_origin`] would surface
+    /// for this working directory — so the fallback can never read a same-named
+    /// skill from an unrelated repository that was out of scope. With no
+    /// working directory it reduces to home/global skills (plus, in a cloud
+    /// environment, the in-location skills that are always advertised there).
+    ///
+    /// When multiple advertised skills share a name, selection is
+    /// deterministic: best (lowest) provider rank first, then path order.
+    fn advertised_skill_by_name(
+        &self,
+        name: &str,
+        working_directory: Option<&LocalOrRemotePath>,
+        path_origin: &SkillPathOrigin,
+        ctx: &AppContext,
+    ) -> Option<&ParsedSkill> {
+        self.get_skills_for_working_directory_with_origin(working_directory, path_origin, ctx)
+            .into_iter()
+            .filter(|descriptor| descriptor.name == name)
+            .filter_map(|descriptor| match descriptor.reference {
+                SkillReference::Path(location) => self.skills_by_path.get(&location),
+                SkillReference::BundledSkillId(_) => None,
+            })
+            .min_by(|a, b| {
+                provider_rank(a.provider)
+                    .cmp(&provider_rank(b.provider))
+                    .then_with(|| a.path.display_path().cmp(&b.path.display_path()))
+            })
     }
 
     /// Returns a local bundled skill by ID only if its activation condition is met.

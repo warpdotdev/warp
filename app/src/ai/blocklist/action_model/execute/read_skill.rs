@@ -40,12 +40,21 @@ impl ReadSkillExecutor {
 
         // Resolve from the catalog selected by the active session's host, so
         // remote sessions read the host-rendered bundled skill.
-        let path_origin =
-            SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin();
+        let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
+        let path_origin = session_context.skill_path_origin();
+        // Scope the bundled-id fallback (see `SkillManager::advertised_skill_by_name`)
+        // to the skills advertised for the session's working directory, so a
+        // hallucinated `bundled_skill_id` resolves only against skills the agent
+        // was actually shown here.
+        let working_directory = session_context
+            .current_working_directory()
+            .as_deref()
+            .and_then(|cwd| path_origin.location_for_path(cwd).ok());
 
         match SkillManager::as_ref(ctx).active_skill_by_reference_with_origin(
             skill_ref,
             &path_origin,
+            working_directory.as_ref(),
             ctx,
         ) {
             Ok(skill) => {
