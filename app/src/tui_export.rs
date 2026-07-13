@@ -82,7 +82,7 @@ pub use crate::terminal::input::slash_commands::{
     slash_command_is_supported_in_tui, slash_command_query, slash_command_selection_behavior,
     AcceptSlashCommandOrSavedPrompt, InlineItem, SlashCommandDataSource, SlashCommandMixer,
     SlashCommandSelectionBehavior, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
-    TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
+    TuiSlashCommand, TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
 };
 pub use crate::terminal::input::CommandExecutionSource;
 pub use crate::terminal::local_tty::{

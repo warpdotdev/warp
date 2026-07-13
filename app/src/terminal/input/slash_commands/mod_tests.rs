@@ -1,6 +1,6 @@
 use super::{
     conversation_cost_validation_error, conversation_cost_validation_error_for_state,
-    slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui,
+    slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui, TuiSlashCommand,
 };
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::{commands, Availability};
@@ -40,16 +40,28 @@ fn slash_command_is_submitted_as_prompt_only_for_prompt_commands() {
 
 #[test]
 fn tui_supports_the_selected_low_effort_commands_but_not_orchestrate() {
-    for command in [
-        &*commands::AGENT,
-        &*commands::NEW,
-        &*commands::COMPACT,
-        &*commands::PLAN,
-        &*commands::CREATE_NEW_PROJECT,
-        &commands::EXPORT_TO_CLIPBOARD,
-        &*commands::EXPORT_TO_FILE,
-        &commands::COST,
+    for (command, expected) in [
+        (&*commands::AGENT, TuiSlashCommand::Agent),
+        (&*commands::NEW, TuiSlashCommand::New),
+        (&*commands::COMPACT, TuiSlashCommand::Compact),
+        (&*commands::PLAN, TuiSlashCommand::Plan),
+        (
+            &*commands::CREATE_NEW_PROJECT,
+            TuiSlashCommand::CreateNewProject,
+        ),
+        (
+            &commands::EXPORT_TO_CLIPBOARD,
+            TuiSlashCommand::ExportToClipboard,
+        ),
+        (&*commands::EXPORT_TO_FILE, TuiSlashCommand::ExportToFile),
+        (&commands::COST, TuiSlashCommand::Cost),
     ] {
+        assert_eq!(
+            TuiSlashCommand::from_static_command(command),
+            Some(expected),
+            "{} should map to its TUI command",
+            command.name
+        );
         assert!(
             slash_command_is_supported_in_tui(command),
             "{} should be supported in TUI",
@@ -57,6 +69,10 @@ fn tui_supports_the_selected_low_effort_commands_but_not_orchestrate() {
         );
     }
 
+    assert_eq!(
+        TuiSlashCommand::from_static_command(&commands::ORCHESTRATE),
+        None
+    );
     assert!(!slash_command_is_supported_in_tui(&commands::ORCHESTRATE));
 }
 
