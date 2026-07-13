@@ -2,7 +2,7 @@
 
 ## Summary
 
-The Warp TUI prints a resumable server conversation token when the user exits and accepts that token through `--resume` on a later launch. Resuming restores the selected Oz/Warp conversation into the TUI's single conversation surface, including its transcript and conversation-derived command history, so the next prompt continues the same conversation.
+The Warp TUI prints a resumable server conversation token when the user exits with a non-empty selected conversation and accepts that token through `--resume` on a later launch. Resuming restores the selected Oz/Warp conversation into the TUI's single conversation surface, including its transcript and conversation-derived command history, so the next prompt continues the same conversation.
 
 ## Figma
 
@@ -26,7 +26,7 @@ Figma: none provided.
 
 ### Starting and resuming
 
-1. Launching the TUI without `--resume` preserves the existing behavior: the TUI opens its normal empty state and starts a new conversation when the user submits the first prompt.
+1. Launching the TUI without `--resume` opens its normal empty state backed by an eagerly created conversation; the first prompt continues that conversation.
 
 2. Launching the TUI with `--resume <server-conversation-token>` attempts to restore the Oz/Warp conversation identified by that token.
 
@@ -86,14 +86,14 @@ Figma: none provided.
 
 ### Exit resume hint
 
-25. When the TUI exits successfully with a selected conversation, it prints a single resume instruction after leaving the full-screen TUI and restoring the host terminal.
+25. When the TUI exits successfully with a selected conversation that contains at least one exchange, it prints a single resume instruction after leaving the full-screen TUI and restoring the host terminal.
 
 26. The instruction contains the selected conversation's server token in the form:
     `warp-tui --resume <server-conversation-token>`
 
 27. The hint is based only on the selected conversation. The TUI does not fall back to another active or recently streamed conversation.
 
-28. If no conversation is selected, no resume hint is printed.
+28. If no conversation is selected, or the selected conversation is empty because the user never submitted a prompt, no resume hint is printed.
 
 29. If the selected conversation has not received a server token because initialization did not complete, no resume hint is printed rather than printing a local ID or an unusable command.
 

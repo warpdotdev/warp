@@ -695,6 +695,7 @@ impl TuiTerminalSessionView {
             .conversation_selection
             .as_ref(ctx)
             .selected_conversation(ctx)
+            .filter(|conversation| !conversation.is_empty())
             .and_then(|conversation| conversation.server_conversation_token())
             .cloned();
         self.exit_summary.set_token(token);

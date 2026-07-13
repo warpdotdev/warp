@@ -182,7 +182,7 @@ Printing must happen after `warp::run_tui` returns so raw mode and the alternate
 - A restored conversation becomes selected.
 - Selection is cleared.
 
-Each update re-reads the selected `AIConversation` and stores only its optional `ServerConversationToken`; it does not duplicate conversation state. After `run_tui` returns successfully, print the resume command when the handle contains a token. Do not fall back to an active conversation or local ID.
+Each update re-reads the selected `AIConversation` and stores its `ServerConversationToken` only when `AIConversation::is_empty()` is false; it does not duplicate conversation state. After `run_tui` returns successfully, print the resume command when the handle contains an eligible token. Do not print for the eager empty conversation and do not fall back to an active conversation or local ID.
 
 This run-scoped bridge avoids changing the shared `TerminationResult`, which carries only `Result<()>`, and avoids printing while the alternate screen is still active. It also works with the headless signal path, which funnels termination through the same event loop before model teardown.
 
@@ -225,7 +225,7 @@ Use existing `App::test` fixtures under `crates/warp_tui` to verify:
 - No `--resume` preserves existing startup. (PRODUCT 1)
 - A malformed or missing token value fails clearly. (PRODUCT 2-4)
 - Successful exit prints the selected token after TUI teardown. (PRODUCT 25-27)
-- No selection, no selected token, worker mode, and error termination print no hint. (PRODUCT 28-31)
+- Empty selection, no selection, no selected token, worker mode, and error termination print no hint. (PRODUCT 28-31)
 
 ### End-to-end verification
 
