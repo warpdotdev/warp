@@ -263,6 +263,43 @@ fn rows_from_top_past_content_clamps_to_end() {
 }
 
 #[test]
+fn collapsing_bottom_content_at_new_max_restores_end_anchor() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 4), fake_item(2, 2)]);
+        let items_handle = content.items.clone();
+        let state = TuiViewportedListState::new_at_end();
+        state.scroll_to_rows_from_top(1);
+        let mut viewport = viewport_with_state(state.clone(), content)
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
+        let size = TuiSize::new(8, 4);
+
+        render_viewport(&app, &mut viewport, size);
+        assert_eq!(state.position(), TuiViewportPosition::RowsFromTop(1));
+
+        // The bottom item's header is visible on the last viewport row while
+        // its body extends one row below it. Collapsing the body changes the
+        // maximum scroll top from 2 to exactly the requested offset, 1.
+        *items_handle.borrow_mut() = vec![fake_item(1, 4), fake_item(2, 1)];
+        let lines = render_viewport(&app, &mut viewport, size);
+        assert_eq!(
+            state.position(),
+            TuiViewportPosition::End,
+            "a viewport at the new maximum must resume following the end",
+        );
+        assert_eq!(&lines[0][..3], "1:1");
+        assert_eq!(&lines[3][..3], "2:0");
+
+        // Once re-anchored, subsequent growth must move the window down rather
+        // than leave it fixed at RowsFromTop(1).
+        *items_handle.borrow_mut() = vec![fake_item(1, 4), fake_item(2, 2)];
+        let lines = render_viewport(&app, &mut viewport, size);
+        assert!(state.is_at_end());
+        assert_eq!(&lines[0][..3], "1:2");
+        assert_eq!(&lines[3][..3], "2:1");
+    });
+}
+
+#[test]
 fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());

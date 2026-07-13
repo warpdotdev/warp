@@ -479,7 +479,8 @@ where
         }
 
         if matches!(self.state.position(), TuiViewportPosition::RowsFromTop(_))
-            && scroll_top > max_scroll_top
+            && scroll_top > 0
+            && scroll_top >= max_scroll_top
         {
             self.set_position(TuiViewportPosition::End);
         }
