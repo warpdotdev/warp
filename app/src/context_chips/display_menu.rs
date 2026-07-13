@@ -664,7 +664,13 @@ impl DisplayChipMenu {
         Some(EnvironmentSidecarData {
             name: env.model().string_model.display_name(),
             id: env.id.to_string(),
-            image: env.model().string_model.base_image.to_string(),
+            image: env
+                .model()
+                .string_model
+                .base_image
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
             repos_text,
         })
     }
