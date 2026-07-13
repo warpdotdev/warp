@@ -34,6 +34,10 @@ struct TuiArgs {
     /// Resume an Oz/Warp conversation by server token.
     #[arg(long)]
     resume: Option<String>,
+
+    /// API key for non-interactive authentication.
+    #[arg(long, env = "WARP_API_KEY")]
+    api_key: Option<String>,
 }
 
 /// Validates and wraps a server conversation token from the command line.
@@ -81,9 +85,10 @@ pub fn run() -> Result<()> {
     let resume_token = args.resume.map(parse_resume_token).transpose()?;
     let exit_summary = TuiExitSummaryHandle::default();
     let exit_summary_for_app = exit_summary.clone();
-    let result = warp::run_tui(Box::new(move |ctx| {
-        init(resume_token, exit_summary_for_app, ctx)
-    }));
+    let result = warp::run_tui(
+        args.api_key,
+        Box::new(move |ctx| init(resume_token, exit_summary_for_app, ctx)),
+    );
     if result.is_ok() {
         if let Some(token) = exit_summary.token() {
             let token = token.as_str();

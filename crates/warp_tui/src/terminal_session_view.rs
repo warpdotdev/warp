@@ -25,9 +25,8 @@ use warp::tui_export::{
     PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
     ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
     SlashCommandSelectionBehavior, StaticCommand, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TranscriptScope,
-    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
-    COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
+    TerminalSurfaceInit, TranscriptScope, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
+    TuiZeroStateDataSource, COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
