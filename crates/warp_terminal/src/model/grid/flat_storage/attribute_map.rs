@@ -1,5 +1,5 @@
-use std::collections::{btree_map, BTreeMap};
 use std::ops::RangeFrom;
+use std::slice;
 
 use get_size::GetSize;
 use string_offset::ByteOffset;
@@ -10,13 +10,13 @@ use string_offset::ByteOffset;
 /// This internally coalesces ranges to store the data in a space-efficient
 /// manner.
 ///
-/// A [`BTreeMap`] is used to achieve great performance both for looking up
-/// a value in the map and scanning forward from that point.
+/// A sorted vector is used because we only ever append changes in order, and
+/// iteration heavily outweighs random inserts on this path.
 #[derive(Debug, Default, Clone)]
 pub struct AttributeMap<A> {
     /// Stores a mapping between an _ending_ byte offset (inclusive) and the
     /// attribute value for the range ending at the given offset.
-    map: BTreeMap<ByteOffset, A>,
+    map: Vec<(ByteOffset, A)>,
     /// The attribute value for all offsets beyond the last end offset stored
     /// in the map.
     tail_value: A,
@@ -32,22 +32,24 @@ impl<A> AttributeMap<A> {
 
     /// Truncates the attribute map to the given content offset.
     pub fn truncate(&mut self, new_len: ByteOffset) {
-        // Split off any ranges that end after our new length.
-        let mut truncated_ranges = self.map.split_off(&new_len);
-        // If we split off any ranges, the first range defines our new tail value.
-        if let Some((_, tail_value)) = truncated_ranges.pop_first() {
+        let split_idx = self.map.partition_point(|(offset, _)| *offset < new_len);
+        let truncated_ranges = self.map.split_off(split_idx);
+        if let Some((_, tail_value)) = truncated_ranges.into_iter().next() {
             self.tail_value = tail_value;
         }
     }
 
     /// Truncates the attribute map to start at the given content offset.
     pub fn truncate_front(&mut self, new_start_offset: ByteOffset) {
-        self.map = self.map.split_off(&new_start_offset);
+        let split_idx = self
+            .map
+            .partition_point(|(offset, _)| *offset < new_start_offset);
+        self.map.drain(..split_idx);
     }
 
     /// Returns the end offset of the last range in the map.
     fn last_end_offset(&self) -> ByteOffset {
-        if let Some((k, _v)) = self.map.last_key_value() {
+        if let Some((k, _v)) = self.map.last() {
             *k
         } else {
             ByteOffset::zero()
@@ -69,7 +71,7 @@ impl<A: PartialEq + std::fmt::Debug> AttributeMap<A> {
         let prev_tail_value = std::mem::replace(&mut self.tail_value, value);
 
         if range.start == ByteOffset::zero() {
-            debug_assert!(self.map.last_key_value().is_none());
+            debug_assert!(self.map.is_empty());
         } else {
             debug_assert!(
                 range.start > self.last_end_offset(),
@@ -78,7 +80,7 @@ impl<A: PartialEq + std::fmt::Debug> AttributeMap<A> {
                 self.last_end_offset(),
                 self.map,
             );
-            self.map.insert(range.start - 1, prev_tail_value);
+            self.map.push((range.start - 1, prev_tail_value));
         }
     }
 }
@@ -92,7 +94,7 @@ impl<A: GetSize> GetSize for AttributeMap<A> {
 impl<A: Copy> AttributeMap<A> {
     /// Returns an iterator over per-byte attribute values starting at the
     /// given byte offset.
-    pub fn iter_from(&self, start_offset: ByteOffset) -> impl Iterator<Item = A> + '_ {
+    pub(super) fn iter_from(&self, start_offset: ByteOffset) -> Iter<'_, A> {
         Iter::new(self, start_offset)
     }
 
@@ -103,16 +105,19 @@ impl<A: Copy> AttributeMap<A> {
 }
 
 /// An iterator over an attribute map.
-struct Iter<'a, A> {
+pub(super) struct Iter<'a, A> {
     cur_offset: ByteOffset,
     cur_range: (ByteOffset, A),
-    inner: btree_map::Range<'a, ByteOffset, A>,
+    inner: slice::Iter<'a, (ByteOffset, A)>,
     tail_value: A,
 }
 
 impl<'a, A: Copy> Iter<'a, A> {
     fn new(map: &'a AttributeMap<A>, start_offset: ByteOffset) -> Self {
-        let mut inner = map.map.range(start_offset..);
+        let start_idx = map
+            .map
+            .partition_point(|(offset, _)| *offset < start_offset);
+        let mut inner = map.map[start_idx..].iter();
         let cur_range = Self::next_range(&mut inner, map.tail_value);
 
         Self {
@@ -124,13 +129,24 @@ impl<'a, A: Copy> Iter<'a, A> {
     }
 
     /// Returns the end point and value for the next range.
-    fn next_range(inner: &mut btree_map::Range<ByteOffset, A>, tail: A) -> (ByteOffset, A) {
+    fn next_range(inner: &mut slice::Iter<'a, (ByteOffset, A)>, tail: A) -> (ByteOffset, A) {
         inner
             .next()
             .map(|(k, v)| (*k, *v))
             // If there are no more ranges in the map, return an "open" range
             // with the tail attribute value.
             .unwrap_or((ByteOffset::from(usize::MAX), tail))
+    }
+
+    fn advance_to_current_range(&mut self) {
+        while self.cur_offset > self.cur_range.0 {
+            self.cur_range = Self::next_range(&mut self.inner, self.tail_value);
+        }
+    }
+
+    pub(super) fn skip_by(&mut self, n: usize) {
+        self.cur_offset += n;
+        self.advance_to_current_range();
     }
 }
 
@@ -141,23 +157,16 @@ where
     type Item = A;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.nth(0)
+        self.advance_to_current_range();
+        let val = self.cur_range.1;
+        self.cur_offset += 1;
+        self.advance_to_current_range();
+        Some(val)
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        // Skip over the next n items.
-        self.cur_offset += n;
-        // While the offset of the next item is outside the current range, get
-        // the next range from the iterator over our BTreeMap.
-        while self.cur_offset > self.cur_range.0 {
-            self.cur_range = Self::next_range(&mut self.inner, self.tail_value);
-        }
-
-        // Get the value and advance the iterator by one, in preparation for
-        // the next call.
-        let val = self.cur_range.1;
-        self.cur_offset += 1;
-        Some(val)
+        self.skip_by(n);
+        self.next()
     }
 }
 

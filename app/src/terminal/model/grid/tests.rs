@@ -363,6 +363,25 @@ fn multiple_resizes_cursor_position_restoration() {
 }
 
 #[test]
+fn resize_cursor_in_blank_tail_does_not_panic() {
+    let _flag = FeatureFlag::ResizeFix.override_enabled(true);
+
+    let mut grid = GridHandler::new_for_test_with_scroll_limit(4, 200, 4);
+    grid.input_at_cursor("abc");
+    grid.set_cursor_point(1, 0);
+    grid.input_at_cursor("def");
+
+    // Put the cursor far into the blank tail of the second row. This used to
+    // crash during resize when the cursor was reflowed back through flat
+    // storage.
+    grid.set_cursor_point(1, 148);
+
+    grid.resize(SizeInfo::new_without_font_metrics(4, 80));
+
+    assert_eq!(grid.cursor_point(), Point::new(1, 3));
+}
+
+#[test]
 fn non_sequential_resizes_cursor_restoration() {
     let _flag = FeatureFlag::ResizeFix.override_enabled(true);
 
