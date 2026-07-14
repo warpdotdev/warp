@@ -66,10 +66,13 @@ pub(crate) fn conversation_restoring(app: &AppContext) -> Box<dyn TuiElement> {
                     muted,
                 ))
                 .child(
-                    TuiText::new("Loading session...")
-                        .with_style(muted)
-                        .truncate()
-                        .finish(),
+                    TuiText::new(menu_label(
+                        "tui.conversation_restore.loading",
+                        "Loading session...",
+                    ))
+                    .with_style(muted)
+                    .truncate()
+                    .finish(),
                 )
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .finish(),
@@ -85,12 +88,18 @@ pub(crate) fn conversation_restore_failed(message: &str) -> Box<dyn TuiElement> 
     vertically_centered(
         TuiFlex::column()
             .child(
-                TuiText::new(format!("Could not restore conversation: {message}"))
-                    .truncate()
-                    .finish(),
+                TuiText::new(
+                    menu_label(
+                        "tui.conversation_restore.failed_prefix",
+                        "Could not restore conversation: {message}",
+                    )
+                    .replace("{message}", message),
+                )
+                .truncate()
+                .finish(),
             )
             .child(
-                TuiText::new("Press Ctrl-C to exit.")
+                TuiText::new(menu_label("tui.login.failed_hint", "Press Ctrl-C to exit."))
                     .with_style(dim)
                     .truncate()
                     .finish(),

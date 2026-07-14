@@ -2174,7 +2174,22 @@ ru:
       starting: "Запуск терминала…"
       cannot_run_command: "не удалось выполнить — команда уже запущена"
       new_conversation_blocked: "нельзя начать новый разговор, пока в терминале выполняется команда"
-      copied_to_clipboard: "скопировано в буфер обмена"
+      copied_to_clipboard: "Разговор скопирован в буфер обмена терминала"
+      restore_token_mismatch: "Восстановленный разговор не соответствует запрошенному токену."
+      restore_only_oz_supported: "Warp TUI поддерживает только разговоры Oz/Warp."
+      restore_load_failed: "Не удалось загрузить разговор."
+      no_active_conversation_to_export: "Нет активного разговора для экспорта"
+      export_overwrote: "Разговор экспортирован в {path} (файл перезаписан)"
+      export_success: "Разговор экспортирован в {path}"
+      export_error:
+        permission_denied: "Нет прав на запись в {}. Проверьте права доступа к файлу."
+        not_found: "Директория не найдена: {}"
+        already_exists: "Файл {} уже существует"
+        failed: "Не удалось экспортировать в {path}: {source}"
+      create_new_project_missing_query: "Опишите проект, который нужно создать, после /create-new-project"
+    conversation_restore:
+      loading: "Загрузка сессии..."
+      failed_prefix: "Не удалось восстановить разговор: {message}"
     footer:
       ctrl_c_exit_hint: "Ctrl-C ещё раз для выхода"
       shell_mode_hint: "shell-режим · esc для выхода"

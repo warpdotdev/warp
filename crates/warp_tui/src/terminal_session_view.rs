@@ -137,11 +137,19 @@ enum ConversationRestoreState {
     Failed(String),
 }
 fn export_file_success_message(export: &ConversationFileExport) -> String {
-    let path = export.path().display();
+    let path = export.path().display().to_string();
     if export.overwrote_existing() {
-        format!("Conversation exported to {path} (overwrote existing file)")
+        menu_label(
+            "tui.terminal.export_overwrote",
+            "Conversation exported to {path} (overwrote existing file)",
+        )
+        .replace("{path}", &path)
     } else {
-        format!("Conversation exported to {path}")
+        menu_label(
+            "tui.terminal.export_success",
+            "Conversation exported to {path}",
+        )
+        .replace("{path}", &path)
     }
 }
 
@@ -626,7 +634,11 @@ impl TuiTerminalSessionView {
             Some(CloudConversationData::Oz(conversation)) => {
                 if conversation.server_conversation_token() != Some(&requested_token) {
                     view.fail_conversation_restore(
-                        "The restored conversation did not match the requested token.".to_owned(),
+                        menu_label(
+                            "tui.terminal.restore_token_mismatch",
+                            "The restored conversation did not match the requested token.",
+                        )
+                        .to_owned(),
                         ctx,
                     );
                     return;
@@ -635,13 +647,21 @@ impl TuiTerminalSessionView {
             }
             Some(CloudConversationData::CLIAgent(_)) => {
                 view.fail_conversation_restore(
-                    "The Warp TUI only supports Oz/Warp conversations.".to_owned(),
+                    menu_label(
+                        "tui.terminal.restore_only_oz_supported",
+                        "The Warp TUI only supports Oz/Warp conversations.",
+                    )
+                    .to_owned(),
                     ctx,
                 );
             }
             None => {
                 view.fail_conversation_restore(
-                    "The conversation could not be loaded.".to_owned(),
+                    menu_label(
+                        "tui.terminal.restore_load_failed",
+                        "The conversation could not be loaded.",
+                    )
+                    .to_owned(),
                     ctx,
                 );
             }
@@ -1281,8 +1301,11 @@ impl TuiTerminalSessionView {
                     .filter(|argument| !argument.is_empty())
                 else {
                     self.show_transient_hint(
-                        "Please describe the project you want to create after /create-new-project"
-                            .to_owned(),
+                        menu_label(
+                            "tui.terminal.create_new_project_missing_query",
+                            "Please describe the project you want to create after /create-new-project",
+                        )
+                        .to_owned(),
                         ctx,
                     );
                     return;
@@ -1304,7 +1327,11 @@ impl TuiTerminalSessionView {
                     match copy_to_clipboard(&markdown) {
                         Ok(()) => {
                             self.show_success_hint(
-                                "Conversation sent to terminal clipboard".to_owned(),
+                                menu_label(
+                                    "tui.terminal.copied_to_clipboard",
+                                    "Conversation sent to terminal clipboard",
+                                )
+                                .to_owned(),
                                 ctx,
                             );
                         }
@@ -1318,7 +1345,14 @@ impl TuiTerminalSessionView {
                         }
                     }
                 } else {
-                    self.show_transient_hint("No active conversation to export".to_owned(), ctx);
+                    self.show_transient_hint(
+                        menu_label(
+                            "tui.terminal.no_active_conversation_to_export",
+                            "No active conversation to export",
+                        )
+                        .to_owned(),
+                        ctx,
+                    );
                 }
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
@@ -1329,7 +1363,14 @@ impl TuiTerminalSessionView {
                     .as_ref(ctx)
                     .selected_conversation(ctx)
                 else {
-                    self.show_transient_hint("No active conversation to export".to_owned(), ctx);
+                    self.show_transient_hint(
+                        menu_label(
+                            "tui.terminal.no_active_conversation_to_export",
+                            "No active conversation to export",
+                        )
+                        .to_owned(),
+                        ctx,
+                    );
                     return;
                 };
                 let title = conversation.title();
