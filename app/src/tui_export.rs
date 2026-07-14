@@ -17,7 +17,7 @@ pub use crate::ai::agent::{
     AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText, AIAgentTextSection, AIAgentTodo,
     AIAgentTodoId, AskUserQuestionResult, CancellationReason, FileGlobV2Result, GrepResult,
     MessageId, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
+    SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared, ShellCommandDelay,
     StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, TodoOperation,
     UserQueryMode,
 };
@@ -31,7 +31,10 @@ pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
 };
-pub use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
+pub use crate::ai::blocklist::block::cli_controller::{
+    CLISubagentController, CLISubagentEvent, CLISubagentTarget, LongRunningCommandControlState,
+    UserTakeOverReason,
+};
 pub use crate::ai::blocklist::block::model::{
     AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
 };

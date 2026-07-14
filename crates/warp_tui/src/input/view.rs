@@ -790,7 +790,14 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::InsertChar(c) => {
                 // A `!` typed at the very start of the input enters shell mode
                 // instead of inserting (matching the GUI's typed-only trigger).
-                if *c == '!' && !self.is_shell_mode(ctx) && self.is_cursor_at_start(ctx) {
+                if *c == '!'
+                    && !self.is_shell_mode(ctx)
+                    && self.is_cursor_at_start(ctx)
+                    && !self
+                        .input_mode
+                        .as_ref(ctx)
+                        .is_terminal_use_active_or_pending()
+                {
                     self.enter_shell_mode(ctx);
                 } else {
                     let s = c.to_string();

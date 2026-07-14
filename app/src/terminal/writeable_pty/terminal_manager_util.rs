@@ -57,6 +57,11 @@ pub fn wire_up_pty_controller_with_surface<T: EventLoopSender, S: TerminalSurfac
                     controller.write_end_of_transmission_char(ctx);
                 });
             }
+            PtyIntent::Interrupt => {
+                controller.update(ctx, |controller, ctx| {
+                    controller.write_interrupt(ctx);
+                });
+            }
             PtyIntent::ShutdownPty => {
                 controller.update(ctx, |controller, ctx| {
                     controller.shutdown_pty(ctx);

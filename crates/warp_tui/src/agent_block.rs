@@ -37,6 +37,7 @@ use crate::agent_block_sections::{
     render_todo_list_section,
 };
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
+use crate::tui_cli_subagent_view::TuiCLISubagentView;
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -238,15 +239,22 @@ impl TuiAIBlock {
         );
 
         ctx.subscribe_to_model(model_events, |me, _, event, ctx| {
-            let block_id = match event {
-                ModelEvent::AfterBlockStarted { block_id, .. } => block_id,
-                ModelEvent::BlockCompleted(completed) => &completed.block_id,
+            let (block_id, should_schedule_auto_expand) = match event {
+                ModelEvent::AfterBlockStarted { block_id, .. } => (block_id, true),
+                ModelEvent::BlockCompleted(completed) => (&completed.block_id, false),
                 _ => return,
             };
             let Some(action_id) = me.requested_command_action_id(block_id) else {
                 return;
             };
             if me.renders_action(&action_id) {
+                if should_schedule_auto_expand {
+                    if let Some(TuiToolCallView::ShellCommand(view)) =
+                        me.action_views.get(&action_id)
+                    {
+                        view.update(ctx, |view, ctx| view.schedule_auto_expand(ctx));
+                    }
+                }
                 me.invalidate_action(&action_id, ctx);
             }
         });
@@ -367,6 +375,21 @@ impl TuiAIBlock {
     /// styling depends on conversation-wide todo and status state.
     pub(super) fn renders_todos(&self) -> bool {
         self.renders_todos
+    }
+    pub(super) fn set_cli_subagent_view(
+        &mut self,
+        action_id: &AIAgentActionId,
+        cli_subagent_view: Option<ViewHandle<TuiCLISubagentView>>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(TuiToolCallView::ShellCommand(view)) = self.action_views.get(action_id) else {
+            return false;
+        };
+        view.update(ctx, |view, ctx| {
+            view.set_cli_subagent_view(cli_subagent_view, ctx);
+        });
+        self.invalidate_layout(ctx);
+        true
     }
 
     /// Invalidates this block and its stateful command child after an owned

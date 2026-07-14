@@ -6,7 +6,8 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     export_conversation_markdown, AIAgentActionId, AIConversationId, AgentInteractionMetadata,
-    BlockId, TerminalModel, TranscriptScope,
+    BlockId, LongRunningCommandControlState, PtyIntent, PtyIntentEvent, TerminalModel,
+    TranscriptScope, UserTakeOverReason,
 };
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
@@ -14,7 +15,8 @@ use warpui_core::App;
 
 use super::{
     export_file_success_message, hide_agent_requested_command_from_top_level,
-    raw_prompt_if_not_blank,
+    raw_prompt_if_not_blank, routes_submission_to_terminal_use, terminal_use_interrupt_action,
+    user_controlled_line_bytes, TerminalUseInterruptAction, TuiTerminalSessionEvent,
 };
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
@@ -34,6 +36,20 @@ fn model_with_finished_block(command: &str) -> (TerminalModel, BlockId) {
         .id()
         .clone();
     (model, block_id)
+}
+
+#[test]
+fn interrupt_event_projects_to_high_level_pty_intent() {
+    let event = TuiTerminalSessionEvent::InterruptPty;
+    assert!(matches!(event.pty_intent(), Some(PtyIntent::Interrupt)));
+}
+
+#[test]
+fn user_controlled_line_has_no_agent_cursor_movement_prefix() {
+    #[cfg(target_os = "windows")]
+    assert_eq!(user_controlled_line_bytes("hello"), b"hello\r");
+    #[cfg(not(target_os = "windows"))]
+    assert_eq!(user_controlled_line_bytes("hello"), b"hello\n");
 }
 
 fn mark_visible_agent_requested_command(
@@ -204,5 +220,59 @@ fn file_export_success_message_includes_destination_path() {
     assert_eq!(
         export_file_success_message(&export),
         format!("Conversation exported to {}", export.path().display())
+    );
+}
+
+#[test]
+fn only_agent_control_routes_submissions_to_terminal_use() {
+    let agent = LongRunningCommandControlState::Agent {
+        is_blocked: false,
+        should_hide_responses: false,
+    };
+    let user = LongRunningCommandControlState::User {
+        reason: UserTakeOverReason::Manual,
+    };
+
+    assert!(routes_submission_to_terminal_use(&agent));
+    assert!(!routes_submission_to_terminal_use(&user));
+}
+
+#[test]
+fn terminal_use_interrupt_follows_takeover_then_cancel_policy() {
+    let agent = LongRunningCommandControlState::Agent {
+        is_blocked: false,
+        should_hide_responses: false,
+    };
+    assert_eq!(
+        terminal_use_interrupt_action(&agent),
+        TerminalUseInterruptAction::TakeControl
+    );
+
+    let stopped = LongRunningCommandControlState::User {
+        reason: UserTakeOverReason::Stop {
+            should_auto_resume: true,
+        },
+    };
+    assert_eq!(
+        terminal_use_interrupt_action(&stopped),
+        TerminalUseInterruptAction::CancelAndInterrupt
+    );
+
+    let manual = LongRunningCommandControlState::User {
+        reason: UserTakeOverReason::Manual,
+    };
+    assert_eq!(
+        terminal_use_interrupt_action(&manual),
+        TerminalUseInterruptAction::InterruptCommand
+    );
+
+    let transferred = LongRunningCommandControlState::User {
+        reason: UserTakeOverReason::TransferFromAgent {
+            reason: "enter password".to_owned(),
+        },
+    };
+    assert_eq!(
+        terminal_use_interrupt_action(&transferred),
+        TerminalUseInterruptAction::InterruptCommand
     );
 }

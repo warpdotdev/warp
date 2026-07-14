@@ -1,5 +1,6 @@
 //! Authenticated terminal-session TUI surface.
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,20 +17,21 @@ use warp::tui_export::{
     slash_command_selection_behavior, throttle, AIAgentActionId, AIAgentPtyWriteMode,
     AIConversation, AIConversationId, AcceptSlashCommandOrSavedPrompt, ActiveSession,
     ActiveSessionEvent, AgentConversationEntryId, AgentConversationListEntryState,
-    AgentConversationsModel, AgentInteractionMetadata, AgentViewEntryOrigin,
+    AgentConversationsModel, AgentInteractionMetadata, AgentViewEntryOrigin, BlockId,
     BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
-    CLISubagentEvent, CancellationReason, ChangelogModel, ChangelogModelEvent,
+    CLISubagentEvent, CLISubagentTarget, CancellationReason, ChangelogModel, ChangelogModelEvent,
     ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
-    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
-    ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
-    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
-    ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
-    RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SkillReference,
-    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
-    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
-    COMMAND_REGISTRY, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, WAKEUP_THROTTLE_PERIOD,
+    ConversationSelection, ConversationSelectionHandle, ConversationStatus,
+    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
+    GitRepoStatusModel, GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
+    LongRunningCommandControlState, ModelEvent, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent,
+    RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
+    ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
+    SlashCommandSelectionBehavior, StaticCommand, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit, TranscriptScope, TuiSlashCommand, TuiSlashCommandDataSource,
+    TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, UserTakeOverReason, COMMAND_REGISTRY,
+    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
@@ -65,6 +67,7 @@ use crate::slash_commands::TuiSlashCommandModel;
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
 use crate::tui_builder::TuiUiBuilder;
+use crate::tui_cli_subagent_view::TuiCLISubagentView;
 use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
 use crate::warping_indicator::{render_response_summary, render_warping_indicator};
@@ -80,6 +83,7 @@ const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
 /// Events emitted by the TUI terminal session surface.
 pub(crate) enum TuiTerminalSessionEvent {
     ExecuteCommand(Box<ExecuteCommandEvent>),
+    InterruptPty,
     WriteAgentInput {
         bytes: Cow<'static, [u8]>,
         mode: AIAgentPtyWriteMode,
@@ -90,6 +94,7 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
     fn pty_intent(&self) -> Option<PtyIntent> {
         match self {
             Self::ExecuteCommand(event) => Some(PtyIntent::ExecuteCommand((**event).clone())),
+            Self::InterruptPty => Some(PtyIntent::Interrupt),
             Self::WriteAgentInput { bytes, mode } => Some(PtyIntent::WriteAgentInput {
                 bytes: bytes.clone(),
                 mode: *mode,
@@ -180,6 +185,39 @@ fn export_file_success_message(export: &ConversationFileExport) -> String {
         format!("Conversation exported to {path}")
     }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalUseInterruptAction {
+    TakeControl,
+    CancelAndInterrupt,
+    InterruptCommand,
+}
+
+fn terminal_use_interrupt_action(
+    control_state: &LongRunningCommandControlState,
+) -> TerminalUseInterruptAction {
+    match control_state {
+        LongRunningCommandControlState::Agent { .. } => TerminalUseInterruptAction::TakeControl,
+        LongRunningCommandControlState::User {
+            reason: UserTakeOverReason::Stop { .. },
+        } => TerminalUseInterruptAction::CancelAndInterrupt,
+        LongRunningCommandControlState::User {
+            reason: UserTakeOverReason::Manual | UserTakeOverReason::TransferFromAgent { .. },
+        } => TerminalUseInterruptAction::InterruptCommand,
+    }
+}
+
+fn routes_submission_to_terminal_use(control_state: &LongRunningCommandControlState) -> bool {
+    control_state.is_agent_in_control()
+}
+
+fn user_controlled_line_bytes(input: &str) -> Vec<u8> {
+    let mut bytes = input.as_bytes().to_vec();
+    #[cfg(target_os = "windows")]
+    bytes.push(b'\r');
+    #[cfg(not(target_os = "windows"))]
+    bytes.push(b'\n');
+    bytes
+}
 
 /// Typed actions handled by [`TuiTerminalSessionView`].
 #[derive(Debug, Clone)]
@@ -208,6 +246,8 @@ pub(crate) struct TuiTerminalSessionView {
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
     ai_controller: ModelHandle<BlocklistAIController>,
+    cli_subagent_controller: ModelHandle<CLISubagentController>,
+    cli_subagent_views: HashMap<BlockId, ViewHandle<TuiCLISubagentView>>,
     /// Read by the footer for the active session's working directory.
     active_session: ModelHandle<ActiveSession>,
     /// Repository currently containing the active session's working directory.
@@ -254,6 +294,185 @@ pub(crate) fn init(app: &mut AppContext) {
 }
 
 impl TuiTerminalSessionView {
+    fn handle_cli_subagent_event(&mut self, event: &CLISubagentEvent, ctx: &mut ViewContext<Self>) {
+        match event {
+            CLISubagentEvent::SpawnedSubagent {
+                block_id,
+                initial_requested_command_action_id,
+                ..
+            } => {
+                hide_agent_requested_command_from_top_level(
+                    &self.terminal_model,
+                    initial_requested_command_action_id.as_ref(),
+                );
+                self.input_view
+                    .update(ctx, |input, ctx| input.exit_shell_mode(ctx));
+                if let Some(target) = self
+                    .cli_subagent_controller
+                    .as_ref(ctx)
+                    .target_for_block(block_id)
+                {
+                    let controller = self.cli_subagent_controller.clone();
+                    let action_model = self.ai_action_model.clone();
+                    let terminal_model = self.terminal_model.clone();
+                    let view = ctx.add_typed_action_tui_view(|ctx| {
+                        TuiCLISubagentView::new(
+                            target,
+                            controller,
+                            action_model,
+                            terminal_model,
+                            ctx,
+                        )
+                    });
+                    self.transcript.update(ctx, |transcript, ctx| {
+                        transcript.attach_cli_subagent(
+                            block_id.clone(),
+                            initial_requested_command_action_id.as_ref(),
+                            view.clone(),
+                            ctx,
+                        );
+                    });
+                    self.cli_subagent_views.insert(block_id.clone(), view);
+                }
+            }
+            CLISubagentEvent::FinishedSubagent {
+                block_id,
+                initial_requested_command_action_id,
+                ..
+            } => {
+                if let Some(view) = self.cli_subagent_views.remove(block_id) {
+                    self.transcript.update(ctx, |transcript, ctx| {
+                        transcript.detach_cli_subagent(
+                            initial_requested_command_action_id.as_ref(),
+                            view.id(),
+                            ctx,
+                        );
+                    });
+                }
+                ctx.focus(&self.input_view);
+            }
+            CLISubagentEvent::UpdatedControl { .. }
+            | CLISubagentEvent::UpdatedInstruction { .. }
+            | CLISubagentEvent::UpdatedLastSnapshot
+            | CLISubagentEvent::ToggledHideResponses => {}
+            CLISubagentEvent::ControlHandedBackAfterTransfer => {
+                let executor = self.ai_action_model.as_ref(ctx).shell_command_executor(ctx);
+                executor.update(ctx, |executor, _| {
+                    executor.notify_control_handed_back();
+                });
+            }
+        }
+        ctx.notify();
+    }
+
+    fn handle_terminal_use_interrupt(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let Some(target) = self.cli_subagent_controller.as_ref(ctx).active_target() else {
+            return false;
+        };
+        match terminal_use_interrupt_action(&target.control_state) {
+            TerminalUseInterruptAction::TakeControl => {
+                self.cli_subagent_controller.update(ctx, |controller, ctx| {
+                    controller.switch_control_to_user(
+                        UserTakeOverReason::Stop {
+                            should_auto_resume: true,
+                        },
+                        ctx,
+                    );
+                });
+                true
+            }
+            TerminalUseInterruptAction::CancelAndInterrupt => {
+                let had_active_stream = self
+                    .ai_controller
+                    .as_ref(ctx)
+                    .has_active_stream_for_conversation(target.conversation_id, ctx);
+                self.ai_controller.update(ctx, |controller, ctx| {
+                    controller.cancel_conversation_progress(
+                        target.conversation_id,
+                        CancellationReason::ManuallyCancelled,
+                        ctx,
+                    );
+                });
+                {
+                    let mut terminal_model = self.terminal_model.lock();
+                    terminal_model
+                        .block_list_mut()
+                        .active_block_mut()
+                        .set_user_control_for_teardown();
+                }
+                if !had_active_stream {
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        history.update_conversation_status(
+                            self.terminal_surface_id,
+                            target.conversation_id,
+                            ConversationStatus::Cancelled,
+                            ctx,
+                        );
+                    });
+                }
+                ctx.emit(TuiTerminalSessionEvent::InterruptPty);
+                true
+            }
+            TerminalUseInterruptAction::InterruptCommand => {
+                ctx.emit(TuiTerminalSessionEvent::InterruptPty);
+                true
+            }
+        }
+    }
+
+    fn active_agent_controlled_target(&self, ctx: &AppContext) -> Option<CLISubagentTarget> {
+        self.cli_subagent_controller
+            .as_ref(ctx)
+            .active_target()
+            .filter(|target| routes_submission_to_terminal_use(&target.control_state))
+    }
+
+    fn active_user_controlled_target(&self, ctx: &AppContext) -> Option<CLISubagentTarget> {
+        self.cli_subagent_controller
+            .as_ref(ctx)
+            .active_target()
+            .filter(|target| target.control_state.is_user_in_control())
+    }
+
+    fn send_terminal_use_prompt(&mut self, input: &str, ctx: &mut ViewContext<Self>) -> bool {
+        let Some(prompt) = raw_prompt_if_not_blank(input) else {
+            return false;
+        };
+        let Some(target) = self.active_agent_controlled_target(ctx) else {
+            return false;
+        };
+        let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
+            controller.send_user_query_in_conversation(
+                prompt.to_owned(),
+                target.conversation_id,
+                None,
+                ctx,
+            )
+        });
+        if !dispatched {
+            return false;
+        }
+        self.cli_subagent_controller.update(ctx, |controller, ctx| {
+            controller.set_latest_instruction(target.block_id, prompt.to_owned(), ctx);
+        });
+        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+        true
+    }
+
+    fn send_user_controlled_pty_input(&mut self, input: &str, ctx: &mut ViewContext<Self>) -> bool {
+        if self.active_user_controlled_target(ctx).is_none() {
+            return false;
+        }
+        ctx.emit(TuiTerminalSessionEvent::WriteAgentInput {
+            bytes: Cow::Owned(user_controlled_line_bytes(input)),
+            mode: AIAgentPtyWriteMode::Raw,
+        });
+        self.input_view.update(ctx, |input, ctx| {
+            input.clear(ctx);
+            input.exit_shell_mode(ctx);
+        });
+        true
+    }
     /// Builds the transcript-capable terminal surface for a manager-backed session.
     pub(crate) fn new(
         surface_init: TerminalSurfaceInit,
@@ -337,20 +556,8 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
-        let model_for_cli_subagent_events = model.clone();
-        ctx.subscribe_to_model(&cli_subagent_controller, move |_, _, event, ctx| {
-            if let CLISubagentEvent::SpawnedSubagent {
-                initial_requested_command_action_id,
-                ..
-            } = event
-            {
-                if hide_agent_requested_command_from_top_level(
-                    &model_for_cli_subagent_events,
-                    initial_requested_command_action_id.as_ref(),
-                ) {
-                    ctx.notify();
-                }
-            }
+        ctx.subscribe_to_model(&cli_subagent_controller, |view, _, event, ctx| {
+            view.handle_cli_subagent_event(event, ctx);
         });
         let transcript = ctx.add_typed_action_tui_view(|ctx| {
             TuiTranscriptView::new(
@@ -368,7 +575,7 @@ impl TuiTerminalSessionView {
             TuiSlashCommandDataSource::new(
                 TuiSlashCommandDataSourceArgs {
                     active_session: active_session.clone(),
-                    cli_subagent_controller,
+                    cli_subagent_controller: cli_subagent_controller.clone(),
                     terminal_view_id: terminal_surface_id,
                     terminal_model: model.clone(),
                 },
@@ -566,8 +773,8 @@ impl TuiTerminalSessionView {
         // These events update block metadata or grids the transcript reads.
         // PTY output redraws are driven by `wakeups_rx` below.
         ctx.subscribe_to_model(&model_events, |_, _, event, ctx| match event {
-            ModelEvent::BlockCompleted(_)
-            | ModelEvent::AfterBlockStarted { .. }
+            ModelEvent::BlockCompleted(_) => ctx.notify(),
+            ModelEvent::AfterBlockStarted { .. }
             | ModelEvent::BlockMetadataReceived(_)
             | ModelEvent::BlockWorkingDirectoryUpdated(_)
             | ModelEvent::BackgroundBlockStarted
@@ -700,6 +907,8 @@ impl TuiTerminalSessionView {
             conversation_selection,
             ai_action_model: action_model,
             ai_controller,
+            cli_subagent_controller,
+            cli_subagent_views: HashMap::new(),
             active_session,
             current_repo_path: None,
             git_repo_status: None,
@@ -982,6 +1191,25 @@ impl TuiTerminalSessionView {
         ) {
             self.refresh_exit_summary(ctx);
         }
+        match event {
+            BlocklistAIHistoryEvent::RemoveConversation {
+                conversation_id, ..
+            }
+            | BlocklistAIHistoryEvent::DeletedConversation {
+                conversation_id, ..
+            }
+            | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces {
+                conversation_id,
+                ..
+            } => {
+                self.cli_subagent_views
+                    .retain(|_, view| view.as_ref(ctx).conversation_id() != *conversation_id);
+            }
+            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. } => {
+                self.cli_subagent_views.clear();
+            }
+            _ => {}
+        }
     }
 
     /// Displays `text` in the footer's hint slot for the transient-hint
@@ -1020,6 +1248,11 @@ impl TuiTerminalSessionView {
         let now = Instant::now();
         if self.exit_confirmation.should_exit(now) {
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            return;
+        }
+        if self.handle_terminal_use_interrupt(ctx) {
+            self.exit_confirmation.disarm();
+            ctx.notify();
             return;
         }
 
@@ -1269,10 +1502,15 @@ impl TuiTerminalSessionView {
         ) {
             return;
         }
-        if self.is_shell_mode(ctx) {
-            self.execute_user_command(&text, ctx);
-        } else {
-            self.handle_submitted_input(&text, ctx);
+        if self.send_terminal_use_prompt(&text, ctx) {
+            self.input_view
+                .update(ctx, |input, ctx| input.exit_shell_mode(ctx));
+        } else if !self.send_user_controlled_pty_input(&text, ctx) {
+            if self.is_shell_mode(ctx) {
+                self.execute_user_command(&text, ctx);
+            } else {
+                self.handle_submitted_input(&text, ctx);
+            }
         }
         ctx.notify();
     }
@@ -1352,6 +1590,13 @@ impl TuiTerminalSessionView {
 
     /// Sends a prompt to the TUI session's eagerly selected conversation.
     fn send_prompt(&mut self, prompt: String, ctx: &mut ViewContext<Self>) {
+        let active_long_running_block_id = {
+            let terminal_model = self.terminal_model.lock();
+            let active_block = terminal_model.block_list().active_block();
+            active_block
+                .is_active_and_long_running()
+                .then(|| active_block.id().clone())
+        };
         let Some(conversation_id) = self
             .conversation_selection
             .as_ref(ctx)
@@ -1360,9 +1605,16 @@ impl TuiTerminalSessionView {
             report_error!("TUI prompt submitted without an eagerly selected conversation");
             return;
         };
-        self.ai_controller.update(ctx, |controller, ctx| {
-            controller.send_user_query_in_conversation(prompt, conversation_id, None, ctx);
+        let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
+            controller.send_user_query_in_conversation(prompt.clone(), conversation_id, None, ctx)
         });
+        if dispatched {
+            if let Some(block_id) = active_long_running_block_id {
+                self.cli_subagent_controller.update(ctx, |controller, ctx| {
+                    controller.set_latest_instruction(block_id, prompt, ctx);
+                });
+            }
+        }
     }
 
     fn handle_submitted_input(&mut self, input: &str, ctx: &mut ViewContext<Self>) {
@@ -1744,12 +1996,21 @@ impl TuiTerminalSessionView {
                     mode: *mode,
                 });
             }
-            // TODO(tui-agent-cancel): wire `CancelExecution` into the terminal
-            // manager so an agent-requested command can be interrupted.
-            // Ctrl-c conversation cancellation itself is handled by
-            // `handle_interrupt`.
-            ShellCommandExecutorEvent::CancelExecution
-            | ShellCommandExecutorEvent::TransferControlToUser { .. } => {}
+            ShellCommandExecutorEvent::CancelExecution => {
+                ctx.emit(TuiTerminalSessionEvent::InterruptPty);
+            }
+            ShellCommandExecutorEvent::TransferControlToUser {
+                action_id: _,
+                reason,
+            } => {
+                let reason = reason.clone();
+                self.cli_subagent_controller.update(ctx, |controller, ctx| {
+                    controller.switch_control_to_user(
+                        UserTakeOverReason::TransferFromAgent { reason },
+                        ctx,
+                    );
+                });
+            }
         }
     }
 }
