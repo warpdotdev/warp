@@ -1055,6 +1055,10 @@ fn test_get_entries_excludes_conversation_shadowed_by_child_task() {
                 model.get_entries(&all_owner_filters(), ctx).is_empty(),
                 "a conversation shadowed by a child task must be hidden with it"
             );
+            assert!(
+                !model.has_items(ctx),
+                "a conversation shadowed by a child task must not count as a visible item"
+            );
         });
     });
 }
@@ -1085,27 +1089,33 @@ fn test_conversation_metadata_child_predicate_matches_conversation() {
 
 #[test]
 fn test_has_items_ignores_child_agent_tasks() {
-    let now = Utc::now();
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+        let now = Utc::now();
 
-    // A model containing only a child task produces no visible entries, so
-    // `has_items` must report empty (matching `get_entries`).
-    let mut child_only = create_test_model();
-    let mut child_task = create_test_task(&make_uuid(9101), "user-a", now);
-    child_task.parent_run_id = Some(make_uuid(9100));
-    child_only.tasks.insert(child_task.task_id, child_task);
-    assert!(
-        !child_only.has_items(),
-        "a child-only model should be treated as empty"
-    );
+        // A model containing only a child task produces no visible entries, so
+        // `has_items` must report empty (matching `get_entries`).
+        let mut child_only = create_test_model();
+        let mut child_task = create_test_task(&make_uuid(9101), "user-a", now);
+        child_task.parent_run_id = Some(make_uuid(9100));
+        child_only.tasks.insert(child_task.task_id, child_task);
 
-    // A model with a normal (non-child) task has visible items.
-    let mut with_parent = create_test_model();
-    let parent_task = create_test_task(&make_uuid(9102), "user-a", now);
-    with_parent.tasks.insert(parent_task.task_id, parent_task);
-    assert!(
-        with_parent.has_items(),
-        "a model with a non-child task should have items"
-    );
+        // A model with a normal (non-child) task has visible items.
+        let mut with_parent = create_test_model();
+        let parent_task = create_test_task(&make_uuid(9102), "user-a", now);
+        with_parent.tasks.insert(parent_task.task_id, parent_task);
+
+        app.update(|ctx| {
+            assert!(
+                !child_only.has_items(ctx),
+                "a child-only model should be treated as empty"
+            );
+            assert!(
+                with_parent.has_items(ctx),
+                "a model with a non-child task should have items"
+            );
+        });
+    });
 }
 
 #[test]

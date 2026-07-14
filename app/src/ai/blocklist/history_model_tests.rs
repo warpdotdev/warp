@@ -1731,7 +1731,8 @@ fn test_child_agent_conversations_excluded_from_list_but_accessible_by_id() {
     use crate::ai::agent::conversation::AIConversation;
 
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let regular_id = AIConversationId::new();
 

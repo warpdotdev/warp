@@ -1234,14 +1234,9 @@ impl AgentConversationsModel {
         }
     }
 
-    /// Returns true if we have any *visible* tasks or local conversations in
-    /// this view. Child (orchestrated) agent tasks produce no list entries
-    /// (see [`Self::get_entries`]), so they don't count; child conversations
-    /// never enter `self.conversations` because they are filtered at the
-    /// source (`ConversationNavigationData::all_conversations`).
-    pub fn has_items(&self) -> bool {
-        self.tasks.values().any(|task| task.parent_run_id.is_none())
-            || !self.conversations.is_empty()
+    /// Returns whether the unfiltered conversation list contains any entries.
+    pub fn has_items(&self, app: &AppContext) -> bool {
+        !self.unfiltered_entries(app).is_empty()
     }
 
     /// Returns an iterator over all ambient agent tasks.
@@ -1275,6 +1270,15 @@ impl AgentConversationsModel {
         filters: &AgentManagementFilters,
         app: &AppContext,
     ) -> Vec<AgentConversationEntry> {
+        self.unfiltered_entries(app)
+            .into_iter()
+            .filter(|entry| entry.matches_filters(filters, app))
+            .sorted_by(|a, b| b.display.last_updated.cmp(&a.display.last_updated))
+            .collect()
+    }
+
+    /// Returns normalized entries before user-selected filters are applied.
+    fn unfiltered_entries(&self, app: &AppContext) -> Vec<AgentConversationEntry> {
         let history_model = BlocklistAIHistoryModel::as_ref(app);
         let mut entries = Vec::new();
         // Local conversation IDs represented by a task — either shown as a
@@ -1331,10 +1335,6 @@ impl AgentConversationsModel {
         }
 
         entries
-            .into_iter()
-            .filter(|entry| entry.matches_filters(filters, app))
-            .sorted_by(|a, b| b.display.last_updated.cmp(&a.display.last_updated))
-            .collect()
     }
 
     pub fn get_entry_by_id(
