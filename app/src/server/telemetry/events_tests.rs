@@ -1,4 +1,7 @@
-use warp_core::telemetry::TelemetryEventDesc;
+use warp_core::telemetry::{EnablementState, TelemetryEventDesc};
+
+use super::TelemetryEventDiscriminants;
+use crate::channel::Channel;
 
 #[derive(Debug)]
 enum TelemetryEventPropertyError {
@@ -25,4 +28,33 @@ fn telemetry_events_have_nonempty_name_and_description() -> Result<(), Telemetry
         }
     }
     Ok(())
+}
+
+/// Emits `AgentMode.NaturalLanguageDetection.InputBufferSubmitted` only in dogfood channels for
+/// cost control. Remove this test if the event is re-enabled across channels (e.g. a new NLD change).
+#[test]
+fn input_buffer_submitted_only_emits_on_dogfood_channels() {
+    let EnablementState::ChannelSpecific { channels } =
+        TelemetryEventDiscriminants::InputBufferSubmitted.enablement_state()
+    else {
+        panic!("InputBufferSubmitted should be gated to specific channels, not Always/Flag");
+    };
+
+    for channel in [Channel::Dev, Channel::Local] {
+        assert!(
+            channels.contains(&channel),
+            "expected {channel:?} to emit InputBufferSubmitted"
+        );
+    }
+    for channel in [
+        Channel::Stable,
+        Channel::Preview,
+        Channel::Oss,
+        Channel::Integration,
+    ] {
+        assert!(
+            !channels.contains(&channel),
+            "expected {channel:?} to NOT emit InputBufferSubmitted"
+        );
+    }
 }
