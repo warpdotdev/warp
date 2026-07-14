@@ -1070,8 +1070,10 @@ ru:
     back: "Назад"
     cancel: "Отмена"
     clear: "Очистить"
+    continue: "Продолжить"
     create: "Создать"
     delete: "Удалить"
+    disable_warp_drive: "Отключить Warp Drive"
     disabled: "Отключено"
     edit: "Редактировать"
     enabled: "Включено"
@@ -1079,11 +1081,13 @@ ru:
     get_started: "Начать"
     get_warping: "Начать работу"
     next: "Далее"
+    privacy_settings: "Настройки конфиденциальности"
     recommended: "Рекомендуется"
     remove: "Удалить"
     retry: "Повторить"
     save: "Сохранить"
     skip: "Пропустить"
+    skip_for_now: "Пропустить"
     submit: "Отправить"
     env_vars:
       command: "Команда"
@@ -1731,6 +1735,9 @@ ru:
     close_pane: "Закрыть панель"
 
   # ── LSP ──
+  auth:
+    token_placeholder: "Токен авторизации"
+
   # ── Code Review ──
   codereview:
     tooltip:

@@ -41,7 +41,7 @@ use crate::server::telemetry::{LoginEventSource, TelemetryEvent};
 use crate::settings::PrivacySettings;
 use crate::themes::theme::Fill as ThemeFill;
 use crate::util::bindings::CustomAction;
-use crate::{send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
+use crate::{menu_label, send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
 
 const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
 
@@ -313,7 +313,7 @@ impl LoginSlideView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Auth Token", ctx);
+            editor.set_placeholder_text(menu_label("auth.token_placeholder", "Auth Token"), ctx);
             editor
         });
 
@@ -605,7 +605,7 @@ impl LoginSlideView {
             .with_child(
                 ui_builder
                     .link(
-                        "Privacy Settings".into(),
+                        menu_label("common.privacy_settings", "Privacy Settings").into(),
                         None,
                         Some(Box::new(|ctx| {
                             ctx.dispatch_typed_action(LoginSlideAction::ShowPrivacySettings);
@@ -646,7 +646,7 @@ impl LoginSlideView {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -659,9 +659,11 @@ impl LoginSlideView {
 
         let cmd_enter = Keystroke::parse("cmdorctrl-enter").unwrap_or_default();
         let skip_label = match self.login_purpose() {
-            LoginPurpose::WarpDrive => "Disable Warp Drive",
-            LoginPurpose::WarpAgent => "Skip for now",
-            LoginPurpose::ThirdParty => "Skip for now",
+            LoginPurpose::WarpDrive => {
+                menu_label("common.disable_warp_drive", "Disable Warp Drive")
+            }
+            LoginPurpose::WarpAgent => menu_label("common.skip_for_now", "Skip for now"),
+            LoginPurpose::ThirdParty => menu_label("common.skip_for_now", "Skip for now"),
         };
         let skip_button = self.skip_button.render(
             appearance,
@@ -682,7 +684,7 @@ impl LoginSlideView {
         let login_button = self.login_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Continue".into()),
+                content: button::Content::Label(menu_label("common.continue", "Continue").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),
@@ -858,7 +860,7 @@ impl LoginSlideView {
         let back_button = self.browser_back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -918,7 +920,7 @@ impl LoginSlideView {
         let back_button = self.done_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -1004,7 +1006,9 @@ LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => (
         let confirm_button = self.dialog_skip_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Skip for now".into()),
+                content: button::Content::Label(
+                    menu_label("common.skip_for_now", "Skip for now").into(),
+                ),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(dialog_enter),

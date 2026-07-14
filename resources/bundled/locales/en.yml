@@ -1070,8 +1070,10 @@ en:
     back: "Back"
     cancel: "Cancel"
     clear: "Clear"
+    continue: "Continue"
     create: "Create"
     delete: "Delete"
+    disable_warp_drive: "Disable Warp Drive"
     disabled: "Disabled"
     edit: "Edit"
     enabled: "Enabled"
@@ -1079,11 +1081,13 @@ en:
     get_started: "Get started"
     get_warping: "Get Warping"
     next: "Next"
+    privacy_settings: "Privacy Settings"
     recommended: "Recommended"
     remove: "Remove"
     retry: "Retry"
     save: "Save"
     skip: "Skip"
+    skip_for_now: "Skip for now"
     submit: "Submit"
     env_vars:
       command: "Command"
@@ -1731,6 +1735,9 @@ en:
     close_pane: "Close pane"
 
   # ── LSP ──
+  auth:
+    token_placeholder: "Auth Token"
+
   # ── Code Review ──
   codereview:
     tooltip:
