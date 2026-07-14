@@ -1751,7 +1751,7 @@ fn shared_third_party_viewer_sync_enters_agent_view_and_retags_existing_block() 
                 .block_list()
                 .block_with_id(&harness_block_id)
                 .expect("harness block should still exist");
-            assert!(!block.should_hide_block(model.block_list().agent_view_state()));
+            assert!(!block.should_hide_block(model.block_list().transcript_scope()));
             match block.agent_view_visibility() {
                 AgentViewVisibility::Terminal {
                     conversation_ids,
@@ -1821,7 +1821,7 @@ fn shared_third_party_viewer_syncs_from_viewer_harness_updated_when_harness_unch
                 .block_list()
                 .block_with_id(&harness_block_id)
                 .expect("harness block should still exist");
-            assert!(!block.should_hide_block(model.block_list().agent_view_state()));
+            assert!(!block.should_hide_block(model.block_list().transcript_scope()));
             match block.agent_view_visibility() {
                 AgentViewVisibility::Terminal {
                     conversation_ids,
@@ -1892,7 +1892,7 @@ fn shared_third_party_viewer_syncs_from_cli_agent_state_without_ambient_model() 
                 .block_list()
                 .block_with_id(&harness_block_id)
                 .expect("harness block should still exist");
-            assert!(!block.should_hide_block(model.block_list().agent_view_state()));
+            assert!(!block.should_hide_block(model.block_list().transcript_scope()));
             match block.agent_view_visibility() {
                 AgentViewVisibility::Terminal {
                     conversation_ids,
@@ -2267,7 +2267,7 @@ fn cmd_enter_from_terminal_with_selected_block_enters_agent_view_with_context() 
                 .block_with_id(&selected_block_id)
                 .expect("selected block should still exist");
             assert!(
-                !block.should_hide_block(model.block_list().agent_view_state()),
+                !block.should_hide_block(model.block_list().transcript_scope()),
                 "selected block should remain visible in the new agent conversation"
             );
             match block.agent_view_visibility() {

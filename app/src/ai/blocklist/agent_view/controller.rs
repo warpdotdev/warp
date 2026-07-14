@@ -830,10 +830,16 @@ impl AgentViewController {
             display_mode,
             original_conversation_length: exchange_count,
         };
+
+        let is_cloud = matches!(
+            origin,
+            AgentViewEntryOrigin::CloudAgent | AgentViewEntryOrigin::ThirdPartyCloudAgent
+        );
+
         self.terminal_model
             .lock()
             .block_list_mut()
-            .set_agent_view_state(self.agent_view_state.clone());
+            .enter_conversation_context(conversation_id, display_mode.is_inline(), is_cloud);
 
         ctx.emit(AgentViewControllerEvent::EnteredAgentView {
             conversation_id,
@@ -958,7 +964,7 @@ impl AgentViewController {
         self.terminal_model
             .lock()
             .block_list_mut()
-            .set_agent_view_state(self.agent_view_state.clone());
+            .exit_conversation_context();
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let final_exchange_count = history_model

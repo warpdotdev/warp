@@ -1999,10 +1999,7 @@ impl AgentInputFooter {
     fn sync_fast_forward_button(&self, ctx: &mut ViewContext<Self>) {
         // In cloud agent conversations fast forward is force-enabled.
         let terminal_model = self.terminal_model.lock();
-        let is_force_enabled = is_in_cloud_context(
-            terminal_model.block_list().agent_view_state(),
-            &terminal_model,
-        );
+        let is_force_enabled = is_in_cloud_context(&terminal_model);
         drop(terminal_model);
 
         // Read directly from the conversation, same data source as the warping
@@ -2324,10 +2321,7 @@ impl View for AgentInputFooter {
 
         let terminal_model = self.terminal_model.lock();
         let shared_status = terminal_model.shared_session_status();
-        let is_cloud_context = super::is_in_cloud_context(
-            terminal_model.block_list().agent_view_state(),
-            &terminal_model,
-        );
+        let is_cloud_context = super::is_in_cloud_context(&terminal_model);
         let is_conversation_transcript_context =
             is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
 

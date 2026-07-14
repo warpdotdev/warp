@@ -6539,7 +6539,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -10505,7 +10505,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "itertools 0.11.0",
  "log",
  "multimap",
@@ -15310,7 +15310,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a937ae35dfe20eaed030664ad52b36657390b162#a937ae35dfe20eaed030664ad52b36657390b162"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ec1ae8e84277b0caf46bb028c21ee592a494dc97#ec1ae8e84277b0caf46bb028c21ee592a494dc97"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -15328,7 +15328,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a937ae35dfe20eaed030664ad52b36657390b162#a937ae35dfe20eaed030664ad52b36657390b162"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ec1ae8e84277b0caf46bb028c21ee592a494dc97#ec1ae8e84277b0caf46bb028c21ee592a494dc97"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",
@@ -15538,6 +15538,7 @@ dependencies = [
  "string-offset",
  "sum_tree",
  "thiserror 2.0.17",
+ "unicode-linebreak",
  "unicode-segmentation",
  "unicode-width 0.1.14",
  "urlocator",
@@ -15906,6 +15907,7 @@ dependencies = [
  "async-fs",
  "base64 0.22.1",
  "channel_versions",
+ "clap",
  "command",
  "dirs 6.0.0",
  "futures",
@@ -15925,6 +15927,8 @@ dependencies = [
  "strum_macros 0.27.1",
  "sum_tree",
  "tempfile",
+ "unicode-width 0.1.14",
+ "uuid",
  "vec1",
  "warp",
  "warp_channel_config",

@@ -1,17 +1,15 @@
 use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiText;
-use crate::elements::tui::test_support::{render_to_lines, with_paint_context};
-use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize,
-};
+use crate::elements::tui::test_support::{render_to_frame, render_to_lines};
+use crate::elements::tui::{TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiSize};
 use crate::{App, EntityIdMap};
 
 #[test]
 fn renders_a_single_short_line() {
     let text = TuiText::new("hello");
     assert_eq!(
-        render_to_lines(&text, TuiSize::new(10, 1)),
+        render_to_lines(text, TuiSize::new(10, 1)),
         vec!["hello     "],
     );
 }
@@ -41,7 +39,7 @@ fn layout_reports_content_width_and_row_count() {
 fn word_wraps_at_the_width_boundary() {
     let text = TuiText::new("hello world foo");
     assert_eq!(
-        render_to_lines(&text, TuiSize::new(11, 2)),
+        render_to_lines(text, TuiSize::new(11, 2)),
         vec!["hello world", "foo        "],
     );
 }
@@ -51,7 +49,7 @@ fn hard_breaks_a_token_wider_than_the_row() {
     let text = TuiText::new("abcdefgh");
     assert_eq!(text.desired_height(3), 3);
     assert_eq!(
-        render_to_lines(&text, TuiSize::new(3, 3)),
+        render_to_lines(text, TuiSize::new(3, 3)),
         vec!["abc", "def", "gh "],
     );
 }
@@ -61,11 +59,11 @@ fn wide_glyphs_occupy_two_columns_and_are_never_split() {
     // A wide glyph painted with one trailing column to spare drops whole: only
     // the leading "日" lands, proving it claimed two columns.
     let truncated = TuiText::new("日本").truncate();
-    assert_eq!(render_to_lines(&truncated, TuiSize::new(3, 1)), vec!["日 "]);
+    assert_eq!(render_to_lines(truncated, TuiSize::new(3, 1)), vec!["日 "]);
 
     // Given exactly four columns both wide glyphs fit.
     assert_eq!(
-        render_to_lines(&TuiText::new("日本"), TuiSize::new(4, 1)),
+        render_to_lines(TuiText::new("日本"), TuiSize::new(4, 1)),
         vec!["日本"],
     );
 
@@ -74,7 +72,7 @@ fn wide_glyphs_occupy_two_columns_and_are_never_split() {
     let wrapped = TuiText::new("日本");
     assert_eq!(wrapped.desired_height(2), 2);
     assert_eq!(
-        render_to_lines(&wrapped, TuiSize::new(2, 2)),
+        render_to_lines(wrapped, TuiSize::new(2, 2)),
         vec!["日", "本"],
     );
 }
@@ -83,9 +81,7 @@ fn wide_glyphs_occupy_two_columns_and_are_never_split() {
 fn applies_its_style_to_painted_cells() {
     let style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     let text = TuiText::new("a").with_style(style);
-
-    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 1, 1));
-    with_paint_context(|ctx| text.render(TuiRect::new(0, 0, 1, 1), &mut buffer, ctx));
+    let buffer = render_to_frame(text, TuiSize::new(1, 1)).buffer;
 
     let cell = &buffer[(0, 0)];
     assert_eq!(cell.symbol(), "a");
@@ -98,7 +94,7 @@ fn truncation_keeps_one_row_per_hard_line() {
     let text = TuiText::new("a\nb\nc").truncate();
     assert_eq!(text.desired_height(10), 3);
     assert_eq!(
-        render_to_lines(&text, TuiSize::new(3, 3)),
+        render_to_lines(text, TuiSize::new(3, 3)),
         vec!["a  ", "b  ", "c  "],
     );
 }
@@ -112,8 +108,7 @@ fn spans_flow_as_one_paragraph_with_per_span_styles() {
     ])
     .with_style(Style::default().fg(Color::White));
 
-    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 6, 1));
-    with_paint_context(|ctx| text.render(TuiRect::new(0, 0, 6, 1), &mut buffer, ctx));
+    let buffer = render_to_frame(text, TuiSize::new(6, 1)).buffer;
 
     assert_eq!(buffer.to_lines(), vec!["✓ done"]);
     // The span's style patches over the base style.
@@ -131,7 +126,7 @@ fn spans_wrap_across_span_boundaries() {
     ]);
     assert_eq!(text.desired_height(5), 2);
     assert_eq!(
-        render_to_lines(&text, TuiSize::new(5, 2)),
+        render_to_lines(text, TuiSize::new(5, 2)),
         vec!["aa bb", "cc   "],
     );
 }
@@ -144,7 +139,7 @@ fn hard_newlines_inside_spans_split_lines() {
     ]);
     assert_eq!(text.desired_height(10), 2);
     assert_eq!(
-        render_to_lines(&text, TuiSize::new(3, 2)),
+        render_to_lines(text, TuiSize::new(3, 2)),
         vec!["a  ", "bc "],
     );
 }

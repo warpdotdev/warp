@@ -119,6 +119,29 @@ impl TuiUiBuilder {
             self.warp_theme.terminal_colors().normal.cyan,
         )))
     }
+
+    /// Blue command-name text used by the slash-command menu and recognized
+    /// slash-command prefixes in the input.
+    pub(crate) fn slash_command_text_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
+    }
+
+    /// Solid cyan selection background used by the slash-command menu.
+    pub(crate) fn slash_command_selection_background(&self) -> Color {
+        cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.cyan,
+        ))
+    }
+
+    /// Bold, contrast-derived text over the slash-command selection color.
+    pub(crate) fn slash_command_selection_text_style(&self) -> TuiStyle {
+        let background_fill = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        let foreground = self.warp_theme.font_color(background_fill.into_solid());
+        TuiStyle::default()
+            .fg(cell_color(foreground))
+            .bg(cell_color(background_fill))
+            .add_modifier(Modifier::BOLD)
+    }
     /// Bold accent prompt marker over the submitted-input background.
     pub(crate) fn input_prefix_style(&self) -> TuiStyle {
         self.accent_text_style()
@@ -212,6 +235,40 @@ impl TuiUiBuilder {
             collapsed,
             [(label.into(), style)],
             style,
+            mouse_state,
+            move || body,
+            on_toggle,
+        )
+    }
+
+    /// Prominent [`tui_collapsible`] variant: a bold primary-text header of
+    /// a leading `glyph` and a `label` (e.g. the task-list header, which the
+    /// design renders bold white). Since the header is already bold, hover
+    /// signals with an underline instead of the muted collapsible's
+    /// brighten-on-hover — applied to the label only, so the decorative
+    /// glyph and the chevron don't pick up a clashing underline.
+    pub(crate) fn prominent_collapsible(
+        &self,
+        collapsed: bool,
+        glyph: impl Into<String>,
+        label: impl Into<String>,
+        mouse_state: MouseStateHandle,
+        body: Box<dyn TuiElement>,
+        on_toggle: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
+    ) -> Box<dyn TuiElement> {
+        let header_style = self.primary_text_style().add_modifier(Modifier::BOLD);
+        let label_style = if mouse_state.lock().unwrap().is_hovered() {
+            header_style.add_modifier(Modifier::UNDERLINED)
+        } else {
+            header_style
+        };
+        tui_collapsible(
+            collapsed,
+            [
+                (format!("{} ", glyph.into()), header_style),
+                (label.into(), label_style),
+            ],
+            header_style,
             mouse_state,
             move || body,
             on_toggle,

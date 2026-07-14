@@ -326,6 +326,7 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Our embedded application assets.
 pub static ASSETS: warp_assets::Assets = warp_assets::Assets;
+const TUI_SECURE_STORAGE_SERVICE_SUFFIX: &str = ".tui";
 
 fn determine_agent_source(
     launch_mode: &LaunchMode,
@@ -411,7 +412,7 @@ pub(crate) enum LaunchMode {
     },
 
     /// Run the headless TUI front-end (the `warp-tui` binary in the `warp_tui`
-    /// crate). Boots the real headless app so auth/agent state can be reused,
+    /// crate). Boots the real headless app so shared auth/agent infrastructure can be reused,
     /// then renders an editor-backed input UI to the terminal (via `mount`)
     /// instead of opening a GUI window.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
@@ -422,10 +423,9 @@ pub(crate) enum LaunchMode {
         /// this mode.
         mount: TuiMountFn,
         /// API key for server authentication, if provided via `--api-key` or
-        /// `WARP_API_KEY`. Populated by `run_internal` (after feature flags are
-        /// initialized), not by `run_tui`. Only used on dogfood channels
-        /// (mirrors `App`); lets the TUI log in non-interactively instead of the
-        /// device-auth flow.
+        /// `WARP_API_KEY`. Parsed by the TUI front-end and only used on dogfood
+        /// channels (mirrors `App`); lets the TUI log in non-interactively
+        /// instead of the device-auth flow.
         api_key: Option<String>,
     },
 }
@@ -468,6 +468,24 @@ impl LaunchMode {
             | LaunchMode::Test { .. }
             | LaunchMode::RemoteServerProxy
             | LaunchMode::RemoteServerDaemon { .. } => ::settings::SettingsMode::Gui,
+        }
+    }
+    /// The platform secure-storage service name for this launch mode.
+    ///
+    /// The TUI uses a separate namespace so it never attempts to read secrets
+    /// created by the GUI. On macOS, those items' Keychain ACLs trust the GUI's
+    /// distinct code-signing identity and would otherwise prompt for the user's
+    /// login password when the TUI accesses them.
+    fn secure_storage_service_name<'a>(&self, data_domain: &'a str) -> Cow<'a, str> {
+        match self {
+            LaunchMode::Tui { .. } => {
+                Cow::Owned(format!("{data_domain}{TUI_SECURE_STORAGE_SERVICE_SUFFIX}"))
+            }
+            LaunchMode::App { .. }
+            | LaunchMode::CommandLine { .. }
+            | LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. } => Cow::Borrowed(data_domain),
         }
     }
 
@@ -854,15 +872,8 @@ pub fn run_integration_test(driver: TestDriver) -> Result<()> {
 /// view plus the window/driver bootstrap), so `warp` never has to depend on
 /// `warp_tui`.
 #[cfg(feature = "tui")]
-pub fn run_tui(mount: TuiMountFn) -> Result<()> {
-    // The `--api-key` / `WARP_API_KEY` value is parsed later in `run_internal`,
-    // after feature flags are initialized (`Args::from_env` checks feature flags
-    // while building its clap command). Parsing there rather than here avoids a
-    // redundant feature-flag init.
-    run_internal(LaunchMode::Tui {
-        mount,
-        api_key: None,
-    })
+pub fn run_tui(api_key: Option<String>, mount: TuiMountFn) -> Result<()> {
+    run_internal(LaunchMode::Tui { mount, api_key })
 }
 
 /// Dispatches a worker command when the current executable was re-invoked for one.
@@ -912,16 +923,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // The `run` function already initializes feature flags, but ensure they're initialized here
     // for other entrypoints.
     features::init_feature_flags();
-
-    // Now that feature flags are initialized, parse the TUI's `--api-key` /
-    // `WARP_API_KEY` (`Args::from_env` checks feature flags while building its
-    // clap command). Done here rather than in `run_tui` so we don't re-init
-    // feature flags just to parse args. Worker invocations are dispatched before
-    // `run_tui`, so the argv here is a normal TUI launch.
-    #[cfg(feature = "tui")]
-    if let LaunchMode::Tui { api_key, .. } = &mut launch_mode {
-        *api_key = warp_cli::Args::from_env().api_key().cloned();
-    }
 
     #[cfg(feature = "crash_reporting")]
     if launch_mode.needs_crash_reporting() {
@@ -1273,6 +1274,7 @@ pub(crate) fn initialize_app(
     // Sentry. Only the dependencies of crash_reporting should be initialized here. Avoid adding
     // any other stuff here, as failures will be silent. Push them to pre_sentry_errors instead.
     let data_domain = ChannelState::data_domain();
+    let secure_storage_service_name = launch_mode.secure_storage_service_name(&data_domain);
 
     // Daemon auth arrives through the client handshake, so avoid platform keychains that may
     // require an interactive unlock prompt. Other headless modes still use secure storage for
@@ -1283,13 +1285,13 @@ pub(crate) fn initialize_app(
         // Register an implementation of the secure storage service.
         cfg_if::cfg_if! {
             if #[cfg(feature = "integration_tests")] {
-                warpui_extras::secure_storage::register_noop(&data_domain, ctx);
+                warpui_extras::secure_storage::register_noop(&secure_storage_service_name, ctx);
             } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-                warpui_extras::secure_storage::register_with_fallback(&data_domain, warp_core::paths::state_dir(), ctx)
+                warpui_extras::secure_storage::register_with_fallback(&secure_storage_service_name, warp_core::paths::state_dir(), ctx)
             } else if #[cfg(target_os = "windows")] {
-                warpui_extras::secure_storage::register_with_dir(&data_domain, warp_core::paths::state_dir(), ctx)
+                warpui_extras::secure_storage::register_with_dir(&secure_storage_service_name, warp_core::paths::state_dir(), ctx)
             } else {
-                warpui_extras::secure_storage::register(&data_domain, ctx);
+                warpui_extras::secure_storage::register(&secure_storage_service_name, ctx);
             }
         }
     }
@@ -2948,3 +2950,7 @@ fn init_logging_for_unit_tests_glue() {
     // Initialize terminal-friendly logging for tests from the shared logger crate.
     warp_logging::init_logging_for_unit_tests();
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

@@ -34,7 +34,6 @@ use super::selection::ScrollDelta;
 use super::terminal_model::RangeInModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentActionId;
-use crate::ai::blocklist::agent_view::{AgentViewDisplayMode, AgentViewState};
 use crate::ai::blocklist::{AIBlock, SerializedBlockListItem};
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
@@ -47,7 +46,7 @@ use crate::terminal::model::ansi::{
     CursorShape, CursorStyle, LineClearMode, Mode, PrecmdValue, PreexecValue, Processor,
     PromptMetadata, StandardCharset, TabulationClearMode,
 };
-use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock};
+use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock, TranscriptScope};
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions;
@@ -65,6 +64,12 @@ pub(in crate::terminal) const INLINE_BANNER_HEIGHT: f64 = 2.5;
 pub(super) enum ActiveBlockCompletion {
     AlreadyFinished,
     NewlyFinished,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveConversationContext {
+    conversation_id: AIConversationId,
+    is_cloud: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,22 +109,17 @@ impl RichContentItem {
         Self::new(content_type, view_id, agent_view_conversation_id, false)
     }
 
-    pub fn should_hide_for_agent_view_state(&self, agent_view_state: &AgentViewState) -> bool {
+    pub fn should_hide_for_transcript_scope(&self, transcript_scope: &TranscriptScope) -> bool {
         if !FeatureFlag::AgentView.is_enabled() {
             return false;
         }
 
-        match agent_view_state {
-            AgentViewState::Active {
-                conversation_id,
-                display_mode: AgentViewDisplayMode::FullScreen,
-                ..
-            } => Some(*conversation_id) != self.agent_view_conversation_id,
-            AgentViewState::Active {
-                display_mode: AgentViewDisplayMode::Inline,
-                ..
+        match transcript_scope {
+            TranscriptScope::Unfiltered => false,
+            TranscriptScope::Terminal => self.agent_view_conversation_id.is_some(),
+            TranscriptScope::Conversation(conversation_id) => {
+                Some(*conversation_id) != self.agent_view_conversation_id
             }
-            | AgentViewState::Inactive => self.agent_view_conversation_id.is_some(),
         }
     }
 }
@@ -350,7 +350,8 @@ pub struct BlockList {
     /// relevant wherever we're traversing the blocklist's sumtree (i.e. in clamp_to_grid_points)
     is_inverted: bool,
 
-    agent_view_state: AgentViewState,
+    transcript_scope: TranscriptScope,
+    active_conversation_context: Option<ActiveConversationContext>,
 
     /// The view ID of a rich content item that should always remain at the bottom
     /// of the blocklist. After any other insertion, this item is automatically
@@ -381,9 +382,9 @@ pub struct BlockFilter {
 
 impl BlockFilter {
     /// Tests if a block matches this filter.
-    pub fn matches(self, block: &Block, agent_view_state: &AgentViewState) -> bool {
+    pub fn matches(self, block: &Block, transcript_scope: &TranscriptScope) -> bool {
         (self.include_background || !block.is_background())
-            && (self.include_hidden || !block.is_empty(agent_view_state))
+            && (self.include_hidden || !block.is_empty(transcript_scope))
     }
 
     /// Block filter for visible command blocks. This excludes background output
@@ -671,7 +672,8 @@ impl BlockList {
             is_ai_ugc_telemetry_enabled,
             scroll_position_before_filter: None,
             is_inverted,
-            agent_view_state: AgentViewState::Inactive,
+            transcript_scope: TranscriptScope::Terminal,
+            active_conversation_context: None,
             pinned_to_bottom: None,
             is_executing_oz_environment_startup_commands: false,
         }
@@ -931,8 +933,8 @@ impl BlockList {
         };
 
         let gap = BlockHeightItem::Gap(gap_height.into());
-        let agent_view_state = self.agent_view_state.clone();
-        let active_block_height = self.active_block_mut().height(&agent_view_state).into();
+        let transcript_scope = self.transcript_scope;
+        let active_block_height = self.active_block_mut().height(&transcript_scope).into();
 
         if active_block_height > BlockHeight::zero() {
             self.block_heights
@@ -1172,7 +1174,7 @@ impl BlockList {
             return;
         };
 
-        let agent_view_state = &self.agent_view_state;
+        let transcript_scope = &self.transcript_scope;
         self.block_heights = {
             let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
             let mut new_tree = cursor.slice(&index, SeekBias::Right);
@@ -1182,7 +1184,7 @@ impl BlockList {
                     agent_view_conversation_id,
                     ..*item
                 }
-                .should_hide_for_agent_view_state(agent_view_state);
+                .should_hide_for_transcript_scope(transcript_scope);
                 new_tree.push(BlockHeightItem::RichContent(RichContentItem {
                     agent_view_conversation_id,
                     should_hide,
@@ -1527,13 +1529,18 @@ impl BlockList {
             }
 
             // Only clear blocks that are currently visible in the agent view.
-            if block.is_empty(&self.agent_view_state) {
+            if block.is_empty(&self.transcript_scope) {
                 continue;
             }
 
             indices_to_remove.push(index);
         }
 
+        self.remove_command_blocks_at_indices(indices_to_remove);
+    }
+
+    /// Removes command blocks at stable pre-removal indices.
+    fn remove_command_blocks_at_indices(&mut self, indices_to_remove: Vec<BlockIndex>) {
         if indices_to_remove.is_empty() {
             return;
         }
@@ -1571,22 +1578,7 @@ impl BlockList {
                 indices_to_remove.push(index);
             }
         }
-
-        if indices_to_remove.is_empty() {
-            return;
-        }
-
-        self.clear_selection();
-        self.clear_smart_select_override();
-        self.clear_scroll_position_before_filter();
-
-        // Remove in reverse order so indices remain valid.
-        for index in indices_to_remove.into_iter().rev() {
-            self.remove_block_at_index(index);
-        }
-
-        // Force a re-draw since the blocklist has changed.
-        self.event_proxy.send_wakeup_event();
+        self.remove_command_blocks_at_indices(indices_to_remove);
     }
 
     /// Gets the active background block, if one exists.
@@ -1649,51 +1641,86 @@ impl BlockList {
         }
     }
 
-    pub fn agent_view_state(&self) -> &AgentViewState {
-        &self.agent_view_state
+    pub fn transcript_scope(&self) -> &TranscriptScope {
+        &self.transcript_scope
     }
 
-    /// Returns the selected conversation cached in the terminal render snapshot.
+    /// Returns the conversation associated with newly created command blocks.
     pub fn active_conversation_id(&self) -> Option<AIConversationId> {
-        self.agent_view_state.active_conversation_id()
+        self.active_conversation_context
+            .map(|context| context.conversation_id)
     }
 
-    /// Sets the agent view state for this blocklist.
-    ///
-    /// With `FeatureFlag::AgentView` enabled, if the state is active, only blocks corresponding to
-    /// the active state's conversation ID are rendered. If inactive, only blocks with no conversation
-    /// ID (i.e. those executed in the top-level terminal context) are rendered.
-    ///
-    /// Do not call this method directly. Instead, use the `AgentViewController` to enter/exit the
-    /// agent view.
-    pub fn set_agent_view_state(&mut self, state: AgentViewState) {
-        self.agent_view_state = state;
+    /// Returns whether the active conversation executes in a cloud context.
+    pub fn is_cloud_conversation_context(&self) -> bool {
+        self.active_conversation_context
+            .is_some_and(|context| context.is_cloud)
+    }
+
+    /// Updates the transcript membership used by the cached block-height layout.
+    pub fn set_transcript_scope(&mut self, scope: TranscriptScope) {
+        if self.transcript_scope == scope {
+            return;
+        }
+        self.transcript_scope = scope;
+        self.mark_agent_view_rich_content_dirty();
+        self.update_blocks_and_sumtree(None, None, |_| {}, |_| {});
+    }
+
+    /// Associates subsequent command blocks with an active conversation.
+    pub fn set_active_conversation_context(
+        &mut self,
+        conversation_id: AIConversationId,
+        is_cloud: bool,
+        attach_to_terminal: bool,
+    ) {
+        self.active_conversation_context = Some(ActiveConversationContext {
+            conversation_id,
+            is_cloud,
+        });
         if !self.active_block().finished() {
-            if let Some(id) = self.agent_view_state.active_conversation_id() {
-                // For inline agent views, add the conversation ID to Terminal variant
-                // instead of replacing with Agent variant
-                if self.agent_view_state.is_inline() {
-                    self.active_block_mut().add_attached_conversation_id(id);
-                } else {
-                    self.active_block_mut().set_conversation_id(id);
-                }
+            if attach_to_terminal {
+                self.active_block_mut()
+                    .add_attached_conversation_id(conversation_id);
             } else {
-                // Only clear conversation ID for blocks that were created inside agent view.
-                // Terminal blocks with conversation associations should keep them.
-                if matches!(
-                    self.active_block().agent_view_visibility(),
-                    &AgentViewVisibility::Agent { .. }
-                ) {
-                    self.active_block_mut().clear_conversation_id();
-                }
+                self.active_block_mut().set_conversation_id(conversation_id);
             }
         }
+    }
 
-        // AI blocks render with height 0 when hidden for the current agent view state, so mark
-        // them dirty to force a re-measure.
-        self.mark_agent_view_rich_content_dirty();
+    /// Clears the active conversation association without changing transcript scope.
+    pub fn clear_active_conversation_context(&mut self) {
+        self.active_conversation_context = None;
+        if !self.active_block().finished()
+            && matches!(
+                self.active_block().agent_view_visibility(),
+                AgentViewVisibility::Agent { .. }
+            )
+        {
+            self.active_block_mut().clear_conversation_id();
+        }
+    }
 
-        self.update_blocks_and_sumtree(None, None, |_| {}, |_| {});
+    /// Associates command blocks with a GUI conversation and updates its transcript scope.
+    pub fn enter_conversation_context(
+        &mut self,
+        conversation_id: AIConversationId,
+        is_inline: bool,
+        is_cloud: bool,
+    ) {
+        self.set_active_conversation_context(conversation_id, is_cloud, is_inline);
+        let scope = if is_inline {
+            TranscriptScope::Terminal
+        } else {
+            TranscriptScope::Conversation(conversation_id)
+        };
+        self.set_transcript_scope(scope);
+    }
+
+    /// Clears the active conversation association and returns to terminal scope.
+    pub fn exit_conversation_context(&mut self) {
+        self.clear_active_conversation_context();
+        self.set_transcript_scope(TranscriptScope::Terminal);
     }
 
     /// Marks AI / agent-view rich content as dirty so heights get re-laid out. Call this after
@@ -1848,7 +1875,7 @@ impl BlockList {
         };
         let mut previous_block_height = BlockHeight::zero();
         let block_height = if let Some(block) = self.block_at(block_index) {
-            block.height(&self.agent_view_state).into()
+            block.height(&self.transcript_scope).into()
         } else {
             report_error!(
                 "Tried to update height of block, but no such block exists",
@@ -2026,7 +2053,7 @@ impl BlockList {
     {
         block_indices.into_iter().find(|index| {
             self.block_at(*index)
-                .is_some_and(|block| filter.matches(block, &self.agent_view_state))
+                .is_some_and(|block| filter.matches(block, &self.transcript_scope))
         })
     }
 
@@ -2190,7 +2217,7 @@ impl BlockList {
         F: Fn(&mut Block),
         G: Fn(&mut Gap),
     {
-        let agent_view_state = &self.agent_view_state;
+        let transcript_scope = &self.transcript_scope;
         self.block_heights = {
             let mut new_sum_tree = SumTree::new();
 
@@ -2208,7 +2235,7 @@ impl BlockList {
                         if let Some(block) = self.blocks.get_mut(block_index) {
                             block_update_fn(block);
                             new_sum_tree.push(BlockHeightItem::Block(
-                                block.height(agent_view_state).into(),
+                                block.height(transcript_scope).into(),
                             ));
                         } else {
                             report_error!("invalid block index in block heights");
@@ -2235,7 +2262,7 @@ impl BlockList {
                         new_sum_tree.push(BlockHeightItem::SubshellSeparator {
                             separator_id: *separator_id,
                             height_when_visible,
-                            is_hidden: agent_view_state.is_fullscreen(),
+                            is_hidden: transcript_scope.is_conversation(),
                         });
                     }
                     BlockHeightItem::RichContent(RichContentItem {
@@ -2252,7 +2279,7 @@ impl BlockList {
                             agent_view_conversation_id: *agent_view_conversation_id,
                             should_hide: false,
                         }
-                        .should_hide_for_agent_view_state(agent_view_state);
+                        .should_hide_for_transcript_scope(transcript_scope);
                         let updated_height = rich_content_heights
                             .and_then(|heights| heights.get(view_id))
                             .copied()
@@ -2276,7 +2303,7 @@ impl BlockList {
                             is_historical_conversation_restoration:
                                 *is_historical_conversation_restoration,
                             // Don't show restored block separators in the agent view.
-                            is_hidden: agent_view_state.is_fullscreen(),
+                            is_hidden: transcript_scope.is_conversation(),
                         });
                     }
                     BlockHeightItem::InlineBanner {
@@ -2284,7 +2311,7 @@ impl BlockList {
                         height_when_visible: height,
                         ..
                     } => {
-                        let is_hidden = agent_view_state.is_fullscreen()
+                        let is_hidden = transcript_scope.is_conversation()
                             && !banner.banner_type.is_visible_in_agent_view();
                         new_sum_tree.push(BlockHeightItem::InlineBanner {
                             banner: *banner,
@@ -2694,7 +2721,7 @@ impl BlockList {
             honor_ps1,
             self.obfuscate_secrets,
             self.is_ai_ugc_telemetry_enabled,
-            self.agent_view_state.active_conversation_id(),
+            self.active_conversation_id(),
         );
         if let Some(is_local) = restored_block_was_local {
             block.set_restored_block_was_local(is_local);
@@ -2719,7 +2746,7 @@ impl BlockList {
         }
 
         self.block_heights.push(BlockHeightItem::Block(
-            block.height(&self.agent_view_state).into(),
+            block.height(&self.transcript_scope).into(),
         ));
         self.block_id_to_block_index
             .insert(block.id().clone(), block.index());
@@ -3249,14 +3276,14 @@ impl BlockList {
         let num_secrets_obfuscated = self
             .background_block_mut()
             .map(|block| block.num_secrets_obfuscated());
-        let agent_view_state = self.agent_view_state.clone();
+        let transcript_scope = self.transcript_scope;
         if let Some(background_block) = self.background_block_mut() {
             background_block.finish(0);
             let block_index = background_block.index();
 
             // It's common to have empty background blocks (because they only contained
             // typeahead), so we skip serializing them.
-            if !background_block.is_empty(&agent_view_state) {
+            if !background_block.is_empty(&transcript_scope) {
                 // This is similar to send_after_block_completed_event, but we can't
                 // call it because background_block mutably borrows self.
                 let block_type = background_block.into();
@@ -3309,7 +3336,7 @@ impl BlockList {
     /// Updates the sumtree with the block's new height.
     fn update_block_height_at_idx(&mut self, block_index: BlockIndex) {
         if let Some(block) = self.block_at(block_index) {
-            let new_block_height = block.height(&self.agent_view_state).into();
+            let new_block_height = block.height(&self.transcript_scope).into();
 
             self.block_heights = {
                 let mut cursor = self.block_heights.cursor::<BlockIndex, ()>();
@@ -3345,7 +3372,7 @@ impl BlockList {
         let block_to_filter = self
             .blocks
             .get_mut(block_index.0)
-            .filter(|block| !block.is_empty(&self.agent_view_state));
+            .filter(|block| !block.is_empty(&self.transcript_scope));
         if let Some(block) = block_to_filter {
             block.filter_output(filter_query);
             self.update_block_height_at_idx(block_index);
@@ -3364,7 +3391,7 @@ impl BlockList {
         let block_to_clear = self
             .blocks
             .get_mut(block_index.0)
-            .filter(|block| !block.is_empty(&self.agent_view_state));
+            .filter(|block| !block.is_empty(&self.transcript_scope));
         if let Some(block) = block_to_clear {
             block.clear_filter();
             self.update_block_height_at_idx(block_index);
@@ -3393,14 +3420,14 @@ impl BlockList {
     pub fn filter_for_block(&self, block_index: BlockIndex) -> Option<&BlockFilterQuery> {
         self.blocks
             .get(block_index.0)
-            .filter(|block| !block.is_empty(&self.agent_view_state))
+            .filter(|block| !block.is_empty(&self.transcript_scope))
             .and_then(|block| block.current_filter())
     }
 
     pub fn num_matched_lines_in_filter_for_block(&self, block_index: BlockIndex) -> Option<usize> {
         self.blocks
             .get(block_index.0)
-            .filter(|block| !block.is_empty(&self.agent_view_state))
+            .filter(|block| !block.is_empty(&self.transcript_scope))
             .and_then(|block| {
                 block
                     .output_grid()
@@ -3416,7 +3443,7 @@ impl BlockList {
         }
     }
 
-    pub(in crate::terminal) fn insert_rich_content_before_block_index(
+    pub fn insert_rich_content_before_block_index(
         &mut self,
         item: RichContentItem,
         block_index: BlockIndex,
@@ -3749,7 +3776,7 @@ impl ansi::Handler for BlockList {
 
                 if let Some(block) = self.blocks.last() {
                     self.block_heights = SumTree::from_item(BlockHeightItem::Block(
-                        block.height(&self.agent_view_state).into(),
+                        block.height(&self.transcript_scope).into(),
                     ));
                 } else {
                     self.block_heights = SumTree::new();

@@ -118,6 +118,31 @@ lazy_static! {
     static ref URL_SEPARATORS: HashSet<char> = HashSet::from([' ', '<', '>', '"', '{', '}', '|', '\\', '^', '`']);
 }
 
+/// Returns true when `c` should terminate a clickable URL.
+///
+/// URL detection allows non-ASCII letters so internationalized paths remain
+/// clickable, but non-ASCII whitespace and punctuation usually indicate prose
+/// around the URL (for example, CJK punctuation like `，` or `。`).
+pub fn is_url_link_separator(c: char) -> bool {
+    if URL_SEPARATORS.contains(&c) {
+        return true;
+    }
+    if c.is_ascii() {
+        return false;
+    }
+    if c.is_whitespace() {
+        return true;
+    }
+    matches!(
+        get_general_category(c),
+        GeneralCategory::OpenPunctuation
+            | GeneralCategory::ClosePunctuation
+            | GeneralCategory::InitialPunctuation
+            | GeneralCategory::FinalPunctuation
+            | GeneralCategory::OtherPunctuation
+    )
+}
+
 /// Returns true when `c` should terminate a clickable file path.
 ///
 /// Beyond the explicit set in [`FILE_LINK_SEPARATORS`] (ASCII punctuation
@@ -712,7 +737,7 @@ impl GridHandler {
             !cell
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                && URL_SEPARATORS.contains(&cell.c)
+                && is_url_link_separator(cell.c)
         };
         // If the point is on a separator, return directly because this can't be
         // part of a url.
@@ -779,6 +804,10 @@ impl GridHandler {
 
             if current_point >= original_point {
                 passed_point = true;
+            }
+
+            if is_at_boundary(item.cell()) {
+                break;
             }
 
             let last_state = mem::replace(&mut state, locator.advance(item.cell().c));

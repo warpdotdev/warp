@@ -9,7 +9,6 @@ use warpui::r#async::executor::Background;
 use warpui::units::Lines;
 
 use super::{decode_scrollback, SharedSessionScrollbackType};
-use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::assert_lines_approx_eq;
 use crate::channel::ChannelState;
 use crate::terminal::color::List;
@@ -328,7 +327,7 @@ fn test_loading_scrollback() {
         model
             .block_list()
             .active_block()
-            .height(&AgentViewState::Inactive),
+            .height(&crate::terminal::model::block::TranscriptScope::Terminal),
         Lines::zero()
     );
     assert!(!model.block_list().active_block().started());
@@ -374,7 +373,7 @@ fn test_loading_scrollback_with_completed_last_block_creates_active_block() {
         model
             .block_list()
             .active_block()
-            .height(&AgentViewState::Inactive),
+            .height(&crate::terminal::model::block::TranscriptScope::Terminal),
         Lines::zero()
     );
     assert!(!model.block_list().active_block().started());
@@ -419,7 +418,7 @@ fn test_loading_scrollback_in_alt_screen() {
             .block_list()
             .block_at(2.into())
             .unwrap()
-            .height(&AgentViewState::Inactive),
+            .height(&crate::terminal::model::block::TranscriptScope::Terminal),
         0.
     );
     assert!(!model.block_list().block_at(2.into()).unwrap().started());

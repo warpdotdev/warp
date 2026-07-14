@@ -8,8 +8,9 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
-    BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, ModelEventDispatcher, RichContentItem, RichContentType, TerminalModel,
+    BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, ConversationBlockRestorationPlan, ModelEventDispatcher,
+    RichContentItem, RichContentType, TerminalModel,
 };
 use warp_core::semantic_selection::SemanticSelection;
 use warpui_core::elements::tui::{
@@ -134,11 +135,26 @@ impl TuiTranscriptView {
                     .and_then(|conversation| conversation.get_task(task_id))
                     .is_some_and(should_show_task_in_blocklist);
                 if should_show {
-                    self.insert_agent_block(*conversation_id, *exchange_id, ctx);
+                    self.insert_agent_block(*conversation_id, *exchange_id, None, ctx);
                 }
             }
             BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => {
                 self.mark_exchange_dirty(*exchange_id, ctx);
+            }
+            // Todo statuses are projections of conversation-wide state. A new
+            // list can cancel rows rendered by an older exchange, so dirty
+            // every todo-rendering block on this surface rather than only the
+            // exchange carrying the UpdateTodos message.
+            BlocklistAIHistoryEvent::UpdatedTodoList { .. } => {
+                self.mark_todo_blocks_dirty(ctx);
+            }
+            // The first pending item switches between InProgress and Stopped
+            // when its conversation starts or stops, without changing the
+            // output messages that own the rendered task list.
+            BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id, ..
+            } => {
+                self.mark_conversation_dirty(*conversation_id, ctx);
             }
             BlocklistAIHistoryEvent::ReassignedExchange {
                 exchange_id,
@@ -155,16 +171,26 @@ impl TuiTranscriptView {
                 conversation_id,
                 ..
             } => self.remove_conversation(*conversation_id, ctx),
-            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. } => {
-                self.clear_agent_blocks(ctx);
+            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                active_conversation_id,
+                cleared_conversation_ids,
+                ..
+            } => {
+                let mut conversation_ids = cleared_conversation_ids.clone();
+                if let Some(active_conversation_id) = active_conversation_id {
+                    if !conversation_ids.contains(active_conversation_id) {
+                        conversation_ids.push(*active_conversation_id);
+                    }
+                }
+                for conversation_id in conversation_ids {
+                    self.remove_conversation(conversation_id, ctx);
+                }
             }
             BlocklistAIHistoryEvent::StartedNewConversation { .. }
             | BlocklistAIHistoryEvent::CreatedSubtask { .. }
             | BlocklistAIHistoryEvent::UpgradedTask { .. }
-            | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
             | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-            | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::SplitConversation { .. }
             | BlocklistAIHistoryEvent::RestoredConversations { .. }
@@ -214,6 +240,7 @@ impl TuiTranscriptView {
         &mut self,
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
+        command_block_index: Option<BlockIndex>,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.view_id_for_exchange(exchange_id, ctx).is_some() {
@@ -256,17 +283,99 @@ impl TuiTranscriptView {
             }
         });
         self.agent_blocks.borrow_mut().insert(view_id, view);
-        self.model.lock().block_list_mut().append_rich_content(
-            RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
-            false,
-        );
+        let item = RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false);
+        let mut model = self.model.lock();
+        match command_block_index {
+            Some(command_block_index) => model
+                .block_list_mut()
+                .insert_rich_content_before_block_index(item, command_block_index),
+            None => model.block_list_mut().append_rich_content(item, false),
+        }
         ctx.notify();
+    }
+
+    /// Materializes a shared restoration plan as TUI agent-block views.
+    pub(super) fn restore_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        restoration_plan: ConversationBlockRestorationPlan,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for restored_exchange in restoration_plan.into_exchanges() {
+            self.insert_agent_block(
+                conversation_id,
+                restored_exchange.exchange().id,
+                restored_exchange.command_block_index(),
+                ctx,
+            );
+        }
+        self.viewport.scroll_to_end();
+        ctx.notify();
+    }
+
+    /// Clears agent rich content before replacing the sole conversation.
+    pub(super) fn clear_for_replacement(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_agent_blocks(ctx);
+        self.viewport.scroll_to_end();
     }
 
     fn mark_exchange_dirty(&mut self, exchange_id: AIAgentExchangeId, ctx: &mut ViewContext<Self>) {
         if let Some(view_id) = self.view_id_for_exchange(exchange_id, ctx) {
             self.mark_agent_block_dirty(view_id, ctx);
         }
+    }
+
+    /// Marks every todo-rendering agent block on this terminal surface dirty.
+    /// Todo-list updates are conversation-wide — a newly active list can
+    /// restyle rows in any older exchange as cancelled — but blocks without a
+    /// todo message never change appearance, so their cached heights and
+    /// layout stay untouched.
+    fn mark_todo_blocks_dirty(&mut self, ctx: &mut ViewContext<Self>) {
+        let view_ids = self
+            .agent_blocks
+            .borrow()
+            .iter()
+            .filter_map(|(view_id, view)| view.as_ref(ctx).renders_todos().then_some(*view_id))
+            .collect::<Vec<_>>();
+        if view_ids.is_empty() {
+            return;
+        }
+        let mut model = self.model.lock();
+        for view_id in view_ids {
+            model.block_list_mut().mark_rich_content_dirty(view_id);
+        }
+        drop(model);
+        ctx.notify();
+    }
+
+    /// Marks `conversation_id`'s todo-rendering agent blocks dirty.
+    /// Conversation status participates in the projected status of the first
+    /// pending todo (InProgress vs Stopped); no other TUI block content reads
+    /// it, so blocks without todo messages keep their cached layout.
+    fn mark_conversation_dirty(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let view_ids = self
+            .agent_blocks
+            .borrow()
+            .iter()
+            .filter_map(|(view_id, view)| {
+                let view = view.as_ref(ctx);
+                (view.conversation_id() == conversation_id && view.renders_todos())
+                    .then_some(*view_id)
+            })
+            .collect::<Vec<_>>();
+        if view_ids.is_empty() {
+            return;
+        }
+        let mut model = self.model.lock();
+        for view_id in view_ids {
+            model.block_list_mut().mark_rich_content_dirty(view_id);
+        }
+        drop(model);
+        ctx.notify();
     }
 
     fn reassign_exchange(

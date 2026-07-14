@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use warp_core::features::FeatureFlag;
 use warp_editor::render::model::LineCount;
 use warpui::{Entity, ModelContext};
 
@@ -99,13 +98,7 @@ impl ReviewCommentBatch {
         file: &LocalOrRemotePath,
     ) -> Vec<EditorReviewComment> {
         self.file_comments(file)
-            .filter(|comment| {
-                if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-                    !comment.outdated
-                } else {
-                    true
-                }
-            })
+            .filter(|comment| !comment.outdated)
             .filter_map(|comment| EditorReviewComment::try_from(comment.clone()).ok())
             .collect()
     }

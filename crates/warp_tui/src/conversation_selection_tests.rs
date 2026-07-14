@@ -1,11 +1,79 @@
+use std::sync::Arc;
+
+use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIConversationId, AgentViewEntryOrigin, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    ConversationSelection, ConversationSelectionHandle,
+    AIConversationId, AgentConversationListEntryState, AgentRunDisplayStatus, AgentViewEntryOrigin,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationSelection,
+    ConversationSelectionHandle, Harness, TerminalModel, TranscriptScope,
 };
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, EntityId, ModelHandle};
 
-use super::TuiConversationSelection;
+use super::{classify_conversation_list_entry, TuiConversationSelection};
+
+#[test]
+fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
+    let selected_id = AIConversationId::new();
+    assert_eq!(
+        classify_conversation_list_entry(
+            Some(selected_id),
+            Some(selected_id),
+            true,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::ConversationSucceeded,
+        ),
+        AgentConversationListEntryState::Selected
+    );
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            Some(AIConversationId::new()),
+            false,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::ConversationCancelled,
+        ),
+        AgentConversationListEntryState::Available
+    );
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            None,
+            true,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::TaskInProgress,
+        ),
+        AgentConversationListEntryState::Unavailable
+    );
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            None,
+            true,
+            Some(Harness::Claude),
+            &AgentRunDisplayStatus::TaskSucceeded,
+        ),
+        AgentConversationListEntryState::Unavailable
+    );
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            None,
+            false,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::TaskSucceeded,
+        ),
+        AgentConversationListEntryState::Unavailable
+    );
+}
+
+/// Creates a terminal model configured for the TUI's unfiltered transcript.
+fn tui_terminal_model() -> Arc<FairMutex<TerminalModel>> {
+    let mut terminal_model = TerminalModel::mock(None, None);
+    terminal_model
+        .block_list_mut()
+        .set_transcript_scope(TranscriptScope::Unfiltered);
+    Arc::new(FairMutex::new(terminal_model))
+}
 
 fn build_tui_selection(
     app: &mut App,
@@ -13,50 +81,112 @@ fn build_tui_selection(
     ModelHandle<BlocklistAIHistoryModel>,
     ConversationSelectionHandle,
     EntityId,
+    Arc<FairMutex<TerminalModel>>,
 ) {
     app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
     let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
     let terminal_surface_id = EntityId::new();
+    let terminal_model = tui_terminal_model();
+    let terminal_model_for_selection = terminal_model.clone();
     let selection = app.add_model(|ctx| {
-        Box::new(TuiConversationSelection::new(terminal_surface_id, ctx))
-            as Box<dyn ConversationSelection>
+        Box::new(TuiConversationSelection::new(
+            terminal_surface_id,
+            terminal_model_for_selection,
+            ctx,
+        )) as Box<dyn ConversationSelection>
     });
-    (history, selection, terminal_surface_id)
+    (history, selection, terminal_surface_id, terminal_model)
 }
 
 #[test]
-fn tui_selection_owns_next_prompt_selection() {
+fn tui_selection_eagerly_owns_session_conversation() {
     App::test((), |mut app| async move {
-        let (_, selection, _) = build_tui_selection(&mut app);
-        let conversation_id = AIConversationId::new();
+        let (history, selection, terminal_surface_id, terminal_model) =
+            build_tui_selection(&mut app);
+        let conversation_id = selection
+            .read(&app, |selection, ctx| {
+                assert!(selection.is_conversation_active(ctx));
+                assert!(selection.is_conversation_fullscreen(ctx));
+                selection.selected_conversation_id(ctx)
+            })
+            .expect("TUI should create its session conversation eagerly");
 
-        selection.update(&mut app, |selection, ctx| {
-            selection.select_existing_conversation(conversation_id, AgentViewEntryOrigin::Cli, ctx);
-        });
-        selection.read(&app, |selection, ctx| {
+        history.read(&app, |history, _| {
+            assert!(history.conversation(&conversation_id).is_some());
             assert_eq!(
-                selection.selected_conversation_id(ctx),
+                history
+                    .active_conversation(terminal_surface_id)
+                    .map(|conversation| conversation.id()),
                 Some(conversation_id)
             );
-            assert!(selection.is_conversation_active(ctx));
-            assert!(selection.is_conversation_fullscreen(ctx));
+            assert_eq!(
+                history
+                    .all_live_conversations_for_terminal_surface(terminal_surface_id)
+                    .map(|conversation| conversation.id())
+                    .collect::<Vec<_>>(),
+                vec![conversation_id]
+            );
         });
+        assert_eq!(
+            terminal_model.lock().block_list().active_conversation_id(),
+            Some(conversation_id)
+        );
+        assert_eq!(
+            terminal_model.lock().block_list().transcript_scope(),
+            &TranscriptScope::Unfiltered
+        );
+
+        terminal_model
+            .lock()
+            .simulate_block("echo before prompt", "before prompt\r\n");
+        let restored_conversation_id = terminal_model
+            .lock()
+            .block_list()
+            .blocks()
+            .iter()
+            .find(|block| block.command_to_string() == "echo before prompt")
+            .and_then(|block| block.agent_view_visibility().agent_view_conversation_id());
+        assert_eq!(restored_conversation_id, Some(conversation_id));
 
         selection.update(&mut app, |selection, ctx| {
             selection.select_new_conversation(AgentViewEntryOrigin::Cli, ctx);
         });
-        selection.read(&app, |selection, ctx| {
-            assert_eq!(selection.selected_conversation_id(ctx), None);
-            assert!(!selection.is_conversation_active(ctx));
-            assert!(!selection.is_conversation_fullscreen(ctx));
+        let new_conversation_id = selection
+            .read(&app, |selection, ctx| {
+                assert!(selection.is_conversation_active(ctx));
+                assert!(selection.is_conversation_fullscreen(ctx));
+                selection.selected_conversation_id(ctx)
+            })
+            .expect("TUI /new should eagerly create its replacement conversation");
+        assert_ne!(new_conversation_id, conversation_id);
+        history.read(&app, |history, _| {
+            assert_eq!(
+                history
+                    .active_conversation(terminal_surface_id)
+                    .map(|conversation| conversation.id()),
+                Some(new_conversation_id)
+            );
         });
+        assert_eq!(
+            terminal_model.lock().block_list().active_conversation_id(),
+            Some(new_conversation_id)
+        );
+        assert_eq!(
+            terminal_model.lock().block_list().transcript_scope(),
+            &TranscriptScope::Unfiltered
+        );
     });
 }
 
 #[test]
 fn tui_selection_creates_and_selects_terminal_surface_scoped_conversation() {
     App::test((), |mut app| async move {
-        let (history, selection, terminal_surface_id) = build_tui_selection(&mut app);
+        let (history, selection, terminal_surface_id, _) = build_tui_selection(&mut app);
+        let initial_conversation_id = selection
+            .read(&app, |selection, ctx| {
+                selection.selected_conversation_id(ctx)
+            })
+            .expect("TUI should have an initial conversation");
 
         let conversation_id = selection
             .update(&mut app, |selection, ctx| {
@@ -71,13 +201,12 @@ fn tui_selection_creates_and_selects_terminal_surface_scoped_conversation() {
             );
         });
         history.read(&app, |history, _| {
-            assert_eq!(
-                history
-                    .all_live_conversations_for_terminal_surface(terminal_surface_id)
-                    .map(|conversation| conversation.id())
-                    .collect::<Vec<_>>(),
-                vec![conversation_id]
-            );
+            let conversation_ids = history
+                .all_live_conversations_for_terminal_surface(terminal_surface_id)
+                .map(|conversation| conversation.id())
+                .collect::<Vec<_>>();
+            assert!(conversation_ids.contains(&initial_conversation_id));
+            assert!(conversation_ids.contains(&conversation_id));
         });
     });
 }
@@ -85,7 +214,7 @@ fn tui_selection_creates_and_selects_terminal_surface_scoped_conversation() {
 #[test]
 fn tui_selection_reconciles_split_and_removed_selection() {
     App::test((), |mut app| async move {
-        let (history, selection, terminal_surface_id) = build_tui_selection(&mut app);
+        let (history, selection, terminal_surface_id, _) = build_tui_selection(&mut app);
         let old_conversation_id = AIConversationId::new();
         let new_conversation_id = AIConversationId::new();
 
@@ -120,6 +249,58 @@ fn tui_selection_reconciles_split_and_removed_selection() {
         selection.read(&app, |selection, ctx| {
             assert_eq!(selection.selected_conversation_id(ctx), None);
         });
+        for _ in 0..100 {
+            if selection.read(&app, |selection, ctx| {
+                selection.selected_conversation_id(ctx).is_some()
+            }) {
+                break;
+            }
+            futures_lite::future::yield_now().await;
+        }
+        selection.read(&app, |selection, ctx| {
+            assert!(selection.selected_conversation_id(ctx).is_some());
+            assert!(selection.is_conversation_active(ctx));
+            assert!(selection.is_conversation_fullscreen(ctx));
+        });
+    });
+}
+
+#[test]
+fn tui_restoration_wins_over_deferred_replacement() {
+    App::test((), |mut app| async move {
+        let (history, selection, terminal_surface_id, _) = build_tui_selection(&mut app);
+        let provisional_conversation_id = selection
+            .read(&app, |selection, ctx| {
+                selection.selected_conversation_id(ctx)
+            })
+            .expect("TUI should have a provisional conversation");
+        let restored_conversation_id = AIConversationId::new();
+        app.update(|ctx| {
+            history.update(ctx, |_, ctx| {
+                ctx.emit(
+                    BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                        terminal_surface_id,
+                        active_conversation_id: Some(provisional_conversation_id),
+                        cleared_conversation_ids: vec![provisional_conversation_id],
+                    },
+                );
+            });
+            selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    restored_conversation_id,
+                    AgentViewEntryOrigin::RestoreExistingConversation,
+                    ctx,
+                );
+            });
+        });
+        futures_lite::future::yield_now().await;
+
+        selection.read(&app, |selection, ctx| {
+            assert_eq!(
+                selection.selected_conversation_id(ctx),
+                Some(restored_conversation_id)
+            );
+        });
     });
 }
 
@@ -129,9 +310,13 @@ fn tui_new_conversation_preserves_pending_autoexecute_override() {
         app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
         let terminal_surface_id = EntityId::new();
+        let terminal_model = tui_terminal_model();
         let selection = app.add_model(|ctx| {
-            Box::new(TuiConversationSelection::new(terminal_surface_id, ctx))
-                as Box<dyn ConversationSelection>
+            Box::new(TuiConversationSelection::new(
+                terminal_surface_id,
+                terminal_model,
+                ctx,
+            )) as Box<dyn ConversationSelection>
         });
 
         let conversation_id = selection

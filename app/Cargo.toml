@@ -652,7 +652,6 @@ default = [
     "blocklist_markdown_table_rendering",
     "markdown_mermaid",
     "blocklist_markdown_images",
-    "pr_comments_slash_command",
     "pr_comments_v2",
     "pr_comments_skill",
     "revert_to_checkpoints",
@@ -683,8 +682,6 @@ default = [
     "oz_handoff",
     "handoff_local_cloud",
     "run_agents_tool",
-    "orchestration_viewer_streamer",
-    "owner_orchestration_ancestor_streamer",
     "pending_user_query_indicator",
     "queue_slash_command",
     "queued_prompts_v2",
@@ -913,7 +910,6 @@ tabbed_editor_view = []
 selection_as_context = []
 send_telemetry_to_file = []
 multi_profile = []
-pr_comments_slash_command = []
 pr_comments_v2 = []
 pr_comments_skill = []
 conversation_artifacts = []
@@ -989,8 +985,6 @@ skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
 run_agents_tool = []
-orchestration_viewer_streamer = []
-owner_orchestration_ancestor_streamer = []
 wait_for_events_parent_registration = []
 pending_user_query_indicator = []
 queue_slash_command = []

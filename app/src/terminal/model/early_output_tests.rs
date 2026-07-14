@@ -1,5 +1,4 @@
 use super::TypeaheadMode;
-use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, Handler};
 use crate::terminal::model::blocks::BlockList;
@@ -201,5 +200,5 @@ fn test_queued_typeahead_shell_reported() {
     assert!(block_list
         .background_block_mut()
         .expect("Block should exist")
-        .is_empty(&AgentViewState::Inactive));
+        .is_empty(&crate::terminal::model::block::TranscriptScope::Terminal));
 }

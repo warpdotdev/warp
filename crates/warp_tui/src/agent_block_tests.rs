@@ -7,23 +7,32 @@ use parking_lot::FairMutex;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIBlockModel, AIBlockOutputStatus,
-    AIConversationId, AIRequestType, Appearance, LLMId, MessageId, OutputStatusUpdateCallback,
-    RequestCommandOutputResult, ServerOutputId, Shared, TaskId, TerminalModel, UserQueryMode,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
+    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, Appearance, LLMId,
+    MessageId, OutputStatusUpdateCallback, RequestCommandOutputResult, ServerOutputId, Shared,
+    SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus, UserQueryMode,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
+    Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPosition,
+    TuiSize,
 };
 use warpui_core::elements::Fill as CoreFill;
+use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityIdMap, ViewContext, ViewHandle};
+use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext, ViewHandle};
 
-use super::{TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection, TuiToolCallView};
-use crate::agent_block_sections::render_fallback_tool_call_section;
+use super::{
+    CollapsibleSectionStates, TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection,
+    TuiToolCallView,
+};
+use crate::agent_block_sections::{
+    completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
+};
 use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
 use crate::tui_shell_command_view::TuiShellCommandViewAction;
 
@@ -527,6 +536,34 @@ fn finished_reasoning_renders_collapsed_thought_for_header() {
     });
 }
 
+/// Duration-only reasoning records do not create empty thinking sections.
+#[test]
+fn empty_finished_reasoning_is_omitted() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    reasoning_message("r1", Some(Duration::from_secs(15)), ""),
+                    plain_text_message("m2", "after"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    TuiAIBlockSection::PlainText("after".to_owned()),
+                ]
+            );
+        });
+    });
+}
+
 #[test]
 fn manual_expand_override_shows_finished_reasoning_body() {
     App::test((), |mut app| async move {
@@ -542,7 +579,7 @@ fn manual_expand_override_shows_finished_reasoning_body() {
             let block = block.as_ref(app_ctx);
             // A manual expand wins over the collapsed-when-finished default.
             block
-                .thinking_states
+                .collapsible_states
                 .set_collapsed(MessageId::new("reasoning-1".to_owned()), false);
 
             let rendered = render_block_lines(block, 40, app_ctx);
@@ -568,7 +605,7 @@ fn thinking_action_records_a_manual_collapse_override() {
             ctx.dispatch_typed_action_for_view(
                 block.window_id(ctx),
                 block.id(),
-                &TuiAIBlockAction::SetThinkingCollapsed {
+                &TuiAIBlockAction::SetSectionCollapsed {
                     message_id: message_id.clone(),
                     collapsed: true,
                 },
@@ -576,7 +613,7 @@ fn thinking_action_records_a_manual_collapse_override() {
         });
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            assert!(block.thinking_states.is_collapsed(&message_id, false));
+            assert!(block.collapsible_states.is_collapsed(&message_id, false));
         });
     });
 }
@@ -614,6 +651,98 @@ fn reasoning_interleaves_with_plain_text_in_message_order() {
 }
 
 #[test]
+fn completed_conversation_summary_renders_collapsed_in_message_order() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    summarization_message(
+                        "summary-1",
+                        Some(Duration::from_secs(3)),
+                        SummarizationType::ConversationSummary,
+                        "condensed context",
+                    ),
+                    plain_text_message("m2", "after"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    TuiAIBlockSection::Summarization {
+                        message_id: MessageId::new("summary-1".to_owned()),
+                        finished: true,
+                        body: "condensed context".to_owned(),
+                    },
+                    TuiAIBlockSection::PlainText("after".to_owned()),
+                ]
+            );
+            assert_eq!(
+                render_block_lines(block, 40, app_ctx),
+                vec!["before", "Conversation summarized ▸", "after"]
+            );
+        });
+    });
+}
+
+#[test]
+fn expanded_conversation_summary_shows_its_body() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![summarization_message(
+                    "summary-1",
+                    Some(Duration::from_secs(3)),
+                    SummarizationType::ConversationSummary,
+                    "condensed context",
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            block
+                .collapsible_states
+                .set_collapsed(MessageId::new("summary-1".to_owned()), false);
+            assert_eq!(
+                render_block_lines(block, 40, app_ctx),
+                vec!["Conversation summarized ▾", "    condensed context"]
+            );
+        });
+    });
+}
+
+#[test]
+fn tool_call_result_summaries_remain_hidden() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![summarization_message(
+                    "summary-1",
+                    Some(Duration::from_secs(3)),
+                    SummarizationType::ToolCallResultSummary,
+                    "tool output",
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            assert!(block.as_ref(app_ctx).sections(app_ctx).is_empty());
+        });
+    });
+}
+
+#[test]
 fn multiple_reasoning_blocks_render_independent_collapse_state() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -637,6 +766,335 @@ fn multiple_reasoning_blocks_render_independent_collapse_state() {
             assert!(rendered.iter().all(|line| !line.contains("done body")));
         });
     });
+}
+
+#[test]
+fn todo_operations_map_to_sections_in_message_order() {
+    App::test((), |mut app| async move {
+        let todos = vec![todo("t1", "Compile list"), todo("t2", "Create suggestions")];
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    update_todos_message("m2", todos.clone()),
+                    mark_completed_message("m3", vec![todo("t1", "Compile list")]),
+                    plain_text_message("m4", "after"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    TuiAIBlockSection::TodoList {
+                        message_id: MessageId::new("m2".to_owned()),
+                        todos: todos.clone(),
+                    },
+                    TuiAIBlockSection::CompletedTodos {
+                        completed: vec![todo("t1", "Compile list")],
+                    },
+                    TuiAIBlockSection::PlainText("after".to_owned()),
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_todo_operations_are_ignored() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    update_todos_message("m1", Vec::new()),
+                    mark_completed_message("m2", Vec::new()),
+                    plain_text_message("m3", "visible"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![TuiAIBlockSection::PlainText("visible".to_owned())]
+            );
+        });
+    });
+}
+
+#[test]
+fn task_list_renders_header_and_status_glyph_rows() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let theme = Appearance::as_ref(app_ctx).theme();
+            let yellow: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.yellow)).into();
+            let green: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.green)).into();
+            let primary = expected_output_text_color(app_ctx);
+            let muted = expected_tool_call_text_color(app_ctx);
+
+            let rows = vec![
+                ("Compile list".to_owned(), TodoStatus::Completed),
+                ("Determine duplications".to_owned(), TodoStatus::InProgress),
+                ("Create suggestions".to_owned(), TodoStatus::Pending),
+                ("Old task".to_owned(), TodoStatus::Cancelled),
+            ];
+            let states = CollapsibleSectionStates::default();
+            let message_id = MessageId::new("m1".to_owned());
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_todo_list_section(&states, &message_id, &rows, app_ctx),
+                TuiRect::new(0, 0, 40, 5),
+                app_ctx,
+            );
+            assert_eq!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .collect::<Vec<_>>(),
+                vec![
+                    "≡ Tasks 4 ▾",
+                    "  ✓ Compile list",
+                    "  • Determine duplications",
+                    "  ◌ Create suggestions",
+                    "  ■ Old task",
+                ],
+            );
+            // Header is bold primary text (the design's prominent header).
+            assert_eq!(frame.buffer[(0, 0)].fg, primary);
+            assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+            // Completed: green check, primary title.
+            assert_eq!(frame.buffer[(2, 1)].fg, green);
+            assert_eq!(frame.buffer[(4, 1)].fg, primary);
+            // In progress: yellow bullet, primary title.
+            assert_eq!(frame.buffer[(2, 2)].fg, yellow);
+            assert_eq!(frame.buffer[(4, 2)].fg, primary);
+            // Pending: primary glyph and title.
+            assert_eq!(frame.buffer[(2, 3)].fg, primary);
+            // Cancelled: muted glyph, struck-through muted title.
+            assert_eq!(frame.buffer[(2, 4)].fg, muted);
+            assert_eq!(frame.buffer[(4, 4)].fg, muted);
+            assert!(frame.buffer[(4, 4)]
+                .modifier
+                .contains(Modifier::CROSSED_OUT));
+        });
+    });
+}
+
+#[test]
+fn task_list_collapse_override_hides_rows() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let rows = vec![("Compile list".to_owned(), TodoStatus::Pending)];
+            let states = CollapsibleSectionStates::default();
+            let message_id = MessageId::new("m1".to_owned());
+
+            // Default: expanded, even though nothing is streaming — task
+            // lists never default to collapsed.
+            assert!(!states.is_collapsed(&message_id, false));
+
+            states.set_collapsed(message_id.clone(), true);
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_todo_list_section(&states, &message_id, &rows, app_ctx),
+                TuiRect::new(0, 0, 40, 2),
+                app_ctx,
+            );
+            let lines = frame.buffer.to_lines();
+            assert_eq!(lines[0].trim_end(), "≡ Tasks 1 ▸");
+            assert!(lines.iter().all(|line| !line.contains("Compile list")));
+        });
+    });
+}
+
+#[test]
+fn task_list_header_hover_underlines_only_the_label() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let rows = vec![("Compile list".to_owned(), TodoStatus::Pending)];
+            let states = CollapsibleSectionStates::default();
+            let message_id = MessageId::new("m1".to_owned());
+            let area = TuiRect::new(0, 0, 40, 2);
+
+            // Move the pointer onto the header row so the shared hover state
+            // reports it hovered, as the runtime would.
+            let mut element = render_todo_list_section(&states, &message_id, &rows, app_ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(TuiConstraint::loose(TuiSize::new(40, 2)), &mut ctx, app_ctx);
+            // Paint once so the element retains its scene geometry for
+            // hit-testing the hover move.
+            let scene = {
+                let mut buffer = TuiBuffer::empty(area);
+                let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+                Rc::new(paint_ctx.scene.clone())
+            };
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+            event_ctx.set_origin_view(Some(EntityId::new()));
+            element.dispatch_event(
+                &TuiEvent::MouseMoved {
+                    position: TuiPoint::new(0, 0),
+                    modifiers: ModifiersState::default(),
+                    is_synthetic: false,
+                },
+                &mut event_ctx,
+                app_ctx,
+            );
+
+            // Re-render hovered: `≡ Tasks 1 ▾` underlines exactly the label's
+            // cells — not the ≡ glyph, the chevron, or trailing cells. The
+            // label's start column is located from the buffer since the
+            // glyph's cell width varies by rendering backend.
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_todo_list_section(&states, &message_id, &rows, app_ctx),
+                area,
+                app_ctx,
+            );
+            assert_eq!(frame.buffer.to_lines()[0].trim_end(), "≡ Tasks 1 ▾");
+            let label_start = (0..40u16)
+                .find(|&x| frame.buffer[(x, 0)].symbol() == "T")
+                .expect("the header row contains the label");
+            let underlined: Vec<u16> = (0..40u16)
+                .filter(|&x| frame.buffer[(x, 0)].modifier.contains(Modifier::UNDERLINED))
+                .collect();
+            // "Tasks 1" spans seven cells.
+            let label_cells: Vec<u16> = (label_start..label_start + 7).collect();
+            assert_eq!(underlined, label_cells);
+        });
+    });
+}
+
+#[test]
+fn task_list_desired_height_accounts_for_rows_and_collapse() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![update_todos_message(
+                    "m1",
+                    vec![todo("t1", "one"), todo("t2", "two")],
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            // Top padding + header + two task rows.
+            assert_eq!(desired_height(block, 40, app_ctx), 4);
+
+            block
+                .collapsible_states
+                .set_collapsed(MessageId::new("m1".to_owned()), true);
+            // Collapsed: top padding + header only.
+            assert_eq!(desired_height(block, 40, app_ctx), 2);
+        });
+    });
+}
+
+#[test]
+fn task_list_without_conversation_state_falls_back_to_cancelled() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        // The block's conversation is unknown to the (default) history model,
+        // so every item resolves to the Cancelled fallback.
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![update_todos_message(
+                    "m1",
+                    vec![todo("t1", "orphaned task")],
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            let rendered = render_block_lines(block, 40, app_ctx);
+            assert_eq!(rendered[0], "≡ Tasks 1 ▾");
+            assert_eq!(rendered[1], "  ■ orphaned task");
+        });
+    });
+}
+
+#[test]
+fn completed_todos_render_muted_completion_row() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![mark_completed_message(
+                    "m1",
+                    vec![todo("t1", "Compile list")],
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            // No active list is known to the history model, so the position
+            // suffix is omitted.
+            let rendered = render_block_lines(block, 40, app_ctx);
+            assert_eq!(rendered[0], "✓ Completed Compile list");
+
+            let frame = {
+                let mut presenter = TuiPresenter::new();
+                presenter.present_element(
+                    block.render_element(app_ctx),
+                    TuiRect::new(0, 0, 40, 2),
+                    app_ctx,
+                )
+            };
+            assert_eq!(
+                frame.buffer[(0, 1)].fg,
+                expected_tool_call_text_color(app_ctx)
+            );
+        });
+    });
+}
+
+#[test]
+fn completed_todos_label_includes_active_list_positions() {
+    let list = AIAgentTodoList::default()
+        .with_completed_items(vec![todo("t1", "one")])
+        .with_pending_items(vec![todo("t2", "two"), todo("t3", "three")]);
+
+    // Items in the active list carry their (n/m) position; unknown items omit it.
+    assert_eq!(
+        completed_todos_label(&[todo("t1", "one")], Some(&list)),
+        "Completed one (1/3)"
+    );
+    assert_eq!(
+        completed_todos_label(&[todo("t1", "one"), todo("t3", "three")], Some(&list)),
+        "Completed one (1/3), three (3/3)"
+    );
+    assert_eq!(
+        completed_todos_label(&[todo("t9", "unknown")], Some(&list)),
+        "Completed unknown"
+    );
+    assert_eq!(
+        completed_todos_label(&[todo("t1", "one")], None),
+        "Completed one"
+    );
+    assert_eq!(completed_todos_label(&[], Some(&list)), "");
 }
 
 struct FakeAgentBlockModel {
@@ -754,6 +1212,31 @@ fn debug_output_message(id: &str, text: &str) -> AIAgentOutputMessage {
     }
 }
 
+/// Builds a todo item for task-list tests.
+fn todo(id: &str, title: &str) -> AIAgentTodo {
+    AIAgentTodo::new(id.to_owned().into(), title.to_owned(), String::new())
+}
+
+/// Builds an `UpdateTodos` todo-operation output message.
+fn update_todos_message(id: &str, todos: Vec<AIAgentTodo>) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::TodoOperation(TodoOperation::UpdateTodos { todos }),
+        citations: Vec::new(),
+    }
+}
+
+/// Builds a `MarkAsCompleted` todo-operation output message.
+fn mark_completed_message(id: &str, completed_todos: Vec<AIAgentTodo>) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::TodoOperation(TodoOperation::MarkAsCompleted {
+            completed_todos,
+        }),
+        citations: Vec::new(),
+    }
+}
+
 /// Builds a tool-call action for message-ordering tests.
 fn test_action(id: &str) -> AIAgentAction {
     AIAgentAction {
@@ -816,6 +1299,28 @@ fn reasoning_message(
                 }],
             },
             finished_duration,
+        },
+        citations: Vec::new(),
+    }
+}
+
+fn summarization_message(
+    id: &str,
+    finished_duration: Option<Duration>,
+    summarization_type: SummarizationType,
+    body: &str,
+) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::Summarization {
+            text: AIAgentText {
+                sections: vec![AIAgentTextSection::PlainText {
+                    text: body.to_owned().into(),
+                }],
+            },
+            finished_duration,
+            summarization_type,
+            token_count: None,
         },
         citations: Vec::new(),
     }

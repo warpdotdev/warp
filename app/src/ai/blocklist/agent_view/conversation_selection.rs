@@ -4,11 +4,17 @@ use warpui::{AppContext, EntityId, ModelContext, ModelHandle, SingletonEntity};
 use super::{
     AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin, EnterAgentViewError,
 };
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversationAutoexecuteMode, AIConversationId};
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentConversationEntryId, AgentConversationListEntryState,
+    AgentConversationListPolicy,
+};
 use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::workspace::RestoreConversationLayout;
 
 /// GUI conversation selection backed unconditionally by Agent View.
 pub(crate) struct AgentViewConversationSelection {
@@ -58,6 +64,49 @@ impl AgentViewConversationSelection {
             terminal_surface_id,
             agent_view_controller,
         }
+    }
+}
+
+/// Applies GUI list-state precedence without consulting frontend models.
+fn classify_gui_list_entry(
+    selected_entry_id: Option<AgentConversationEntryId>,
+    entry_id: AgentConversationEntryId,
+    open_terminal_view_id: Option<EntityId>,
+    terminal_surface_id: EntityId,
+    has_open_action: impl FnOnce() -> bool,
+) -> AgentConversationListEntryState {
+    if selected_entry_id == Some(entry_id) {
+        return AgentConversationListEntryState::Selected;
+    }
+    if open_terminal_view_id.is_some_and(|terminal_view_id| terminal_view_id != terminal_surface_id)
+    {
+        return AgentConversationListEntryState::OpenElsewhere;
+    }
+    if has_open_action() {
+        AgentConversationListEntryState::Available
+    } else {
+        AgentConversationListEntryState::Unavailable
+    }
+}
+/// Classifies entries relative to this GUI Agent View terminal surface.
+impl AgentConversationListPolicy for AgentViewConversationSelection {
+    fn classify_entry(
+        &self,
+        entry: &AgentConversationEntry,
+        app: &AppContext,
+    ) -> AgentConversationListEntryState {
+        let selected_entry_id = self
+            .selected_conversation_id(app)
+            .map(AgentConversationEntryId::Conversation);
+        let open_terminal_view_id =
+            ActiveAgentViewsModel::as_ref(app).get_terminal_view_id_for_entry(entry, app);
+        classify_gui_list_entry(
+            selected_entry_id,
+            entry.id,
+            open_terminal_view_id,
+            self.terminal_surface_id,
+            || entry.has_open_action(Some(RestoreConversationLayout::ActivePane), app),
+        )
     }
 }
 

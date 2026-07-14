@@ -19,12 +19,12 @@
 //! ancestors can react.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize,
 };
 use crate::AppContext;
 
-type KeyCallback = Box<dyn FnMut(&TuiEvent, &mut TuiEventContext, &AppContext)>;
+type KeyCallback = Box<dyn for<'a> FnMut(&TuiEvent, &mut TuiEventContext<'a>, &AppContext)>;
 
 struct KeyBinding {
     key: String,
@@ -49,7 +49,7 @@ impl TuiEventHandler {
     pub fn on_key(
         mut self,
         key: impl Into<String>,
-        callback: impl FnMut(&TuiEvent, &mut TuiEventContext, &AppContext) + 'static,
+        callback: impl for<'a> FnMut(&TuiEvent, &mut TuiEventContext<'a>, &AppContext) + 'static,
     ) -> Self {
         self.bindings.push(KeyBinding {
             key: key.into(),
@@ -69,12 +69,21 @@ impl TuiElement for TuiEventHandler {
         self.child.layout(constraint, ctx, app)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        self.child.render(area, buffer, ctx);
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.child.render(origin, surface, ctx);
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        self.child.cursor_position(area, ctx)
+    fn size(&self) -> Option<TuiSize> {
+        self.child.size()
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.child.origin()
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -84,12 +93,10 @@ impl TuiElement for TuiEventHandler {
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        if self.child.dispatch_event(event, area, event_ctx, ctx, app) {
+        if self.child.dispatch_event(event, event_ctx, app) {
             return true;
         }
 

@@ -1,5 +1,6 @@
 #[allow(dead_code)]
 pub mod entry;
+mod query;
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -11,8 +12,10 @@ pub use entry::{
     AgentConversationProvenance,
 };
 use futures::stream::AbortHandle;
+use fuzzy_match::FuzzyMatchResult;
 use instant::Instant;
 use itertools::Itertools;
+pub use query::query_conversation_entries;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
@@ -120,6 +123,14 @@ enum TaskFetchState {
     /// can back off for [`TRANSIENT_FETCH_FAILURE_COOLDOWN`] before retrying.
     /// The `TaskFetchError` carries structured failure details for display in the UI.
     TransientlyFailed { at: Instant, error: TaskFetchError },
+}
+
+/// Availability state for cloud conversation metadata.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum CloudConversationMetadataLoadState {
+    #[default]
+    Available,
+    Failed,
 }
 
 /// Tracks the cooldown window for RTC-triggered task-list refreshes. Pending events keep
@@ -281,6 +292,31 @@ pub struct AgentManagementFilters {
     pub environment: EnvironmentFilter,
     #[serde(default)]
     pub harness: HarnessFilter,
+}
+
+/// Frontend-specific classification of a normalized conversation-list entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentConversationListEntryState {
+    Selected,
+    OpenElsewhere,
+    Available,
+    Unavailable,
+}
+
+/// Per-frontend policy for classifying normalized conversation-list entries.
+pub trait AgentConversationListPolicy: 'static {
+    /// Classifies `entry` as selected, open elsewhere, available, or unavailable.
+    fn classify_entry(
+        &self,
+        entry: &AgentConversationEntry,
+        app: &AppContext,
+    ) -> AgentConversationListEntryState;
+}
+
+/// A normalized conversation entry paired with optional title-match metadata.
+pub struct AgentConversationQueryResult {
+    pub entry: AgentConversationEntry,
+    pub title_match: Option<FuzzyMatchResult>,
 }
 
 impl AgentManagementFilters {
@@ -559,6 +595,8 @@ pub struct AgentConversationsModel {
     active_data_consumers_per_window: HashMap<WindowId, HashSet<EntityId>>,
     /// Whether we have finished the initial task load
     has_finished_initial_load: bool,
+    /// Availability state for cloud conversation metadata.
+    cloud_conversation_metadata_load_state: CloudConversationMetadataLoadState,
     /// Per-task fetch state for `get_or_async_fetch_task_data`. See [`TaskFetchState`] for
     /// the meaning of each variant. Tasks that have been successfully fetched live in `tasks`
     /// and are absent from this map.
@@ -614,6 +652,8 @@ impl AgentConversationsModel {
                 next_poll_abort_handle: None,
                 active_data_consumers_per_window: HashMap::new(),
                 has_finished_initial_load: true,
+                cloud_conversation_metadata_load_state:
+                    CloudConversationMetadataLoadState::Available,
                 task_fetch_state: HashMap::new(),
                 rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
                 dirty_since: None,
@@ -653,6 +693,7 @@ impl AgentConversationsModel {
             next_poll_abort_handle: None,
             active_data_consumers_per_window: HashMap::new(),
             has_finished_initial_load: false,
+            cloud_conversation_metadata_load_state: CloudConversationMetadataLoadState::Available,
             task_fetch_state: HashMap::new(),
             rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
             dirty_since: None,
@@ -671,6 +712,12 @@ impl AgentConversationsModel {
 
     pub fn is_loading(&self) -> bool {
         !self.has_finished_initial_load
+    }
+
+    /// Returns whether cloud conversation metadata failed to load.
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    pub(crate) fn cloud_conversation_metadata_load_failed(&self) -> bool {
+        self.cloud_conversation_metadata_load_state == CloudConversationMetadataLoadState::Failed
     }
 
     fn handle_network_status_changed(
@@ -922,13 +969,14 @@ impl AgentConversationsModel {
                     };
 
                     // Handle conversation metadata result
-                    let mut conversation_metadata = match conversation_metadata_result {
-                        Ok(metadata) => metadata,
-                        Err(e) => {
-                            log::warn!("Failed to fetch conversation metadata: {e:?}");
-                            vec![]
-                        }
-                    };
+                    let (mut conversation_metadata, cloud_metadata_loaded) =
+                        match conversation_metadata_result {
+                            Ok(metadata) => (metadata, true),
+                            Err(e) => {
+                                log::warn!("Failed to fetch conversation metadata: {e:?}");
+                                (vec![], false)
+                            }
+                        };
 
                     // Collect all conversation IDs from tasks
                     let task_conversation_ids: HashSet<String> = tasks
@@ -972,13 +1020,23 @@ impl AgentConversationsModel {
                     }
 
                     // Always return success - we handle failures individually above
-                    Ok((tasks, conversation_metadata))
+                    Ok((tasks, conversation_metadata, cloud_metadata_loaded))
                 }
             },
             OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
             |model, result, ctx| {
-                if let RequestState::RequestSucceeded((tasks, conversation_metadata)) = result {
+                if let RequestState::RequestSucceeded((
+                    tasks,
+                    conversation_metadata,
+                    cloud_metadata_loaded,
+                )) = result
+                {
                     model.has_finished_initial_load = true;
+                    model.cloud_conversation_metadata_load_state = if cloud_metadata_loaded {
+                        CloudConversationMetadataLoadState::Available
+                    } else {
+                        CloudConversationMetadataLoadState::Failed
+                    };
 
                     // Update tasks if we got any
                     if !tasks.is_empty() {
@@ -1006,6 +1064,8 @@ impl AgentConversationsModel {
                     ctx.emit(AgentConversationsModelEvent::ConversationsLoaded);
                 } else if let RequestState::RequestFailed(e) = result {
                     model.has_finished_initial_load = true;
+                    model.cloud_conversation_metadata_load_state =
+                        CloudConversationMetadataLoadState::Failed;
                     model.update_polling_state(ctx);
                     report_error!(e);
                 }

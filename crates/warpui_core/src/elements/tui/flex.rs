@@ -40,8 +40,9 @@
 //! children's, clamped to the constraint.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPresentationContext, TuiRect, TuiRectExt, TuiScreenPoint,
+    TuiScreenPosition, TuiSize,
 };
 use crate::elements::{Axis, CrossAxisAlignment};
 use crate::AppContext;
@@ -62,6 +63,8 @@ pub struct TuiFlex {
     /// so `render`, `cursor_position`, and `dispatch_event` have consistent slot
     /// information.
     child_sizes: Vec<TuiSize>,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiFlex {
@@ -71,6 +74,8 @@ impl TuiFlex {
             children: Vec::new(),
             cross_axis_alignment: CrossAxisAlignment::Start,
             child_sizes: Vec::new(),
+            size: None,
+            origin: None,
         }
     }
 
@@ -147,6 +152,26 @@ impl TuiFlex {
         }
     }
 
+    /// Returns the child slots implied by the last layout pass: the leading
+    /// main-axis extent of each laid-out child, packed from the start of
+    /// `area`, stopping once the area is exhausted. Shared by `render`,
+    /// `cursor_position`, and `dispatch_event` so paint and hit-test geometry
+    /// cannot drift.
+    fn child_slots(
+        axis: Axis,
+        area: TuiRect,
+        child_sizes: &[TuiSize],
+    ) -> impl Iterator<Item = TuiRect> + '_ {
+        child_sizes.iter().scan(area, move |remaining, size| {
+            if remaining.is_empty() {
+                return None;
+            }
+            let (slot, rest) = Self::split_main(axis, *remaining, Self::main_extent(axis, *size));
+            *remaining = rest;
+            Some(slot)
+        })
+    }
+
     /// Clamps a main-axis extent into the constraint's main-axis bounds.
     fn constrain_main(axis: Axis, constraint: TuiConstraint, extent: u16) -> u16 {
         match axis {
@@ -185,9 +210,8 @@ impl TuiFlex {
     }
 
     /// The rect a child occupies within its main-axis `slot`, positioned along
-    /// the cross axis per the alignment. `Start` and `Stretch` keep the full
-    /// slot (children paint only their content, and hit areas span the slot);
-    /// `Center` / `End` place the child's measured cross extent within it.
+    /// the cross axis per the alignment. `Stretch` keeps the full slot;
+    /// other alignments use the child's measured cross extent.
     /// Associated (not `&self`) so `dispatch_event` can call it while
     /// `children` is mutably borrowed.
     fn child_rect_for(
@@ -202,7 +226,8 @@ impl TuiFlex {
             Axis::Horizontal => (slot.height, child_size.height.min(slot.height)),
         };
         let offset = match alignment {
-            CrossAxisAlignment::Start | CrossAxisAlignment::Stretch => return slot,
+            CrossAxisAlignment::Stretch => return slot,
+            CrossAxisAlignment::Start => 0,
             CrossAxisAlignment::Center => slot_cross.saturating_sub(child_cross) / 2,
             CrossAxisAlignment::End => slot_cross.saturating_sub(child_cross),
         };
@@ -220,11 +245,6 @@ impl TuiFlex {
                 child_cross,
             ),
         }
-    }
-
-    /// [`Self::child_rect_for`] with this flex's axis and alignment.
-    fn child_rect(&self, slot: TuiRect, child_size: TuiSize) -> TuiRect {
-        Self::child_rect_for(self.axis, self.cross_axis_alignment, slot, child_size)
     }
 }
 
@@ -276,11 +296,13 @@ impl TuiElement for TuiFlex {
                 cross_max = cross_max.max(Self::cross_extent(axis, size));
                 self.child_sizes.push(size);
             }
-            return Self::size_of(
+            let size = Self::size_of(
                 axis,
                 Self::constrain_main(axis, constraint, total_main),
                 self.reported_cross(constraint, cross, cross_max),
             );
+            self.size = Some(size);
+            return size;
         }
 
         // Flex children: two passes.
@@ -328,47 +350,49 @@ impl TuiElement for TuiFlex {
             };
             self.child_sizes.push(size);
         }
-        Self::size_of(
+        let size = Self::size_of(
             axis,
             offered_main,
             self.reported_cross(constraint, cross, cross_max),
-        )
+        );
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        let mut remaining = area;
-        for (child, size) in self.children.iter().zip(&self.child_sizes) {
-            if remaining.is_empty() {
-                break;
-            }
-            let (slot, rest) =
-                Self::split_main(self.axis, remaining, Self::main_extent(self.axis, *size));
-            child
-                .element
-                .render(self.child_rect(slot, *size), buffer, ctx);
-            remaining = rest;
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        let area = TuiRect::new(0, 0, size.width, size.height);
+        let axis = self.axis;
+        let alignment = self.cross_axis_alignment;
+        for ((child, size), slot) in self
+            .children
+            .iter_mut()
+            .zip(&self.child_sizes)
+            .zip(Self::child_slots(axis, area, &self.child_sizes))
+        {
+            let rect = Self::child_rect_for(axis, alignment, slot, *size);
+            child.element.render(
+                origin.offset(i32::from(rect.x), i32::from(rect.y)),
+                surface,
+                ctx,
+            );
         }
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        let mut remaining = area;
-        for (child, size) in self.children.iter().zip(&self.child_sizes) {
-            if remaining.is_empty() {
-                break;
-            }
-            let (slot, rest) =
-                Self::split_main(self.axis, remaining, Self::main_extent(self.axis, *size));
-            let rect = self.child_rect(slot, *size);
-            if let Some((cx, cy)) = child.element.cursor_position(rect, ctx) {
-                // Offset is relative to the child's rect, not the full area.
-                return Some((
-                    rect.x.saturating_sub(area.x) + cx,
-                    rect.y.saturating_sub(area.y) + cy,
-                ));
-            }
-            remaining = rest;
-        }
-        None
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -380,32 +404,12 @@ impl TuiElement for TuiFlex {
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        // Offer the event to each child in its rendered rect (mirrors render's
-        // packing and alignment); the first child to handle it consumes it.
-        // Children clipped past the available extent see no events.
-        let axis = self.axis;
-        let alignment = self.cross_axis_alignment;
-        let mut remaining = area;
-        for (child, size) in self.children.iter_mut().zip(&self.child_sizes) {
-            if remaining.is_empty() {
-                break;
-            }
-            let (slot, rest) = Self::split_main(axis, remaining, Self::main_extent(axis, *size));
-            let rect = Self::child_rect_for(axis, alignment, slot, *size);
-            if child
-                .element
-                .dispatch_event(event, rect, event_ctx, ctx, app)
-            {
-                return true;
-            }
-            remaining = rest;
-        }
-        false
+        self.children.iter_mut().fold(false, |handled, child| {
+            child.element.dispatch_event(event, event_ctx, app) || handled
+        })
     }
 }
 

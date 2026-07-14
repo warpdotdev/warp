@@ -1024,7 +1024,6 @@ pub enum AIAgentInput {
     CreateNewProject { query: String },
     CloneRepository { url: String },
     CodeReview,
-    FetchReviewComments,
     SummarizeConversation,
     InvokeSkill { skill_name: String },
     StartFromAmbientRunPrompt,
@@ -1057,7 +1056,6 @@ impl From<FullAIAgentInput> for AIAgentInput {
                 url: clone_repo_url.into_url(),
             },
             FullAIAgentInput::CodeReview { .. } => Self::CodeReview,
-            FullAIAgentInput::FetchReviewComments { .. } => Self::FetchReviewComments,
             FullAIAgentInput::SummarizeConversation { .. } => Self::SummarizeConversation,
             FullAIAgentInput::InvokeSkill { skill, .. } => Self::InvokeSkill {
                 skill_name: skill.name.clone(),
@@ -1372,10 +1370,6 @@ pub enum TelemetryEvent {
         duration_since_start: Duration,
     },
     BootstrappingSucceeded(BootstrappingInfo),
-    /// The user accepted a completion suggestion when it was the only one in the suggestions menu.
-    /// This event is named with 'Tab' to maintain backwards compatibility; the completion
-    /// suggestions menu may be triggered with a keybinding other than tab.
-    TabSingleResultAutocompletion,
     EditorUnhandledModifierKey(String),
     CopyInviteLink,
     OpenThemeChooser,
@@ -1545,9 +1539,6 @@ pub enum TelemetryEvent {
         url: String,
     },
     ShowInFileExplorer,
-    CommandXRayTriggered {
-        trigger: CommandXRayTrigger,
-    },
     OpenLaunchConfigSaveModal,
     SaveLaunchConfig {
         state: SaveState,
@@ -2397,9 +2388,6 @@ pub enum TelemetryEvent {
         id: Option<WorkflowId>,
         selection_source: WorkflowSelectionSource,
     },
-    ImageReceived {
-        image_protocol: ImageProtocol,
-    },
     /// A file from the result of an AI Agent Action exceeded the context limit.
     FileExceededContextLimit {
         identifiers: AIIdentifiers,
@@ -3237,7 +3225,6 @@ impl TelemetryEvent {
                 Some(json!({"link_type": link, "open_with": open_with}))
             }
             TelemetryEvent::OpenChangelogLink { url } => Some(json!({ "url": url })),
-            TelemetryEvent::CommandXRayTriggered { trigger } => Some(json!({ "trigger": trigger })),
             TelemetryEvent::SaveLaunchConfig { state } => Some(json!({ "state": state })),
             TelemetryEvent::SaveAsWorkflowModal { source } => Some(json!({ "source": source })),
             TelemetryEvent::CommandCorrection { event } => Some(json!({ "event": event })),
@@ -3988,9 +3975,6 @@ impl TelemetryEvent {
                 "id": id,
                 "selection_source": selection_source,
             })),
-            TelemetryEvent::ImageReceived { image_protocol } => Some(json!({
-                "image_protocol": image_protocol,
-            })),
             TelemetryEvent::FileExceededContextLimit { identifiers } => Some(json!({
                 "server_output_id": identifiers.server_output_id,
                 "exchange_id": identifiers.client_exchange_id,
@@ -4128,7 +4112,6 @@ impl TelemetryEvent {
             | TelemetryEvent::ContextMenuInsertSelectedText
             | TelemetryEvent::ContextMenuCopySelectedText
             | TelemetryEvent::JumpToPreviousCommand
-            | TelemetryEvent::TabSingleResultAutocompletion
             | TelemetryEvent::CopyInviteLink
             | TelemetryEvent::OpenThemeChooser
             | TelemetryEvent::OpenThemeCreatorModal
@@ -4869,7 +4852,6 @@ impl TelemetryEvent {
             | TelemetryEvent::BootstrappingSlow(_)
             | TelemetryEvent::SessionAbandonedBeforeBootstrap { .. }
             | TelemetryEvent::BootstrappingSucceeded(_)
-            | TelemetryEvent::TabSingleResultAutocompletion
             | TelemetryEvent::EditorUnhandledModifierKey(_)
             | TelemetryEvent::CopyInviteLink
             | TelemetryEvent::OpenThemeChooser
@@ -4945,7 +4927,6 @@ impl TelemetryEvent {
             | TelemetryEvent::OpenLink { .. }
             | TelemetryEvent::OpenChangelogLink { .. }
             | TelemetryEvent::ShowInFileExplorer
-            | TelemetryEvent::CommandXRayTriggered { .. }
             | TelemetryEvent::OpenLaunchConfigSaveModal
             | TelemetryEvent::SaveLaunchConfig { .. }
             | TelemetryEvent::OpenLaunchConfigFile
@@ -5157,7 +5138,6 @@ impl TelemetryEvent {
             | TelemetryEvent::AISuggestedRuleEdited { .. }
             | TelemetryEvent::AISuggestedRuleContentChanged { .. }
             | TelemetryEvent::AttachedImagesToAgentModeQuery { .. }
-            | TelemetryEvent::ImageReceived { .. }
             | TelemetryEvent::FileExceededContextLimit { .. }
             | TelemetryEvent::AgentModeError { .. }
             | TelemetryEvent::AgentModeRequestRetrySucceeded { .. }
@@ -5426,7 +5406,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::BootstrappingSlowContents => EnablementState::Always,
             Self::SessionAbandonedBeforeBootstrap => EnablementState::Always,
             Self::BootstrappingSucceeded => EnablementState::Always,
-            Self::TabSingleResultAutocompletion => EnablementState::Always,
             Self::EditorUnhandledModifierKey => EnablementState::Always,
             Self::CopyInviteLink => EnablementState::Always,
             Self::OpenThemeChooser => EnablementState::Always,
@@ -5500,7 +5479,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::OpenLink => EnablementState::Always,
             Self::OpenChangelogLink => EnablementState::Always,
             Self::ShowInFileExplorer => EnablementState::Always,
-            Self::CommandXRayTriggered => EnablementState::Always,
             Self::OpenLaunchConfigSaveModal => EnablementState::Always,
             Self::SaveLaunchConfig => EnablementState::Always,
             Self::OpenLaunchConfigFile => EnablementState::Always,
@@ -5722,7 +5700,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 EnablementState::Flag(FeatureFlag::GlobalAIAnalyticsBanner)
             }
             Self::ExecutedWarpDrivePrompt => EnablementState::Flag(FeatureFlag::AgentModeWorkflows),
-            Self::ImageReceived => EnablementState::Always,
             Self::FileExceededContextLimit => EnablementState::Always,
             Self::AgentModeError => EnablementState::Always,
             Self::AgentModeRequestRetrySucceeded => EnablementState::Always,
@@ -5757,7 +5734,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentModeSetupProjectScopedRulesAction { .. } => EnablementState::Always,
             Self::AgentModeSetupCodebaseContextAction { .. } => EnablementState::Always,
             Self::AgentModeSetupCreateEnvironmentAction { .. } => EnablementState::Always,
-            Self::InputBufferSubmitted => EnablementState::Always,
+            Self::InputBufferSubmitted => EnablementState::ChannelSpecific {
+                channels: vec![Channel::Local, Channel::Dev],
+            },
             Self::AgentModeContinueConversationButtonClicked { .. } => EnablementState::Always,
             Self::AgentModeRewindDialogOpened { .. } => {
                 EnablementState::Flag(FeatureFlag::RevertToCheckpoints)
@@ -5914,7 +5893,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AnonymousUserHitCloudObjectLimit => "Anonymous User Hit Cloud Object Limit",
             Self::BootstrappingSucceeded => "Bootstrapping Succeeded",
             Self::SessionAbandonedBeforeBootstrap => "Session Abandoned Before Bootstrap",
-            Self::TabSingleResultAutocompletion => "Tab Single Result Autocompletion",
             Self::OpenSuggestionsMenu => "Open Suggestions Menu",
             Self::ConfirmSuggestion => "Confirm Suggestion",
             Self::ContextMenuInsertSelectedText => "Context Menu Insert Selected Text into Input",
@@ -5998,7 +5976,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::OpenLink => "Opened Link",
             Self::OpenChangelogLink => "Opened Changelog Link",
             Self::ShowInFileExplorer => "Showed File in File Explorer",
-            Self::CommandXRayTriggered => "Triggered Command XRay",
             Self::OpenLaunchConfigSaveModal => "Open Save Config Modal",
             Self::SaveLaunchConfig => "Save Launch Config",
             Self::OpenLaunchConfigFile => "Open Launch Config File",
@@ -6261,7 +6238,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AttachedImagesToAgentModeQuery => "AgentMode.AttachedImages",
             Self::AgentModeRatedResponse => "AgentMode.RatedResponse",
             Self::ExecutedWarpDrivePrompt => "AgentMode.ExecutedWarpDrivePrompt",
-            Self::ImageReceived => "Image Received",
             Self::FileExceededContextLimit => "AgentMode.Code.FileExceededContextLimit",
             Self::AgentModeError => "AgentMode.Error",
             Self::AgentModeRequestRetrySucceeded => "AgentMode.RequestRetrySucceeded",
@@ -6486,9 +6462,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Abandoned session before the bootstrapping completes"
             }
             Self::BootstrappingSucceeded => "Successful bootstrap for session",
-            Self::TabSingleResultAutocompletion => {
-                "Accepted tab completion and inserted into Input Editor"
-            }
             Self::EditorUnhandledModifierKey => {
                 "Used modifier keybinding keystroke which is not currently supported"
             }
@@ -6609,9 +6582,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::OpenLink => "Opened a highlighted link within input or output",
             Self::OpenChangelogLink => "Opened the changelog link within the App",
             Self::ShowInFileExplorer => "Opened a file in Finder by using \"Show in Finder\"",
-            Self::CommandXRayTriggered => {
-                "Triggered Command X-Ray (hovering over a command for explanation)"
-            }
             Self::OpenLaunchConfigSaveModal => "Opened save launch configuration modal",
             Self::SaveLaunchConfig => {
                 "Saved current launch configuration of windows, tabs, and panes"
@@ -7061,7 +7031,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Toggled on/off the enablement of autoindexing for codebase context."
             }
             Self::ExecutedWarpDrivePrompt => "Executed a saved prompt.",
-            Self::ImageReceived => "Received an image through an image protocol over the pty",
             Self::FileExceededContextLimit => "File from AI exceeded context limit",
             Self::AgentModeError => "Received an error when getting Agent Mode response",
             Self::AgentModeRequestRetrySucceeded => {

@@ -507,7 +507,7 @@ fn reasoning_agent_block_source(
 fn expand_thinking_section(app: &mut App, agent_block: &ViewHandle<TuiAIBlock>) {
     agent_block.update(app, |block, ctx| {
         block.handle_action(
-            &TuiAIBlockAction::SetThinkingCollapsed {
+            &TuiAIBlockAction::SetSectionCollapsed {
                 message_id: MessageId::new("reasoning-1".to_owned()),
                 collapsed: false,
             },

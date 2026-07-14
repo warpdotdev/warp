@@ -1,4 +1,6 @@
-use super::slash_command_is_submitted_as_prompt;
+use super::{
+    slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui, TuiSlashCommand,
+};
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::{commands, Availability};
 const BASELINE_AVAILABILITY: Availability = Availability::AGENT_VIEW
@@ -33,6 +35,50 @@ fn slash_command_is_submitted_as_prompt_only_for_prompt_commands() {
         &commands::CONVERSATIONS
     ));
     assert!(!slash_command_is_submitted_as_prompt(&commands::QUEUE));
+}
+
+#[test]
+fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
+    for (command, expected) in [
+        (&*commands::AGENT, TuiSlashCommand::Agent),
+        (&*commands::NEW, TuiSlashCommand::New),
+        (&*commands::COMPACT, TuiSlashCommand::Compact),
+        (&*commands::PLAN, TuiSlashCommand::Plan),
+        (&commands::MODEL, TuiSlashCommand::Model),
+        (
+            &*commands::CREATE_NEW_PROJECT,
+            TuiSlashCommand::CreateNewProject,
+        ),
+        (
+            &commands::EXPORT_TO_CLIPBOARD,
+            TuiSlashCommand::ExportToClipboard,
+        ),
+        (&*commands::EXPORT_TO_FILE, TuiSlashCommand::ExportToFile),
+    ] {
+        assert_eq!(
+            TuiSlashCommand::from_static_command(command),
+            Some(expected),
+            "{} should map to its TUI command",
+            command.name
+        );
+        assert!(
+            slash_command_is_supported_in_tui(command),
+            "{} should be supported in TUI",
+            command.name
+        );
+    }
+
+    for command in [&commands::COST, &*commands::ORCHESTRATE] {
+        assert_eq!(TuiSlashCommand::from_static_command(command), None);
+        assert!(!slash_command_is_supported_in_tui(command));
+    }
+}
+
+#[test]
+fn model_command_is_supported_in_tui_without_becoming_a_prompt_command() {
+    assert!(slash_command_is_supported_in_tui(&commands::MODEL));
+    assert!(!slash_command_is_submitted_as_prompt(&commands::MODEL));
+    assert!(commands::MODEL.argument.is_none());
 }
 
 #[test]

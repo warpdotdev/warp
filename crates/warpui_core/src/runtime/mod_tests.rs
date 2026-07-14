@@ -8,9 +8,11 @@ use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyM
 
 use super::*;
 use crate::elements::tui::{
-    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext,
-    TuiPaintContext, TuiStyle, TuiText,
+    TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiFlex, TuiHoverable,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiScreenPoint,
+    TuiScreenPosition, TuiText,
 };
+use crate::elements::MouseStateHandle;
 use crate::keymap::macros::*;
 use crate::keymap::FixedBinding;
 use crate::platform::WindowStyle;
@@ -19,6 +21,8 @@ use crate::{AddWindowOptions, AppContext, Entity, TypedActionView, ViewContext};
 /// A trivial leaf element that paints a single line of text.
 struct TextElement {
     text: String,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiElement for TextElement {
@@ -29,17 +33,34 @@ impl TuiElement for TextElement {
         _app: &AppContext,
     ) -> TuiSize {
         let width = u16::try_from(self.text.chars().count()).unwrap_or(u16::MAX);
-        constraint.clamp(TuiSize::new(width, 1))
+        let size = constraint.clamp(TuiSize::new(width, 1));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
-        buffer.set_stringn(
-            area.x,
-            area.y,
-            &self.text,
-            usize::from(area.width),
-            TuiStyle::default(),
-        );
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let size = self.size.unwrap();
+        for (column, character) in self.text.chars().take(usize::from(size.width)).enumerate() {
+            if let Some(cell) =
+                surface.cell_mut(origin.offset(i32::try_from(column).unwrap_or(i32::MAX), 0))
+            {
+                cell.set_char(character);
+            }
+        }
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 
@@ -58,6 +79,8 @@ impl TuiView for TextView {
     fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
         Box::new(TextElement {
             text: "hello".to_owned(),
+            size: None,
+            origin: None,
         })
     }
 }
@@ -306,6 +329,99 @@ fn typed_action_from_embedded_child_reaches_parent_through_runtime_dispatch() {
     });
 }
 
+/// The typed action that shifts [`ShiftingHoverView`]'s hover target down a row.
+#[derive(Debug)]
+struct Shift;
+
+/// A root view whose hover target moves down one row after [`Shift`], used to
+/// verify the post-draw synthetic mouse move refreshes hover state.
+struct ShiftingHoverView {
+    hover: MouseStateHandle,
+    shifted: bool,
+}
+
+impl Entity for ShiftingHoverView {
+    type Event = ();
+}
+
+impl TuiView for ShiftingHoverView {
+    fn ui_name() -> &'static str {
+        "ShiftingHoverView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        let mut column = TuiFlex::column();
+        if self.shifted {
+            column = column.child(TuiText::new("pad").finish());
+        }
+        let target = TuiHoverable::new(self.hover.clone(), TuiText::new("target").finish());
+        column = column.child(target.finish());
+        Box::new(
+            TuiEventHandler::new(column.finish())
+                .on_key("s", |_, ctx, _| ctx.dispatch_typed_action(Shift)),
+        )
+    }
+}
+
+impl TypedActionView for ShiftingHoverView {
+    type Action = Shift;
+
+    fn handle_action(&mut self, _action: &Shift, ctx: &mut ViewContext<Self>) {
+        self.shifted = true;
+        ctx.notify();
+    }
+}
+
+/// After a redraw, the runtime replays the last pointer position as a
+/// synthetic move, so a hover target that shifts out from under a stationary
+/// mouse unhoveres without any real mouse movement.
+#[test]
+fn synthetic_mouse_move_after_redraw_updates_hover() {
+    App::test((), |mut app| async move {
+        let hover = MouseStateHandle::default();
+        let hover_for_view = hover.clone();
+        let (window_id, root) = app.update(move |ctx| {
+            ctx.add_tui_window(window_options(), move |_| ShiftingHoverView {
+                hover: hover_for_view,
+                shifted: false,
+            })
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 5));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        let mouse_moved = TuiEvent::MouseMoved {
+            position: TuiPoint::new(2, 0),
+            modifiers: ModifiersState::default(),
+            is_synthetic: false,
+        };
+        app.update(|ctx| screen.dispatch_event(ctx, &mouse_moved));
+        assert!(hover.lock().unwrap().is_hovered());
+
+        root.update(&mut app, |view, ctx| {
+            view.shifted = true;
+            ctx.notify();
+        });
+        screen.terminal.output.clear();
+
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        assert!(
+            !hover.lock().unwrap().is_hovered(),
+            "the post-draw synthetic move should unhover the shifted target"
+        );
+        assert_eq!(
+            screen
+                .terminal
+                .output_string()
+                .matches("\u{1b}[?2026h")
+                .count(),
+            1,
+            "multi-pass hover reconciliation should flush one terminal frame"
+        );
+    });
+}
+
 /// Records the mode-control enter/leave calls so the guard's lifecycle can be
 /// asserted without touching a real terminal.
 struct RecordingControl {
@@ -327,6 +443,26 @@ impl TerminalModeControl for RecordingControl {
     }
 }
 
+#[test]
+fn terminal_screen_lifecycle_toggles_bracketed_paste() {
+    let mut enter_output = Vec::new();
+    enter_terminal_screen(&mut enter_output).unwrap();
+    assert!(
+        enter_output
+            .windows(b"\x1b[?2004h".len())
+            .any(|window| window == b"\x1b[?2004h"),
+        "entering the TUI should enable bracketed paste"
+    );
+
+    let mut leave_output = Vec::new();
+    leave_terminal_screen(&mut leave_output).unwrap();
+    assert!(
+        leave_output
+            .windows(b"\x1b[?2004l".len())
+            .any(|window| window == b"\x1b[?2004l"),
+        "leaving the TUI should disable bracketed paste"
+    );
+}
 #[test]
 fn raw_mode_guard_restores_on_drop() {
     let log = Rc::new(RefCell::new(Vec::new()));
