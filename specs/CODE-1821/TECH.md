@@ -37,7 +37,7 @@ The model subscribes to input changes and `AgentConversationsModelEvent`. Every 
 
 ### Query and order eligible entries
 
-Request personal Oz entries from `AgentConversationsModel::get_entries` and classify each through the TUI’s existing conversation-selection policy. Pass eligible entries to the same pure `query_conversation_entries` helper used by the GUI inline menu. The helper owns the 50-entry recent cap, case-insensitive fuzzy matching, score threshold, score/recency ordering, and 500-result search cap. GUI-only directory filtering and frontend-specific row construction remain outside the helper.
+Request personal Warp Agent entries from `AgentConversationsModel::get_entries` and classify each through the TUI’s existing conversation-selection policy. Pass eligible entries to the same pure `query_conversation_entries` helper used by the GUI inline menu. The helper owns the 50-entry recent cap, case-insensitive fuzzy matching, score threshold, score/recency ordering, and 500-result search cap. GUI-only directory filtering and frontend-specific row construction remain outside the helper.
 
 With an empty query:
 
@@ -143,7 +143,7 @@ sequenceDiagram
   participant Transcript as TuiTranscriptView
 
   User->>Menu: /conversations
-  Menu->>Model: query classified Oz entries
+  Menu->>Model: query classified Warp Agent entries
   Model-->>Menu: eligible normalized rows
   User->>Menu: search and accept
   Menu->>Session: stable entry ID
@@ -151,7 +151,7 @@ sequenceDiagram
   Session->>History: load local ID or server token
   alt rejected, failed, or cancelled
     Session-->>User: retain current conversation
-  else valid Oz conversation
+  else valid Warp Agent conversation
     Session->>Transcript: clear previous visible content
     Session->>History: register target
     Session->>Transcript: materialize restoration plan
