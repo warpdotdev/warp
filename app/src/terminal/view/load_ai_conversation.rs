@@ -3,6 +3,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use itertools::Itertools;
 use prost::Message;
 use vec1::Vec1;
@@ -21,7 +22,6 @@ use crate::ai::agent::{
     AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, CreateDocumentsRequest,
     CreateDocumentsResult, EditDocumentsResult,
 };
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryBlockParams, AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage,
 };

@@ -159,6 +159,13 @@ impl TuiUiBuilder {
         )
     }
 
+    /// Blue-overlay background for inline plan bodies, matching the TUI
+    /// design's `blue_overlay_1` treatment.
+    pub(crate) fn plan_background(&self) -> Color {
+        let blue = ThemeFill::Solid(self.warp_theme.ansi_fg_blue());
+        cell_color(self.base_background().blend(&blue.with_opacity(10)))
+    }
+
     /// The background the transcript actually renders over: default cells
     /// stay bg-unset, so it is the terminal's *own* background when the
     /// startup probe captured it, else the theme background as the closest
