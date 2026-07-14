@@ -1,5 +1,5 @@
 //! [`TuiRunAgentsCardView`]: the TUI permission and configuration card for a
-//! `RunAgents` request (PRODUCT 9-28).
+//! `RunAgents` request.
 //!
 //! The card has two interactive modes: an acceptance card summarizing the
 //! request and its run-wide configuration, and a configuring mode that walks
@@ -50,7 +50,7 @@ const CONFIGURING_CONTEXT_FLAG: &str = "TuiRunAgentsCardConfiguring";
 /// Row ids emitted by `location_snapshot`.
 const LOCATION_CLOUD_ID: &str = "cloud";
 
-/// Registers the card's keybindings (PRODUCT 16, 26-28). Called once at TUI
+/// Registers the card's keybindings. Called once at TUI
 /// startup from `keybindings::init`. All bindings are fixed and scoped to
 /// the card's keymap context, so they only fire while a card is focused.
 pub(crate) fn init(app: &mut AppContext) {
@@ -76,6 +76,12 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_group(TUI_BINDING_GROUP),
         FixedBinding::new("escape", TuiRunAgentsCardAction::Back, configuring())
+            .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new("left", TuiRunAgentsCardAction::PreviousPage, configuring())
+            .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new("right", TuiRunAgentsCardAction::NextPage, configuring())
+            .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new("tab", TuiRunAgentsCardAction::NextPage, configuring())
             .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
             "ctrl-c",
@@ -104,7 +110,7 @@ fn build_request(fields: &RunAgentsRequest, state: &OrchestrationConfigState) ->
     }
 }
 
-/// One single-field configuration page (PRODUCT 18-19).
+/// One single-field configuration page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConfigPage {
     Location,
@@ -116,27 +122,16 @@ enum ConfigPage {
 }
 
 impl ConfigPage {
-    /// The page's header title.
-    fn title(self) -> &'static str {
+    /// The page's question, with agent/agents chosen from the request.
+    fn question(self, agent_count: usize) -> String {
+        let agent = if agent_count == 1 { "agent" } else { "agents" };
         match self {
-            Self::Location => "Location",
-            Self::Harness => "Harness",
-            Self::ApiKey => "API key",
-            Self::Host => "Host",
-            Self::Environment => "Environment",
-            Self::Model => "Model",
-        }
-    }
-
-    /// The page's single question (PRODUCT 18).
-    fn question(self) -> &'static str {
-        match self {
-            Self::Location => "Where should the agents run?",
-            Self::Harness => "Which harness should run the agents?",
-            Self::ApiKey => "Which API key should the agents use?",
-            Self::Host => "Which host should run the agents?",
-            Self::Environment => "Which environment should the agents use?",
-            Self::Model => "Which model should the agents use?",
+            Self::Location => format!("Where should the {agent} run?"),
+            Self::Harness => format!("Which harness should the {agent} use?"),
+            Self::ApiKey => format!("Which API key should the {agent} use?"),
+            Self::Host => format!("Which host should run the {agent}?"),
+            Self::Environment => format!("Which environment should the {agent} use?"),
+            Self::Model => format!("Which model should the {agent} use?"),
         }
     }
 }
@@ -166,6 +161,8 @@ pub(crate) enum TuiRunAgentsCardAction {
     Accept,
     Configure,
     ConfirmSelection,
+    PreviousPage,
+    NextPage,
     Back,
     Reject,
 }
@@ -190,12 +187,12 @@ pub(crate) struct TuiRunAgentsCardView {
     /// Whether the block was restored from history (non-interactive).
     is_restored: bool,
     spawning: Option<RunAgentsSpawningSnapshot>,
-    /// Set once the request is accepted or rejected (PRODUCT 8).
+    /// Set once the request is accepted or rejected.
     decided: bool,
-    /// Validation reason shown inline after a blocked Accept (PRODUCT 53).
+    /// Validation reason shown inline after a blocked Accept.
     accept_error: Option<String>,
     /// Identity palette pinned at construction so identities stay stable
-    /// across re-renders, edits, and theme switches (PRODUCT 11).
+    /// across re-renders, edits, and theme switches.
     identity_palette: Vec<AgentIdentity>,
 }
 
@@ -263,7 +260,7 @@ impl TuiRunAgentsCardView {
         });
 
         // Live catalog changes revalidate the edit state and refresh the
-        // active page (PRODUCT 45, 49-50).
+        // active page.
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
@@ -418,8 +415,7 @@ impl TuiRunAgentsCardView {
 
     /// Whether this card is the active blocking interaction: interactive in
     /// Acceptance/Configuring while the action awaits confirmation, and
-    /// false once accepted, rejected, spawning, finished, or restored
-    /// (PRODUCT 1-8).
+    /// false once accepted, rejected, spawning, finished, or restored.
     pub(crate) fn wants_focus(&self, ctx: &AppContext) -> bool {
         if self.decided || self.spawning.is_some() || self.is_restored {
             return false;
@@ -432,7 +428,7 @@ impl TuiRunAgentsCardView {
         )
     }
 
-    /// The dynamic page sequence for the current edit state (PRODUCT 19-21).
+    /// The dynamic page sequence for the current edit state.
     fn page_sequence(state: &OrchestrationConfigState) -> Vec<ConfigPage> {
         if state.execution_mode.is_remote() {
             let mut pages = vec![ConfigPage::Location, ConfigPage::Harness];
@@ -473,9 +469,9 @@ impl TuiRunAgentsCardView {
         let position = sequence.iter().position(|p| *p == page).unwrap_or(0) + 1;
         let snapshot = self.snapshot_for_page(page, ctx);
         let selector_page = OptionSelectorPage {
-            field_label: page.title().to_string(),
+            field_label: "Edit agent configuration".to_string(),
             position: (position, sequence.len()),
-            prompt: page.question().to_string(),
+            prompt: page.question(self.request_fields.agent_run_configs.len()),
             snapshot,
             searchable: false,
         };
@@ -488,7 +484,7 @@ impl TuiRunAgentsCardView {
 
     /// Refreshes the active page's snapshot in place after a catalog or
     /// state change, updating the header so the dynamic page count stays
-    /// current (PRODUCT 20).
+    /// current.
     fn refresh_active_page(&mut self, ctx: &mut ViewContext<Self>) {
         let CardMode::Configuring { page } = self.mode else {
             return;
@@ -509,7 +505,7 @@ impl TuiRunAgentsCardView {
     }
 
     /// Triggers the lazy per-harness auth-secret fetch (also the Retry path
-    /// for a `Failed` API-key page, PRODUCT 48).
+    /// for a `Failed` API-key page).
     fn ensure_auth_secrets_fetched(&self, ctx: &mut ViewContext<Self>) {
         let Some(harness) = Harness::parse_orchestration_harness(
             &self
@@ -524,8 +520,8 @@ impl TuiRunAgentsCardView {
         });
     }
 
-    /// Applies a confirmed selection to the edit state (PRODUCT 24) and
-    /// advances to the next applicable page (PRODUCT 25-26).
+    /// Applies a confirmed selection to the edit state and
+    /// advances to the next applicable page.
     fn handle_page_confirmed(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
         let CardMode::Configuring { page } = self.mode else {
             return;
@@ -574,7 +570,7 @@ impl TuiRunAgentsCardView {
     }
 
     /// Advances past `page` in the (freshly recomputed) sequence, returning
-    /// to the acceptance card after the final page (PRODUCT 25-26).
+    /// to the acceptance card after the final page.
     fn advance_after(&mut self, page: ConfigPage, ctx: &mut ViewContext<Self>) {
         let sequence =
             Self::page_sequence(&self.orchestration_edit_state.orchestration_config_state);
@@ -590,6 +586,26 @@ impl TuiRunAgentsCardView {
                 ctx.emit(TuiRunAgentsCardViewEvent::BlockingStateChanged);
                 ctx.notify();
             }
+        }
+    }
+
+    /// Moves to an adjacent page without applying the current highlight.
+    fn navigate_page(&mut self, forward: bool, ctx: &mut ViewContext<Self>) {
+        let CardMode::Configuring { page } = self.mode else {
+            return;
+        };
+        let sequence =
+            Self::page_sequence(&self.orchestration_edit_state.orchestration_config_state);
+        let Some(index) = sequence.iter().position(|candidate| *candidate == page) else {
+            return;
+        };
+        let target = if forward {
+            sequence.get(index + 1)
+        } else {
+            index.checked_sub(1).and_then(|index| sequence.get(index))
+        };
+        if let Some(target) = target.copied() {
+            self.open_page(target, ctx);
         }
     }
 
@@ -636,7 +652,7 @@ impl TuiRunAgentsCardView {
         )
     }
 
-    /// Accept (PRODUCT 52-55): validates with the shared gate; a blocked
+    /// Accept: validates with the shared gate; a blocked
     /// accept renders the reason inline and stays active, a valid one
     /// dispatches the edited request through `execute_run_agents`.
     fn handle_accept(&mut self, ctx: &mut ViewContext<Self>) {
@@ -663,8 +679,8 @@ impl TuiRunAgentsCardView {
         ctx.notify();
     }
 
-    /// Reject (PRODUCT 56): resolves the request as rejected exactly once,
-    /// from the acceptance card or any configuration page (PRODUCT 28).
+    /// Reject: resolves the request as rejected exactly once,
+    /// from the acceptance card or any configuration page.
     fn handle_reject(&mut self, ctx: &mut ViewContext<Self>) {
         if self.decided || self.spawning.is_some() || !self.wants_focus(ctx) {
             return;
@@ -676,7 +692,7 @@ impl TuiRunAgentsCardView {
         ctx.notify();
     }
 
-    /// Opens configuration on the first page (PRODUCT 16).
+    /// Opens configuration on the first page.
     fn handle_configure(&mut self, ctx: &mut ViewContext<Self>) {
         if !self.wants_focus(ctx) {
             return;
@@ -690,8 +706,8 @@ impl TuiRunAgentsCardView {
     }
 
     /// Escape from configuration: completed pages keep their confirmed
-    /// selections; the current page's unconfirmed highlight is discarded
-    /// (PRODUCT 27). Active custom-text editing unwinds first.
+    /// selections; the current page's unconfirmed highlight is discarded.
+    /// Active custom-text editing unwinds first.
     fn handle_back(&mut self, ctx: &mut ViewContext<Self>) {
         let consumed = self
             .selector
@@ -706,7 +722,7 @@ impl TuiRunAgentsCardView {
         }
     }
 
-    /// Confirms the selector's highlighted option (Enter, PRODUCT 31).
+    /// Confirms the selector's highlighted option (Enter).
     fn handle_confirm_selection(&mut self, ctx: &mut ViewContext<Self>) {
         self.selector.update(ctx, |selector, ctx| {
             selector.confirm_selected(ctx);
@@ -716,7 +732,7 @@ impl TuiRunAgentsCardView {
     // ── Rendering ───────────────────────────────────────────────────
 
     /// Deterministic identities for the proposed agents, from the pinned
-    /// palette (PRODUCT 11-13).
+    /// palette.
     fn agent_identities(&self) -> Vec<&AgentIdentity> {
         let names = self
             .request_fields
@@ -729,7 +745,7 @@ impl TuiRunAgentsCardView {
             .collect()
     }
 
-    /// The harness display label for the current selection (PRODUCT 39).
+    /// The harness display label for the current selection.
     fn harness_label(&self, ctx: &AppContext) -> String {
         match Harness::parse_orchestration_harness(
             &self
@@ -774,23 +790,10 @@ impl TuiRunAgentsCardView {
         .finish()
     }
 
-    /// The acceptance card body (PRODUCT 9-17).
+    /// The acceptance card body.
     fn render_acceptance(&self, app: &AppContext, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
         let state = &self.orchestration_edit_state.orchestration_config_state;
         let mut column = TuiFlex::column();
-
-        // Title row with the attention glyph, on the tinted header.
-        column.add_child(
-            TuiText::from_spans([
-                ("◆ ".to_string(), builder.attention_glyph_style()),
-                (
-                    RUN_AGENTS_CARD_TITLE.to_string(),
-                    builder.primary_text_style().add_modifier(Modifier::BOLD),
-                ),
-            ])
-            .finish(),
-        );
-
         let summary = if self.request_fields.summary.trim().is_empty() {
             format!(
                 "Spawn {} agent(s) to address this task.",
@@ -842,7 +845,7 @@ impl TuiRunAgentsCardView {
             );
         }
 
-        // Run-wide configuration values (PRODUCT 9-10, 14).
+        // Run-wide configuration values.
         let is_remote = state.execution_mode.is_remote();
         let mut metadata = TuiFlex::column();
         metadata.add_child(Self::render_metadata_row(
@@ -904,7 +907,7 @@ impl TuiRunAgentsCardView {
                 .finish(),
         );
 
-        // Inline validation (PRODUCT 53) or the soft empty-env nudge.
+        // Inline validation or the soft empty-env nudge.
         if let Some(error) = &self.accept_error {
             column.add_child(
                 TuiText::new(error.clone())
@@ -920,37 +923,46 @@ impl TuiRunAgentsCardView {
             );
         }
 
-        // Action hints replace the normal input footer (PRODUCT 2, 16-17);
-        // they wrap rather than truncate so every available action stays
-        // visible at narrow widths (PRODUCT 15).
-        column.add_child(
-            TuiContainer::new(
-                TuiText::new("enter accept · ctrl-e configure · ctrl-c reject")
-                    .with_style(builder.muted_text_style())
-                    .finish(),
-            )
-            .with_padding_top(1)
-            .finish(),
-        );
-
         column.finish()
     }
+    /// The persistent title row shared by acceptance and configuration.
+    fn render_title(&self, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+        TuiText::from_spans([
+            ("■ ".to_string(), builder.attention_glyph_style()),
+            (
+                RUN_AGENTS_CARD_TITLE.to_string(),
+                builder.primary_text_style(),
+            ),
+        ])
+        .finish()
+    }
 
-    /// The configuring body: the active selector page plus its hints (which
-    /// wrap rather than truncate at narrow widths, PRODUCT 15).
-    fn render_configuring(&self, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
-        TuiFlex::column()
-            .child(TuiChildView::new(&self.selector).finish())
-            .child(
-                TuiContainer::new(
-                    TuiText::new("↑↓ move · 1-9 select · enter confirm · esc back · ctrl-c reject")
-                        .with_style(builder.muted_text_style())
-                        .finish(),
-                )
-                .with_padding_top(1)
-                .finish(),
-            )
-            .finish()
+    /// The configuring body: the active selector page.
+    fn render_configuring(&self) -> Box<dyn TuiElement> {
+        TuiChildView::new(&self.selector).finish()
+    }
+
+    /// Key hints shown below (not inside) the tinted card.
+    fn render_footer(&self, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+        let spans = match self.mode {
+            CardMode::Acceptance => vec![
+                ("Enter ".to_string(), builder.primary_text_style()),
+                ("to accept  ".to_string(), builder.muted_text_style()),
+                ("Ctrl-E ".to_string(), builder.primary_text_style()),
+                ("to configure  ".to_string(), builder.muted_text_style()),
+                ("Ctrl-C ".to_string(), builder.primary_text_style()),
+                ("to reject".to_string(), builder.muted_text_style()),
+            ],
+            CardMode::Configuring { .. } => vec![
+                ("Enter ".to_string(), builder.primary_text_style()),
+                ("to accept  ".to_string(), builder.muted_text_style()),
+                ("Tab or ← →".to_string(), builder.primary_text_style()),
+                (" to navigate  ".to_string(), builder.muted_text_style()),
+                ("Esc ".to_string(), builder.primary_text_style()),
+                ("to go back".to_string(), builder.muted_text_style()),
+            ],
+        };
+        TuiText::from_spans(spans).finish()
     }
 }
 
@@ -984,8 +996,7 @@ impl TuiView for TuiRunAgentsCardView {
             .get_action_status(&self.action_id);
 
         // Terminal, spawning, restored, and still-streaming states reuse the
-        // shared fallback tool-call row and its `tool_call_labels` copy
-        // (PRODUCT 7, 57).
+        // shared fallback tool-call row and its `tool_call_labels` copy.
         let interactive = !self.is_restored
             && self.spawning.is_none()
             && matches!(status, Some(AIActionStatus::Blocked));
@@ -1002,13 +1013,23 @@ impl TuiView for TuiRunAgentsCardView {
         let builder = TuiUiBuilder::from_app(app);
         let body = match self.mode {
             CardMode::Acceptance => self.render_acceptance(app, &builder),
-            CardMode::Configuring { .. } => self.render_configuring(&builder),
+            CardMode::Configuring { .. } => TuiContainer::new(self.render_configuring())
+                .with_padding_top(1)
+                .with_padding_x(2)
+                .finish(),
         };
-        // The orchestration treatment: a themed magenta-tinted surface
-        // (PRODUCT 14), padded one cell on each side.
-        TuiContainer::new(body)
-            .with_background(builder.orchestration_surface_background())
-            .with_padding_x(1)
+        let card = TuiContainer::new(
+            TuiFlex::column()
+                .child(self.render_title(&builder))
+                .child(body)
+                .finish(),
+        )
+        .with_background(builder.orchestration_surface_background())
+        .with_padding_x(1)
+        .finish();
+        TuiFlex::column()
+            .child(card)
+            .child(self.render_footer(&builder))
             .finish()
     }
 }
@@ -1021,6 +1042,8 @@ impl TypedActionView for TuiRunAgentsCardView {
             TuiRunAgentsCardAction::Accept => self.handle_accept(ctx),
             TuiRunAgentsCardAction::Configure => self.handle_configure(ctx),
             TuiRunAgentsCardAction::ConfirmSelection => self.handle_confirm_selection(ctx),
+            TuiRunAgentsCardAction::PreviousPage => self.navigate_page(false, ctx),
+            TuiRunAgentsCardAction::NextPage => self.navigate_page(true, ctx),
             TuiRunAgentsCardAction::Back => self.handle_back(ctx),
             TuiRunAgentsCardAction::Reject => self.handle_reject(ctx),
         }

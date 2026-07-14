@@ -1,5 +1,5 @@
 //! Deterministic color-and-glyph agent identities for the TUI orchestration
-//! card (PRODUCT 11-13): a theme-derived palette of ANSI colors crossed with
+//! card: a theme-derived palette of ANSI colors crossed with
 //! a curated glyph set, plus the stable hash and per-request assignment
 //! policy that keep identities stable across re-renders and edits.
 
@@ -15,9 +15,8 @@ const AGENT_IDENTITY_GLYPHS: [&str; 8] = ["⟡", "⊹", "✶", "◊", "⊛", "*"
 /// to count as readable.
 const AGENT_IDENTITY_MIN_CONTRAST: f32 = 32.0;
 
-/// The identity palette must offer at least this many combinations
-/// (PRODUCT 12); when background filtering would drop below it, the
-/// unfiltered ANSI set is used instead.
+/// The identity palette must offer at least this many combinations; use the
+/// unfiltered ANSI set when contrast filtering would drop below it.
 const AGENT_IDENTITY_MIN_COMBOS: usize = 32;
 
 /// One deterministic color-and-glyph agent identity.
@@ -85,7 +84,7 @@ fn luma(color: ColorU) -> f32 {
 }
 
 /// Stable FNV-1a hash of an agent name; must not vary across runs or
-/// platforms so identities stay deterministic (PRODUCT 11).
+/// platforms so identities stay deterministic.
 pub(crate) fn stable_hash(name: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in name.as_bytes() {
@@ -97,8 +96,7 @@ pub(crate) fn stable_hash(name: &str) -> u64 {
 
 /// Assigns a palette index to each agent name: `stable_hash(name) % len`,
 /// with a first-come linear-probe fallback so identities within one request
-/// stay distinct, cycling deterministically once the palette is exhausted
-/// (PRODUCT 12-13).
+/// stay distinct, cycling deterministically once the palette is exhausted.
 pub(crate) fn assign_agent_identity_indices(
     names: impl IntoIterator<Item = impl AsRef<str>>,
     palette_len: usize,

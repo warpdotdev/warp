@@ -12,7 +12,7 @@ use warp::tui_export::{
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, ModelHandle};
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
-use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::presenter::tui::{TuiFrame, TuiPresenter};
 use warpui_core::{App, TypedActionView as _, ViewHandle, WindowInvalidation};
 
 use super::{
@@ -23,6 +23,7 @@ use crate::option_selector::TuiOptionSelectorAction;
 use crate::test_fixtures::{
     add_active_test_conversation, add_test_action_model_with_surface, TestHostView,
 };
+use crate::tui_builder::TuiUiBuilder;
 
 /// Builds a request with the given harness and execution mode.
 fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRequest {
@@ -162,7 +163,7 @@ fn build_request_carries_card_fields_and_edited_run_wide_state() {
     assert_eq!(built.agent_run_configs, original.agent_run_configs);
     assert_eq!(built.plan_id, original.plan_id);
     // Run-wide fields come from the edited state; the per-call
-    // computer-use flag is preserved through the round trip (PRODUCT 46).
+    // computer-use flag is preserved through the round trip.
     assert_eq!(built.model_id, "gpt-5");
     assert_eq!(built.harness_type, "codex");
     assert_eq!(
@@ -255,15 +256,14 @@ fn blocked_card(app: &mut App, request: &RunAgentsRequest) -> BlockedCard {
     }
 }
 
-/// Renders the card through the real presenter (so the embedded selector
-/// child view resolves) and returns trimmed lines at `width`.
-fn render_card_lines(
+/// Renders the card through the real presenter so child views resolve.
+fn render_card_frame(
     app: &mut App,
     card: &ViewHandle<TuiRunAgentsCardView>,
     width: u16,
-) -> Vec<String> {
+) -> TuiFrame {
     let mut presenter = TuiPresenter::new();
-    let frame = app.update(|ctx| {
+    app.update(|ctx| {
         let window_id = card.window_id(ctx);
         // Mirror the runtime's draw: `invalidate` renders the card and its
         // selector into the presenter cache, then `present` resolves the
@@ -273,13 +273,20 @@ fn render_card_lines(
         invalidation.updated.insert(card.as_ref(ctx).selector.id());
         presenter.invalidate(&invalidation, ctx, window_id);
         presenter.present(ctx, card, TuiRect::new(0, 0, width, 60))
-    });
-    frame
+    })
+}
+
+/// Returns the card's trimmed rendered lines at `width`.
+fn render_card_lines(
+    app: &mut App,
+    card: &ViewHandle<TuiRunAgentsCardView>,
+    width: u16,
+) -> Vec<String> {
+    render_card_frame(app, card, width)
         .buffer
         .to_lines()
         .into_iter()
         .map(|line| line.trim_end().to_owned())
-        .filter(|line| !line.is_empty())
         .collect()
 }
 
@@ -311,7 +318,7 @@ fn acceptance_card_renders_required_content_across_widths() {
         for width in [40u16, 80, 132] {
             let lines = render_card_lines(&mut app, &fixture.card, width);
             let all = lines.join("\n");
-            // PRODUCT 9: question, summary, agent names, and run-wide values.
+            // question, summary, agent names, and run-wide values.
             assert!(all.contains("Can I start"), "width {width}: {all}");
             assert!(all.contains("Parallelize the task."), "width {width}");
             assert!(all.contains("Agents (2)"), "width {width}");
@@ -323,11 +330,11 @@ fn acceptance_card_renders_required_content_across_widths() {
             assert!(all.contains("Model"), "width {width}");
             assert!(all.contains("Host"), "width {width}");
             assert!(all.contains("Environment"), "width {width}");
-            // PRODUCT 16-17: the footer hints replace the input footer and
-            // wrap (rather than clip) at narrow widths (PRODUCT 15).
-            assert!(all.contains("enter accept"), "width {width}");
-            assert!(all.contains("ctrl-e configure"), "width {width}");
-            assert!(all.contains("ctrl-c reject"), "width {width}");
+            // the footer hints replace the input footer and
+            // wrap (rather than clip) at narrow widths.
+            assert!(all.contains("Enter to accept"), "width {width}: {all}");
+            assert!(all.contains("Ctrl-E to configure"), "width {width}: {all}");
+            assert!(all.contains("Ctrl-C to reject"), "width {width}: {all}");
         }
     });
 }
@@ -344,7 +351,7 @@ fn agent_identities_stay_stable_across_rerenders_and_edits() {
                 .expect("agent row")
         }
         let before = agent_line(&mut app, &fixture);
-        // Stable across plain re-renders (PRODUCT 11)…
+        // Stable across plain re-renders…
         assert_eq!(before, agent_line(&mut app, &fixture));
         // …and across a streamed edit that appends an agent.
         let mut extended = base.clone();
@@ -372,14 +379,14 @@ fn accept_dispatches_through_the_action_model_exactly_once() {
 
         act(&mut app, &fixture.card, TuiRunAgentsCardAction::Accept);
         // The action left the Blocked queue through `execute_run_agents`
-        // (PRODUCT 55) and the card stopped blocking the input (PRODUCT 5).
+        // and the card stopped blocking the input.
         assert!(!matches!(
             action_status(&app, &fixture),
             Some(AIActionStatus::Blocked) | None
         ));
         assert!(app.read(|app| !fixture.card.as_ref(app).wants_focus(app)));
 
-        // A second decision is a no-op (PRODUCT 8): no reject can follow.
+        // A second decision is a no-op: no reject can follow.
         act(&mut app, &fixture.card, TuiRunAgentsCardAction::Reject);
         assert!(!fixture
             .events
@@ -401,7 +408,7 @@ fn reject_emits_the_cancellation_event_exactly_once() {
             .iter()
             .filter(|event| matches!(event, TuiRunAgentsCardViewEvent::RejectRequested))
             .count();
-        // Exactly one decision (PRODUCT 8, 56); the card stops blocking.
+        // Exactly one decision; the card stops blocking.
         assert_eq!(rejects, 1);
         assert!(app.read(|app| !fixture.card.as_ref(app).wants_focus(app)));
     });
@@ -410,10 +417,10 @@ fn reject_emits_the_cancellation_event_exactly_once() {
 #[test]
 fn invalid_configurations_cannot_launch_and_surface_a_reason() {
     App::test((), |mut app| async move {
-        // OpenCode + Cloud is a hard block (PRODUCT 54).
+        // OpenCode + Cloud is a hard block.
         let fixture = blocked_card(&mut app, &request("opencode", remote("env-1", "warp")));
         act(&mut app, &fixture.card, TuiRunAgentsCardAction::Accept);
-        // The card stays active and blocked (PRODUCT 53), showing the reason.
+        // The card stays active and blocked, showing the reason.
         assert!(matches!(
             action_status(&app, &fixture),
             Some(AIActionStatus::Blocked)
@@ -429,18 +436,33 @@ fn configure_walks_pages_and_esc_returns_to_acceptance() {
     App::test((), |mut app| async move {
         let fixture = blocked_card(&mut app, &request("oz", remote("env-1", "warp")));
         act(&mut app, &fixture.card, TuiRunAgentsCardAction::Configure);
-        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
-        // First page of the Cloud sequence with its dynamic count
-        // (PRODUCT 18-19) and the configuring hints.
-        assert!(all.contains("Location"));
-        assert!(all.contains("1 of 5"));
-        assert!(all.contains("Where should the agents run?"));
-        assert!(all.contains("esc back"));
+        let lines = render_card_lines(&mut app, &fixture.card, 80);
+        let all = lines.join("\n");
+        assert!(lines[0].contains("■ Can I start additional agents for this task?"));
+        assert!(lines[1].trim().is_empty());
+        assert!(lines[2].starts_with("   Edit agent configuration"));
+        assert!(lines[2].contains("← 1 of 5 →"));
+        assert!(lines[3].trim().is_empty());
+        assert!(lines[4].starts_with("   Where should the agent run?"));
+        assert!(lines[5].starts_with("   (1) Cloud"));
+        assert!(all.contains("Enter to accept"));
+        assert!(all.contains("Tab or ← → to navigate"));
+        assert!(all.contains("Esc to go back"));
 
-        // Esc returns to the acceptance card without deciding (PRODUCT 27).
+        let frame = render_card_frame(&mut app, &fixture.card, 80);
+        let surface =
+            app.read(|app| TuiUiBuilder::from_app(app).orchestration_surface_background());
+        assert_eq!(frame.buffer[(0, 0)].bg, surface);
+        let footer_row = lines
+            .iter()
+            .position(|line| line.contains("Enter to accept"))
+            .expect("configuration footer row");
+        assert_ne!(frame.buffer[(0, footer_row as u16)].bg, surface);
+
+        // Esc returns to the acceptance card without deciding.
         act(&mut app, &fixture.card, TuiRunAgentsCardAction::Back);
         let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
-        assert!(all.contains("enter accept"));
+        assert!(all.contains("Enter to accept"));
         assert!(matches!(
             action_status(&app, &fixture),
             Some(AIActionStatus::Blocked)
@@ -454,7 +476,7 @@ fn switching_to_local_mid_flow_collapses_the_sequence() {
         let fixture = blocked_card(&mut app, &request("oz", remote("env-1", "warp")));
         act(&mut app, &fixture.card, TuiRunAgentsCardAction::Configure);
         // Highlight "Local" (second row) and confirm it: the sequence
-        // collapses to Location, Model and advances to Model (PRODUCT 21).
+        // collapses to Location, Model and advances to Model.
         let selector = app.read(|app| fixture.card.as_ref(app).selector.clone());
         selector.update(&mut app, |selector, ctx| {
             selector.handle_action(&TuiOptionSelectorAction::MoveDown, ctx);
@@ -465,7 +487,62 @@ fn switching_to_local_mid_flow_collapses_the_sequence() {
             TuiRunAgentsCardAction::ConfirmSelection,
         );
         let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
-        assert!(all.contains("Model"), "{all}");
+        assert!(all.contains("Which model should the agent use?"), "{all}");
         assert!(all.contains("2 of 2"), "{all}");
+    });
+}
+
+#[test]
+fn horizontal_navigation_moves_between_pages_without_applying_highlights() {
+    App::test((), |mut app| async move {
+        let fixture = blocked_card(&mut app, &request("oz", remote("env-1", "warp")));
+        act(&mut app, &fixture.card, TuiRunAgentsCardAction::Configure);
+
+        // Highlight Local, then navigate away without confirming it.
+        let selector = app.read(|app| fixture.card.as_ref(app).selector.clone());
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::MoveDown, ctx);
+        });
+        act(&mut app, &fixture.card, TuiRunAgentsCardAction::NextPage);
+        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
+        assert!(all.contains("← 2 of 5 →"));
+        assert!(all.contains("Which harness should the agent use?"));
+        assert!(app.read(|app| {
+            fixture
+                .card
+                .as_ref(app)
+                .orchestration_edit_state
+                .orchestration_config_state
+                .execution_mode
+                .is_remote()
+        }));
+
+        act(
+            &mut app,
+            &fixture.card,
+            TuiRunAgentsCardAction::PreviousPage,
+        );
+        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
+        assert!(all.contains("← 1 of 5 →"));
+
+        // Previous on the first page is clamped.
+        act(
+            &mut app,
+            &fixture.card,
+            TuiRunAgentsCardAction::PreviousPage,
+        );
+        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
+        assert!(all.contains("← 1 of 5 →"));
+
+        for _ in 0..10 {
+            act(&mut app, &fixture.card, TuiRunAgentsCardAction::NextPage);
+        }
+        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
+        assert!(all.contains("← 5 of 5 →"));
+
+        // Next on the final page is clamped.
+        act(&mut app, &fixture.card, TuiRunAgentsCardAction::NextPage);
+        let all = render_card_lines(&mut app, &fixture.card, 80).join("\n");
+        assert!(all.contains("← 5 of 5 →"));
     });
 }

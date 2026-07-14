@@ -17,7 +17,7 @@ fn tui_ownership_is_by_name_prefix_or_group() {
 }
 
 /// Registering every TUI binding — including the orchestration card's
-/// enter/ctrl-e/escape/ctrl-c set — must satisfy the debug-time
+/// enter/ctrl-e/escape/ctrl-c and Tab/Left/Right navigation set — must satisfy the debug-time
 /// cross-surface validators, which panic on any keystroke binding matching
 /// a TUI view's context that is not TUI-owned.
 #[test]

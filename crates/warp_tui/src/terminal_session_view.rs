@@ -1055,17 +1055,16 @@ impl TuiTerminalSessionView {
         }
     }
 
-    /// The active front-of-queue blocking interaction, if any (PRODUCT 1, 4).
+    /// The active front-of-queue blocking interaction, if any.
     fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
         self.transcript.as_ref(ctx).active_blocking_child(ctx)
     }
 
     /// Reconciles focus with the derived blocker: a newly active blocker is
     /// focused (handing off directly between consecutive blockers with no
-    /// intermediate editable input, PRODUCT 6), and focus returns to the
-    /// input when the last blocker resolves (PRODUCT 5). Nothing here writes
-    /// to the input model, so its draft/cursor/selection are untouched
-    /// (PRODUCT 3).
+    /// intermediate editable input), and focus returns to the input when the
+    /// last blocker resolves. Nothing here writes to the input model, so its
+    /// draft/cursor/selection are untouched.
     fn sync_blocker_focus(&mut self, ctx: &mut ViewContext<Self>) {
         let blocker = self.active_blocking_child(ctx);
         let blocker_view_id = blocker.as_ref().map(|child| child.view.id());
@@ -2361,10 +2360,10 @@ impl TuiView for TuiTerminalSessionView {
         // While a `RunAgents` card (or another blocking interaction) is the
         // active front-of-queue blocker, the input box, inline menus, and
         // normal footer are omitted; the blocker renders its own action
-        // hints in their place (PRODUCT 1-2). Visibility is derived fresh
+        // hints in their place. Visibility is derived fresh
         // each pass — no stored suppression flag — and the hidden input
         // model is never written to, so its draft/cursor/selection/scroll
-        // survive untouched (PRODUCT 3).
+        // survive untouched.
         let blocker_active = self.active_blocking_child(ctx).is_some();
         if !blocker_active && !inline_process_owns_input {
             if let Some(menu) = inline_menu {

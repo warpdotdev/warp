@@ -43,7 +43,7 @@ The Warp TUI gains an interactive permission card for an active `RunAgents` requ
 11. Every proposed agent has a deterministic color-and-glyph identity that remains stable for the life of the request, including across re-renders and configuration edits.
 12. Agent identities use theme-derived ANSI colors rather than fixed RGB values. The palette provides at least 32 distinct color-and-glyph combinations, covering the current maximum agents in one request.
 13. If a future request exceeds the number of unique combinations, the palette cycles deterministically. No agent is omitted and rendering does not fail.
-14. The card uses the orchestration treatment from the designs: a themed magenta-tinted body and header, an attention glyph, primary text for content, muted separators and metadata, and bold emphasis for selected configuration values.
+14. The card uses the orchestration treatment from the designs: one 10%-magenta-tinted body/header surface, a yellow square attention glyph, primary text for content, muted separators and metadata, and bold magenta emphasis for selected configuration options.
 15. Text and agent identities wrap and reflow at narrow terminal widths. If the complete card cannot fit vertically, it remains navigable without clipping required configuration or actions.
 16. On the acceptance card:
    - Enter accepts the current configuration.
@@ -52,7 +52,7 @@ The Warp TUI gains an interactive permission card for an active `RunAgents` requ
 17. The footer renders these bindings using the active theme and the exact actions available in the current state.
 
 ### Configuration flow
-18. Configuration is a sequence of single-field pages. Each page shows a title, its position in the current sequence, one question, a selectable option list, and contextual keybinding hints.
+18. Configuration is a sequence of single-field pages. The tinted card keeps the permission title visible, then shows `Edit agent configuration` with right-aligned `← n of m →` navigation, one bold question, a selectable option list, and contextual keybinding hints below the tinted surface.
 19. Cloud uses this order:
    1. Location
    2. Harness
@@ -65,6 +65,9 @@ The Warp TUI gains an interactive permission card for an active `RunAgents` requ
 22. Selecting Cloud restores the applicable Cloud page sequence and valid selections from the current edit session when possible.
 23. Each page initially highlights the request's current value, including values inherited from an approved plan configuration. If the current value is unavailable, the page highlights the appropriate valid default and clearly reflects the replacement.
 24. A confirmed selection is saved immediately to the edit session.
+   - Tab and Right move to the next applicable page without confirming the current highlight.
+   - Left moves to the previous applicable page without confirming the current highlight.
+   - Navigation clamps at the first and final pages; the unavailable boundary arrow is muted.
 25. Confirming a selection on a non-final page advances to the next applicable page.
 26. Confirming the final page returns to the acceptance card without launching. A second Enter on the acceptance card is required to launch the edited request.
 27. Esc returns to the acceptance card and retains selections confirmed on completed pages. The current page's highlighted but unconfirmed option is discarded.
@@ -72,13 +75,13 @@ The Warp TUI gains an interactive permission card for an active `RunAgents` requ
 
 ### General option selection
 29. Every configuration page uses the same option-selection behavior and presentation.
-30. Up and Down move the highlight through enabled options without confirming a value. Navigation scrolls when the highlight moves beyond the visible viewport.
+30. Up and Down move the highlight through options without confirming a value. Four rows are visible at once; navigation scrolls when the highlight moves beyond that viewport and shows `↑` / `↓` overflow markers.
 31. Enter confirms the highlighted option.
-32. Number keys 1–9 confirm the corresponding visible option and advance immediately. The shortcuts are viewport-relative so they remain useful in long, scrolled lists.
-33. Options beyond the first nine visible rows remain reachable with scrolling, Up and Down, and Enter.
+32. Number keys 1–9 confirm the corresponding visible option, when present, and advance immediately. The shortcuts are viewport-relative so they remain useful in long, scrolled lists.
+33. Options beyond the four-row viewport remain reachable with scrolling, Up and Down, and Enter.
 34. Clicking an enabled option confirms it and advances exactly like Enter.
 35. Mouse-wheel and trackpad input scroll lists that exceed the available height.
-36. Disabled rows can be highlighted for context but cannot be confirmed. They show a concise reason when one is available.
+36. Rows render with `(n)` number prefixes. The selected row is bold magenta without a separate marker or background. Disabled rows can be highlighted for context but cannot be confirmed; they show a concise reason when available.
 37. Empty lists show a non-selectable empty state rather than leaving a blank surface.
 
 ### Field-specific choices
@@ -93,7 +96,7 @@ The Warp TUI gains an interactive permission card for an active `RunAgents` requ
    - Existing named managed secrets valid for the selected harness.
    - No resource-creation option.
 42. Host appears only for Cloud. It offers the Warp-hosted option, the workspace default when configured, known connected self-hosted workers, the user's recent custom host when available, and a custom-host text-entry option.
-43. A custom host is trimmed and validated before it is confirmed. Invalid or empty custom input remains editable and shows a concise error.
+43. A custom host is trimmed and validated before it is confirmed. Invalid or empty custom input remains editable and shows a concise error. Once confirmed, the user-entered value replaces the generic `Custom host…` option text and pre-fills the editor if selected again.
 44. Environment appears only for Cloud. It offers “Empty environment” plus existing environments, using the same labels and default-selection behavior as the GUI. It does not offer environment creation.
 45. Switching Location or Harness revalidates all dependent fields:
    - Local forces Warp and removes Cloud-only values from the launch configuration.
