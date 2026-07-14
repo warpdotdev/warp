@@ -22,7 +22,7 @@ use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat};
+use warp_cli::agent::{Harness, OutputFormat, RepositoryBaseline};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
@@ -297,6 +297,10 @@ pub struct AgentDriverOptions {
     pub cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
     /// Resolved environment configuration, if any.
     pub environment: Option<AmbientAgentEnvironment>,
+    /// Server-owned immutable repository baselines for this run.
+    pub repository_baselines: Vec<RepositoryBaseline>,
+    /// Whether this server-dispatched run reports its verified repository baselines.
+    pub report_repository_baselines: bool,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
@@ -364,6 +368,8 @@ pub struct AgentDriver {
 
     /// Resolved environment configuration.
     environment: Option<AmbientAgentEnvironment>,
+    repository_baselines: Vec<RepositoryBaseline>,
+    report_repository_baselines: bool,
 
     // End-of-run snapshot upload controls.
     snapshot_disabled: bool,
@@ -635,6 +641,8 @@ impl AgentDriver {
             resume,
             cloud_providers,
             environment,
+            repository_baselines,
+            report_repository_baselines,
             selected_harness,
             third_party_harness_model_config,
             snapshot_disabled,
@@ -761,6 +769,8 @@ impl AgentDriver {
             resume_payload,
             cloud_providers,
             environment,
+            repository_baselines,
+            report_repository_baselines,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
                 .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
@@ -805,6 +815,8 @@ impl AgentDriver {
             resume_payload: None,
             cloud_providers: Vec::new(),
             environment: None,
+            repository_baselines: Vec::new(),
+            report_repository_baselines: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
             snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
@@ -2156,7 +2168,17 @@ impl AgentDriver {
             .await?;
         let mut environment_skill_repos = Vec::new();
 
-        let environment_opt = foreground.spawn(|me, _| me.environment.clone()).await?;
+        let (environment_opt, repository_baselines, baseline_reporter) = foreground
+            .spawn(|me, ctx| {
+                let baseline_reporter = (me.report_repository_baselines && me.task_id.is_some())
+                    .then(|| ServerApiProvider::as_ref(ctx).get_harness_support_client());
+                (
+                    me.environment.clone(),
+                    me.repository_baselines.clone(),
+                    baseline_reporter,
+                )
+            })
+            .await?;
 
         if let Some(environment) = environment_opt {
             log::info!("Loading environment...");
@@ -2197,6 +2219,10 @@ impl AgentDriver {
                             working_dir,
                             false, /* is_sandbox */
                             harness,
+                            environment::RepositoryBaselineContext::new(
+                                repository_baselines,
+                                baseline_reporter,
+                            ),
                             setup_events_for_environment,
                             ctx,
                         )
@@ -3638,10 +3664,20 @@ impl AgentDriver {
             return;
         }
 
-        let Ok((working_dir, client)) = spawner
+        let Ok((working_dir, client, repository_baselines)) = spawner
             .spawn(|me, ctx| {
                 let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
-                (me.working_dir.clone(), client)
+                let repository_baselines = me
+                    .repository_baselines
+                    .iter()
+                    .map(|baseline| {
+                        (
+                            me.working_dir.join(&baseline.repo_name),
+                            baseline.commit_sha.clone(),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                (me.working_dir.clone(), client, repository_baselines)
             })
             .await
         else {
@@ -3666,9 +3702,10 @@ impl AgentDriver {
         // Cap the upload so a pathological slow upload cannot wedge cleanup.
         // On timeout we surface via report_error! so Sentry captures the incident and on-call
         // alerting can fire, then let cloud-provider teardown continue.
-        if let Err(TimeoutError) = snapshot::upload_snapshot_from_declarations(client, &task_id)
-            .with_timeout(upload_timeout)
-            .await
+        if let Err(TimeoutError) =
+            snapshot::upload_snapshot_from_declarations(client, &task_id, &repository_baselines)
+                .with_timeout(upload_timeout)
+                .await
         {
             report_error!(
                 "Snapshot upload timed out; continuing with cleanup",

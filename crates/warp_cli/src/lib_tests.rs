@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use clap::Parser;
 
 use super::*;
-use crate::agent::{AgentCommand, Harness, OutputFormat};
+use crate::agent::{AgentCommand, Harness, OutputFormat, RepositoryBaselineForge};
 use crate::artifact::ArtifactCommand;
 use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
@@ -261,6 +261,94 @@ fn agent_run_rejects_bedrock_role_region_without_role() {
         err.to_string().contains("--bedrock-inference-role"),
         "expected error to reference --bedrock-inference-role, got: {err}"
     );
+}
+
+#[test]
+fn agent_run_parses_repeated_repository_baseline_json() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "--repository-baseline-json",
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","commit_sha":"0123456789abcdef0123456789abcdef01234567","branch":"main"}"#,
+        "--repository-baseline-json",
+        r#"{"code_forge":"GITLAB","repo_owner":"platform/backend","repo_name":"api","commit_sha":"89abcdef0123456789abcdef0123456789abcdef"}"#,
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(run_args.repository_baselines.len(), 2);
+    assert_eq!(
+        run_args.repository_baselines[0].code_forge,
+        RepositoryBaselineForge::GitHub
+    );
+    assert_eq!(
+        run_args.repository_baselines[0].branch.as_deref(),
+        Some("main")
+    );
+    assert_eq!(
+        run_args.repository_baselines[1].code_forge,
+        RepositoryBaselineForge::GitLab
+    );
+    assert_eq!(
+        run_args.repository_baselines[1].repo_owner,
+        "platform/backend"
+    );
+}
+
+#[test]
+fn agent_run_rejects_non_lowercase_exact_repository_sha() {
+    for invalid_sha in [
+        "0123456789abcdef0123456789abcdef0123456",
+        "0123456789abcdef0123456789abcdef012345678",
+        "0123456789abcdef0123456789abcdef0123456A",
+    ] {
+        let baseline = format!(
+            r#"{{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","commit_sha":"{invalid_sha}"}}"#
+        );
+        let err = Args::try_parse_from([
+            "warp",
+            "agent",
+            "run",
+            "--task-id",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--repository-baseline-json",
+            baseline.as_str(),
+        ])
+        .expect_err("invalid commit SHA must fail parsing");
+        assert!(
+            err.to_string()
+                .contains("exact 40-character lowercase hexadecimal SHA"),
+            "unexpected parse error: {err}"
+        );
+    }
+}
+
+#[test]
+fn agent_run_rejects_invalid_repository_baseline_shape() {
+    for invalid_baseline in [
+        r#"{"code_forge":"github","repo_owner":"warpdotdev","repo_name":"warp","commit_sha":"0123456789abcdef0123456789abcdef01234567"}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","commit_sha":"0123456789abcdef0123456789abcdef01234567","unexpected":true}"#,
+    ] {
+        Args::try_parse_from([
+            "warp",
+            "agent",
+            "run",
+            "--task-id",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--repository-baseline-json",
+            invalid_baseline,
+        ])
+        .expect_err("invalid baseline JSON must fail parsing");
+    }
 }
 
 #[test]

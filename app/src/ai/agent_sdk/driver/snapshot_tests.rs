@@ -44,6 +44,99 @@ struct TestClient {
     drop_trailing_targets: usize,
 }
 
+#[test]
+fn pinned_repo_patch_includes_committed_and_uncommitted_changes() {
+    let tempdir = snaptest_tempdir();
+    init_git_repo(tempdir.path(), false);
+    let baseline_sha = git_stdout(tempdir.path(), &["rev-parse", "HEAD"]);
+
+    fs::write(
+        tempdir.path().join("committed.txt"),
+        "subject-commit-content\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["add", "committed.txt"],
+        vec!["commit", "-q", "-m", "subject commit"],
+    ] {
+        let output = BlockingCommand::new("git")
+            .current_dir(tempdir.path())
+            .args(args)
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            output.status.success(),
+            "git command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fs::write(tempdir.path().join("README.md"), "working-tree-content\n").unwrap();
+    fs::write(tempdir.path().join("untracked.txt"), "untracked work\n").unwrap();
+
+    let runtime = Runtime::new().unwrap();
+    let legacy_patch = runtime.block_on(build_repo_patch(tempdir.path())).unwrap();
+    let pinned_patch = runtime
+        .block_on(build_repo_patch_from_baseline(
+            tempdir.path(),
+            Some(&baseline_sha),
+        ))
+        .unwrap();
+    let legacy_patch = String::from_utf8_lossy(&legacy_patch);
+    let pinned_patch = String::from_utf8_lossy(&pinned_patch);
+
+    assert!(!legacy_patch.contains("subject-commit-content"));
+    assert!(legacy_patch.contains("working-tree-content"));
+    assert!(legacy_patch.contains("untracked work"));
+    assert!(pinned_patch.contains("subject-commit-content"));
+    assert!(pinned_patch.contains("working-tree-content"));
+    assert!(pinned_patch.contains("untracked work"));
+}
+
+#[test]
+fn pinned_snapshot_manifest_records_baseline_sha() {
+    let repo = snaptest_tempdir();
+    init_git_repo(repo.path(), false);
+    let baseline_sha = git_stdout(repo.path(), &["rev-parse", "HEAD"]);
+    fs::write(repo.path().join("README.md"), "subject work\n").unwrap();
+    let declarations_dir = snaptest_tempdir();
+    let declarations_path = write_declarations(declarations_dir.path(), &[repo.path()], &[]);
+    let repository_baselines = HashMap::from([(repo.path().to_path_buf(), baseline_sha.clone())]);
+
+    let mut server = Server::new();
+    let patch_mock = server
+        .mock("PUT", upload_path(r".+\.patch"))
+        .with_status(200)
+        .expect(1)
+        .create();
+    let manifest_mock = server
+        .mock("PUT", upload_path("snapshot_state\\.json"))
+        .match_body(Matcher::PartialJson(serde_json::json!({
+            "repos": [{
+                "path": repo.path().to_string_lossy(),
+                "baseline_sha": baseline_sha,
+                "status": "uploaded",
+                "uploaded": true,
+            }],
+        })))
+        .with_status(200)
+        .expect(1)
+        .create();
+
+    let client = TestClient::new(server.url());
+    let outcome = Runtime::new()
+        .unwrap()
+        .block_on(upload_snapshot_from_declarations_file_with_baselines(
+            &declarations_path,
+            client,
+            &repository_baselines,
+        ))
+        .expect("pipeline returned None");
+
+    assert!(outcome.manifest_uploaded);
+    patch_mock.assert();
+    manifest_mock.assert();
+}
+
 impl TestClient {
     fn new(server_base_url: String) -> Arc<Self> {
         Arc::new(Self {
@@ -113,6 +206,12 @@ impl HarnessSupportClient for TestClient {
     }
 
     async fn finish_task(&self, _success: bool, _summary: &str) -> Result<()> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+    async fn report_repository_baselines(
+        &self,
+        _repositories: &[warp_cli::agent::RepositoryBaseline],
+    ) -> Result<()> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 

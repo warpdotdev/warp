@@ -661,6 +661,8 @@ struct RepoManifestEntry {
     branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     head_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline_sha: Option<String>,
     patch_file: Option<String>,
     status: &'static str,
     uploaded: Option<bool>,
@@ -704,17 +706,32 @@ async fn upload_with_retry(
 pub(super) async fn upload_snapshot_from_declarations(
     client: Arc<dyn HarnessSupportClient>,
     task_id: &AmbientAgentTaskId,
+    repository_baselines: &HashMap<PathBuf, String>,
 ) {
     let declarations_path = resolve_declarations_path(Some(task_id));
-    let _ = upload_snapshot_from_declarations_file(&declarations_path, client).await;
+    let _ = upload_snapshot_from_declarations_file_with_baselines(
+        &declarations_path,
+        client,
+        repository_baselines,
+    )
+    .await;
 }
 
 /// Internal entry that reads from an explicit path and returns the structured outcome so tests
 /// can inspect per-entry statuses. Production callers go through
 /// [`upload_snapshot_from_declarations`] which discards the outcome.
+#[cfg(test)]
 async fn upload_snapshot_from_declarations_file(
     path: &Path,
     client: Arc<dyn HarnessSupportClient>,
+) -> Option<SnapshotOutcome> {
+    upload_snapshot_from_declarations_file_with_baselines(path, client, &HashMap::new()).await
+}
+
+async fn upload_snapshot_from_declarations_file_with_baselines(
+    path: &Path,
+    client: Arc<dyn HarnessSupportClient>,
+    repository_baselines: &HashMap<PathBuf, String>,
 ) -> Option<SnapshotOutcome> {
     log::info!("Snapshot upload starting from {}", path.display());
     let declarations = read_and_parse_declarations(path)?;
@@ -729,7 +746,7 @@ async fn upload_snapshot_from_declarations_file(
         "Snapshot declarations: {} entries ({repo_count} repo, {file_count} file)",
         declarations.len(),
     );
-    let outcome = run_pipeline(declarations, client).await?;
+    let outcome = run_pipeline(declarations, client, repository_baselines).await?;
     log_snapshot_outcome(&outcome);
     Some(outcome)
 }
@@ -876,6 +893,7 @@ pub(crate) async fn upload_snapshot_for_handoff(
 async fn run_pipeline(
     declarations: Vec<DeclarationEntry>,
     client: Arc<dyn HarnessSupportClient>,
+    repository_baselines: &HashMap<PathBuf, String>,
 ) -> Option<SnapshotOutcome> {
     let GatheredSnapshot {
         manifest_filename,
@@ -883,7 +901,7 @@ async fn run_pipeline(
         repos,
         files,
         pre_upload_entries,
-    } = gather_snapshot_entries(declarations).await;
+    } = gather_snapshot_entries_with_baselines(declarations, repository_baselines).await;
 
     upload_gathered_snapshot(
         client,
@@ -905,6 +923,13 @@ struct GatheredSnapshot {
 }
 
 async fn gather_snapshot_entries(declarations: Vec<DeclarationEntry>) -> GatheredSnapshot {
+    gather_snapshot_entries_with_baselines(declarations, &HashMap::new()).await
+}
+
+async fn gather_snapshot_entries_with_baselines(
+    declarations: Vec<DeclarationEntry>,
+    repository_baselines: &HashMap<PathBuf, String>,
+) -> GatheredSnapshot {
     let mut used_filenames = HashSet::new();
     let manifest_filename = unique_filename("snapshot_state.json", &mut used_filenames);
 
@@ -920,8 +945,10 @@ async fn gather_snapshot_entries(declarations: Vec<DeclarationEntry>) -> Gathere
         match entry.kind {
             EntryKind::Repo => {
                 repo_index += 1;
+                let baseline_sha = repository_baselines.get(Path::new(&entry.path));
                 gather_repo(
                     &entry.path,
+                    baseline_sha.map(String::as_str),
                     repo_index,
                     &mut used_filenames,
                     &mut upload_files,
@@ -1104,6 +1131,7 @@ async fn upload_prepared_snapshot_files(
 /// Gather a repo entry: run `build_repo_patch` and append an upload blob + manifest stub.
 async fn gather_repo(
     repo_path: &str,
+    baseline_sha: Option<&str>,
     repo_index: usize,
     used_filenames: &mut HashSet<String>,
     upload_files: &mut Vec<SnapshotUploadFile>,
@@ -1112,13 +1140,14 @@ async fn gather_repo(
 ) {
     let repo = Path::new(repo_path);
     let metadata = repo_metadata(repo).await;
-    match build_repo_patch(repo).await {
+    match build_repo_patch_from_baseline(repo, baseline_sha).await {
         Ok(patch) if patch.is_empty() => {
             repos.push(RepoManifestEntry {
                 path: repo_path.to_string(),
                 repo_name: metadata.repo_name,
                 branch: metadata.branch,
                 head_sha: metadata.head_sha,
+                baseline_sha: baseline_sha.map(str::to_string),
                 patch_file: None,
                 status: "clean",
                 uploaded: None,
@@ -1142,6 +1171,7 @@ async fn gather_repo(
                 repo_name: metadata.repo_name,
                 branch: metadata.branch,
                 head_sha: metadata.head_sha,
+                baseline_sha: baseline_sha.map(str::to_string),
                 patch_file: Some(filename),
                 status: "dirty",
                 uploaded: None,
@@ -1156,6 +1186,7 @@ async fn gather_repo(
                 repo_name: metadata.repo_name,
                 branch: metadata.branch,
                 head_sha: metadata.head_sha,
+                baseline_sha: baseline_sha.map(str::to_string),
                 patch_file: None,
                 status: "gather_failed",
                 uploaded: None,
@@ -1455,8 +1486,21 @@ async fn repo_metadata(repo_dir: &Path) -> RepoMetadata {
     }
 }
 
+#[cfg(test)]
 async fn build_repo_patch(repo_dir: &Path) -> Result<Vec<u8>> {
-    let mut patch = git_output_bytes(repo_dir, ["diff", "--binary", "HEAD"], &[0]).await?;
+    build_repo_patch_from_baseline(repo_dir, None).await
+}
+
+async fn build_repo_patch_from_baseline(
+    repo_dir: &Path,
+    baseline_sha: Option<&str>,
+) -> Result<Vec<u8>> {
+    let mut patch = git_output_bytes(
+        repo_dir,
+        ["diff", "--binary", baseline_sha.unwrap_or("HEAD")],
+        &[0],
+    )
+    .await?;
     let untracked_listing = git_output_bytes(
         repo_dir,
         ["ls-files", "--others", "--exclude-standard", "-z"],

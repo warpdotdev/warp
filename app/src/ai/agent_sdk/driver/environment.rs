@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -7,11 +7,12 @@ use std::time::Duration;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
+use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use warp_cli::agent::Harness;
-use warp_completer::completer::CommandExitStatus;
+use warp_cli::agent::{Harness, RepositoryBaseline, RepositoryBaselineForge};
+use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 use warp_core::{safe_info, safe_warn};
 use warpui::r#async::FutureExt;
@@ -21,6 +22,7 @@ use super::terminal::TerminalDriver;
 use super::AgentDriverError;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
@@ -32,6 +34,16 @@ pub enum PrepareEnvironmentError {
     InvalidRuntimeState,
     #[error("Failed to clone {repo_name}")]
     CloneRepo { repo_name: String },
+    #[error("Invalid repository baselines: {reason}")]
+    InvalidRepositoryBaselines { reason: String },
+    #[error("Failed to prepare repositories: {repo_names}")]
+    PrepareRepositories { repo_names: String },
+    #[error("Failed to verify repository {repo_name}")]
+    VerifyRepository { repo_name: String },
+    #[error("Failed to report repository baselines: {source}")]
+    ReportRepositoryBaselines { source: anyhow::Error },
+    #[error("Failed to remove remotes from pinned repositories")]
+    RemovePinnedRemotes,
     #[error("Failed to run setup command: {command}")]
     SetupCommand { command: String },
     #[error("Failed to change directory into {repo_name}")]
@@ -40,8 +52,84 @@ pub enum PrepareEnvironmentError {
     TerminalDriver { source: AgentDriverError },
 }
 
+/// Server-owned repository pinning and reporting context for environment preparation.
+#[derive(Default)]
+pub(crate) struct RepositoryBaselineContext {
+    baselines: Vec<RepositoryBaseline>,
+    reporter: Option<Arc<dyn HarnessSupportClient>>,
+}
+
+impl RepositoryBaselineContext {
+    pub fn new(
+        baselines: Vec<RepositoryBaseline>,
+        reporter: Option<Arc<dyn HarnessSupportClient>>,
+    ) -> Self {
+        Self {
+            baselines,
+            reporter,
+        }
+    }
+}
+
+pub(crate) fn validate_repository_baselines(
+    environment: Option<&AmbientAgentEnvironment>,
+    baselines: &[RepositoryBaseline],
+) -> Result<(), PrepareEnvironmentError> {
+    if baselines.is_empty() {
+        return Ok(());
+    }
+    let source_repos = environment
+        .ok_or_else(|| PrepareEnvironmentError::InvalidRepositoryBaselines {
+            reason: "repository baselines require an environment".to_string(),
+        })?
+        .effective_repos();
+    let mut identities = HashSet::new();
+    for baseline in baselines {
+        if !identities.insert(baseline.identity()) {
+            return Err(PrepareEnvironmentError::InvalidRepositoryBaselines {
+                reason: format!(
+                    "duplicate repository identity {:?}/{}/{}",
+                    baseline.code_forge, baseline.repo_owner, baseline.repo_name
+                ),
+            });
+        }
+        if !source_repos
+            .iter()
+            .any(|repo| baseline_matches_repo(baseline, repo))
+        {
+            return Err(PrepareEnvironmentError::InvalidRepositoryBaselines {
+                reason: format!(
+                    "repository {:?}/{}/{} is not declared by the environment",
+                    baseline.code_forge, baseline.repo_owner, baseline.repo_name
+                ),
+            });
+        }
+    }
+    if baselines.len() != source_repos.len() {
+        let missing_repositories = source_repos
+            .iter()
+            .filter(|repo| baseline_for_repo(baselines, repo).is_none())
+            .map(|repo| {
+                format!(
+                    "{:?}/{}/{}",
+                    baseline_forge_for_repo(repo),
+                    repo.owner,
+                    repo.repo
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(PrepareEnvironmentError::InvalidRepositoryBaselines {
+            reason: format!(
+                "pinned tasks require one baseline for every environment repository; missing: {missing_repositories}"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Prepare a cloud agent environment within a terminal session. This will:
-/// 1. Clone all repositories, skipping any that are already cloned.
+/// 1. Materialize all repositories, enforcing any server-provided commit pins.
 /// 2. Begin codebase indexing for all repositories (Oz harness only).
 /// 3. Run any setup commands.
 /// 4. If there is only one repository, navigate into it.
@@ -57,11 +145,17 @@ pub fn prepare_environment(
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
+    repository_baseline_context: RepositoryBaselineContext,
     setup_events: SetupClientEventReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> {
     let spawner = ctx.spawner();
     async move {
+        let RepositoryBaselineContext {
+            baselines: repository_baselines,
+            reporter: baseline_reporter,
+        } = repository_baseline_context;
+        validate_repository_baselines(Some(&environment), &repository_baselines)?;
         let source_repos = environment.effective_repos();
         let setup_commands = environment.setup_commands;
 
@@ -80,6 +174,8 @@ pub fn prepare_environment(
             working_dir.as_path(),
             is_sandbox,
             &source_repos,
+            &repository_baselines,
+            baseline_reporter,
             setup_commands,
             should_index_codebase,
             Arc::clone(&repo_channels),
@@ -105,6 +201,8 @@ async fn prepare_environment_impl(
     working_dir: &Path,
     is_sandbox: bool,
     source_repos: &[SourceRepo],
+    repository_baselines: &[RepositoryBaseline],
+    baseline_reporter: Option<Arc<dyn HarnessSupportClient>>,
     setup_commands: Vec<String>,
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
@@ -124,28 +222,43 @@ async fn prepare_environment_impl(
     }
     let mut codebase_context_receivers = Vec::new();
 
-    if !source_repos.is_empty() {
+    let verified_baselines = if source_repos.is_empty() {
+        Vec::new()
+    } else {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
-                clone_repos(source_repos, working_dir, spawner).await?;
-                for repo in source_repos {
-                    register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
-                    if !is_sandbox && should_index_codebase {
-                        let receiver = index_repo_codebase(
-                            &repo.repo,
-                            working_dir,
-                            Arc::clone(&repo_channels),
-                            spawner,
-                        )
-                        .await?;
-                        if let Some(receiver) = receiver {
-                            codebase_context_receivers.push(receiver);
-                        }
-                    }
-                }
-                Ok::<(), PrepareEnvironmentError>(())
+                prepare_repositories(source_repos, repository_baselines, working_dir, spawner).await
             })
-            .await?;
+            .await?
+    };
+
+    if let Some(reporter) = baseline_reporter {
+        reporter
+            .report_repository_baselines(&verified_baselines)
+            .await
+            .map_err(|source| PrepareEnvironmentError::ReportRepositoryBaselines { source })?;
+    } else if !repository_baselines.is_empty() {
+        return Err(PrepareEnvironmentError::InvalidRepositoryBaselines {
+            reason: "pinned repositories require an authenticated task reporter".to_string(),
+        });
+    }
+
+    if !source_repos.is_empty() {
+        for repo in source_repos {
+            register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
+            if !is_sandbox && should_index_codebase {
+                let receiver = index_repo_codebase(
+                    &repo.repo,
+                    working_dir,
+                    Arc::clone(&repo_channels),
+                    spawner,
+                )
+                .await?;
+                if let Some(receiver) = receiver {
+                    codebase_context_receivers.push(receiver);
+                }
+            }
+        }
 
         if should_index_codebase {
             record_codebase_indexing(
@@ -157,7 +270,7 @@ async fn prepare_environment_impl(
     }
 
     let has_setup_commands = !setup_commands.is_empty();
-    if has_setup_commands {
+    let setup_result = if has_setup_commands {
         setup_events
             .record_result(SetupStep::EnvironmentSetupCommands, async {
                 // Set CI=true so setup commands run in a CI-like environment. This should help us run
@@ -197,14 +310,22 @@ async fn prepare_environment_impl(
                 execute_command("unset CI".to_string(), spawner).await?;
                 Ok::<(), PrepareEnvironmentError>(())
             })
-            .await?;
+            .await
     } else if should_index_codebase && source_repos.is_empty() {
         let _ = spawner
             .spawn(|_, ctx| {
                 ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
             })
             .await;
-    }
+        Ok(())
+    } else {
+        Ok(())
+    };
+
+    let remove_remotes_result =
+        remove_pinned_remotes(repository_baselines, working_dir, spawner).await;
+    setup_result?;
+    remove_remotes_result?;
 
     if should_index_codebase && source_repos.is_empty() {
         log::info!("No repositories to index for codebase context");
@@ -259,6 +380,285 @@ fn record_codebase_indexing(
             })
             .await;
     });
+}
+
+fn baseline_forge_for_repo(repo: &SourceRepo) -> RepositoryBaselineForge {
+    match repo.code_forge.unwrap_or_default() {
+        CodeForge::GitHub => RepositoryBaselineForge::GitHub,
+        CodeForge::GitLab => RepositoryBaselineForge::GitLab,
+    }
+}
+
+fn baseline_matches_repo(baseline: &RepositoryBaseline, repo: &SourceRepo) -> bool {
+    baseline.code_forge == baseline_forge_for_repo(repo)
+        && baseline.repo_owner == repo.owner
+        && baseline.repo_name == repo.repo
+}
+
+fn baseline_for_repo<'a>(
+    baselines: &'a [RepositoryBaseline],
+    repo: &SourceRepo,
+) -> Option<&'a RepositoryBaseline> {
+    baselines
+        .iter()
+        .find(|baseline| baseline_matches_repo(baseline, repo))
+}
+
+async fn active_shell_type(spawner: &ModelSpawner<TerminalDriver>) -> ShellType {
+    spawner
+        .spawn(|driver, ctx| {
+            driver
+                .active_session_shell_type(ctx)
+                .unwrap_or(ShellType::Bash)
+        })
+        .await
+        .unwrap_or(ShellType::Bash)
+}
+
+fn build_parallel_prepare_command(
+    repos: &[SourceRepo],
+    baselines: &[RepositoryBaseline],
+    shell_type: ShellType,
+) -> String {
+    let mut script = String::from(
+        r#"set +e
+failed=0
+pids=""
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/warp-repo-logs.XXXXXX")"
+cleanup_repo_logs() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup_repo_logs EXIT
+clone_repo() {
+  repo_name="$1"
+  repo_url="$2"
+  target="$3"
+  if [ -d "$target" ]; then
+    printf '%s\n' "Repository directory $target already exists, skipping clone..."
+    return 0
+  fi
+  printf '%s\n' "Cloning repository $repo_name..."
+  git clone --filter=tree:0 "$repo_url" "$target"
+}
+checkout_pinned_repo() {
+  repo_name="$1"
+  repo_url="$2"
+  target="$3"
+  commit_sha="$4"
+  if [ -e "$target" ]; then
+    printf '%s\n' "Verifying existing pinned repository $repo_name..."
+  else
+    printf '%s\n' "Initializing pinned repository $repo_name..."
+    git init --quiet "$target" || return 1
+    git -C "$target" remote add origin "$repo_url" || return 1
+    git -C "$target" fetch --depth=1 origin "$commit_sha" || return 1
+    git -C "$target" checkout --detach "$commit_sha" || return 1
+  fi
+  if ! git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf '%s\n' "Pinned repository path $target is not a Git repository" >&2
+    return 1
+  fi
+  actual_sha="$(git -C "$target" rev-parse HEAD)" || return 1
+  if [ "$actual_sha" != "$commit_sha" ]; then
+    printf '%s\n' "Pinned repository $repo_name is at $actual_sha, expected $commit_sha" >&2
+    return 1
+  fi
+  if git -C "$target" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+    printf '%s\n' "Pinned repository $repo_name must use a detached HEAD" >&2
+    return 1
+  fi
+  shallow="$(git -C "$target" rev-parse --is-shallow-repository)" || return 1
+  if [ "$shallow" != "true" ]; then
+    printf '%s\n' "Pinned repository $repo_name is not shallow" >&2
+    return 1
+  fi
+  reachable_commits="$(git -C "$target" rev-list --count HEAD --all)" || return 1
+  if [ "$reachable_commits" != "1" ]; then
+    printf '%s\n' "Pinned repository $repo_name exposes $reachable_commits commits, expected exactly 1" >&2
+    return 1
+  fi
+}
+"#,
+    );
+
+    let mut log_outputs = String::new();
+    for (index, repo) in repos.iter().enumerate() {
+        let repo_name = format!("{}/{}", repo.owner, repo.repo);
+        let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
+        let escaped_repo_url = shell_escape_single_quotes(&repo.https_clone_url(), ShellType::Bash);
+        let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
+        let log_var = format!("log_file_{index}");
+        script.push_str(&format!("{log_var}=\"$tmp_dir/repo-{index}.log\"\n"));
+        if let Some(baseline) = baseline_for_repo(baselines, repo) {
+            let escaped_commit_sha =
+                shell_escape_single_quotes(&baseline.commit_sha, ShellType::Bash);
+            script.push_str(&format!(
+                "checkout_pinned_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_commit_sha}' >\"${log_var}\" 2>&1 &\n"
+            ));
+        } else {
+            script.push_str(&format!(
+                "clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' >\"${log_var}\" 2>&1 &\n"
+            ));
+        }
+        script.push_str("pids=\"$pids $!\"\n");
+        log_outputs.push_str(&format!(
+            "printf '%s\\n' '===== {escaped_repo_name} ====='\n\
+             if [ -s \"${log_var}\" ]; then\n\
+             \tcat \"${log_var}\"\n\
+             else\n\
+             \tprintf '%s\\n' '(no output)'\n\
+             fi\n"
+        ));
+    }
+
+    script.push_str(
+        r#"for pid in $pids; do
+  if ! wait "$pid"; then
+    failed=1
+  fi
+done
+"#,
+    );
+    script.push_str(&log_outputs);
+    script.push_str(
+        r#"
+exit "$failed"
+"#,
+    );
+
+    let escaped_script = shell_escape_single_quotes(&script, shell_type);
+    format!("sh -c '{escaped_script}'")
+}
+
+async fn prepare_repositories(
+    repos: &[SourceRepo],
+    baselines: &[RepositoryBaseline],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<Vec<RepositoryBaseline>, PrepareEnvironmentError> {
+    if baselines.is_empty() {
+        clone_repos(repos, working_dir, spawner).await?;
+    } else {
+        let shell_type = active_shell_type(spawner).await;
+        let command = build_parallel_prepare_command(repos, baselines, shell_type);
+        let exit_code = execute_command(command, spawner).await?;
+        if exit_code != 0.into() {
+            return Err(PrepareEnvironmentError::PrepareRepositories {
+                repo_names: repos
+                    .iter()
+                    .map(|repo| format!("{}/{}", repo.owner, repo.repo))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            });
+        }
+    }
+
+    collect_verified_baselines(repos, baselines, working_dir, spawner).await
+}
+
+async fn collect_verified_baselines(
+    repos: &[SourceRepo],
+    baselines: &[RepositoryBaseline],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<Vec<RepositoryBaseline>, PrepareEnvironmentError> {
+    let shell_type = active_shell_type(spawner).await;
+    let mut verified = Vec::with_capacity(repos.len());
+    for repo in repos {
+        let repo_path = working_dir.join(&repo.repo);
+        let escaped_path =
+            shell_escape_single_quotes(&repo_path.to_string_lossy(), ShellType::Bash);
+        let script = format!(
+            "sha=$(git -C '{escaped_path}' rev-parse HEAD) || exit 1\n\
+             printf '%s\\n' \"$sha\"\n\
+             git -C '{escaped_path}' symbolic-ref --quiet --short HEAD || true"
+        );
+        let escaped_script = shell_escape_single_quotes(&script, shell_type);
+        let command = format!("sh -c '{escaped_script}'");
+        let output = execute_silent_command(command, spawner).await?;
+        if !output.success() {
+            return Err(PrepareEnvironmentError::VerifyRepository {
+                repo_name: format!("{}/{}", repo.owner, repo.repo),
+            });
+        }
+        let stdout = String::from_utf8(output.stdout).map_err(|_| {
+            PrepareEnvironmentError::VerifyRepository {
+                repo_name: format!("{}/{}", repo.owner, repo.repo),
+            }
+        })?;
+        let mut lines = stdout.lines();
+        let commit_sha = lines.next().unwrap_or_default().trim().to_string();
+        if commit_sha.len() != 40
+            || !commit_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(PrepareEnvironmentError::VerifyRepository {
+                repo_name: format!("{}/{}", repo.owner, repo.repo),
+            });
+        }
+        let baseline = baseline_for_repo(baselines, repo);
+        if baseline.is_some_and(|baseline| baseline.commit_sha != commit_sha) {
+            return Err(PrepareEnvironmentError::VerifyRepository {
+                repo_name: format!("{}/{}", repo.owner, repo.repo),
+            });
+        }
+        let branch = baseline
+            .and_then(|baseline| baseline.branch.clone())
+            .or_else(|| {
+                lines
+                    .next()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+            });
+        verified.push(RepositoryBaseline {
+            code_forge: baseline_forge_for_repo(repo),
+            repo_owner: repo.owner.clone(),
+            repo_name: repo.repo.clone(),
+            commit_sha,
+            branch,
+        });
+    }
+    Ok(verified)
+}
+
+fn build_remove_pinned_remotes_command(
+    baselines: &[RepositoryBaseline],
+    working_dir: &Path,
+    shell_type: ShellType,
+) -> String {
+    let mut script = String::new();
+    for baseline in baselines {
+        let repo_path = working_dir.join(&baseline.repo_name);
+        let escaped_path =
+            shell_escape_single_quotes(&repo_path.to_string_lossy(), ShellType::Bash);
+        script.push_str(&format!(
+            "if git -C '{escaped_path}' remote get-url origin >/dev/null 2>&1; then\n\
+             \tgit -C '{escaped_path}' remote remove origin || exit 1\n\
+             fi\n"
+        ));
+    }
+    let escaped_script = shell_escape_single_quotes(&script, shell_type);
+    format!("sh -c '{escaped_script}'")
+}
+
+async fn remove_pinned_remotes(
+    baselines: &[RepositoryBaseline],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(), PrepareEnvironmentError> {
+    if baselines.is_empty() {
+        return Ok(());
+    }
+    let shell_type = active_shell_type(spawner).await;
+    let command = build_remove_pinned_remotes_command(baselines, working_dir, shell_type);
+    let output = execute_silent_command(command, spawner).await?;
+    if output.success() {
+        Ok(())
+    } else {
+        Err(PrepareEnvironmentError::RemovePinnedRemotes)
+    }
 }
 
 fn build_parallel_clone_command(repos: &[SourceRepo], shell_type: ShellType) -> String {
@@ -610,6 +1010,21 @@ async fn execute_command(
             AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
             source => PrepareEnvironmentError::TerminalDriver { source },
         })?
+        .await
+        .map_err(|error| match error {
+            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+            source => PrepareEnvironmentError::TerminalDriver { source },
+        })
+}
+
+async fn execute_silent_command(
+    command: String,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<CommandOutput, PrepareEnvironmentError> {
+    spawner
+        .spawn(move |driver, ctx| driver.execute_silent_command(command, ctx))
+        .await
+        .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
         .await
         .map_err(|error| match error {
             AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,

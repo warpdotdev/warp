@@ -1,5 +1,6 @@
 use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::builder::PossibleValue;
 use clap::{Args, Subcommand, ValueEnum};
@@ -37,6 +38,68 @@ impl fmt::Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = self.to_possible_value().expect("no values are skipped");
         f.write_str(value.get_name())
+    }
+}
+
+/// Source-control provider for a repository baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RepositoryBaselineForge {
+    #[serde(rename = "GITHUB")]
+    GitHub,
+    #[serde(rename = "GITLAB")]
+    GitLab,
+}
+
+/// Immutable repository state supplied by the server for an agent run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryBaseline {
+    pub code_forge: RepositoryBaselineForge,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub commit_sha: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+impl RepositoryBaseline {
+    pub fn identity(&self) -> (RepositoryBaselineForge, &str, &str) {
+        (
+            self.code_forge,
+            self.repo_owner.as_str(),
+            self.repo_name.as_str(),
+        )
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.repo_owner.is_empty() {
+            return Err("repo_owner must not be empty".to_string());
+        }
+        if self.repo_name.is_empty() {
+            return Err("repo_name must not be empty".to_string());
+        }
+        if self.commit_sha.len() != 40
+            || !self
+                .commit_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(
+                "commit_sha must be an exact 40-character lowercase hexadecimal SHA".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for RepositoryBaseline {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let baseline = serde_json::from_str::<Self>(value)
+            .map_err(|error| format!("invalid repository baseline JSON: {error}"))?;
+        baseline.validate()?;
+        Ok(baseline)
     }
 }
 
@@ -470,6 +533,16 @@ pub struct RunAgentArgs {
 
     #[arg(long = "configure-git-credentials-with-github", hide = true, requires_all = ["task_id"])]
     pub configure_git_credentials_with_github: bool,
+
+    /// Immutable repository baseline supplied by the server for this task.
+    #[arg(
+        long = "repository-baseline-json",
+        value_name = "JSON",
+        action = clap::ArgAction::Append,
+        requires = "task_id",
+        hide = true
+    )]
+    pub repository_baselines: Vec<RepositoryBaseline>,
 }
 
 impl RunAgentArgs {
