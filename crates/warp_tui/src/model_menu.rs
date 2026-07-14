@@ -1,7 +1,9 @@
 //! Searchable TUI model picker state.
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
-use warp::tui_export::{query_model_picker_choices, LLMId, LLMPreferences, LLMPreferencesEvent};
+use warp::tui_export::{
+    menu_label, query_model_picker_choices, LLMId, LLMPreferences, LLMPreferencesEvent,
+};
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
@@ -142,7 +144,7 @@ impl TuiModelMenuModel {
         };
         Some(TuiInlineMenuSnapshot {
             header: Some(TuiInlineMenuHeader {
-                title: Some("Models".to_owned()),
+                title: Some(menu_label("tui.model_menu.title", "Models").to_owned()),
                 tabs: Vec::new(),
             }),
             rows: list
@@ -150,7 +152,8 @@ impl TuiModelMenuModel {
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
-                    description: (!row.is_selectable).then(|| "disabled".to_owned()),
+                    description: (!row.is_selectable)
+                        .then(|| menu_label("tui.model_menu.disabled", "disabled").to_owned()),
                     is_selectable: row.is_selectable,
                     style: TuiInlineMenuRowStyle::Default,
                 })
@@ -158,10 +161,11 @@ impl TuiModelMenuModel {
             selected_index: list.selected_index(),
             scroll_offset: list.scroll_offset(),
             max_visible_rows: MAX_VISIBLE_ROWS,
-            status: list
-                .rows()
-                .is_empty()
-                .then(|| TuiInlineMenuStatus::Empty("No models found".to_owned())),
+            status: list.rows().is_empty().then(|| {
+                TuiInlineMenuStatus::Empty(
+                    menu_label("tui.model_menu.empty", "No models found").to_owned(),
+                )
+            }),
         })
     }
 

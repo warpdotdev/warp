@@ -2409,6 +2409,23 @@ en:
       succeeded: "You are in control"
       failed: "Control transfer failed"
       cancelled: "Control transfer cancelled"
+    conversation:
+      cloud_load_failed: "Could not load cloud conversations. Showing local conversations only."
+      loading_hint: "Loading conversation…"
+      model_persistence_failed: "Could not save the selected model."
+      switch:
+        command_running: "Cannot switch conversations while a command is in progress."
+        conversation_running: "Cannot switch conversations while the current conversation is in progress."
+        loading: "Another conversation is already loading."
+        unavailable: "That conversation is no longer available."
+    conversation_menu:
+      empty: "No conversations found"
+      loading: "Loading conversations…"
+      title: "Conversations"
+    model_menu:
+      disabled: "disabled"
+      empty: "No models found"
+      title: "Models"
   drive:
     title: "Warp Drive"
     team:

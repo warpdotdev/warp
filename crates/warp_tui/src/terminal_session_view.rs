@@ -92,15 +92,6 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
     }
 }
 
-const SWITCH_COMMAND_RUNNING_HINT: &str =
-    "Cannot switch conversations while a command is in progress.";
-const SWITCH_CONVERSATION_RUNNING_HINT: &str =
-    "Cannot switch conversations while the current conversation is in progress.";
-const SWITCH_LOADING_HINT: &str = "Another conversation is already loading.";
-const SWITCH_UNAVAILABLE_HINT: &str = "That conversation is no longer available.";
-const LOADING_CONVERSATION_HINT: &str = "Loading conversation…";
-const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model.";
-
 /// Keeps an agent-requested command's canonical block out of the TUI's
 /// top-level transcript. The shell-command action embeds the block's terminal
 /// content inside its own disclosure, so the canonical block must have zero
@@ -390,8 +381,11 @@ impl TuiTerminalSessionView {
             TuiConversationMenuEvent::Updated => ctx.notify(),
             TuiConversationMenuEvent::CloudMetadataUnavailable => {
                 view.show_transient_hint(
-                    "Could not load cloud conversations. Showing local conversations only."
-                        .to_owned(),
+                    menu_label(
+                        "tui.conversation.cloud_load_failed",
+                        "Could not load cloud conversations. Showing local conversations only.",
+                    )
+                    .to_owned(),
                     ctx,
                 );
             }
@@ -1075,7 +1069,10 @@ impl TuiTerminalSessionView {
                 ..
             }
         ) {
-            Some((LOADING_CONVERSATION_HINT.to_owned(), muted))
+            Some((
+                menu_label("tui.conversation.loading_hint", "Loading conversation…").to_owned(),
+                muted,
+            ))
         } else if let Some((transient, tone)) = self.transient_hint.current() {
             let style = match tone {
                 TransientHintTone::Muted => muted,
@@ -1450,7 +1447,14 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         if self.is_conversation_restore_loading() {
-            self.show_transient_hint(SWITCH_LOADING_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.loading",
+                    "Another conversation is already loading.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         if !self
@@ -1458,7 +1462,14 @@ impl TuiTerminalSessionView {
             .as_ref(ctx)
             .can_start_new_conversation()
         {
-            self.show_transient_hint(SWITCH_COMMAND_RUNNING_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.command_running",
+                    "Cannot switch conversations while a command is in progress.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         let current_conversation_is_busy = self
@@ -1469,13 +1480,27 @@ impl TuiTerminalSessionView {
                 !conversation.is_empty() && !conversation.status().is_done()
             });
         if current_conversation_is_busy {
-            self.show_transient_hint(SWITCH_CONVERSATION_RUNNING_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.conversation_running",
+                    "Cannot switch conversations while the current conversation is in progress.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
 
         let Some(entry) = AgentConversationsModel::as_ref(ctx).get_entry_by_id(&entry_id, ctx)
         else {
-            self.show_transient_hint(SWITCH_UNAVAILABLE_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.unavailable",
+                    "That conversation is no longer available.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         };
         if self
@@ -1484,7 +1509,14 @@ impl TuiTerminalSessionView {
             .classify_entry(&entry, ctx)
             != AgentConversationListEntryState::Available
         {
-            self.show_transient_hint(SWITCH_UNAVAILABLE_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.unavailable",
+                    "That conversation is no longer available.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         let target = match (
@@ -1494,7 +1526,14 @@ impl TuiTerminalSessionView {
             (Some(conversation_id), _) => TuiConversationRestoreTarget::Local(conversation_id),
             (None, Some(server_token)) => TuiConversationRestoreTarget::Server(server_token),
             (None, None) => {
-                self.show_transient_hint(SWITCH_UNAVAILABLE_HINT.to_owned(), ctx);
+                self.show_transient_hint(
+                    menu_label(
+                        "tui.conversation.switch.unavailable",
+                        "That conversation is no longer available.",
+                    )
+                    .to_owned(),
+                    ctx,
+                );
                 return;
             }
         };
@@ -1510,7 +1549,14 @@ impl TuiTerminalSessionView {
         });
         if let Err(error) = result {
             report_error!(error.context("Failed to persist the TUI agent model"));
-            self.show_transient_hint(MODEL_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.model_persistence_failed",
+                    "Could not save the selected model.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
