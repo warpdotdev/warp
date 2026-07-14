@@ -17496,9 +17496,15 @@ impl Workspace {
         source: RewindDialogSource,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.rewind_confirmation_dialog.update(ctx, |view, _| {
-            view.set_rewind_source(source);
-        });
+        self.rewind_confirmation_dialog
+            .update(ctx, |view, view_ctx| {
+                view.set_rewind_source(source);
+                // Mark the dialog dirty so its scene is rebuilt with the current
+                // source. Required because the same dialog is reused for rewind and
+                // edit, and the edit copy depends on the source (with lazy scene
+                // building, a stale scene would otherwise show the previous copy).
+                view_ctx.notify();
+            });
         self.current_workspace_state
             .is_rewind_confirmation_dialog_open = true;
         ctx.focus(&self.rewind_confirmation_dialog);
