@@ -119,27 +119,24 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         let size = self.terminal.size()?;
         let area = TuiRect::new(0, 0, size.width, size.height);
 
-        let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
-        self.presenter
-            .invalidate(&invalidation, ctx, self.window_id);
-        let mut frame = self.presenter.present(ctx, &self.root_view, area);
-        self.replay_mouse_position(ctx);
-
         // Mirrors the GUI's `build_scene` loop: pointer replay can invalidate
         // hover-dependent layout, requiring another presentation and replay.
-        // Cap at three total presentations so a hover/layout feedback loop
-        // cannot hang the redraw.
-        for _ in 2..=3 {
+        // The first iteration always presents; later ones only run if the
+        // replay invalidated something. Cap at three total presentations so a
+        // hover/layout feedback loop cannot hang the redraw.
+        let mut frame = None;
+        for _ in 0..3 {
             let invalidation = ctx.take_all_invalidations_for_window(self.window_id);
-            if invalidation.updated.is_empty() && !invalidation.redraw_requested {
+            if frame.is_some() && invalidation.updated.is_empty() && !invalidation.redraw_requested
+            {
                 break;
             }
             self.presenter
                 .invalidate(&invalidation, ctx, self.window_id);
-            frame = self.presenter.present(ctx, &self.root_view, area);
-
+            frame = Some(self.presenter.present(ctx, &self.root_view, area));
             self.replay_mouse_position(ctx);
         }
+        let frame = frame.expect("loop always presents at least once");
 
         let mut writer = self.terminal.writer();
         self.renderer
