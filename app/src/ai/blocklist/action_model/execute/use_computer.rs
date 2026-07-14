@@ -37,7 +37,10 @@ impl UseComputerExecutor {
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> {
-        let ExecuteActionInput { action, .. } = input;
+        let ExecuteActionInput {
+            action,
+            conversation_id,
+        } = input;
         let AIAgentActionType::UseComputer(request) = &action.action else {
             return ActionExecution::InvalidAction;
         };
@@ -45,7 +48,7 @@ impl UseComputerExecutor {
         let labels = computer_use::overlay_labels_for(&request.actions, &request.action_summary);
         if !labels.is_empty() {
             RecordingController::handle(ctx).update(ctx, |controller, _| {
-                controller.record_action(labels);
+                controller.record_action(conversation_id, labels);
             });
         }
 

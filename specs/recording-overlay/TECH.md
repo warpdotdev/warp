@@ -22,20 +22,21 @@ Computer-use recording is a single-pass ffmpeg `x11grab` capture streamed straig
 Define a timed action group in the `computer_use` crate so the renderer can consume it directly:
 ```rust
 pub struct ActionLogEntry {
-    pub offset: Duration,        // time from capture-live to this UseComputer call
-    pub labels: Vec<String>,     // ordered semantic actions shown together
-    pub show_duration: Duration, // fixed default (~1.5s); clamped at render time
+    pub offset: Duration,    // time from capture-live to this UseComputer call
+    pub labels: Vec<String>, // ordered semantic actions shown together
 }
 ```
+The renderer applies one recording-wide action-group duration (~1.5s) to every
+entry and clamps it at the next group's start.
 
 ### 2. Collect the log while a recording is live (app layer)
 - Add `started_at: Instant` and `actions: Vec<ActionLogEntry>` to `ActiveRecording` (`recording_controller.rs:28`), set `started_at` at `finish_start` (`recording_controller.rs:60`). This is required because `RecordingHandle.started_at` is private and linux-only (`lib.rs:260`) — unreachable from the app layer where offsets must be computed and cross-platform for the mock path.
-- Add `RecordingController::record_action(labels)` that pushes one group only when a recording is `Active` and `labels` is non-empty (no-op otherwise).
+- Add `RecordingController::record_action(conversation_id, labels)` that pushes one group only when a recording is `Active`, belongs to the originating conversation, and `labels` is non-empty (no-op otherwise). The ownership check prevents concurrent computer-use conversations from writing labels into another conversation's artifact.
 - In `UseComputerExecutor::execute` (`use_computer.rs:34`), before spawning the actor, reach the `RecordingController` via `ctx`; if a recording is active, derive ordered semantic labels from `request.actions` (+ `request.action_summary` for a lone key label), compute `offset = started_at.elapsed()`, and `record_action`. One group is recorded per `UseComputer` call. Low-level key down/up primitives collapse to one semantic label; omitted actions produce no group. This is synchronous and additive; the async actor path is unchanged.
 - Drain the entries alongside the handle at finalize: extend the finalization claim introduced by #2 (`begin_finalize`/`take_handle_or_err`) to return `(RecordingHandle, Vec<ActionLogEntry>)`.
 
 #### Action-label mapping
-Derive overlay eligibility from the structured actions (authoritative and redaction-safe). Use the summary only for the semantic text of a call containing one key action; reconstruct labels from keycodes when a call contains multiple key actions. Never render the typed payload. The zero-duration wait placeholder remains the shared no-op distinction used by recording decoration, while overlay eligibility is a separate mapping.
+Derive overlay eligibility, ordering, and redaction from the structured actions (authoritative and redaction-safe). Use the call-level summary only for the semantic text of a lone renderable key group, where it preserves the provider's key naming. A single summary cannot describe every pill in a multi-action call, so reconstruct those key labels from the structured keycodes. Never render the typed payload. The zero-duration wait placeholder remains the shared no-op distinction used by recording decoration, while overlay eligibility is a separate mapping.
 
 | Server `action_summary` (`anthropic_computer_use.go`) | Structured `computer_use::Action` | Label | Render |
 | --- | --- | --- | --- |
@@ -49,7 +50,7 @@ Derive overlay eligibility from the structured actions (authoritative and redact
 
 ### 3. Render: `.ass` burn-in via a post-stop re-encode pass
 Add `computer_use::burn_in_action_log(input: &Path, entries: &[ActionLogEntry], capture: (u32,u32)) -> Result<PathBuf, RecordingError>` in `linux/recording.rs` (noop/mock backends return the input path unchanged). It:
-1. Generates an `.ass` subtitle file from `entries`: one `Dialogue` per pill, with every pill in a group sharing `Start = offset` and `End = min(offset + show_duration, next group.offset)` (PRODUCT invariant 4). Explicit `\pos` tags place the group's individually boxed pills as a centered horizontal row in action order. `PlayResX/Y` = capture width/height (`RecordingHandle::width()/height()`), so positioning matches the frame.
+1. Generates an `.ass` subtitle file from `entries`: one `Dialogue` per pill, with every pill in a group sharing `Start = offset` and `End = min(offset + action_group_duration, next group.offset)` (PRODUCT invariant 4). Explicit `\\pos` tags place the group's individually boxed pills as a centered horizontal row in action order. `PlayResX/Y` = capture width/height (`RecordingHandle::width()/height()`), so positioning matches the frame.
 2. Runs `ffmpeg -y -i <input.mp4> -vf "subtitles=<overlay.ass>" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -movflags +faststart <input.overlay.mp4>`. This **demuxes the on-disk mp4 frame-by-frame and never buffers the whole recording in memory** (matches the finalization design's no-buffering rule). libass is present in stock apt ffmpeg — no `libzmq` / custom build needed.
 3. Returns the overlay path on success; on any error, returns `Err` and the caller falls back to the original (PRODUCT invariant 12).
 
@@ -81,8 +82,8 @@ At the burn-in hook in `finalize_recording` (recording-finalization TECH §2 ste
 4. #2's unconditional temp-file cleanup extends to remove the overlay file too.
 Because burn-in sits inside the single finalize path, it covers every terminal cause (StoppedByAgent, AgentFinished, LimitReached, FfmpegExited) uniformly (PRODUCT invariant 14); a `StoppedEarly` recording is annotated with whatever entries were logged.
 
-### 5. Required infra: scalable font for libass (`warp-agent-docker-video`)
-libass renders **no text** from `xfonts-base` (bitmap) alone. Add a scalable font — `fonts-dejavu-core` (+ `fontconfig`, usually pulled in by ffmpeg) — to whichever image runs the burn-in ffmpeg (the `xvfb-sidecar` image, and the agent image if `ffmpeg` executes there). If fontconfig can't resolve the family, pass `subtitles=<file>:fontsdir=<dir>` or `:force_style='FontName=DejaVu Sans Mono'`. This is a **hard dependency**: without it burn-in produces empty pills (and per invariant 12 still publishes the original video, so the failure mode is "no labels," not "no video"). Also confirm `ffmpeg` is on `PATH` for the client process that runs the recorder/burn-in.
+### 5. Required infra: scalable font for libass (`warp-agent-docker`)
+libass renders **no text** from `xfonts-base` (bitmap) alone. The Xvfb sidecar installs `fonts-dejavu-core` and `fontconfig` alongside ffmpeg. Its existing ffmpeg wrapper generates a fontconfig file that points at the mounted sidecar fonts, so the client can invoke the normal `subtitles=<file>` filter without knowing the sidecar layout. This is a **hard dependency**: without it burn-in produces empty pills (and per invariant 12 still publishes the original video, so the failure mode is "no labels," not "no video").
 
 ### 6. Redaction
 `action_summary` and `TypeText.text` are `(sensitive)=true`. The `Type` case drops the payload and renders `typing…`; unmodified printable keypresses are redacted the same way. Modifier combinations, non-printing keys, direction-only scroll labels, and the generic `typing…` indicator may render. Burned-in text is user-visible in the artifact by design, but `ActionLogEntry` values must never be written to non-artifact logs (no `log::*` of labels/summaries).
@@ -90,11 +91,11 @@ libass renders **no text** from `xfonts-base` (bitmap) alone. Add a scalable fon
 ## Testing and validation
 ### Pure unit tests (no recorder, no ffmpeg)
 - Label mapping (PRODUCT 5–9): table-driven over representative `UseComputer` requests (structured actions + summary) asserting ordered labels or omission; explicitly assert `TypeText` and unmodified printable keys → `typing…` and never the payload, scroll directions map to direction-only labels, and clicks, mouse-moves, drag, and waits produce no group.
-- Group/clamp logic (invariant 4): multiple renderable actions in one call share a time window and render as separate horizontal pills; entries closer than `show_duration` ⇒ every pill in the earlier group ends at the next group's start.
+- Group/clamp logic (invariant 4): multiple renderable actions in one call share the recording-wide time window and render as separate horizontal pills; closer entries end the earlier group at the next group's start.
 - `.ass` generation: `Dialogue` timecode formatting (`H:MM:SS.cs`), ASS escaping of labels, style/`PlayRes` from capture dims, empty-entry list ⇒ no burn-in (invariant 8).
 
 ### Mock-recorder path (local, cross-platform)
-`create_recorder` already returns a mock under `test-util` or `debug + WARP_COMPUTER_USE_MOCK_RECORDER` (`lib.rs:196-204`). Extend the mock to emit a real minimal playable mp4 so `burn_in_action_log` can be exercised on macOS; assert the overlay mp4 is produced when ffmpeg+font are available and that a missing ffmpeg/font degrades to the original path without failing (invariant 12). Collection tests (record_action gating, offsets monotonic from `started_at`) run against the controller directly.
+`create_recorder` already returns a mock under `test-util` or `debug + WARP_COMPUTER_USE_MOCK_RECORDER` (`lib.rs:196-204`). Extend the mock to emit a real minimal playable mp4 so `burn_in_action_log` can be exercised on macOS; assert the overlay mp4 is produced when ffmpeg+font are available and that a missing ffmpeg/font degrades to the original path without failing (invariant 12). Collection tests (conversation ownership gating, record_action gating, offsets monotonic from `started_at`) run against the controller directly.
 
 ### Real-capture e2e (oz-local + custom Docker with the font added)
 Real `x11grab` only runs on Linux. With a `warp-agent-docker-video` image that includes `fonts-dejavu-core`, run a computer-use flow that issues key + type + scroll actions (plus some clicks), let #2 finalize publish the artifact, pull the mp4, and eyeball bottom-center groups at the right timecodes; confirm pointer-only flows have no pills. The overlay is **not inspectable headlessly** — verification requires downloading the artifact. Also verify a mixed batch renders its semantic pills together in action order.

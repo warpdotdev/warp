@@ -179,11 +179,6 @@ impl crate::Recorder for Recorder {
     }
 }
 
-/// Directory the xvfb sidecar installs its scalable fonts into. libass can't use
-/// the base image's bitmap X fonts, and the sidecar layout is outside
-/// fontconfig's default search path, so it is passed to the subtitles filter.
-const SIDECAR_FONTS_DIR: &str = "/mnt/xvfb-sidecar/usr/share/fonts";
-
 /// Burns the keyboard overlay pills into `input` via a post-stop ffmpeg
 /// re-encode, returning the path to the annotated file (a sibling of `input`).
 /// The original is left untouched; the caller owns cleanup of both. ffmpeg
@@ -204,11 +199,7 @@ pub async fn burn_in_action_log(
     })?;
     let output_path = input.with_extension("overlay.mp4");
 
-    let subtitles_filter = format!(
-        "subtitles=filename='{}':fontsdir='{}'",
-        ass_path.display(),
-        SIDECAR_FONTS_DIR,
-    );
+    let subtitles_filter = format!("subtitles=filename='{}'", ass_path.display());
     let status = Command::new("ffmpeg")
         .arg("-y")
         .arg("-i")

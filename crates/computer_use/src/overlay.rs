@@ -13,23 +13,35 @@ pub struct ActionLogEntry {
     /// Time from when capture went live to when this group was dispatched.
     pub offset: Duration,
     pub labels: Vec<String>,
-    /// How long the group stays on screen before expiring.
-    pub show_duration: Duration,
 }
-
-fn is_unmodified_printable_key(keys: &[Key]) -> bool {
-    matches!(keys, [Key::Char(ch)] if !ch.is_control())
-}
-
-/// Default on-screen lifetime of an action group.
-pub const DEFAULT_PILL_DURATION: Duration = Duration::from_millis(1500);
 
 enum LabelCandidate {
     Key(Vec<Key>),
     Label(String),
 }
-
+/// Converts one `UseComputer` call into ordered, redaction-safe overlay labels.
+///
+/// Key down/up primitives are grouped until all pressed keys are released. Text
+/// and scroll actions become semantic labels; pointer and meta actions are
+/// omitted. The call-level summary preserves provider naming for a lone key
+/// group, but structured actions reconstruct multi-action calls and always
+/// determine printable-key redaction.
 pub fn overlay_labels_for(actions: &[TargetedAction], action_summary: &str) -> Vec<String> {
+    let candidates = collect_label_candidates(actions);
+    let use_action_summary = matches!(candidates.as_slice(), [LabelCandidate::Key(_)]);
+
+    candidates
+        .into_iter()
+        .map(|candidate| match candidate {
+            LabelCandidate::Key(keys) => {
+                key_label(&keys, use_action_summary.then_some(action_summary))
+            }
+            LabelCandidate::Label(label) => label,
+        })
+        .collect()
+}
+
+fn collect_label_candidates(actions: &[TargetedAction]) -> Vec<LabelCandidate> {
     let mut candidates = Vec::new();
     let mut current_keys = Vec::new();
     let mut pressed_keys = Vec::new();
@@ -66,28 +78,18 @@ pub fn overlay_labels_for(actions: &[TargetedAction], action_summary: &str) -> V
         }
     }
     flush_keys(&mut candidates, &mut current_keys, &mut pressed_keys);
-
-    let candidate_count = candidates.len();
-    let key_count = candidates
-        .iter()
-        .filter(|candidate| matches!(candidate, LabelCandidate::Key(_)))
-        .count();
     candidates
-        .into_iter()
-        .map(|candidate| match candidate {
-            LabelCandidate::Key(keys) => {
-                let label = if is_unmodified_printable_key(&keys) {
-                    "typing\u{2026}".to_string()
-                } else if key_count == 1 && candidate_count == 1 {
-                    key_label_from_summary(action_summary)
-                } else {
-                    key_label_from_keys(&keys)
-                };
-                redact_printable_key(label)
-            }
-            LabelCandidate::Label(label) => label,
-        })
-        .collect()
+}
+
+fn key_label(keys: &[Key], action_summary: Option<&str>) -> String {
+    if matches!(keys, [Key::Char(ch)] if !ch.is_control()) {
+        return "typing\u{2026}".to_string();
+    }
+
+    let label = action_summary
+        .map(key_label_from_summary)
+        .unwrap_or_else(|| key_label_from_keys(keys));
+    redact_printable_key(label)
 }
 
 fn flush_keys(
@@ -162,6 +164,8 @@ fn scroll_label(direction: ScrollDirection) -> &'static str {
 }
 
 #[cfg(any(linux, test))]
+const ACTION_GROUP_DURATION: Duration = Duration::from_millis(1500);
+#[cfg(any(linux, test))]
 const PILL_FONT_SIZE: i32 = 48;
 #[cfg(any(linux, test))]
 const APPROX_GLYPH_WIDTH: i32 = 29;
@@ -206,7 +210,7 @@ pub(crate) fn build_overlay_ass(entries: &[ActionLogEntry], dimensions: (u32, u3
 
     for (index, entry) in ordered.iter().enumerate() {
         let start = entry.offset;
-        let mut end = entry.offset + entry.show_duration;
+        let mut end = entry.offset + ACTION_GROUP_DURATION;
         if let Some(next) = ordered.get(index + 1)
             && next.offset < end
         {

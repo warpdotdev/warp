@@ -23,7 +23,7 @@ use async_trait::async_trait;
 // module definition.
 #[cfg(noop)]
 use noop as imp;
-pub use overlay::{ActionLogEntry, DEFAULT_PILL_DURATION, overlay_labels_for};
+pub use overlay::{ActionLogEntry, overlay_labels_for};
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};

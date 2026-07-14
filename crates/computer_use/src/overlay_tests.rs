@@ -7,11 +7,10 @@ fn screen(action: Action) -> TargetedAction {
     TargetedAction::screen(action)
 }
 
-fn entry(offset_ms: u64, labels: &[&str], duration_ms: u64) -> ActionLogEntry {
+fn entry(offset_ms: u64, labels: &[&str]) -> ActionLogEntry {
     ActionLogEntry {
         offset: Duration::from_millis(offset_ms),
         labels: labels.iter().map(ToString::to_string).collect(),
-        show_duration: Duration::from_millis(duration_ms),
     }
 }
 
@@ -102,7 +101,7 @@ fn empty_entries_produce_no_dialogue() {
 
 #[test]
 fn bottom_center_pill_style_and_dimensions() {
-    let ass = build_overlay_ass(&[entry(1000, &["ctrl+a"], 1500)], (1920, 1080));
+    let ass = build_overlay_ass(&[entry(1000, &["ctrl+a"])], (1920, 1080));
     assert!(ass.contains("PlayResX: 1920"));
     assert!(ass.contains("PlayResY: 1080"));
     assert!(ass.contains("Style: Pill,DejaVu Sans Mono,48"));
@@ -114,7 +113,7 @@ fn bottom_center_pill_style_and_dimensions() {
 #[test]
 fn labels_in_a_group_share_timing_and_position() {
     let ass = build_overlay_ass(
-        &[entry(1000, &["ctrl+a", "typing…", "Return"], 1500)],
+        &[entry(1000, &["ctrl+a", "typing…", "Return"])],
         (1920, 1080),
     );
     let dialogue_lines = ass
@@ -135,8 +134,8 @@ fn labels_in_a_group_share_timing_and_position() {
 #[test]
 fn group_end_is_clamped_to_next_entry_start() {
     let entries = vec![
-        entry(1000, &["ctrl+a", "typing…"], 1500),
-        entry(2000, &["scroll ↓"], 1500),
+        entry(1000, &["ctrl+a", "typing…"]),
+        entry(2000, &["scroll ↓"]),
     ];
     let ass = build_overlay_ass(&entries, (1280, 720));
     let first_group = ass
@@ -154,10 +153,7 @@ fn group_end_is_clamped_to_next_entry_start() {
 
 #[test]
 fn entries_are_ordered_by_timecode() {
-    let entries = vec![
-        entry(3000, &["typing…"], 1000),
-        entry(1000, &["ctrl+a"], 1000),
-    ];
+    let entries = vec![entry(3000, &["typing…"]), entry(1000, &["ctrl+a"])];
     let ass = build_overlay_ass(&entries, (1280, 720));
     assert!(ass.find("ctrl+a").unwrap() < ass.find("typing…").unwrap());
 }

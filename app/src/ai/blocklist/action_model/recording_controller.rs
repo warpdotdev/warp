@@ -133,16 +133,18 @@ impl RecordingController {
         }
     }
 
-    /// Appends an overlay group to the active recording.
+    /// Appends an overlay group when the active recording belongs to the
+    /// originating conversation.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub fn record_action(&mut self, labels: Vec<String>) {
+    pub fn record_action(&mut self, conversation_id: AIConversationId, labels: Vec<String>) {
         if !labels.is_empty() {
             if let RecordingState::Active(recording) = &mut self.state {
-                recording.actions.push(computer_use::ActionLogEntry {
-                    offset: recording.started_at.elapsed(),
-                    labels,
-                    show_duration: computer_use::DEFAULT_PILL_DURATION,
-                });
+                if recording.conversation_id == conversation_id {
+                    recording.actions.push(computer_use::ActionLogEntry {
+                        offset: recording.started_at.elapsed(),
+                        labels,
+                    });
+                }
             }
         }
     }
