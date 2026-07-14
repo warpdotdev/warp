@@ -57,11 +57,23 @@ impl TuiElement for AltScreenElement {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        // The alt-screen app owns the whole pane.
+        // The alt-screen app owns the whole pane. `layout` only measures; the
+        // PTY resize is committed in `after_layout` (below), once the size is
+        // final — not from here, which can run more than once per frame.
         let size = constraint.max;
-        let _ = self.resize_tx.try_send(size);
         self.size = Some(size);
         size
+    }
+
+    fn after_layout(&mut self, _ctx: &mut TuiLayoutContext, _app: &AppContext) {
+        // Commit the laid-out pane size to the PTY once layout has settled,
+        // mirroring the GUI's `TerminalSizeElement::after_layout`. The session
+        // view consumes this on `alt_screen_resize_tx` and drives the model +
+        // PTY resize with a `&mut ViewContext` (which layout/paint lack), so the
+        // size change is applied outside the measurement pass.
+        if let Some(size) = self.size {
+            let _ = self.resize_tx.try_send(size);
+        }
     }
 
     fn render(
