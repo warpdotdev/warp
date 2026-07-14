@@ -759,3 +759,48 @@ fn test_mark_quota_banner_as_dismissed() {
         });
     });
 }
+
+// VoiceInputLanguage Tests
+
+#[test]
+fn voice_input_language_default_is_auto_detect() {
+    assert_eq!(
+        VoiceInputLanguage::default(),
+        VoiceInputLanguage::AutoDetect
+    );
+    assert_eq!(VoiceInputLanguage::AutoDetect.code(), None);
+}
+
+#[test]
+fn voice_input_language_code_returns_iso_639_1_code() {
+    assert_eq!(VoiceInputLanguage::English.code(), Some("en"));
+    assert_eq!(VoiceInputLanguage::Dutch.code(), Some("nl"));
+    assert_eq!(VoiceInputLanguage::Japanese.code(), Some("ja"));
+}
+
+#[test]
+fn transcribe_request_omits_language_for_auto_detect() {
+    use crate::ai::voice::transcribe::TranscribeRequest;
+
+    let request = TranscribeRequest {
+        language: VoiceInputLanguage::AutoDetect.code().map(|c| c.to_string()),
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert!(
+        json.get("language").is_none(),
+        "language must be omitted when AutoDetect is selected"
+    );
+}
+
+#[test]
+fn transcribe_request_includes_selected_language() {
+    use crate::ai::voice::transcribe::TranscribeRequest;
+
+    let request = TranscribeRequest {
+        language: VoiceInputLanguage::Dutch.code().map(|c| c.to_string()),
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json.get("language").and_then(|v| v.as_str()), Some("nl"));
+}

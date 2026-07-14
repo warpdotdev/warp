@@ -11,7 +11,14 @@ use crate::server::server_api::TranscribeError;
 pub trait Transcriber: Send + Sync {
     /// Transcribe the given base64 encoded wav file into text.
     /// This is expected to be async and called off the main thread.
-    async fn transcribe(&self, wav_base64: String) -> Result<String, TranscribeError>;
+    ///
+    /// `language` is an optional ISO 639-1 language code hint; `None` lets the
+    /// provider auto-detect the language.
+    async fn transcribe(
+        &self,
+        wav_base64: String,
+        language: Option<String>,
+    ) -> Result<String, TranscribeError>;
 }
 
 /// A voice transcriber that is enabled or disabled.

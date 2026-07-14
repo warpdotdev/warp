@@ -155,7 +155,7 @@ use crate::server::telemetry::{
     AgentModeAutoDetectionSettingOrigin, AutonomySettingToggleSource,
     ToggleCodeSuggestionsSettingSource,
 };
-use crate::settings::{AISettings, VoiceInputToggleKey};
+use crate::settings::{AISettings, VoiceInputLanguage, VoiceInputToggleKey};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings;
@@ -656,6 +656,7 @@ pub struct AISettingsPageView {
     page: PageType<Self>,
     active_subpage: Option<AISubpage>,
     voice_input_toggle_key_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    voice_input_language_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
     autodetection_denylist_editor: ViewHandle<EditorView>,
     autonomy_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
@@ -813,6 +814,44 @@ impl AISettingsPageView {
                         DropdownItem::new(
                             val.display_name(),
                             AISettingsPageAction::SetVoiceInputToggleKey(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
+
+            dropdown
+        });
+
+        let voice_input_language_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown.set_menu_max_height(AI_SETTINGS_DROPDOWN_MAX_HEIGHT, ctx);
+            if !AISettings::as_ref(ctx).is_voice_input_enabled(ctx) {
+                dropdown.set_disabled(ctx);
+            }
+
+            let values: Vec<VoiceInputLanguage> = VoiceInputLanguage::iter().collect();
+            let current_value = AISettings::as_ref(ctx).voice_input_language.value();
+            let selected_index = values
+                .iter()
+                .position(|val| val == current_value)
+                .unwrap_or_else(|| {
+                    log::warn!(
+                        "Could not find current VoiceInputLanguage value in dropdown option list"
+                    );
+                    0
+                });
+
+            dropdown.add_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.display_name(),
+                            AISettingsPageAction::SetVoiceInputLanguage(val),
                         )
                     })
                     .collect(),
@@ -1270,6 +1309,16 @@ impl AISettingsPageView {
                         .value()
                         .display_name();
                     me.voice_input_toggle_key_dropdown
+                        .update(ctx, |dropdown, ctx| {
+                            dropdown.set_selected_by_name(current_value, ctx)
+                        });
+                }
+                AISettingsChangedEvent::VoiceInputLanguage { .. } => {
+                    let current_value = AISettings::as_ref(ctx)
+                        .voice_input_language
+                        .value()
+                        .display_name();
+                    me.voice_input_language_dropdown
                         .update(ctx, |dropdown, ctx| {
                             dropdown.set_selected_by_name(current_value, ctx)
                         });
@@ -1926,6 +1975,7 @@ impl AISettingsPageView {
             page: Self::build_page(None, ctx),
             active_subpage: None,
             voice_input_toggle_key_dropdown,
+            voice_input_language_dropdown,
             autodetection_denylist_editor,
             local_only_icon_tooltip_states: Default::default(),
             command_execution_allowlist_editor,
@@ -1992,6 +2042,14 @@ impl AISettingsPageView {
     fn update_voice_input_dropdown_enablement(&mut self, ctx: &mut ViewContext<Self>) {
         let is_voice_enabled = AISettings::as_ref(ctx).is_voice_input_enabled(ctx);
         self.voice_input_toggle_key_dropdown
+            .update(ctx, |dropdown, ctx| {
+                if is_voice_enabled {
+                    dropdown.set_enabled(ctx);
+                } else {
+                    dropdown.set_disabled(ctx);
+                }
+            });
+        self.voice_input_language_dropdown
             .update(ctx, |dropdown, ctx| {
                 if is_voice_enabled {
                     dropdown.set_enabled(ctx);
@@ -3561,6 +3619,7 @@ impl Entity for AISettingsPageView {
 pub enum AISettingsPageAction {
     OpenUrl(String),
     SetVoiceInputToggleKey(VoiceInputToggleKey),
+    SetVoiceInputLanguage(VoiceInputLanguage),
     ToggleGlobalAI,
     ToggleActiveAI,
     ToggleIntelligentAutosuggestions,
@@ -3678,6 +3737,12 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .explicitly_interacted_with_voice
                         .set_value(true, ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetVoiceInputLanguage(language) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.voice_input_language.set_value(*language, ctx));
                 });
                 ctx.notify();
             }
@@ -7100,6 +7165,20 @@ impl VoiceWidget {
                 ),
                 None,
                 &view.voice_input_toggle_key_dropdown,
+            ));
+            column.add_child(render_dropdown_item(
+                appearance,
+                "Speech Recognition Language",
+                Some("Auto-detect chooses from all supported languages."),
+                None,
+                LocalOnlyIconState::for_setting(
+                    VoiceInputLanguage::storage_key(),
+                    VoiceInputLanguage::sync_to_cloud(),
+                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                    app,
+                ),
+                None,
+                &view.voice_input_language_dropdown,
             ));
         }
 
