@@ -122,6 +122,34 @@ pub struct TerminalSurfaceInit {
     pub colors: ColorList,
     pub inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
 }
+
+#[cfg(any(test, feature = "test-util"))]
+impl TerminalSurfaceInit {
+    /// Creates mock terminal surface inputs without spawning a PTY.
+    pub fn new_for_test(ctx: &mut AppContext) -> Self {
+        let (_wakeups_tx, wakeups_rx) = async_channel::unbounded();
+        let (_events_tx, events_rx) = async_channel::unbounded();
+        let (pty_reads_tx, pty_reads_rx) =
+            async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
+        drop(pty_reads_tx);
+        let sessions = ctx.add_model(|_| Sessions::new_for_test());
+        let model_events =
+            ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let colors = model.lock().colors();
+        let size_info = model.lock().block_list().size().to_owned();
+        Self {
+            wakeups_rx,
+            model_events,
+            model,
+            sessions,
+            size_info,
+            colors,
+            inactive_pty_reads_rx: pty_reads_rx.deactivate(),
+        }
+    }
+}
+
 /// A newly constructed terminal surface and its manager post-wiring callback.
 pub struct TerminalSurfaceResult<S, PostWire> {
     pub surface: ViewHandle<S>,

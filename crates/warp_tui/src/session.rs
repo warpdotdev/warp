@@ -2,7 +2,7 @@
 //!
 //! [`run`] boots the real headless Warp app via [`warp::run_tui`]. Once shared
 //! initialization is done, the mount built here starts the TUI driver and
-//! defers creating the transcript-capable terminal session until login.
+//! defers creating the first terminal session until login.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -13,18 +13,19 @@ use clap::Parser;
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
     Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
-    ServerConversationToken, TerminalManagerTrait, TerminalSurfaceResult,
+    ServerConversationToken, TerminalSurfaceResult,
 };
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_errors::report_error;
-use warpui::SingletonEntity;
+use warpui::SingletonEntity as _;
 use warpui_core::platform::{TerminationMode, WindowStyle};
-use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
-use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, ViewHandle};
+use warpui_core::runtime::spawn_tui_driver;
+use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
 
 use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
+use crate::sessions::TuiSessions;
 use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
 use crate::terminal_session_view::{
@@ -50,21 +51,6 @@ fn parse_resume_token(token: String) -> Result<ServerConversationToken> {
         .with_context(|| format!("invalid server conversation token: {token}"))?;
     Ok(ServerConversationToken::new(token))
 }
-
-/// Holds the live TUI driver and, after login, the terminal manager.
-struct TuiSession {
-    #[expect(dead_code, reason = "keeps the TUI driver alive for the TUI session")]
-    driver: TuiDriverHandle,
-    keyboard_enhancement_supported: bool,
-    manager: Option<ModelHandle<Box<dyn TerminalManagerTrait>>>,
-    resume_token: Option<ServerConversationToken>,
-}
-
-impl Entity for TuiSession {
-    type Event = ();
-}
-
-impl SingletonEntity for TuiSession {}
 
 /// Boots the headless Warp app and mounts the transcript-capable TUI session.
 pub fn run() -> Result<()> {
@@ -103,7 +89,7 @@ pub fn run() -> Result<()> {
     result
 }
 
-/// Creates the login-gated TUI root and starts the headless draw + input driver.
+/// Creates the login-gated root and starts the headless draw and input driver.
 fn init(
     resume_token: Option<ServerConversationToken>,
     exit_summary: TuiExitSummaryHandle,
@@ -127,39 +113,32 @@ fn init(
         appearance.set_theme(theme, ctx);
     });
 
-    let banner = ctx.add_model(|_| BannerState::default());
     let (window_id, root) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,
             ..Default::default()
         },
-        |_| RootTuiView::new(exit_summary),
+        |_| RootTuiView::new(),
     );
     match spawn_tui_driver(ctx, window_id, root.clone()) {
         Ok(driver) => {
-            let keyboard_enhancement_supported = driver.keyboard_enhancement_supported();
-            let session = ctx.add_singleton_model(|_| TuiSession {
-                driver,
-                keyboard_enhancement_supported,
-                manager: None,
-                resume_token,
+            let sessions = ctx.add_singleton_model(|_| {
+                TuiSessions::new(driver, window_id, exit_summary, resume_token)
+            });
+            root.update(ctx, |_, ctx| {
+                ctx.subscribe_to_model(&sessions, |_, _, _, ctx| ctx.notify());
             });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
-                // Already authenticated at mount: create the session now.
-                create_terminal_session_after_login(&session, &root, &banner, ctx);
+                // Already authenticated at mount: create the first session now.
+                create_terminal_session_after_login(&sessions, ctx);
             } else {
                 // Otherwise wait for login to complete and create it then.
-                let session_for_login = session.clone();
-                let root_for_login = root.clone();
-                let banner_for_login = banner.clone();
+                let sessions_for_login = sessions.clone();
                 let login_model = TuiLoginModel::handle(ctx);
                 ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
-                    TuiLoginEvent::LoggedIn => create_terminal_session_after_login(
-                        &session_for_login,
-                        &root_for_login,
-                        &banner_for_login,
-                        ctx,
-                    ),
+                    TuiLoginEvent::LoggedIn => {
+                        create_terminal_session_after_login(&sessions_for_login, ctx)
+                    }
                 });
             }
         }
@@ -171,24 +150,16 @@ fn init(
     }
 }
 
-/// Creates and retains the terminal manager after login.
-fn create_terminal_session_after_login(
-    session: &ModelHandle<TuiSession>,
-    root: &ViewHandle<RootTuiView>,
-    banner: &ModelHandle<BannerState>,
-    ctx: &mut AppContext,
-) {
-    if session.read(ctx, |session, _| session.manager.is_some()) {
+/// Creates the focused bootstrap session after login.
+fn create_terminal_session_after_login(sessions: &ModelHandle<TuiSessions>, ctx: &mut AppContext) {
+    if sessions.read(ctx, |sessions, _| !sessions.is_empty()) {
         return;
     }
 
-    let root = root.clone();
-    let (resume_token, keyboard_enhancement_supported) = session.read(ctx, |session, _| {
-        (
-            session.resume_token.clone(),
-            session.keyboard_enhancement_supported,
-        )
-    });
+    let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
+    let (window_id, exit_summary, keyboard_enhancement_supported) =
+        sessions.read(ctx, |sessions, _| sessions.surface_context());
+    let banner = ctx.add_model(|_| BannerState::default());
     let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
         std::env::current_dir().ok(),
         HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
@@ -201,12 +172,13 @@ fn create_terminal_session_after_login(
         TRANSCRIPT_BLOCK_SPACING,
         ctx,
         move |surface_init, ctx| {
-            let surface = root.update(ctx, |root, ctx| {
-                let surface =
-                    root.create_terminal_session(surface_init, keyboard_enhancement_supported, ctx);
-                // Re-render the root so it swaps the login placeholder for the session.
-                ctx.notify();
-                surface
+            let surface = ctx.add_typed_action_tui_view(window_id, |ctx| {
+                TuiTerminalSessionView::new(
+                    surface_init,
+                    exit_summary,
+                    keyboard_enhancement_supported,
+                    ctx,
+                )
             });
             TerminalSurfaceResult {
                 surface,
@@ -227,10 +199,8 @@ fn create_terminal_session_after_login(
         },
     );
 
-    session.update(ctx, |session, ctx| {
-        session.manager = Some(manager.manager);
-        session.resume_token = None;
-        ctx.notify();
+    sessions.update(ctx, |sessions, ctx| {
+        sessions.add_session(manager.surface, manager.manager, true, ctx);
     });
 }
 

@@ -356,7 +356,9 @@ pub struct SyncQueue {
 }
 
 impl SyncQueue {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
+    // Only consumed by `tui_export`; unused when `test-util` is on without `tui`.
+    #[cfg_attr(not(any(test, feature = "tui")), allow(dead_code))]
     pub fn mock(ctx: &mut ModelContext<Self>) -> Self {
         use super::server_api::ServerApiProvider;
 

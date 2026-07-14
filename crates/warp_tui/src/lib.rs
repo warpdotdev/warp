@@ -35,6 +35,7 @@ mod option_selector;
 mod orchestrated_agent_identity_styling;
 mod orchestration_block;
 mod resume;
+mod sessions;
 mod skills_menu;
 mod slash_commands;
 mod terminal_background;

@@ -444,8 +444,8 @@ fn blocked_accept_invalidates_card_layout() {
                 TuiOrchestrationBlockEvent::BlockingStateChanged => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
-                TuiOrchestrationBlockEvent::RejectRequested => {}
-                TuiOrchestrationBlockEvent::LayoutInvalidated => {}
+                TuiOrchestrationBlockEvent::RejectRequested
+                | TuiOrchestrationBlockEvent::LayoutInvalidated => {}
             });
         });
 

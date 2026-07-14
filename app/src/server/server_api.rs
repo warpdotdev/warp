@@ -449,7 +449,9 @@ impl ServerApi {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
+    // Only consumed by `tui_export`; unused when `test-util` is on without `tui`.
+    #[cfg_attr(not(any(test, feature = "tui")), allow(dead_code))]
     fn new_for_test() -> Self {
         let (tx, _) = async_channel::unbounded();
         let auth_state = Arc::new(AuthState::new_for_test());
@@ -1287,7 +1289,9 @@ impl ServerApiProvider {
     }
 
     /// Constructs a new SeverApiProvider for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
+    // Only consumed by `tui_export`; unused when `test-util` is on without `tui`.
+    #[cfg_attr(not(any(test, feature = "tui")), allow(dead_code))]
     pub fn new_for_test() -> Self {
         let server_api = Arc::new(ServerApi::new_for_test());
         let auth_client = Arc::new(AuthClientImpl::new(server_api.base_client.clone()));
