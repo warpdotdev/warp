@@ -3,12 +3,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use markdown_parser::parse_markdown;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
-    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, Appearance, LLMId,
+    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, AgentOutputImage,
+    AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable, Appearance, LLMId,
     MessageId, OutputStatusUpdateCallback, RequestCommandOutputResult, ServerOutputId, Shared,
     SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus, UserQueryMode,
 };
@@ -24,11 +26,11 @@ use warpui_core::elements::tui::{
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext, ViewHandle};
+use warpui_core::{App, AppContext, EntityId, EntityIdMap, TuiView, ViewContext, ViewHandle};
 
 use super::{
     CollapsibleSectionStates, TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection,
-    TuiToolCallView,
+    TuiCodeBlockKey, TuiRichTextSection, TuiToolCallView,
 };
 use crate::agent_block_sections::{
     completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
@@ -153,6 +155,7 @@ fn expected_tool_call_text_color(app: &AppContext) -> Color {
 #[test]
 fn agent_block_extracts_input_and_plain_text_from_model() {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         let block = test_agent_block(
             &mut app,
             FakeAgentBlockModel {
@@ -173,8 +176,8 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
                 block.sections(app_ctx),
                 vec![
                     TuiAIBlockSection::Input("hello".to_owned()),
-                    TuiAIBlockSection::PlainText("one".to_owned()),
-                    TuiAIBlockSection::PlainText("two".to_owned()),
+                    rich_text("one"),
+                    rich_text("two"),
                 ]
             );
         });
@@ -202,9 +205,9 @@ fn agent_block_renders_tool_calls_in_message_order() {
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
-                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    rich_text("before"),
                     TuiAIBlockSection::ToolCall(Box::new(action.clone())),
-                    TuiAIBlockSection::PlainText("after".to_owned()),
+                    rich_text("after"),
                 ]
             );
 
@@ -428,6 +431,7 @@ fn shell_command_disclosure_invalidates_agent_block_layout() {
         assert_eq!(layout_invalidations.get(), 1);
     });
 }
+
 #[test]
 fn agent_block_ignores_unsupported_message_variants() {
     App::test((), |mut app| async move {
@@ -446,18 +450,16 @@ fn agent_block_ignores_unsupported_message_variants() {
             let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
-                vec![
-                    TuiAIBlockSection::PlainText("before".to_owned()),
-                    TuiAIBlockSection::PlainText("after".to_owned()),
-                ]
+                vec![rich_text("before"), rich_text("after"),]
             );
         });
     });
 }
 
 #[test]
-fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
+fn agent_block_preserves_and_renders_code_sections_in_order() {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         let block = test_agent_block(
             &mut app,
             FakeAgentBlockModel {
@@ -476,14 +478,203 @@ fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
+            let code_key = TuiCodeBlockKey {
+                message_id: MessageId::new("message-1".to_owned()),
+                section_index: 0,
+            };
             assert_eq!(
                 block.sections(app_ctx),
-                vec![TuiAIBlockSection::PlainText("visible".to_owned())]
+                vec![
+                    TuiAIBlockSection::RichText(TuiRichTextSection::Code(code_key.clone())),
+                    rich_text("visible"),
+                ]
             );
+            assert!(block.code_views.contains_key(&code_key));
+            assert_eq!(block.child_view_ids(app_ctx).len(), 1);
+            let code_view = block.code_views[&code_key].as_ref(app_ctx);
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                code_view.render(app_ctx),
+                TuiRect::new(0, 0, 40, 3),
+                app_ctx,
+            );
+            assert!(frame
+                .buffer
+                .to_lines()
+                .iter()
+                .any(|line| line.contains("println!")));
+
+            let rendered = render_block_lines(block, 40, app_ctx);
+            assert_eq!(rendered.last().map(String::as_str), Some("visible"));
         });
     });
 }
 
+#[test]
+fn agent_block_preserves_table_image_and_mermaid_source_order() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let table_content = "Name\tValue\nAlpha\t1";
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![text_message(
+                    "rich-1",
+                    vec![
+                        AIAgentTextSection::PlainText {
+                            text: "before".to_owned().into(),
+                        },
+                        AIAgentTextSection::Table {
+                            table: AgentOutputTable::legacy(table_content.to_owned()),
+                        },
+                        AIAgentTextSection::Image {
+                            image: AgentOutputImage {
+                                alt_text: "architecture".to_owned(),
+                                source: "diagram.png".to_owned(),
+                                title: None,
+                                markdown_source: "![architecture](diagram.png)".to_owned(),
+                                layout: AgentOutputImageLayout::Block,
+                            },
+                        },
+                        AIAgentTextSection::MermaidDiagram {
+                            diagram: AgentOutputMermaidDiagram {
+                                source: "graph TD\nA-->B".to_owned(),
+                                markdown_source: "```mermaid\ngraph TD\nA-->B\n```".to_owned(),
+                            },
+                        },
+                        AIAgentTextSection::PlainText {
+                            text: "after".to_owned().into(),
+                        },
+                    ],
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            let mermaid_key = TuiCodeBlockKey {
+                message_id: MessageId::new("rich-1".to_owned()),
+                section_index: 3,
+            };
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    rich_text("before"),
+                    TuiAIBlockSection::RichText(TuiRichTextSection::Table {
+                        structured: None,
+                        fallback: table_content.to_owned(),
+                    }),
+                    TuiAIBlockSection::RichText(TuiRichTextSection::Image {
+                        alt_text: "architecture".to_owned(),
+                        source: "diagram.png".to_owned(),
+                    }),
+                    TuiAIBlockSection::RichText(TuiRichTextSection::Code(mermaid_key.clone())),
+                    rich_text("after"),
+                ]
+            );
+            assert!(block.code_views.contains_key(&mermaid_key));
+
+            let rendered = render_block_lines(block, 40, app_ctx);
+            let joined = rendered.join("\n");
+            assert!(joined.contains("Name"));
+            assert!(joined.contains("Image: architecture (diagram.png)"));
+            assert!(joined.ends_with("after"));
+        });
+    });
+}
+
+#[test]
+fn code_children_reconcile_across_streamed_section_boundaries() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![text_message(
+                    "stream-1",
+                    vec![AIAgentTextSection::Code {
+                        code: "first".to_owned(),
+                        language: None,
+                        source: None,
+                    }],
+                )]),
+            },
+        );
+        let old_key = TuiCodeBlockKey {
+            message_id: MessageId::new("stream-1".to_owned()),
+            section_index: 0,
+        };
+        let original_id = app.read(|ctx| block.as_ref(ctx).code_views[&old_key].id());
+        let invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::LayoutInvalidated => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        block.update(&mut app, |block, ctx| {
+            block.block_model = Rc::new(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![text_message(
+                    "stream-1",
+                    vec![AIAgentTextSection::Code {
+                        code: "second".to_owned(),
+                        language: None,
+                        source: None,
+                    }],
+                )]),
+            });
+            block.sync_code_views(ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(block.as_ref(ctx).code_views[&old_key].id(), original_id);
+        });
+        assert!(invalidations.get() > 0);
+
+        let new_key = TuiCodeBlockKey {
+            message_id: MessageId::new("stream-1".to_owned()),
+            section_index: 1,
+        };
+        block.update(&mut app, |block, ctx| {
+            block.block_model = Rc::new(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![text_message(
+                    "stream-1",
+                    vec![
+                        AIAgentTextSection::PlainText {
+                            text: "prefix".to_owned().into(),
+                        },
+                        AIAgentTextSection::Code {
+                            code: "second".to_owned(),
+                            language: None,
+                            source: None,
+                        },
+                    ],
+                )]),
+            });
+            block.sync_code_views(ctx);
+        });
+        app.read(|ctx| {
+            let block = block.as_ref(ctx);
+            assert!(!block.code_views.contains_key(&old_key));
+            assert!(block.code_views.contains_key(&new_key));
+            assert_ne!(block.code_views[&new_key].id(), original_id);
+        });
+
+        block.update(&mut app, |block, ctx| {
+            block.block_model = Rc::new(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![plain_text_message("stream-1", "finished")]),
+            });
+            block.sync_code_views(ctx);
+        });
+        app.read(|ctx| assert!(block.as_ref(ctx).code_views.is_empty()));
+    });
+}
 #[test]
 fn streaming_reasoning_renders_thinking_header_with_body() {
     App::test((), |mut app| async move {
@@ -502,7 +693,7 @@ fn streaming_reasoning_renders_thinking_header_with_body() {
                 vec![TuiAIBlockSection::Thinking {
                     message_id: MessageId::new("reasoning-1".to_owned()),
                     finished_duration: None,
-                    body: "line one\nline two".to_owned(),
+                    body: rich_body("line one\nline two"),
                 }]
             );
 
@@ -555,10 +746,7 @@ fn empty_finished_reasoning_is_omitted() {
             let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
-                vec![
-                    TuiAIBlockSection::PlainText("before".to_owned()),
-                    TuiAIBlockSection::PlainText("after".to_owned()),
-                ]
+                vec![rich_text("before"), rich_text("after")]
             );
         });
     });
@@ -637,13 +825,13 @@ fn reasoning_interleaves_with_plain_text_in_message_order() {
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
-                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    rich_text("before"),
                     TuiAIBlockSection::Thinking {
                         message_id: MessageId::new("r1".to_owned()),
                         finished_duration: None,
-                        body: "thinking".to_owned(),
+                        body: rich_body("thinking"),
                     },
-                    TuiAIBlockSection::PlainText("after".to_owned()),
+                    rich_text("after"),
                 ]
             );
         });
@@ -675,13 +863,13 @@ fn completed_conversation_summary_renders_collapsed_in_message_order() {
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
-                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    rich_text("before"),
                     TuiAIBlockSection::Summarization {
                         message_id: MessageId::new("summary-1".to_owned()),
                         finished: true,
-                        body: "condensed context".to_owned(),
+                        body: rich_body("condensed context"),
                     },
-                    TuiAIBlockSection::PlainText("after".to_owned()),
+                    rich_text("after"),
                 ]
             );
             assert_eq!(
@@ -789,7 +977,7 @@ fn todo_operations_map_to_sections_in_message_order() {
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
-                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    rich_text("before"),
                     TuiAIBlockSection::TodoList {
                         message_id: MessageId::new("m2".to_owned()),
                         todos: todos.clone(),
@@ -797,7 +985,7 @@ fn todo_operations_map_to_sections_in_message_order() {
                     TuiAIBlockSection::CompletedTodos {
                         completed: vec![todo("t1", "Compile list")],
                     },
-                    TuiAIBlockSection::PlainText("after".to_owned()),
+                    rich_text("after"),
                 ]
             );
         });
@@ -820,10 +1008,7 @@ fn empty_todo_operations_are_ignored() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            assert_eq!(
-                block.sections(app_ctx),
-                vec![TuiAIBlockSection::PlainText("visible".to_owned())]
-            );
+            assert_eq!(block.sections(app_ctx), vec![rich_text("visible")]);
         });
     });
 }
@@ -1334,6 +1519,18 @@ fn plain_text_message(id: &str, text: &str) -> AIAgentOutputMessage {
             text: text.to_owned().into(),
         }],
     )
+}
+
+fn rich_text(text: &str) -> TuiAIBlockSection {
+    TuiAIBlockSection::RichText(rich_text_section(text))
+}
+
+fn rich_body(text: &str) -> Vec<TuiRichTextSection> {
+    vec![rich_text_section(text)]
+}
+
+fn rich_text_section(text: &str) -> TuiRichTextSection {
+    TuiRichTextSection::Markdown(Arc::new(parse_markdown(text).expect("valid test Markdown")))
 }
 
 /// Measures the block by laying out its rendered element with an empty layout
