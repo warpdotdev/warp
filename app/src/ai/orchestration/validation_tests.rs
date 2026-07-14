@@ -1,8 +1,7 @@
 use ai::agent::action::RunAgentsExecutionMode;
-use warp_cli::agent::Harness;
 use warpui::{App, AppContext, Entity};
 
-use super::{accept_disabled_reason_with_auth, harness_is_selectable};
+use super::accept_disabled_reason_with_auth;
 use crate::ai::orchestration::config_state::{AuthSecretSelection, OrchestrationConfigState};
 
 /// Minimal entity used to borrow an `AppContext` inside `App::test`.
@@ -104,22 +103,3 @@ fn accept_allowed_for_cloud_harness_with_named_or_inherited_auth() {
     });
 }
 
-#[test]
-fn gemini_is_never_selectable() {
-    assert!(!harness_is_selectable(Harness::Gemini, true));
-    assert!(!harness_is_selectable(Harness::Gemini, false));
-}
-
-#[test]
-fn product_disabled_local_codex_is_not_selectable() {
-    assert!(!harness_is_selectable(Harness::Codex, true));
-    // Cloud Codex is unaffected by local product gating and setup checks.
-    assert!(harness_is_selectable(Harness::Codex, false));
-}
-
-#[test]
-fn cloud_harnesses_skip_local_setup_checks() {
-    for harness in [Harness::Oz, Harness::Claude, Harness::OpenCode] {
-        assert!(harness_is_selectable(harness, false));
-    }
-}

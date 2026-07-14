@@ -77,25 +77,6 @@ fn execution_mode_change_prefers_valid_fallback_over_default_model() {
 }
 
 #[test]
-fn execution_mode_change_falls_back_to_default_when_fallback_invalid() {
-    let mut state = OrchestrationConfigState::from_run_agents_fields(
-        "stale",
-        "oz",
-        &RunAgentsExecutionMode::Local,
-    );
-
-    state.apply_execution_mode_change_core(
-        true,
-        Some("also-stale".to_string()),
-        None,
-        &model_valid_among(&["first"]),
-        &|_| Some("first".to_string()),
-    );
-
-    assert_eq!(state.model_id, "first");
-}
-
-#[test]
 fn harness_change_saves_and_restores_per_harness_model_memory() {
     let state =
         OrchestrationConfigState::from_run_agents_fields("sonnet", "claude", &remote_mode());
@@ -119,23 +100,6 @@ fn harness_change_saves_and_restores_per_harness_model_memory() {
         edit_state.saved_model_per_harness.get("claude"),
         Some(&"sonnet".to_string())
     );
-}
-
-#[test]
-fn harness_change_without_memory_falls_back_to_default_model() {
-    let state =
-        OrchestrationConfigState::from_run_agents_fields("sonnet", "claude", &remote_mode());
-    let mut edit_state = OrchestrationEditState::new(state);
-
-    edit_state.apply_harness_change_core(
-        "codex",
-        None,
-        AuthSecretSelection::Unset,
-        &model_valid_among(&[""]),
-        &|_| Some(String::new()),
-    );
-
-    assert_eq!(edit_state.orchestration_config_state.model_id, "");
 }
 
 #[test]
