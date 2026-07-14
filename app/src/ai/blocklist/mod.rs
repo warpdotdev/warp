@@ -46,8 +46,7 @@ pub use action_model::AIActionStatus;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
     apply_edits, read_local_file_context, FileReadResult, ReadFileContextResult,
-    RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    StartAgentRequestId,
+    RequestFileEditsFormatKind,
 };
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg(feature = "tui")]
@@ -58,6 +57,13 @@ pub use action_model::{
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg(feature = "tui")]
 pub use action_model::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawningSnapshot};
+// Consumed by `tui_export` for the `warp_tui` frontend's child-agent
+// materializer, in addition to the GUI pane-group dispatch.
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
+pub use action_model::{
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
+    StartAgentRequestId,
+};
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};

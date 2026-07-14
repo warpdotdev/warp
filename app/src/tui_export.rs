@@ -27,10 +27,10 @@ pub use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText,
     AIAgentTextSection, AIAgentTodo, AIAgentTodoId, AgentOutputImage, AgentOutputImageLayout,
     AgentOutputMermaidDiagram, AgentOutputTable, AskUserQuestionResult, CancellationReason,
-    FileGlobV2Result, GrepResult, MessageId, RequestCommandOutputResult, RunAgentsAgentOutcomeKind,
-    RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
-    ShellCommandDelay, StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType,
-    TodoOperation, UserQueryMode,
+    FileGlobV2Result, GrepResult, MessageId, RenderableAIError, RequestCommandOutputResult,
+    RunAgentsAgentOutcomeKind, RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult,
+    ServerOutputId, Shared, ShellCommandDelay, StartAgentExecutionMode,
+    SuggestNewConversationResult, SummarizationType, TodoOperation, UserQueryMode,
 };
 pub use crate::ai::agent_conversations_model::{
     query_conversation_entries, AgentConversationEntry, AgentConversationEntryId,
@@ -38,6 +38,7 @@ pub use crate::ai::agent_conversations_model::{
     AgentConversationsModelEvent, AgentManagementFilters, AgentRunDisplayStatus, HarnessFilter,
     OwnerFilter,
 };
+pub use crate::ai::ambient_agents::AmbientAgentTaskId;
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
@@ -62,6 +63,9 @@ pub use crate::ai::blocklist::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
 };
+pub use crate::ai::blocklist::orchestration_event_streamer::{
+    register_agent_event_consumer, unregister_agent_event_consumer,
+};
 pub use crate::ai::blocklist::view_util::format_credits;
 pub use crate::ai::blocklist::{
     block_context_from_terminal_model, AIActionStatus, AskUserQuestionExecutor,
@@ -69,7 +73,8 @@ pub use crate::ai::blocklist::{
     BlocklistAIInputModel, InputConfig, InputModePolicy, InputModePolicyHandle, InputType,
     InputTypeAutoDetectionSource, PolicyConfigUpdate, RequestFileEditsExecutor, RunAgentsExecutor,
     RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
-    ShellCommandExecutorEvent,
+    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    StartAgentRequest, StartAgentRequestId,
 };
 pub use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
@@ -78,6 +83,7 @@ pub use crate::ai::connected_self_hosted_workers::{
 pub use crate::ai::conversation_export::{
     export_conversation_markdown, ConversationFileExport, ConversationFileExportError,
 };
+pub use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::harness_availability::{
     AuthSecretEntry, AuthSecretFetchState, HarnessAvailability, HarnessAvailabilityEvent,
@@ -109,6 +115,8 @@ pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
+pub use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot};
+pub use crate::server::server_api::ServerApiProvider;
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};

@@ -1078,6 +1078,15 @@ impl TuiTerminalSessionView {
         }
     }
 
+    /// The action model driving this session's agent tool execution.
+    pub(crate) fn ai_action_model(&self) -> &ModelHandle<BlocklistAIActionModel> {
+        &self.ai_action_model
+    }
+
+    /// The controller used to submit prompts into this session.
+    pub(crate) fn ai_controller(&self) -> &ModelHandle<BlocklistAIController> {
+        &self.ai_controller
+    }
     /// The active front-of-queue blocking interaction, if any.
     fn active_blocking_child(&self, ctx: &AppContext) -> Option<ViewHandle<TuiOrchestrationBlock>> {
         self.transcript.as_ref(ctx).active_blocking_child(ctx)

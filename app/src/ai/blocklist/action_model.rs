@@ -35,8 +35,8 @@ pub use execute::{
     PromptSuggestionExecutor, ReadFileContextResult, RequestFileEditsExecutor,
     RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent, RunAgentsExecutor,
     RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
-    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    StartAgentRequestId,
+    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    StartAgentRequest, StartAgentRequestId,
 };
 use futures::future::{join_all, BoxFuture};
 use itertools::Itertools;

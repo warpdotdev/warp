@@ -85,6 +85,10 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
         CodebaseIndexManager::new_for_test(ServerApiProvider::as_ref(ctx).get(), ctx)
     });
     app.add_singleton_model(AgentConversationsModel::new);
+    let global_resources = crate::GlobalResourceHandles::mock(app);
+    app.add_singleton_model(|_| {
+        crate::GlobalResourceHandlesProvider::new(global_resources.clone())
+    });
 
     app.add_singleton_model(crate::tui::TuiMcpManager::new_for_test);
     app.add_singleton_model(|ctx| {

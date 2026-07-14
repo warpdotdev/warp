@@ -46,6 +46,8 @@ impl TuiSession {
 pub(crate) enum TuiSessionsEvent {
     /// A session was registered, possibly in the background.
     SessionAdded(TuiSessionId),
+    /// A session was removed from the container.
+    SessionRemoved(TuiSessionId),
     /// The focused session changed to this id.
     FocusChanged(TuiSessionId),
 }
@@ -132,7 +134,23 @@ impl TuiSessions {
             self.keyboard_enhancement_supported,
         )
     }
-
+    /// Removes a session. When the focused session is removed, focus falls
+    /// back to the most recently added remaining session, if any.
+    pub(crate) fn remove_session(&mut self, id: TuiSessionId, ctx: &mut ModelContext<Self>) {
+        let before = self.sessions.len();
+        self.sessions.retain(|session| session.id != id);
+        if self.sessions.len() == before {
+            return;
+        }
+        ctx.emit(TuiSessionsEvent::SessionRemoved(id));
+        if self.focused_session_id == Some(id) {
+            self.focused_session_id = None;
+            if let Some(fallback) = self.sessions.last().map(|session| session.id) {
+                self.focus_session(fallback, ctx);
+            }
+        }
+        ctx.notify();
+    }
     /// Focuses a registered session. Returns whether focus changed.
     pub(crate) fn focus_session(&mut self, id: TuiSessionId, ctx: &mut ModelContext<Self>) -> bool {
         if self.focused_session_id == Some(id) || self.session(id).is_none() {

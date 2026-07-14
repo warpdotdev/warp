@@ -30,6 +30,7 @@ fn root_projects_only_the_focused_retained_session_view() {
         root.update(&mut app, |_, ctx| {
             ctx.subscribe_to_model(&sessions, |_, _, event, ctx| match event {
                 TuiSessionsEvent::SessionAdded(_) => {}
+                TuiSessionsEvent::SessionRemoved(_) => ctx.notify(),
                 TuiSessionsEvent::FocusChanged(_) => ctx.notify(),
             });
         });

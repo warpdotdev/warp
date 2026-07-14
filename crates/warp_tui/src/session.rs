@@ -21,11 +21,12 @@ use warp_errors::report_error;
 use warpui::SingletonEntity as _;
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::spawn_tui_driver;
-use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
+use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle, WindowId};
 
+use crate::orchestration_model::TuiOrchestrationModel;
 use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
-use crate::session_registry::{TuiSessions, TuiSessionsEvent};
+use crate::session_registry::{TuiSessionId, TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
 use crate::terminal_session_view::{
@@ -127,9 +128,11 @@ fn init(
             root.update(ctx, |_, ctx| {
                 ctx.subscribe_to_model(&sessions, |_, _, event, ctx| match event {
                     TuiSessionsEvent::SessionAdded(_) => {}
+                    TuiSessionsEvent::SessionRemoved(_) => ctx.notify(),
                     TuiSessionsEvent::FocusChanged(_) => ctx.notify(),
                 });
             });
+            TuiOrchestrationModel::register(ctx);
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
                 create_terminal_session_after_login(&sessions, &root, ctx);
@@ -155,7 +158,7 @@ fn init(
     }
 }
 
-/// Creates the focused bootstrap session after login.
+/// Creates the focused bootstrap session and restores the requested conversation.
 fn create_terminal_session_after_login(
     sessions: &ModelHandle<TuiSessions>,
     root: &ViewHandle<RootTuiView>,
@@ -167,8 +170,30 @@ fn create_terminal_session_after_login(
 
     let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
     let window_id = root.window_id(ctx);
+    let (_, surface) = create_local_terminal_session(sessions, window_id, true, ctx);
+    if let Some(token) = resume_token {
+        surface.update(ctx, |view, ctx| {
+            view.restore_conversation(
+                TuiConversationRestoreTarget::Server(token),
+                TuiConversationRestoreOrigin::Startup,
+                ctx,
+            );
+        });
+    }
+    root.update(ctx, |root, ctx| root.show_terminal(ctx));
+}
+
+/// Creates and registers a full local terminal session.
+pub(crate) fn create_local_terminal_session(
+    sessions: &ModelHandle<TuiSessions>,
+    window_id: WindowId,
+    focus: bool,
+    ctx: &mut AppContext,
+) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
     let (exit_summary, keyboard_enhancement_supported) =
         sessions.read(ctx, |sessions, _| sessions.surface_context());
+    // The manager uses this internal model for unsupported-shell state; the
+    // TUI does not render a separate banner surface.
     let banner = ctx.add_model(|_| BannerState::default());
     let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
         std::env::current_dir().ok(),
@@ -193,26 +218,17 @@ fn create_terminal_session_after_login(
             TerminalSurfaceResult {
                 surface,
                 post_wire: move |_manager: &mut LocalTtyTerminalManager<TuiTerminalSessionView>,
-                                 surface: &ViewHandle<TuiTerminalSessionView>,
-                                 ctx: &mut AppContext| {
-                    if let Some(token) = resume_token {
-                        surface.update(ctx, |view, ctx| {
-                            view.restore_conversation(
-                                TuiConversationRestoreTarget::Server(token),
-                                TuiConversationRestoreOrigin::Startup,
-                                ctx,
-                            );
-                        });
-                    }
-                },
+                                 _surface: &ViewHandle<TuiTerminalSessionView>,
+                                 _ctx: &mut AppContext| {},
             }
         },
     );
 
-    sessions.update(ctx, |sessions, ctx| {
-        sessions.add_session(manager.surface, manager.manager, true, ctx);
+    let surface = manager.surface.clone();
+    let session_id = sessions.update(ctx, |sessions, ctx| {
+        sessions.add_session(manager.surface, manager.manager, focus, ctx)
     });
-    root.update(ctx, |root, ctx| root.show_terminal(ctx));
+    (session_id, surface)
 }
 
 #[cfg(test)]

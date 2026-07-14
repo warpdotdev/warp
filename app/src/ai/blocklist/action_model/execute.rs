@@ -62,7 +62,8 @@ pub use send_message::SendMessageToAgentExecutor;
 use serde::{Deserialize, Serialize};
 pub use shell_command::{ShellCommandExecutor, ShellCommandExecutorEvent};
 pub use start_agent::{
-    StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
+    StartAgentRequestId,
 };
 use start_recording::StartRecordingExecutor;
 use stop_recording::StopRecordingExecutor;
