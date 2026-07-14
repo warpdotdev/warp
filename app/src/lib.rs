@@ -548,17 +548,9 @@ impl LaunchMode {
     }
 
     /// Whether this launch mode should start the local loopback HTTP server
-    /// (`crates/http_server`), which serves app-installation detection and
-    /// profiling endpoints on a fixed per-channel port (9277 on Stable).
-    ///
-    /// Only interactive GUI app instances need it: the installation-detection
-    /// endpoint answers browser (warp.dev) probes, and the profiling endpoint
-    /// is a desktop diagnostic. Headless modes (remote server daemon, CLI/SDK,
-    /// proxy, TUI) must not start it — several headless Warp processes commonly
-    /// run on the same host, and because the port is fixed, all but the first
-    /// fail to bind with `EADDRINUSE` and log a spurious error. Gating on
-    /// `!is_headless()` keeps the server for every GUI surface while avoiding
-    /// that contention.
+    /// (`crates/http_server`), which serves app-installation detection and profiling on a
+    /// fixed port. Only non-headless GUI instances start it, since co-located headless
+    /// processes (daemon, CLI, proxy, TUI) would otherwise contend for the fixed port.
     fn should_start_local_http_server(&self) -> bool {
         !self.is_headless()
     }
@@ -2369,8 +2361,7 @@ pub(crate) fn initialize_app(
 
     // When running natively with a visible GUI, add the http server singleton
     // to the application. Headless modes (e.g. the remote server daemon) skip
-    // it so co-located headless processes don't contend for the fixed port; see
-    // `LaunchMode::should_start_local_http_server`.
+    // it so co-located headless processes don't contend for the fixed port.
     #[cfg(not(target_family = "wasm"))]
     if launch_mode.should_start_local_http_server() {
         ctx.add_singleton_model(move |ctx| {
