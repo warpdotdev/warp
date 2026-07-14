@@ -85,14 +85,16 @@ impl OrchestrationConfigState {
         }
     }
 
+    /// `None` (or an empty string wrapped in `Some`) leaves the field
+    /// unset, matching the wire encoding where absence is emptiness.
     pub fn from_run_agents_fields(
-        model_id: &str,
-        harness_type: &str,
+        model_id: Option<&str>,
+        harness_type: Option<&str>,
         execution_mode: &RunAgentsExecutionMode,
     ) -> Self {
         Self {
-            model_id: model_id.to_string(),
-            harness_type: harness_type.to_string(),
+            model_id: model_id.unwrap_or_default().to_string(),
+            harness_type: harness_type.unwrap_or_default().to_string(),
             execution_mode: execution_mode.clone(),
             auth_secret_selection: AuthSecretSelection::Unset,
         }

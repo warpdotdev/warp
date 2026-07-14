@@ -1,7 +1,9 @@
-//! Plain-data option lists both frontends render from. Builders mirror
-//! the GUI picker population logic exactly; each is a thin
-//! `AppContext`-reading wrapper over a pure core so the mirroring logic
-//! is unit-testable without app singletons.
+//! Plain-data option lists for the orchestration configuration fields:
+//! location, harness, model, API key, host, and environment. One builder
+//! per field turns the live catalogs into an [`OptionSnapshot`] — rows,
+//! ordering, badges, disabled reasons, load state, and selection — and
+//! both frontends render their pickers/pages from that snapshot, so the
+//! option lists cannot drift between the GUI and the TUI.
 
 use ai::agent::action::RunAgentsExecutionMode;
 use warp_cli::agent::Harness;

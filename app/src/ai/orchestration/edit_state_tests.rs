@@ -19,8 +19,11 @@ fn model_valid_among<'a>(valid: &'a [&'a str]) -> impl Fn(&str, &str, bool) -> b
 
 #[test]
 fn execution_mode_change_to_local_forces_oz_and_strips_cloud_fields() {
-    let mut state =
-        OrchestrationConfigState::from_run_agents_fields("gpt-5", "codex", &remote_mode());
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
+        Some("gpt-5"),
+        Some("codex"),
+        &remote_mode(),
+    );
 
     state.apply_execution_mode_change_core(false, None, None, &model_valid_among(&[""]), &|_| {
         Some(String::new())
@@ -37,8 +40,8 @@ fn execution_mode_change_to_local_forces_oz_and_strips_cloud_fields() {
 #[test]
 fn execution_mode_change_to_cloud_prefills_default_environment() {
     let mut state = OrchestrationConfigState::from_run_agents_fields(
-        "auto",
-        "oz",
+        Some("auto"),
+        Some("oz"),
         &RunAgentsExecutionMode::Local,
     );
 
@@ -60,8 +63,8 @@ fn execution_mode_change_to_cloud_prefills_default_environment() {
 #[test]
 fn execution_mode_change_prefers_valid_fallback_over_default_model() {
     let mut state = OrchestrationConfigState::from_run_agents_fields(
-        "stale",
-        "oz",
+        Some("stale"),
+        Some("oz"),
         &RunAgentsExecutionMode::Local,
     );
 
@@ -78,8 +81,11 @@ fn execution_mode_change_prefers_valid_fallback_over_default_model() {
 
 #[test]
 fn harness_change_saves_and_restores_per_harness_model_memory() {
-    let state =
-        OrchestrationConfigState::from_run_agents_fields("sonnet", "claude", &remote_mode());
+    let state = OrchestrationConfigState::from_run_agents_fields(
+        Some("sonnet"),
+        Some("claude"),
+        &remote_mode(),
+    );
     let mut edit_state = OrchestrationEditState {
         orchestration_config_state: state,
         saved_model_per_harness: HashMap::from([("codex".to_string(), "gpt-5".to_string())]),
@@ -104,7 +110,8 @@ fn harness_change_saves_and_restores_per_harness_model_memory() {
 
 #[test]
 fn harness_change_applies_resolved_auth_selection() {
-    let mut state = OrchestrationConfigState::from_run_agents_fields("auto", "oz", &remote_mode());
+    let mut state =
+        OrchestrationConfigState::from_run_agents_fields(Some("auto"), Some("oz"), &remote_mode());
     state.auth_secret_selection = AuthSecretSelection::Named("old-key".to_string());
     let mut edit_state = OrchestrationEditState::new(state);
 
@@ -124,8 +131,11 @@ fn harness_change_applies_resolved_auth_selection() {
 
 #[test]
 fn revalidate_drops_deleted_named_secret_and_reseeds_from_resolved() {
-    let mut state =
-        OrchestrationConfigState::from_run_agents_fields("sonnet", "claude", &remote_mode());
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
+        Some("sonnet"),
+        Some("claude"),
+        &remote_mode(),
+    );
     state.auth_secret_selection = AuthSecretSelection::Named("deleted-key".to_string());
 
     state.revalidate_after_catalog_change_core(
@@ -143,8 +153,11 @@ fn revalidate_drops_deleted_named_secret_and_reseeds_from_resolved() {
 
 #[test]
 fn revalidate_keeps_named_secret_still_present() {
-    let mut state =
-        OrchestrationConfigState::from_run_agents_fields("sonnet", "claude", &remote_mode());
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
+        Some("sonnet"),
+        Some("claude"),
+        &remote_mode(),
+    );
     state.auth_secret_selection = AuthSecretSelection::Named("my-key".to_string());
 
     state.revalidate_after_catalog_change_core(
@@ -162,8 +175,11 @@ fn revalidate_keeps_named_secret_still_present() {
 
 #[test]
 fn revalidate_leaves_explicit_inherit_alone() {
-    let mut state =
-        OrchestrationConfigState::from_run_agents_fields("sonnet", "claude", &remote_mode());
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
+        Some("sonnet"),
+        Some("claude"),
+        &remote_mode(),
+    );
     state.auth_secret_selection = AuthSecretSelection::Inherit;
 
     state.revalidate_after_catalog_change_core(
@@ -178,8 +194,11 @@ fn revalidate_leaves_explicit_inherit_alone() {
 
 #[test]
 fn revalidate_resets_vanished_model_to_default() {
-    let mut state =
-        OrchestrationConfigState::from_run_agents_fields("gone", "claude", &remote_mode());
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
+        Some("gone"),
+        Some("claude"),
+        &remote_mode(),
+    );
 
     state.revalidate_after_catalog_change_core(
         None,

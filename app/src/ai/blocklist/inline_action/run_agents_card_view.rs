@@ -118,8 +118,8 @@ pub struct RunAgentsEditState {
 impl RunAgentsEditState {
     pub fn from_request(req: &RunAgentsRequest) -> Self {
         let mut orchestration_config_state = oc::OrchestrationConfigState::from_run_agents_fields(
-            &req.model_id,
-            &req.harness_type,
+            Some(&req.model_id),
+            Some(&req.harness_type),
             &req.execution_mode,
         );
         // Carry the request's auth secret across the round trip. Absence

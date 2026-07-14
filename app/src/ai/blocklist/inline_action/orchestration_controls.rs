@@ -38,8 +38,8 @@ pub use crate::ai::orchestration::{
 };
 use crate::ai::orchestration::{
     api_key_snapshot, environment_snapshot, harness_snapshot, host_snapshot, model_snapshot,
-    persist_auth_secret_selection, OptionBadge, OptionFooter,
-    OptionSnapshot, OptionSourceStatus, AUTH_SECRET_INHERIT_LABEL,
+    persist_auth_secret_selection, OptionBadge, OptionFooter, OptionRow, OptionSnapshot,
+    OptionSourceStatus, AUTH_SECRET_INHERIT_LABEL,
 };
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -211,8 +211,9 @@ pub fn new_standard_filterable_picker_dropdown<A: OrchestrationControlAction, V:
     })
 }
 
-/// Builds the minimal execution mode carried by the synthetic edit
-/// states the `populate_*` helpers hand to the snapshot builders.
+/// Execution mode for the placeholder states the `populate_*` helpers
+/// build for the snapshot builders: only the Local/Cloud distinction
+/// matters to the builders, so the Remote fields are left empty.
 fn snapshot_execution_mode(is_local: bool) -> RunAgentsExecutionMode {
     if is_local {
         RunAgentsExecutionMode::Local
@@ -236,14 +237,40 @@ fn selected_row_label(snapshot: &OptionSnapshot) -> Option<String> {
     })
 }
 
+/// Rich menu items for Oz model rows. The snapshot owns inclusion,
+/// ordering, and selection; this maps each row id back to its `LLMInfo`
+/// and renders through [`available_model_menu_items`] so Oz rows keep
+/// provider/credential icons and disabled gating — GUI rendering
+/// concerns that cannot live in the frontend-neutral snapshot layer.
+fn oz_model_menu_items<A: OrchestrationControlAction, V: View>(
+    rows: &[OptionRow],
+    ctx: &mut ViewContext<V>,
+) -> Vec<MenuItem<DropdownAction>> {
+    let llm_prefs = LLMPreferences::as_ref(ctx);
+    let all_choices: Vec<_> = llm_prefs.get_base_llm_choices_for_agent_mode(ctx).collect();
+    let ordered_choices: Vec<_> = rows
+        .iter()
+        .filter_map(|row| {
+            all_choices
+                .iter()
+                .copied()
+                .find(|llm| llm.id.to_string() == row.id)
+        })
+        .collect();
+    available_model_menu_items(
+        ordered_choices,
+        move |llm| DropdownAction::select_action_and_close(A::model_changed(llm.id.to_string())),
+        None,
+        None,
+        false,
+        false,
+        ctx,
+    )
+}
+
 /// Populates the model picker from [`model_snapshot`] for the active
 /// harness (Warp LLM catalog for Oz, "Default model" for local Codex,
 /// "Default model" plus the server-provided catalog otherwise).
-///
-/// The snapshot is the source of inclusion, ordering, and selection; Oz
-/// rows are additionally mapped back to their `LLMInfo` and rendered via
-/// [`available_model_menu_items`] so they keep provider/credential icons
-/// and disabled gating.
 pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>(
     dropdown: &ViewHandle<FilterableDropdown<A>>,
     initial_model_id: &str,
@@ -252,8 +279,8 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
     ctx: &mut ViewContext<V>,
 ) {
     let state = OrchestrationConfigState::from_run_agents_fields(
-        initial_model_id,
-        harness_type,
+        Some(initial_model_id),
+        Some(harness_type),
         &snapshot_execution_mode(is_local),
     );
     let is_oz = matches!(
@@ -264,31 +291,7 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
         let snapshot = model_snapshot(&state, ctx_dropdown);
         let selected_label = selected_row_label(&snapshot);
         let items = if is_oz {
-            let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
-            let all_choices: Vec<_> = llm_prefs
-                .get_base_llm_choices_for_agent_mode(ctx_dropdown)
-                .collect();
-            let ordered_choices: Vec<_> = snapshot
-                .rows
-                .iter()
-                .filter_map(|row| {
-                    all_choices
-                        .iter()
-                        .copied()
-                        .find(|llm| llm.id.to_string() == row.id)
-                })
-                .collect();
-            available_model_menu_items(
-                ordered_choices,
-                move |llm| {
-                    DropdownAction::select_action_and_close(A::model_changed(llm.id.to_string()))
-                },
-                None,
-                None,
-                false,
-                false,
-                ctx_dropdown,
-            )
+            oz_model_menu_items::<A, _>(&snapshot.rows, ctx_dropdown)
         } else {
             snapshot
                 .rows
@@ -317,8 +320,8 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
     ctx: &mut ViewContext<V>,
 ) {
     let state = OrchestrationConfigState::from_run_agents_fields(
-        "",
-        initial_harness,
+        None,
+        Some(initial_harness),
         &snapshot_execution_mode(is_local),
     );
     dropdown.update(ctx, |dropdown, ctx_dropdown| {
@@ -393,8 +396,8 @@ pub fn populate_environment_picker<A: OrchestrationControlAction, V: View>(
     ctx: &mut ViewContext<V>,
 ) {
     let state = OrchestrationConfigState::from_run_agents_fields(
-        "",
-        "",
+        None,
+        None,
         &RunAgentsExecutionMode::Remote {
             environment_id: initial_env_id.to_string(),
             worker_host: String::new(),
@@ -478,8 +481,8 @@ pub fn populate_host_picker<V: View>(
     ctx: &mut ViewContext<V>,
 ) {
     let state = OrchestrationConfigState::from_run_agents_fields(
-        "",
-        "",
+        None,
+        None,
         &RunAgentsExecutionMode::Remote {
             environment_id: String::new(),
             worker_host: initial_host.to_string(),
@@ -546,8 +549,8 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
     });
 
     let mut state = OrchestrationConfigState::from_run_agents_fields(
-        "",
-        harness_type,
+        None,
+        Some(harness_type),
         &RunAgentsExecutionMode::Local,
     );
     state.auth_secret_selection = selection.clone();
