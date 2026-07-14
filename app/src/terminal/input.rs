@@ -9026,7 +9026,11 @@ impl Input {
             }
             InputSuggestionsMode::ModelSelector => {
                 self.inline_model_selector_view.update(ctx, |view, ctx| {
-                    view.select_up(ctx);
+                    if view.is_sidecar_focused(ctx) {
+                        view.sidecar_select_up(ctx);
+                    } else {
+                        view.select_up(ctx);
+                    }
                 });
                 true
             }
@@ -9174,6 +9178,27 @@ impl Input {
     }
 
     fn editor_escape(&mut self, ctx: &mut ViewContext<Self>) {
+        // If the inline model selector's reasoning sidecar has focus, escape
+        // returns focus to the model list without closing the menu.
+        if self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_inline_model_selector()
+        {
+            let blurred_sidecar = self.inline_model_selector_view.update(ctx, |view, ctx| {
+                if view.is_sidecar_focused(ctx) {
+                    view.blur_sidecar(ctx);
+                    true
+                } else {
+                    false
+                }
+            });
+            if blurred_sidecar {
+                ctx.notify();
+                return;
+            }
+        }
+
         let vim_mode = self.editor.as_ref(ctx).vim_mode(ctx);
         let has_attached_context = {
             let context_model = self.ai_context_model.as_ref(ctx);
@@ -9392,7 +9417,11 @@ impl Input {
             }
             InputSuggestionsMode::ModelSelector => {
                 self.inline_model_selector_view.update(ctx, |view, ctx| {
-                    view.select_down(ctx);
+                    if view.is_sidecar_focused(ctx) {
+                        view.sidecar_select_down(ctx);
+                    } else {
+                        view.select_down(ctx);
+                    }
                 });
                 true
             }
@@ -10879,6 +10908,20 @@ impl Input {
                             ai_context_menu.update(ctx, |menu, ctx| {
                                 menu.select_current_item(ctx);
                             });
+                        }
+                    });
+                } else if self
+                    .suggestions_mode_model
+                    .as_ref(ctx)
+                    .is_inline_model_selector()
+                {
+                    // Right arrow at the end of the search buffer moves focus from
+                    // a collapsed reasoning row into its reasoning sidecar.
+                    self.inline_model_selector_view.update(ctx, |view, ctx| {
+                        if view.selected_item_has_reasoning_sidecar(ctx)
+                            && !view.is_sidecar_focused(ctx)
+                        {
+                            view.focus_sidecar(ctx);
                         }
                     });
                 }
@@ -12830,6 +12873,24 @@ impl Input {
             });
             return;
         }
+        // When the inline model selector is open and the selected row is a collapsed
+        // reasoning family, tab moves keyboard focus into the reasoning sidecar.
+        if matches!(
+            self.suggestions_mode_model.as_ref(ctx).mode(),
+            InputSuggestionsMode::ModelSelector
+        ) {
+            let focused_sidecar = self.inline_model_selector_view.update(ctx, |view, ctx| {
+                if view.selected_item_has_reasoning_sidecar(ctx) && !view.is_sidecar_focused(ctx) {
+                    view.focus_sidecar(ctx);
+                    true
+                } else {
+                    false
+                }
+            });
+            if focused_sidecar {
+                return;
+            }
+        }
         // We have to manually check if "tab" is bound to
         // `InputAction::MaybeOpenCompletionSuggestions` here because the child `EditorView`
         // handles the actual tab keypress event -- the handler method attached to the
@@ -13173,8 +13234,13 @@ impl Input {
             .as_ref(ctx)
             .is_inline_model_selector()
         {
-            self.inline_model_selector_view
-                .update(ctx, |view, ctx| view.accept_selected_item(false, ctx));
+            self.inline_model_selector_view.update(ctx, |view, ctx| {
+                if view.is_sidecar_focused(ctx) {
+                    view.accept_sidecar(false, ctx);
+                } else {
+                    view.accept_selected_item(false, ctx);
+                }
+            });
             return;
         }
 
@@ -13603,7 +13669,13 @@ impl Input {
                 if FeatureFlag::InlineMenuHeaders.is_enabled() =>
             {
                 self.inline_model_selector_view
-                    .update(ctx, |view, ctx| view.accept_selected_item(true, ctx));
+                    .update(ctx, |view, ctx| {
+                        if view.is_sidecar_focused(ctx) {
+                            view.accept_sidecar(true, ctx);
+                        } else {
+                            view.accept_selected_item(true, ctx);
+                        }
+                    });
             }
             InputSuggestionsMode::UserQueryMenu { .. } => {
                 self.user_query_menu_view

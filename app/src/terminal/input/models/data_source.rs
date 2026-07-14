@@ -1,14 +1,18 @@
+use std::collections::HashSet;
+
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use indexmap::IndexMap;
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use ordered_float::OrderedFloat;
+use parking_lot::Mutex;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, FormattedTextElement, Highlight, HighlightedHyperlink,
-    MouseStateHandle, Radius, Text,
+    Hoverable, MouseStateHandle, Radius, Text,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::Keystroke;
@@ -18,6 +22,7 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
+    WeakModelHandle,
 };
 
 use super::model_spec_scores::{
@@ -40,7 +45,7 @@ use crate::search::{SearchItem, SyncDataSource};
 use crate::settings_view::SettingsSection;
 use crate::terminal::input::inline_menu::{
     default_navigation_message_items, styles as inline_styles, DetailsRenderConfig,
-    InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
+    InlineMenuAction, InlineMenuMessageArgs, InlineMenuRowAction, InlineMenuType,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
@@ -134,9 +139,196 @@ fn model_specs_width(app: &AppContext) -> f32 {
     ) * 34.
 }
 
+/// A single reasoning-level variant within a collapsed model group.
+///
+/// `level` is the display label (e.g. `"low"`, `"medium"`); `id` is the concrete
+/// `LLMId` that selecting this level resolves to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ReasoningVariant {
+    pub(super) level: String,
+    pub(super) id: LLMId,
+}
+
+/// A collapsed group of model choices, mirroring the dropdown
+/// `ProfileModelSelector` collapse logic.
+///
+/// Reasoning variants sharing a `base_model_name` collapse into one group keyed
+/// by that base name; all `auto` models collapse under the `"auto"` key; every
+/// other model (non-reasoning, custom-router, custom-endpoint) forms its own
+/// single-member group keyed by its id. The group carries enough data for the
+/// data source to build one `ModelSearchItem` (the representative variant) and
+/// for the view to drive the reasoning sidecar (the ordered variants, the
+/// active variant, and the variant that accept-on-row resolves to).
+#[derive(Clone, Debug)]
+pub(super) struct ModelGroup {
+    /// Collapse key: `"auto"`, `base_model_name`, or the model `id`.
+    #[allow(dead_code)]
+    key: String,
+    /// Row label shown in the results list.
+    base_name: String,
+    /// Text the fuzzy search matches against (the collapsed label for reasoning
+    /// and auto groups, the per-model display name otherwise).
+    search_label: String,
+    /// The representative variant's id (the active variant when the family is
+    /// selected, otherwise the deterministic default).
+    representative_id: LLMId,
+    /// Reasoning variants in server order. Empty for non-reasoning and auto groups.
+    pub(super) variants: Vec<ReasoningVariant>,
+    /// Index in `variants` of the currently-active variant, if the active model
+    /// is one of this group's variants.
+    active_variant_index: Option<usize>,
+    /// Index in `variants` that accepting the collapsed row resolves to (the
+    /// active variant when the family is selected, otherwise the first level).
+    pub(super) target_variant_index: usize,
+    /// True when the group renders a selectable reasoning sidecar (a reasoning
+    /// family with more than one variant).
+    pub(super) has_reasoning_sidecar: bool,
+    /// True when the active model is a member of this group.
+    is_active: bool,
+    /// True for the collapsed `auto` group.
+    is_auto: bool,
+}
+
+impl ModelGroup {
+    /// The concrete `LLMId` that accepting this collapsed row resolves to.
+    fn target_id(&self) -> LLMId {
+        self.variants
+            .get(self.target_variant_index)
+            .map(|variant| variant.id.clone())
+            .unwrap_or_else(|| self.representative_id.clone())
+    }
+}
+
+/// Collapse a flat list of model choices into one [`ModelGroup`] per base model,
+/// mirroring the dropdown `ProfileModelSelector::refresh_model_menu` keying:
+/// `"auto"` for auto models, `base_model_name()` for reasoning families, and the
+/// model `id` for everything else.
+///
+/// `custom_endpoint_ids` lists custom-endpoint model ids so they are never
+/// grouped by base name (they render one row each, as they do today). The helper
+/// is pure and free of `AppContext` so it is unit-testable with `LLMInfo` fixtures.
+fn collapse_reasoning_variants(
+    choices: &[&LLMInfo],
+    active_llm_id: &LLMId,
+    custom_endpoint_ids: &HashSet<LLMId>,
+) -> Vec<ModelGroup> {
+    // Group by collapse key, preserving the server-provided order (the choices
+    // are already ordered by `order_model_choices`).
+    let mut groups: IndexMap<String, Vec<&LLMInfo>> = IndexMap::new();
+    for llm in choices {
+        let key = if is_custom_router_id(llm.id.as_str()) || custom_endpoint_ids.contains(&llm.id) {
+            llm.id.to_string()
+        } else if is_auto(llm) {
+            "auto".to_string()
+        } else if llm.has_reasoning_level() {
+            llm.base_model_name().to_string()
+        } else {
+            llm.id.to_string()
+        };
+        groups.entry(key).or_default().push(*llm);
+    }
+
+    groups
+        .into_iter()
+        .map(|(key, llms)| {
+            let representative = llms.first().expect("group has at least one member");
+            let is_auto_group =
+                is_auto(representative) && !is_custom_router_id(representative.id.as_str());
+            let is_custom = is_custom_router_id(representative.id.as_str())
+                || custom_endpoint_ids.contains(&representative.id);
+            let is_reasoning_family =
+                !is_auto_group && !is_custom && representative.has_reasoning_level();
+
+            if is_auto_group {
+                let active_member = llms
+                    .iter()
+                    .find(|llm| &llm.id == active_llm_id)
+                    .unwrap_or(representative);
+                ModelGroup {
+                    key,
+                    base_name: "auto".to_string(),
+                    search_label: "auto".to_string(),
+                    representative_id: active_member.id.clone(),
+                    variants: Vec::new(),
+                    active_variant_index: None,
+                    target_variant_index: 0,
+                    has_reasoning_sidecar: false,
+                    is_active: llms.iter().any(|llm| &llm.id == active_llm_id),
+                    is_auto: true,
+                }
+            } else if is_reasoning_family {
+                let variants: Vec<ReasoningVariant> = llms
+                    .iter()
+                    .map(|llm| ReasoningVariant {
+                        level: llm.reasoning_level().unwrap_or_default(),
+                        id: llm.id.clone(),
+                    })
+                    .collect();
+                let active_variant_index = variants
+                    .iter()
+                    .position(|variant| &variant.id == active_llm_id);
+                // Accept-on-row resolves to the active variant when the family is
+                // selected, otherwise the first listed level (a deterministic
+                // default; there is no per-family server default level today).
+                let target_variant_index = active_variant_index.unwrap_or(0);
+                ModelGroup {
+                    key,
+                    base_name: representative.base_model_name().to_string(),
+                    search_label: representative.base_model_name().to_string(),
+                    representative_id: variants
+                        .get(target_variant_index)
+                        .map(|variant| variant.id.clone())
+                        .unwrap_or_else(|| representative.id.clone()),
+                    variants,
+                    active_variant_index,
+                    target_variant_index,
+                    has_reasoning_sidecar: false,
+                    is_active: active_variant_index.is_some(),
+                    is_auto: false,
+                }
+            } else {
+                // Non-reasoning, custom-router, or custom-endpoint model: one row each.
+                ModelGroup {
+                    key,
+                    base_name: representative.display_name.clone(),
+                    search_label: representative.display_name.clone(),
+                    representative_id: representative.id.clone(),
+                    variants: Vec::new(),
+                    active_variant_index: None,
+                    target_variant_index: 0,
+                    has_reasoning_sidecar: false,
+                    is_active: &representative.id == active_llm_id,
+                    is_auto: false,
+                }
+            }
+        })
+        .map(|mut group| {
+            // The sidecar is only useful when there is more than one level to choose.
+            group.has_reasoning_sidecar = group.variants.len() > 1;
+            group
+        })
+        .collect()
+}
+
 pub struct ModelSelectorDataSource {
     terminal_view_id: EntityId,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+    /// Weak handle to this data source, baked into each collapsed reasoning
+    /// `ModelSearchItem` so `render_details` can read the live reasoning-sidecar
+    /// state (focus + highlighted level) without rebuilding the results. Set
+    /// once after construction via [`Self::set_self_weak`].
+    self_weak: Option<WeakModelHandle<ModelSelectorDataSource>>,
+    /// Whether the reasoning sidecar currently has keyboard focus (vs. the model
+    /// list). Owned here so `run_query` can bake it into items for rendering.
+    sidecar_focused: bool,
+    /// The keyboard-highlighted reasoning level within the focused item's
+    /// variants. Read live by the sidecar renderer via `self_weak`.
+    sidecar_highlighted_level: usize,
+    /// The groups produced by the last `run_query`, cached so the view can look
+    /// up the selected item's sidecar variants and target level without
+    /// recomputing the collapse. Behind a `Mutex` because `SyncDataSource::run_query`
+    /// takes `&self`.
+    last_groups: Mutex<Vec<ModelGroup>>,
 }
 
 impl ModelSelectorDataSource {
@@ -147,7 +339,44 @@ impl ModelSelectorDataSource {
         Self {
             terminal_view_id,
             ambient_agent_view_model,
+            self_weak: None,
+            sidecar_focused: false,
+            sidecar_highlighted_level: 0,
+            last_groups: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Set the weak self-handle used to read live sidecar state in `render_details`.
+    /// Called once after the model is created.
+    pub(crate) fn set_self_weak(&mut self, weak: WeakModelHandle<ModelSelectorDataSource>) {
+        self.self_weak = Some(weak);
+    }
+
+    pub(crate) fn set_sidecar_focused(&mut self, focused: bool) {
+        self.sidecar_focused = focused;
+    }
+
+    pub(crate) fn set_sidecar_highlighted_level(&mut self, level: usize) {
+        self.sidecar_highlighted_level = level;
+    }
+
+    pub(crate) fn sidecar_focused(&self) -> bool {
+        self.sidecar_focused
+    }
+
+    pub(crate) fn sidecar_highlighted_level(&self) -> usize {
+        self.sidecar_highlighted_level
+    }
+
+    /// Returns the cached group whose collapsed row resolves to `target_id`
+    /// (i.e. the group that the selected item represents), or `None` when the
+    /// selection is stale relative to the last query.
+    pub(super) fn group_for_target(&self, target_id: &LLMId) -> Option<ModelGroup> {
+        self.last_groups
+            .lock()
+            .iter()
+            .find(|group| &group.target_id() == target_id)
+            .cloned()
     }
 
     /// Attaches an ambient agent view model after construction so the picker treats this pane as a
@@ -249,20 +478,57 @@ impl SyncDataSource for ModelSelectorDataSource {
         };
         let choices = Self::order_model_choices(llm_preferences, choices);
 
+        // Collapse per-reasoning-level variants into one entry per base model,
+        // mirroring the dropdown `ProfileModelSelector`. Custom-endpoint models
+        // are excluded from base-name grouping so they keep rendering one row each.
+        let custom_endpoint_ids: HashSet<LLMId> = llm_preferences
+            .custom_llm_choices(app)
+            .map(|info| info.id.clone())
+            .collect();
+        let groups = collapse_reasoning_variants(&choices, &active_llm_id, &custom_endpoint_ids);
+        // Cache the groups so the view can look up the selected item's sidecar
+        // variants and target level without recomputing the collapse.
+        *self.last_groups.lock() = groups.clone();
+
+        let self_weak = self.self_weak.clone();
+        let build_item = |group: &ModelGroup| {
+            let representative = choices
+                .iter()
+                .find(|llm| llm.id == group.representative_id)
+                .copied()
+                .unwrap_or_else(|| {
+                    choices
+                        .first()
+                        .copied()
+                        .expect("choices is non-empty when groups are non-empty")
+                });
+            ModelSearchItem::new_from_group(
+                group,
+                representative,
+                &active_llm_id,
+                self_weak.clone(),
+                app,
+            )
+        };
+
         let query_text = query.text.trim().to_lowercase();
 
         if query_text.is_empty() {
-            return Ok(choices
-                .into_iter()
-                .map(|llm| QueryResult::from(ModelSearchItem::new(llm, &active_llm_id, app)))
+            return Ok(groups
+                .iter()
+                .map(build_item)
+                .map(QueryResult::from)
                 .collect());
         }
 
-        Ok(choices
-            .into_iter()
-            .filter_map(|llm| {
+        Ok(groups
+            .iter()
+            .filter_map(|group| {
+                // Match collapsed reasoning/auto groups against their base label
+                // (e.g. `terra` matches the single `gpt-5.6-terra` row, not N
+                // per-level rows); non-collapsed items still match on their display name.
                 let match_result = match_indices_case_insensitive(
-                    llm.display_name.to_lowercase().as_str(),
+                    group.search_label.to_lowercase().as_str(),
                     query_text.as_str(),
                 )?;
 
@@ -272,7 +538,7 @@ impl SyncDataSource for ModelSelectorDataSource {
                 }
 
                 Some(QueryResult::from(
-                    ModelSearchItem::new(llm, &active_llm_id, app)
+                    build_item(group)
                         .with_name_match_result(Some(match_result.clone()))
                         .with_score(OrderedFloat(match_result.score as f64)),
                 ))
@@ -287,6 +553,8 @@ impl Entity for ModelSelectorDataSource {
 
 #[derive(Clone)]
 struct ModelSearchItem {
+    /// The concrete `LLMId` that accepting this row resolves to: the targeted
+    /// reasoning variant for a collapsed reasoning family, otherwise the model id.
     id: LLMId,
     provider: LLMProvider,
     spec: Option<LLMSpec>,
@@ -307,46 +575,79 @@ struct ModelSearchItem {
     cost_row_tooltip_mouse_state: MouseStateHandle,
     reasoning_level: Option<String>,
     discount_percentage: Option<f32>,
+    /// Reasoning-level variants exposed in the sidecar (server order). Empty for
+    /// non-reasoning and auto groups, and for single-variant reasoning groups.
+    variants: Vec<ReasoningVariant>,
+    /// Index in `variants` of the currently-active variant (matches the active
+    /// model), if any. Used to render the sidecar checkmark.
+    active_variant_index: Option<usize>,
+    /// Index in `variants` that accepting the collapsed row (without entering the
+    /// sidecar) resolves to. `accept_result` returns this variant's id.
+    target_variant_index: usize,
+    /// Whether this row renders a selectable reasoning sidecar.
+    has_reasoning_sidecar: bool,
+    /// Weak handle to the data source, used by `render_details` to read the live
+    /// sidecar focus + highlighted level. `None` in unit tests.
+    data_source_weak: Option<WeakModelHandle<ModelSelectorDataSource>>,
+    /// One stable mouse-state handle per sidecar row, so hover state persists
+    /// across re-renders. Created at construction (one per variant).
+    sidecar_row_mouse_states: Vec<MouseStateHandle>,
 }
 
 impl ModelSearchItem {
-    fn new(llm: &LLMInfo, active_llm_id: &LLMId, app: &AppContext) -> Self {
+    /// Build a `ModelSearchItem` from a collapsed [`ModelGroup`] and its
+    /// representative `LLMInfo`. The representative supplies the provider, spec,
+    /// icons, and credential/disable metadata; the group supplies the collapsed
+    /// label, the reasoning variants, and the target variant that accept resolves to.
+    fn new_from_group(
+        group: &ModelGroup,
+        representative: &LLMInfo,
+        _active_llm_id: &LLMId,
+        data_source_weak: Option<WeakModelHandle<ModelSelectorDataSource>>,
+        app: &AppContext,
+    ) -> Self {
         // If the model requires an upgrade but the user already has a BYOK key
         // for this provider, treat it as enabled by clearing the disable reason.
-        let disable_reason = if llm.disable_reason == Some(DisableReason::RequiresUpgrade)
-            && should_show_key_icon_for_model(llm, app)
+        let disable_reason = if representative.disable_reason
+            == Some(DisableReason::RequiresUpgrade)
+            && should_show_key_icon_for_model(representative, app)
         {
             None
         } else {
-            llm.disable_reason.clone()
+            representative.disable_reason.clone()
         };
-        let is_custom_router = is_custom_router_id(llm.id.as_str());
-        let is_auto = is_auto(llm);
-        let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
-        let byo_key_source = byo_key_source_for_model(llm, app);
+        let is_custom_router = is_custom_router_id(representative.id.as_str());
+        let is_auto = group.is_auto;
+        let is_using_bedrock = should_show_bedrock_icon_for_model(representative, app);
+        let byo_key_source = byo_key_source_for_model(representative, app);
         let leading_icon = if is_using_bedrock {
             Icon::Aws
         } else if is_custom_router {
             Icon::Dataflow
         } else {
-            llm.provider.icon().unwrap_or(Icon::Oz)
+            representative.provider.icon().unwrap_or(Icon::Oz)
         };
         let credential_icon = if !is_using_bedrock && byo_key_source.is_some() {
             Some(Icon::Key)
         } else {
             None
         };
+        let sidecar_row_mouse_states = group
+            .variants
+            .iter()
+            .map(|_| MouseStateHandle::default())
+            .collect();
         Self {
-            id: llm.id.clone(),
-            provider: llm.provider.clone(),
-            spec: llm.spec.clone(),
+            id: group.target_id(),
+            provider: representative.provider.clone(),
+            spec: representative.spec.clone(),
             leading_icon,
             credential_icon,
             byo_key_source,
-            display_text: llm.display_name.clone(),
-            is_selected: &llm.id == active_llm_id,
+            display_text: group.base_name.clone(),
+            is_selected: group.is_active,
             is_custom_router,
-            description: llm.description.clone(),
+            description: representative.description.clone(),
             disable_reason,
             is_auto,
             is_using_bedrock,
@@ -354,8 +655,14 @@ impl ModelSearchItem {
             score: OrderedFloat(f64::MIN),
             manage_api_key_mouse_state: Default::default(),
             cost_row_tooltip_mouse_state: Default::default(),
-            reasoning_level: llm.reasoning_level(),
-            discount_percentage: llm.discount_percentage,
+            reasoning_level: representative.reasoning_level(),
+            discount_percentage: representative.discount_percentage,
+            variants: group.variants.clone(),
+            active_variant_index: group.active_variant_index,
+            target_variant_index: group.target_variant_index,
+            has_reasoning_sidecar: group.has_reasoning_sidecar,
+            data_source_weak,
+            sidecar_row_mouse_states,
         }
     }
 
@@ -367,6 +674,24 @@ impl ModelSearchItem {
     fn with_score(mut self, score: OrderedFloat<f64>) -> Self {
         self.score = score;
         self
+    }
+
+    /// Reads the live reasoning-sidecar state (focus + highlighted level) from the
+    /// data source via the weak self-handle baked in at query time. Falls back to
+    /// (not focused, the targeted level) when the handle is unavailable (e.g. in
+    /// unit tests), so the sidecar still renders with the active variant checked.
+    fn live_sidecar_state(&self, app: &AppContext) -> (bool, usize) {
+        let Some(weak) = self.data_source_weak.as_ref() else {
+            return (false, self.target_variant_index);
+        };
+        let Some(handle) = weak.upgrade(app) else {
+            return (false, self.target_variant_index);
+        };
+        let data_source = handle.as_ref(app);
+        (
+            data_source.sidecar_focused(),
+            data_source.sidecar_highlighted_level(),
+        )
     }
 }
 
@@ -550,6 +875,21 @@ impl SearchItem for ModelSearchItem {
                     .with_width(model_specs_width(app))
                     .finish(),
             );
+        }
+
+        // Collapsed reasoning family: render a selectable reasoning-level sidecar
+        // (one row per level, the active variant checked, the keyboard-highlighted
+        // level emphasized when the sidecar has focus) instead of the read-only spec panel.
+        if self.has_reasoning_sidecar {
+            let (sidecar_focused, highlighted_level) = self.live_sidecar_state(app);
+            return Some(render_reasoning_sidecar(
+                &self.variants,
+                self.active_variant_index,
+                sidecar_focused,
+                highlighted_level,
+                &self.sidecar_row_mouse_states,
+                app,
+            ));
         }
 
         let (title, description) = if self.reasoning_level.is_some() {
@@ -757,3 +1097,118 @@ impl SearchItem for ModelSearchItem {
 fn should_show_discount_chip(discount_percentage: Option<f32>, is_using_byok: bool) -> bool {
     discount_percentage.is_some_and(|p| p > 0.) && !is_using_byok
 }
+
+/// Renders the selectable reasoning-level sidecar for a collapsed reasoning
+/// family: a header followed by one row per level. The active variant is marked
+/// with a checkmark; the keyboard-highlighted level (when the sidecar has focus)
+/// and the mouse-hovered row get a highlight background. Clicking a row accepts
+/// that variant's `LLMId` through the inline-menu accept pipeline.
+#[allow(clippy::too_many_arguments)]
+fn render_reasoning_sidecar(
+    variants: &[ReasoningVariant],
+    active_variant_index: Option<usize>,
+    sidecar_focused: bool,
+    highlighted_level: usize,
+    row_mouse_states: &[MouseStateHandle],
+    app: &AppContext,
+) -> Box<dyn Element> {
+    use warpui::elements::{DispatchEventResult, EventHandler, Flex, ParentElement as _};
+    use warpui::prelude::{CrossAxisAlignment, Empty};
+
+    let appearance = Appearance::as_ref(app);
+    let font_size = inline_styles::font_size(appearance);
+    let bg_color = inline_styles::menu_background_color(app);
+    let primary_text_color = inline_styles::primary_text_color(appearance.theme(), bg_color.into());
+    let checkmark_color = inline_styles::icon_color(appearance);
+    let row_height = font_size + 8.;
+
+    let header = render_model_spec_header(REASONING_LEVEL_TITLE, REASONING_LEVEL_DESCRIPTION, app);
+
+    let mut column =
+        Flex::column().with_child(Container::new(header).with_margin_bottom(12.).finish());
+
+    for (idx, variant) in variants.iter().enumerate() {
+        let is_active = active_variant_index == Some(idx);
+        let is_highlighted = sidecar_focused && idx == highlighted_level;
+        let mouse_state = row_mouse_states.get(idx).cloned().unwrap_or_default();
+
+        let check_slot = if is_active {
+            ConstrainedBox::new(Icon::Check.to_warpui_icon(checkmark_color).finish())
+                .with_width(font_size)
+                .with_height(font_size)
+                .finish()
+        } else {
+            ConstrainedBox::new(Empty::new().finish())
+                .with_width(font_size)
+                .with_height(font_size)
+                .finish()
+        };
+
+        let row_content = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Container::new(check_slot)
+                    .with_margin_right(inline_styles::ICON_MARGIN)
+                    .finish(),
+            )
+            .with_child(
+                Text::new_inline(
+                    variant.level.clone(),
+                    appearance.ui_font_family(),
+                    font_size,
+                )
+                .with_color(primary_text_color.into())
+                .finish(),
+            )
+            .finish();
+
+        let row_hoverable = Hoverable::new(mouse_state, move |mouse_state| {
+            let highlight = ItemHighlightState::new(is_highlighted, mouse_state);
+            let background = inline_styles::item_background(highlight, appearance);
+            let row = Container::new(row_content)
+                .with_padding_left(inline_styles::ITEM_HORIZONTAL_PADDING)
+                .with_padding_right(inline_styles::ITEM_HORIZONTAL_PADDING)
+                .with_padding_top(4.)
+                .with_padding_bottom(4.);
+            if let Some(background) = background {
+                row.with_background(background)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                        inline_styles::ITEM_CORNER_RADIUS,
+                    )))
+                    .finish()
+            } else {
+                row.finish()
+            }
+        })
+        .with_cursor(Cursor::PointingHand)
+        .finish();
+
+        let variant_id = variant.id.clone();
+        let row_element = EventHandler::new(row_hoverable)
+            .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+            .on_left_mouse_up(move |ctx, _, _| {
+                ctx.dispatch_typed_action(InlineMenuRowAction::<AcceptModel>::Accept {
+                    item: AcceptModel {
+                        id: variant_id.clone(),
+                    },
+                    cmd_or_ctrl_enter: false,
+                });
+                DispatchEventResult::StopPropagation
+            })
+            .finish();
+
+        column = column.with_child(
+            ConstrainedBox::new(Container::new(row_element).with_margin_bottom(4.).finish())
+                .with_height(row_height)
+                .finish(),
+        );
+    }
+
+    ConstrainedBox::new(column.finish())
+        .with_width(model_specs_width(app))
+        .finish()
+}
+
+#[cfg(test)]
+#[path = "data_source_tests.rs"]
+mod tests;

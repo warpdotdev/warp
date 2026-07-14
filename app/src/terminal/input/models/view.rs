@@ -134,6 +134,11 @@ impl InlineModelSelectorView {
             // the lazy shared-session viewer path) is the single point that attaches it.
             ModelSelectorDataSource::new(terminal_view_id, None)
         });
+        // Give the data source a weak handle to itself so each collapsed reasoning
+        // `ModelSearchItem` can read the live sidecar focus + highlighted level in
+        // `render_details` without the view rebuilding the results on every keystroke.
+        let data_source_weak = data_source.downgrade();
+        data_source.update(ctx, |ds, _| ds.set_self_weak(data_source_weak));
 
         let tab_configs = TAB_CONFIGS.clone();
         let initial_filters = tab_configs
@@ -258,6 +263,9 @@ impl InlineModelSelectorView {
                     index: me.menu_view.as_ref(ctx).selected_idx(),
                 });
                 me.rerun_query(ctx);
+                // The sidecar targets the previous tab's family; drop focus so the
+                // new tab starts with the model list focused.
+                me.blur_sidecar(ctx);
             }
             InlineMenuEvent::SelectedItem { .. } | InlineMenuEvent::NoResults => {}
         });
@@ -269,6 +277,8 @@ impl InlineModelSelectorView {
             } else if model.as_ref(ctx).is_closed() {
                 me.set_filter_results_by_input(true);
                 me.set_prompt_parked_for_search(false);
+                // Reset sidecar focus so the next open starts on the model list.
+                me.blur_sidecar(ctx);
                 me.mixer.update(ctx, |mixer, ctx| {
                     mixer.reset_results(ctx);
                 });
@@ -527,6 +537,126 @@ impl InlineModelSelectorView {
     pub fn accept_selected_item(&self, cmd_or_ctrl_enter: bool, ctx: &mut ViewContext<Self>) {
         self.menu_view
             .update(ctx, |v, ctx| v.accept_selected_item(cmd_or_ctrl_enter, ctx));
+    }
+
+    /// Whether the reasoning sidecar currently has keyboard focus (vs. the model list).
+    pub fn is_sidecar_focused(&self, ctx: &ViewContext<Self>) -> bool {
+        self.model_selector_data_source
+            .as_ref(ctx)
+            .sidecar_focused()
+    }
+
+    /// Whether the currently-selected row exposes a selectable reasoning sidecar
+    /// (a collapsed reasoning family with more than one level).
+    pub fn selected_item_has_reasoning_sidecar(&self, ctx: &ViewContext<Self>) -> bool {
+        self.selected_sidecar_group(ctx)
+            .is_some_and(|group| group.has_reasoning_sidecar)
+    }
+
+    /// Moves keyboard focus from the model list into the reasoning sidecar of the
+    /// selected collapsed row. The highlighted level starts at the row's targeted
+    /// variant (the active level when the family is selected, otherwise the default).
+    pub fn focus_sidecar(&self, ctx: &mut ViewContext<Self>) {
+        let Some(group) = self.selected_sidecar_group(ctx) else {
+            return;
+        };
+        if !group.has_reasoning_sidecar {
+            return;
+        }
+        let target = group.target_variant_index;
+        self.model_selector_data_source.update(ctx, |ds, _| {
+            ds.set_sidecar_focused(true);
+            ds.set_sidecar_highlighted_level(target);
+        });
+        self.rerender_menu(ctx);
+    }
+
+    /// Returns keyboard focus from the reasoning sidecar to the model list without
+    /// closing the menu.
+    pub fn blur_sidecar(&self, ctx: &mut ViewContext<Self>) {
+        self.model_selector_data_source
+            .update(ctx, |ds, _| ds.set_sidecar_focused(false));
+        self.rerender_menu(ctx);
+    }
+
+    /// Cycles the highlighted reasoning level up (wrapping around).
+    pub fn sidecar_select_up(&self, ctx: &mut ViewContext<Self>) {
+        let Some(group) = self.selected_sidecar_group(ctx) else {
+            return;
+        };
+        let count = group.variants.len();
+        if count == 0 {
+            return;
+        }
+        let current = self
+            .model_selector_data_source
+            .as_ref(ctx)
+            .sidecar_highlighted_level();
+        let next = current.wrapping_sub(1) % count;
+        self.model_selector_data_source
+            .update(ctx, |ds, _| ds.set_sidecar_highlighted_level(next));
+        self.rerender_menu(ctx);
+    }
+
+    /// Cycles the highlighted reasoning level down (wrapping around).
+    pub fn sidecar_select_down(&self, ctx: &mut ViewContext<Self>) {
+        let Some(group) = self.selected_sidecar_group(ctx) else {
+            return;
+        };
+        let count = group.variants.len();
+        if count == 0 {
+            return;
+        }
+        let current = self
+            .model_selector_data_source
+            .as_ref(ctx)
+            .sidecar_highlighted_level();
+        let next = (current + 1) % count;
+        self.model_selector_data_source
+            .update(ctx, |ds, _| ds.set_sidecar_highlighted_level(next));
+        self.rerender_menu(ctx);
+    }
+
+    /// Accepts the currently-highlighted reasoning level, resolving to that
+    /// variant's `LLMId`. Emits `SelectedModel` (reusing the existing accept
+    /// pipeline that updates preferences and closes the menu). When
+    /// `set_as_default` is true, the variant is also saved as the profile default.
+    pub fn accept_sidecar(&self, set_as_default: bool, ctx: &mut ViewContext<Self>) {
+        let Some(group) = self.selected_sidecar_group(ctx) else {
+            return;
+        };
+        let highlighted = self
+            .model_selector_data_source
+            .as_ref(ctx)
+            .sidecar_highlighted_level();
+        let Some(variant) = group.variants.get(highlighted) else {
+            return;
+        };
+        ctx.emit(InlineModelSelectorEvent::SelectedModel {
+            id: variant.id.clone(),
+            selected_tab: self.active_tab(ctx),
+            set_as_default,
+        });
+    }
+
+    /// The cached collapse group for the currently-selected row, if any.
+    fn selected_sidecar_group(
+        &self,
+        ctx: &ViewContext<Self>,
+    ) -> Option<super::data_source::ModelGroup> {
+        let target_id = self
+            .menu_model(ctx)
+            .selected_item()
+            .map(|item| item.id.clone())?;
+        self.model_selector_data_source
+            .as_ref(ctx)
+            .group_for_target(&target_id)
+    }
+
+    /// Re-renders the menu so the sidecar picks up live focus/highlight state
+    /// from the data source without re-running the query.
+    fn rerender_menu(&self, ctx: &mut ViewContext<Self>) {
+        self.menu_view.update(ctx, |_, ctx| ctx.notify());
     }
 }
 
