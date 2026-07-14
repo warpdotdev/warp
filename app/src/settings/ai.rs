@@ -277,6 +277,200 @@ impl VoiceInputToggleKey {
     }
 }
 
+/// Preferred spoken language for voice input transcription.
+///
+/// `Auto` leaves language detection to the transcription provider (Wispr Flow).
+/// A specific language is sent as an ISO-639-1 code to force that language.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Preferred spoken language for voice input transcription.",
+    rename_all = "snake_case"
+)]
+pub enum VoiceInputLanguage {
+    /// Let the transcription provider auto-detect the spoken language (default).
+    #[default]
+    #[schemars(description = "Auto-detect spoken language.")]
+    Auto,
+    #[schemars(description = "English.")]
+    English,
+    #[schemars(description = "Spanish.")]
+    Spanish,
+    #[schemars(description = "French.")]
+    French,
+    #[schemars(description = "German.")]
+    German,
+    #[schemars(description = "Portuguese.")]
+    Portuguese,
+    #[schemars(description = "Italian.")]
+    Italian,
+    #[schemars(description = "Dutch.")]
+    Dutch,
+    #[schemars(description = "Polish.")]
+    Polish,
+    #[schemars(description = "Russian.")]
+    Russian,
+    #[schemars(description = "Ukrainian.")]
+    Ukrainian,
+    #[schemars(description = "Japanese.")]
+    Japanese,
+    #[schemars(description = "Korean.")]
+    Korean,
+    #[schemars(description = "Chinese (Simplified/Mandarin).")]
+    Chinese,
+    #[schemars(description = "Hindi.")]
+    Hindi,
+    #[schemars(description = "Arabic.")]
+    Arabic,
+    #[schemars(description = "Turkish.")]
+    Turkish,
+    #[schemars(description = "Swedish.")]
+    Swedish,
+    #[schemars(description = "Norwegian.")]
+    Norwegian,
+    #[schemars(description = "Danish.")]
+    Danish,
+    #[schemars(description = "Finnish.")]
+    Finnish,
+    #[schemars(description = "Estonian.")]
+    Estonian,
+    #[schemars(description = "Latvian.")]
+    Latvian,
+    #[schemars(description = "Lithuanian.")]
+    Lithuanian,
+    #[schemars(description = "Czech.")]
+    Czech,
+    #[schemars(description = "Slovak.")]
+    Slovak,
+    #[schemars(description = "Hungarian.")]
+    Hungarian,
+    #[schemars(description = "Romanian.")]
+    Romanian,
+    #[schemars(description = "Greek.")]
+    Greek,
+    #[schemars(description = "Hebrew.")]
+    Hebrew,
+    #[schemars(description = "Thai.")]
+    Thai,
+    #[schemars(description = "Vietnamese.")]
+    Vietnamese,
+    #[schemars(description = "Indonesian.")]
+    Indonesian,
+    #[schemars(description = "Malay.")]
+    Malay,
+    #[schemars(description = "Catalan.")]
+    Catalan,
+}
+
+settings::macros::implement_setting_for_enum!(
+    VoiceInputLanguage,
+    AISettings,
+    SupportedPlatforms::DESKTOP,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    surface: settings::SettingSurfaces::GUI,
+    private: false,
+    toml_path: "agents.voice.voice_input_language",
+    description: "Preferred spoken language for voice input transcription.",
+);
+
+impl VoiceInputLanguage {
+    pub fn all_possible_values() -> Vec<VoiceInputLanguage> {
+        VoiceInputLanguage::iter().collect()
+    }
+
+    /// Display name for the AI settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            VoiceInputLanguage::Auto => "Auto-detect",
+            VoiceInputLanguage::English => "English",
+            VoiceInputLanguage::Spanish => "Spanish",
+            VoiceInputLanguage::French => "French",
+            VoiceInputLanguage::German => "German",
+            VoiceInputLanguage::Portuguese => "Portuguese",
+            VoiceInputLanguage::Italian => "Italian",
+            VoiceInputLanguage::Dutch => "Dutch",
+            VoiceInputLanguage::Polish => "Polish",
+            VoiceInputLanguage::Russian => "Russian",
+            VoiceInputLanguage::Ukrainian => "Ukrainian",
+            VoiceInputLanguage::Japanese => "Japanese",
+            VoiceInputLanguage::Korean => "Korean",
+            VoiceInputLanguage::Chinese => "Chinese",
+            VoiceInputLanguage::Hindi => "Hindi",
+            VoiceInputLanguage::Arabic => "Arabic",
+            VoiceInputLanguage::Turkish => "Turkish",
+            VoiceInputLanguage::Swedish => "Swedish",
+            VoiceInputLanguage::Norwegian => "Norwegian",
+            VoiceInputLanguage::Danish => "Danish",
+            VoiceInputLanguage::Finnish => "Finnish",
+            VoiceInputLanguage::Estonian => "Estonian",
+            VoiceInputLanguage::Latvian => "Latvian",
+            VoiceInputLanguage::Lithuanian => "Lithuanian",
+            VoiceInputLanguage::Czech => "Czech",
+            VoiceInputLanguage::Slovak => "Slovak",
+            VoiceInputLanguage::Hungarian => "Hungarian",
+            VoiceInputLanguage::Romanian => "Romanian",
+            VoiceInputLanguage::Greek => "Greek",
+            VoiceInputLanguage::Hebrew => "Hebrew",
+            VoiceInputLanguage::Thai => "Thai",
+            VoiceInputLanguage::Vietnamese => "Vietnamese",
+            VoiceInputLanguage::Indonesian => "Indonesian",
+            VoiceInputLanguage::Malay => "Malay",
+            VoiceInputLanguage::Catalan => "Catalan",
+        }
+    }
+
+    /// ISO-639-1 language code for the transcription API, or `None` for auto-detect.
+    pub fn iso_code(&self) -> Option<&'static str> {
+        match self {
+            VoiceInputLanguage::Auto => None,
+            VoiceInputLanguage::English => Some("en"),
+            VoiceInputLanguage::Spanish => Some("es"),
+            VoiceInputLanguage::French => Some("fr"),
+            VoiceInputLanguage::German => Some("de"),
+            VoiceInputLanguage::Portuguese => Some("pt"),
+            VoiceInputLanguage::Italian => Some("it"),
+            VoiceInputLanguage::Dutch => Some("nl"),
+            VoiceInputLanguage::Polish => Some("pl"),
+            VoiceInputLanguage::Russian => Some("ru"),
+            VoiceInputLanguage::Ukrainian => Some("uk"),
+            VoiceInputLanguage::Japanese => Some("ja"),
+            VoiceInputLanguage::Korean => Some("ko"),
+            VoiceInputLanguage::Chinese => Some("zh"),
+            VoiceInputLanguage::Hindi => Some("hi"),
+            VoiceInputLanguage::Arabic => Some("ar"),
+            VoiceInputLanguage::Turkish => Some("tr"),
+            VoiceInputLanguage::Swedish => Some("sv"),
+            VoiceInputLanguage::Norwegian => Some("no"),
+            VoiceInputLanguage::Danish => Some("da"),
+            VoiceInputLanguage::Finnish => Some("fi"),
+            VoiceInputLanguage::Estonian => Some("et"),
+            VoiceInputLanguage::Latvian => Some("lv"),
+            VoiceInputLanguage::Lithuanian => Some("lt"),
+            VoiceInputLanguage::Czech => Some("cs"),
+            VoiceInputLanguage::Slovak => Some("sk"),
+            VoiceInputLanguage::Hungarian => Some("hu"),
+            VoiceInputLanguage::Romanian => Some("ro"),
+            VoiceInputLanguage::Greek => Some("el"),
+            VoiceInputLanguage::Hebrew => Some("he"),
+            VoiceInputLanguage::Thai => Some("th"),
+            VoiceInputLanguage::Vietnamese => Some("vi"),
+            VoiceInputLanguage::Indonesian => Some("id"),
+            VoiceInputLanguage::Malay => Some("ms"),
+            VoiceInputLanguage::Catalan => Some("ca"),
+        }
+    }
+}
+
 /// The default mode for new terminal sessions.
 #[derive(
     Default,
@@ -1006,9 +1200,11 @@ define_settings_group!(AISettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     },
-    // This field is used to store the key used for voice input toggling.
+// This field is used to store the key used for voice input toggling.
     // Note this is not the named key, but rather corresponds to the physical key.
     voice_input_toggle_key: VoiceInputToggleKey,
+    // Preferred spoken language for voice transcription (Auto or an ISO language).
+    voice_input_language: VoiceInputLanguage,
     // This is not a user-visible setting - it's merely a one-time flag to track if the user has
     // explicitly interacted with voice input. We use this to determine whether we should show a toast
     // to inform the user about voice input and auto-set the keybinding.
@@ -1893,6 +2089,11 @@ impl AISettings {
         cfg!(feature = "voice_input")
             && self.is_any_ai_enabled(app)
             && *self.voice_input_enabled_internal
+    }
+
+    /// Preferred spoken language for voice transcription, or `None` for auto-detect.
+    pub fn voice_input_language_code(&self) -> Option<&'static str> {
+        self.voice_input_language.iso_code()
     }
 
     /// Returns `true` if input autodetection is enabled.
