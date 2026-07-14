@@ -23,7 +23,7 @@ use async_trait::async_trait;
 // module definition.
 #[cfg(noop)]
 use noop as imp;
-pub use overlay::{ActionLogEntry, DEFAULT_PILL_DURATION, OverlayKind};
+pub use overlay::{ActionLogEntry, DEFAULT_PILL_DURATION, overlay_labels_for};
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
@@ -249,7 +249,7 @@ pub fn create_recorder() -> Box<dyn Recorder> {
     }
 }
 
-/// Burns keyboard action pills into a recorded video, returning the path to the
+/// Burns action labels into a recorded video, returning the path to the
 /// annotated file. The original file is left untouched; the caller owns cleanup
 /// of both. Real compositing (ffmpeg + libass) only runs on the Linux capture
 /// path; every other target (and any `test-util` build) returns `input`
