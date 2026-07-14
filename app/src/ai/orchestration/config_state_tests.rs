@@ -2,7 +2,7 @@ use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 
 use super::{AuthSecretSelection, OrchestrationConfigState};
-use crate::ai::orchestration::{should_show_auth_secret_picker, should_show_harness_picker};
+use crate::ai::orchestration::should_show_auth_secret_picker;
 
 fn remote_claude_state() -> OrchestrationConfigState {
     OrchestrationConfigState::from_run_agents_fields(
@@ -34,31 +34,6 @@ fn from_orchestration_config_preserves_local_claude() {
         state.execution_mode,
         RunAgentsExecutionMode::Local
     ));
-}
-
-#[test]
-fn harness_picker_stays_visible_for_local_mode() {
-    let state = OrchestrationConfigState::from_run_agents_fields(
-        "auto",
-        "oz",
-        &RunAgentsExecutionMode::Local,
-    );
-    assert!(should_show_harness_picker(&state));
-}
-
-#[test]
-fn harness_picker_stays_visible_for_remote_mode() {
-    let state = OrchestrationConfigState::from_run_agents_fields(
-        "auto",
-        "oz",
-        &RunAgentsExecutionMode::Remote {
-            environment_id: "env-1".to_string(),
-            worker_host: "warp".to_string(),
-            computer_use_enabled: false,
-        },
-    );
-
-    assert!(should_show_harness_picker(&state));
 }
 
 #[test]

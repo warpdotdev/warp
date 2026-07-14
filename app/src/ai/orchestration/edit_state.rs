@@ -1,7 +1,12 @@
-//! State-only transition logic shared by the GUI pickers and the TUI
-//! configuration pages. Each public method takes an `AppContext` for
-//! catalog/persistence access; the cores are parameterized over catalog
-//! callbacks so they can be unit-tested without app singletons.
+//! [`OrchestrationEditState`] and the logic for applying user edits to
+//! the orchestration config, shared by the GUI pickers and the TUI
+//! configuration pages. Changing one field (harness, execution mode,
+//! auth secret) cascades into dependent fields — model fallback,
+//! environment pre-fill, auth re-resolution — so those updates live here
+//! as `apply_*` methods rather than in each frontend. Each public method
+//! takes an `AppContext` for catalog/persistence access; the cores are
+//! parameterized over catalog callbacks so they can be unit-tested
+//! without app singletons.
 
 use std::collections::HashMap;
 
@@ -262,5 +267,5 @@ impl OrchestrationEditState {
 }
 
 #[cfg(test)]
-#[path = "transitions_tests.rs"]
+#[path = "edit_state_tests.rs"]
 mod tests;

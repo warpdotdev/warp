@@ -35,8 +35,6 @@ use crate::ai::harness_display;
 use crate::ai::local_harness_setup::{
     local_harness_is_product_enabled, local_harness_setup_state, LocalHarnessSetupState,
 };
-// ── Shim: frontend-neutral domain moved to `crate::ai::orchestration` ──
-// Re-exported so existing GUI import paths keep compiling.
 pub use crate::ai::orchestration::{
     accept_disabled_reason_with_auth, empty_env_recommendation_message,
     persist_environment_selection, persist_host_selection,
@@ -46,7 +44,7 @@ pub use crate::ai::orchestration::{
 };
 use crate::ai::orchestration::{
     get_base_model_choices, harness_is_selectable, persist_auth_secret_selection,
-    resolve_recent_host_slug, should_show_harness_picker, ORCHESTRATION_ENV_NONE_LABEL,
+    resolve_recent_host_slug, ORCHESTRATION_ENV_NONE_LABEL,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObjectLookup as _;
@@ -906,13 +904,7 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
     }
     if let Some(harness_picker) = handles.harness_picker.clone() {
         let harness_type = state.harness_type.clone();
-        let show_harness_picker = should_show_harness_picker(state);
         harness_picker.update(ctx, |dropdown, ctx_dropdown| {
-            if show_harness_picker {
-                dropdown.set_enabled(ctx_dropdown);
-            } else {
-                dropdown.set_disabled(ctx_dropdown);
-            }
             let target = Harness::parse_orchestration_harness(&harness_type).unwrap_or(Harness::Oz);
             // Use the server-provided display_name from HarnessAvailabilityModel
             // so the selection matches the labels (which also use display_name).
@@ -1234,8 +1226,6 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
     vertical: bool,
 ) -> Box<dyn Element> {
     let is_remote = state.execution_mode.is_remote();
-    let show_harness_picker = should_show_harness_picker(state);
-
     let show_auth_picker = should_show_auth_secret_picker(state);
 
     if vertical {
@@ -1251,16 +1241,14 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
         // key) before host/environment/model so the API key sits directly
         // under the harness selector and does not split the model picker
         // from the "Primary model…" subtext that follows the picker row.
-        if show_harness_picker {
-            add(
-                &mut column,
-                "Agent harness",
-                handles
-                    .harness_picker
-                    .as_ref()
-                    .map(|p| ChildView::new(p).finish()),
-            );
-        }
+        add(
+            &mut column,
+            "Agent harness",
+            handles
+                .harness_picker
+                .as_ref()
+                .map(|p| ChildView::new(p).finish()),
+        );
         if show_auth_picker {
             add(
                 &mut column,
@@ -1310,16 +1298,14 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
                 row.add_child(col);
             };
 
-        if show_harness_picker {
-            add_picker(
-                &mut row,
-                "Agent harness",
-                handles
-                    .harness_picker
-                    .as_ref()
-                    .map(|p| ChildView::new(p).finish()),
-            );
-        }
+        add_picker(
+            &mut row,
+            "Agent harness",
+            handles
+                .harness_picker
+                .as_ref()
+                .map(|p| ChildView::new(p).finish()),
+        );
         if is_remote {
             add_picker(
                 &mut row,

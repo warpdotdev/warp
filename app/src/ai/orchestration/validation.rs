@@ -13,12 +13,6 @@ use crate::ai::local_harness_setup::{
 use crate::ai::orchestration::providers::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::cloud_object::CloudObjectLookup as _;
 
-/// Whether the harness picker (or page) is shown for this state. Always
-/// true today; kept as a seam so both frontends gate identically.
-pub(crate) fn should_show_harness_picker(_state: &OrchestrationConfigState) -> bool {
-    true
-}
-
 /// Whether a harness's local setup allows selecting it: always true for
 /// Cloud, otherwise requires the local CLI to be installed and the
 /// harness to be product-enabled.

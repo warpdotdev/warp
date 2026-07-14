@@ -9,8 +9,7 @@ use super::providers::ORCHESTRATION_WARP_WORKER_HOST;
 use super::validation::should_show_auth_secret_picker;
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 
-/// The user's current selection in the auth secret picker. Only `Named(_)`
-/// is persisted across sessions; the other variants are per-session.
+/// The user's current selection in the auth secret picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthSecretSelection {
     /// No choice yet; re-seeded from persisted settings. Blocks Accept.
@@ -85,6 +84,7 @@ impl OrchestrationConfigState {
             self.model_id.clear();
         }
     }
+
     pub fn from_run_agents_fields(
         model_id: &str,
         harness_type: &str,

@@ -94,12 +94,10 @@ pub fn init(app: &mut AppContext) {
     ]);
 }
 
-/// Per-action edit state for the orchestrate confirmation card.
-/// Delegates run-wide config fields to `oc::OrchestrationConfigState`
-/// and adds card-specific fields.
+/// Card-only request fields; the run-wide config lives on the view's
+/// [`OrchestrationEditState`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunAgentsEditState {
-    pub orchestration_config_state: oc::OrchestrationConfigState,
+pub struct RunAgentsCardFields {
     pub agent_run_configs: Vec<RunAgentsAgentRunConfig>,
     pub base_prompt: String,
     pub summary: String,
@@ -107,6 +105,14 @@ pub struct RunAgentsEditState {
     pub skills: Vec<SkillReference>,
     /// The plan that this RunAgents call is executing for.
     pub plan_id: String,
+}
+
+/// Per-action edit state for the orchestrate confirmation card: the
+/// run-wide config fields plus the card-only request fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunAgentsEditState {
+    pub orchestration_config_state: oc::OrchestrationConfigState,
+    pub card: RunAgentsCardFields,
 }
 
 impl RunAgentsEditState {
@@ -125,56 +131,32 @@ impl RunAgentsEditState {
         }
         Self {
             orchestration_config_state,
-            agent_run_configs: req.agent_run_configs.clone(),
-            base_prompt: req.base_prompt.clone(),
-            summary: req.summary.clone(),
-            skills: req.skills.clone(),
-            plan_id: req.plan_id.clone(),
+            card: RunAgentsCardFields {
+                agent_run_configs: req.agent_run_configs.clone(),
+                base_prompt: req.base_prompt.clone(),
+                summary: req.summary.clone(),
+                skills: req.skills.clone(),
+                plan_id: req.plan_id.clone(),
+            },
         }
     }
 
     pub fn to_request(&self) -> RunAgentsRequest {
         RunAgentsRequest {
-            summary: self.summary.clone(),
-            base_prompt: self.base_prompt.clone(),
-            skills: self.skills.clone(),
+            summary: self.card.summary.clone(),
+            base_prompt: self.card.base_prompt.clone(),
+            skills: self.card.skills.clone(),
             model_id: self.orchestration_config_state.model_id.clone(),
             harness_type: self.orchestration_config_state.harness_type.clone(),
             execution_mode: self.orchestration_config_state.execution_mode.clone(),
-            agent_run_configs: self.agent_run_configs.clone(),
-            plan_id: self.plan_id.clone(),
+            agent_run_configs: self.card.agent_run_configs.clone(),
+            plan_id: self.card.plan_id.clone(),
             harness_auth_secret_name: self
                 .orchestration_config_state
                 .auth_secret_name()
                 .map(str::to_string),
         }
     }
-
-    /// Splits into the run-wide orchestration state and the card-only
-    /// request fields the view holds separately.
-    fn into_parts(self) -> (OrchestrationConfigState, RunAgentsCardFields) {
-        (
-            self.orchestration_config_state,
-            RunAgentsCardFields {
-                agent_run_configs: self.agent_run_configs,
-                base_prompt: self.base_prompt,
-                summary: self.summary,
-                skills: self.skills,
-                plan_id: self.plan_id,
-            },
-        )
-    }
-}
-
-/// Card-only request fields; the run-wide config lives on the view's
-/// [`OrchestrationEditState`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RunAgentsCardFields {
-    agent_run_configs: Vec<RunAgentsAgentRunConfig>,
-    base_prompt: String,
-    summary: String,
-    skills: Vec<SkillReference>,
-    plan_id: String,
 }
 
 impl OrchestrationControlAction for RunAgentsCardViewAction {
@@ -333,8 +315,10 @@ impl RunAgentsCardView {
         block_model: Rc<dyn AIBlockModel<View = AIBlock>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let (orchestration_config_state, card) =
-            RunAgentsEditState::from_request(request).into_parts();
+        let RunAgentsEditState {
+            orchestration_config_state,
+            card,
+        } = RunAgentsEditState::from_request(request);
         // Snapshot the raw incoming request so we can diff against the
         // edited state at Accept time.
         let original_tool_call_request = request.clone();
@@ -572,11 +556,7 @@ impl RunAgentsCardView {
                 .orchestration_edit_state
                 .orchestration_config_state
                 .clone(),
-            agent_run_configs: self.card.agent_run_configs.clone(),
-            base_prompt: self.card.base_prompt.clone(),
-            summary: self.card.summary.clone(),
-            skills: self.card.skills.clone(),
-            plan_id: self.card.plan_id.clone(),
+            card: self.card.clone(),
         }
     }
 
@@ -635,9 +615,9 @@ impl RunAgentsCardView {
                     .orchestration_config_state
                     .execution_mode
                     != new_state.orchestration_config_state.execution_mode;
-            let (orchestration_config_state, card) = new_state.into_parts();
-            self.orchestration_edit_state.orchestration_config_state = orchestration_config_state;
-            self.card = card;
+            self.orchestration_edit_state.orchestration_config_state =
+                new_state.orchestration_config_state;
+            self.card = new_state.card;
             if harness_or_model_changed {
                 // Repopulate pickers and re-arm auto-open for the newly-
                 // streamed harness.

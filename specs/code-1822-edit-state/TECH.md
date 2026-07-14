@@ -44,15 +44,15 @@ through `AppContext`.
   `resolve_from_config`, `override_from_approved_config`,
   `toggle_execution_mode_to_remote`, `sanitize_for_local_execution`,
   `accept_disabled_reason`, `auth_secret_name`.
-- `transitions.rs` — state-only transition logic with catalog access injected as
+- `edit_state.rs` — edit-application logic with catalog access injected as
   callbacks so cores are unit-testable without app singletons:
   `OrchestrationConfigState::apply_execution_mode_change`, `apply_auth_secret_change`,
-  `revalidate_after_catalog_change`, and `OrchestrationEditState` — the edit state plus
+  `revalidate_after_catalog_change`, and `OrchestrationEditState` — the config state plus
   the per-harness `saved_model_per_harness` memory (previously a per-view field on each
   card), with `apply_harness_change` handling save/restore/fallback of model selection
   and auth re-resolution.
 - `validation.rs` — shared predicates both frontends must gate through identically:
-  `should_show_harness_picker`, `harness_is_selectable` (excludes Gemini,
+  `harness_is_selectable` (excludes Gemini,
   product-disabled and not-installed local harnesses), `should_show_auth_secret_picker`,
   `auth_secret_selection_required`, `accept_disabled_reason_with_auth`,
   `empty_env_recommendation_message`.
@@ -92,7 +92,7 @@ GUI adaptation:
 ## Testing and validation
 
 - Unit tests colocated with the domain module per repo convention
-  (`config_state_tests.rs`, `transitions_tests.rs`, `validation_tests.rs`): config
+  (`config_state_tests.rs`, `edit_state_tests.rs`, `validation_tests.rs`): config
   round-trips and overrides, execution-mode toggling (OpenCode→Oz reset, environment
   pre-fill), harness-change model memory save/restore with injected catalog callbacks,
   catalog-change revalidation (vanished model reset, deleted secret drop, `Unset`

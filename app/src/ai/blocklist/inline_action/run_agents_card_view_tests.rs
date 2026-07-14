@@ -8,7 +8,7 @@ use ai::agent::action_result::{
 use ai::skills::SkillReference;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
-use super::RunAgentsEditState;
+use super::{RunAgentsCardFields, RunAgentsEditState};
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationConfigState;
 
 fn make_request(harness: &str, mode: RunAgentsExecutionMode) -> RunAgentsRequest {
@@ -48,11 +48,13 @@ fn make_config_state_with_orch_fields(
             &request.harness_type,
             &request.execution_mode,
         ),
-        agent_run_configs: request.agent_run_configs,
-        base_prompt: request.base_prompt,
-        summary: request.summary,
-        skills: request.skills,
-        plan_id: request.plan_id,
+        card: RunAgentsCardFields {
+            agent_run_configs: request.agent_run_configs,
+            base_prompt: request.base_prompt,
+            summary: request.summary,
+            skills: request.skills,
+            plan_id: request.plan_id,
+        },
     }
 }
 
