@@ -106,8 +106,11 @@ Out of scope (explicit non-goals):
    behavior is predictable rather than a crash or corrupt grid.
 
 8. A malformed or unterminated `<table>` (missing `</table>`, or content the parser can't
-   form into a grid) falls back to rendering as literal text without swallowing the rest of
-   the document or panicking.
+   form into a grid) falls back deterministically to the same plain-text sink ordinary
+   Markdown text renders through (`FormattedTextLine::Line`, rendered via
+   `FormattedTextElement`) rather than panicking, silently dropping content, or swallowing
+   the rest of the document. The unparseable region renders as literal (escaped) source
+   text, not undefined behavior.
 
 9. Empty structures degrade cleanly: `<table></table>` renders as an empty (or
    single-empty-row) table or nothing, per the tech spec's chosen convention, never a

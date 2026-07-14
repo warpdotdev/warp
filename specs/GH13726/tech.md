@@ -149,7 +149,10 @@ each `<td>`/`<th>` occupies exactly one grid slot regardless of span. Ragged row
 by the existing `FormattedTable::normalize_shape` (`lib.rs:414-429`) (invariant 6).
 
 Fallback (invariant 8): if the region has no `</table>` or can't form a grid, the block
-detector fails and the text is parsed as ordinary Markdown/literal text.
+detector fails deterministically and the raw region is handed back to ordinary Markdown
+parsing, landing as `FormattedTextLine::Line` — the same plain-text sink (rendered via
+`FormattedTextElement`) that any other unrecognized text renders through. Never an
+unspecified/undefined outcome.
 
 ### 3. Feature gating
 
