@@ -398,6 +398,43 @@ fn selection_logical_text_falls_back_for_partial_input_selection() {
     });
 }
 
+/// A selection that ends part-way through the section's final wrapped row (the
+/// end column stops short of the last glyph) falls back to per-row grid text,
+/// so the whole logical section is not returned and unselected trailing text is
+/// never copied.
+#[test]
+fn selection_logical_text_falls_back_for_partial_end_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, _model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+        let width = 12u16;
+        let block_height = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            agent_block.as_ref(app).desired_height(width, &mut ctx, app)
+        });
+        assert!(
+            block_height > 2,
+            "input should wrap at width {width}: {block_height}"
+        );
+        // Start at the section's first column, but end at column 1 of the last
+        // rendered row — short of the last glyph.
+        let selection = TuiSelectionSpan {
+            start: TuiGridPoint { row: 1, col: 0 },
+            end: TuiGridPoint {
+                row: block_height - 1,
+                col: 1,
+            },
+        };
+
+        let text = app.read(|app| source.selection_logical_text(selection, width, app));
+
+        assert_eq!(text, None);
+    });
+}
+
 /// A selection over an agent block's input and plain-text response sections
 /// copies both as logical text joined by a newline — agent *output* text is
 /// covered too, not just user input.

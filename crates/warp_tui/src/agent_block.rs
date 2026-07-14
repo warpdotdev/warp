@@ -21,8 +21,9 @@ use warp::tui_export::{
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
-    TuiParentElement, TuiSelectionSpan, TuiSize,
+    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiRect,
+    TuiScreenPosition, TuiSelectionSpan, TuiSize,
 };
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{
@@ -504,10 +505,18 @@ impl TuiAIBlock {
             }
             overlapped_any = true;
             // The section must be covered from its first column through its last
-            // row; a partial-column or partial-row overlap falls back.
+            // rendered glyph; any partial-column or partial-row overlap falls
+            // back. Otherwise a selection ending mid-way through the final
+            // wrapped row would still return the whole logical section and copy
+            // unselected trailing text.
             let covers_start = selection.start.row < start
                 || (selection.start.row == start && selection.start.col == 0);
-            if !covers_start || end_row_exclusive < end {
+            let last_row = end.saturating_sub(1);
+            let covers_end = selection.end.row >= end
+                || (selection.end.row == last_row
+                    && usize::from(selection.end.col)
+                        >= last_row_content_width(&mut element, width, height));
+            if !covers_start || !covers_end {
                 return None;
             }
             collected.push(section_logical_text(section)?);
@@ -809,6 +818,30 @@ impl TuiAIBlock {
             .with_padding_top(BLOCK_TOP_PADDING_ROWS)
             .finish()
     }
+}
+
+/// The number of columns occupied by a section's final rendered row, used to
+/// decide whether a selection ending on that row reaches the section's last
+/// glyph (full coverage) or stops short of it (partial — fall back). Renders the
+/// already-laid-out section element to a cell grid and measures the last row's
+/// trimmed content; text-only sections need no registered child views.
+fn last_row_content_width(element: &mut Box<dyn TuiElement>, width: u16, height: usize) -> usize {
+    if height == 0 {
+        return 0;
+    }
+    let buffer_height = u16::try_from(height).unwrap_or(u16::MAX);
+    let mut rendered_views = EntityIdMap::default();
+    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, width, buffer_height));
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    {
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+    }
+    buffer
+        .to_lines()
+        .get(height.saturating_sub(1))
+        .map(|line| line.trim_end().chars().count())
+        .unwrap_or(0)
 }
 
 /// The copy-able logical text for a section, or `None` for section kinds with no
