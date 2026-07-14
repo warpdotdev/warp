@@ -15916,6 +15916,7 @@ dependencies = [
  "instant",
  "itertools 0.14.0",
  "log",
+ "markdown_parser",
  "num-traits",
  "parking_lot",
  "pathfinder_color",
