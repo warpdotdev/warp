@@ -2169,6 +2169,7 @@ ru:
       empty: "Slash-команды не найдены"
     warping:
       label: "Обработка..."
+      summarizing: "Формирование сводки разговора..."
     terminal:
       starting: "Запуск терминала…"
       cannot_run_command: "не удалось выполнить — команда уже запущена"
@@ -2178,6 +2179,7 @@ ru:
       ctrl_c_exit_hint: "Ctrl-C ещё раз для выхода"
       shell_mode_hint: "shell-режим · esc для выхода"
       copied_hint: "скопировано в буфер обмена"
+      copy_failed: "не удалось скопировать в буфер обмена"
     zero_state:
       title: "Warp Agent"
       whats_new: "Что нового"

@@ -32,6 +32,7 @@ pub use state::TuiSelectionHandle;
 
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
 type CopyCallback = Box<dyn FnMut(String, &mut TuiEventContext, &AppContext)>;
+
 /// A content row range before layout and its height afterward.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiRowResize {
@@ -42,7 +43,7 @@ pub struct TuiRowResize {
 }
 
 /// Geometry, content, and rendering behavior implemented by a selectable child.
-pub trait TuiSelectableElement: TuiElement {
+pub trait TuiSelectableElement: TuiScrollableElement {
     /// Resolves one screen position into a content-space point.
     fn selection_point_at(
         &mut self,
@@ -121,6 +122,7 @@ where
         self.smart_select_fn = smart_select_fn;
         self
     }
+
     /// Resolves one screen position into the configured selection unit.
     fn selection_span_at(
         &mut self,
@@ -216,6 +218,7 @@ where
         // Width changes rewrap content and invalidate grid-coordinate selections.
         // Clear first so child layout cannot rebase already-stale row positions.
         self.selection.validate_width(constraint.max.width);
+
         let size = self.child.layout(constraint, ctx, app);
         self.selection
             .rebase_for_row_resizes(self.child.take_selection_row_resizes());
@@ -278,6 +281,20 @@ where
                 true
             }
             TuiEvent::LeftMouseDragged { position, .. } if self.selection.is_selecting() => {
+                // Scroll one row per drag event at an edge. The top edge is
+                // inclusive because terminal mouse coordinates cannot go negative.
+                let scroll_rows = if position.y <= area.y {
+                    -1
+                } else if position.y >= area.bottom() {
+                    1
+                } else {
+                    0
+                };
+                if scroll_rows != 0 {
+                    self.child
+                        .scroll_by_rows(scroll_rows, usize::from(area.height));
+                }
+
                 let Some(interaction) = self.selection.interaction() else {
                     return false;
                 };
@@ -324,6 +341,7 @@ where
             | TuiEvent::LeftMouseUp { .. }
             | TuiEvent::ScrollWheel { .. }
             | TuiEvent::KeyDown { .. }
+            | TuiEvent::Paste { .. }
             | TuiEvent::MiddleMouseDown { .. }
             | TuiEvent::RightMouseDown { .. }
             | TuiEvent::MouseMoved { .. } => false,
@@ -400,7 +418,7 @@ fn byte_offset_for_char(text: &str, char_offset: usize) -> usize {
 
 impl<Child> TuiScrollableElement for TuiSelectable<Child>
 where
-    Child: TuiSelectableElement + TuiScrollableElement,
+    Child: TuiSelectableElement,
 {
     fn scroll_by_rows(&mut self, rows: isize, viewport_height: usize) -> bool {
         self.child.scroll_by_rows(rows, viewport_height)

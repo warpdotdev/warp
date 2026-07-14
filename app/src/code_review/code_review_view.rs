@@ -3627,9 +3627,7 @@ impl CodeReviewView {
                 let Some(editor_view) = matching_editor else {
                     // If there's no matching editor, mark the comment as outdated.
                     // The comment retains its original content so it can still be displayed.
-                    if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-                        comment.outdated = true;
-                    }
+                    comment.outdated = true;
                     return comment;
                 };
 
@@ -3643,20 +3641,28 @@ impl CodeReviewView {
                     return comment;
                 };
 
+                // Imported comments store the raw provider diff line, including its
+                // one-char unified-diff marker (`+`/`-`/space); strip it to recover
+                // the file line for matching. Native comments store raw text where a
+                // leading space would be significant indentation, so keep it as-is.
+                let match_text = if comment.origin.is_imported_from_github() {
+                    content.imported_original_text()
+                } else {
+                    content.original_text()
+                };
+
                 let (new_location, new_content, used_fallback) =
                     editor_view.update(ctx, |local_editor, ctx| {
                         local_editor.editor().update(ctx, |editor, ctx| {
                             editor.model.update(ctx, |model, ctx| {
-                                model.get_new_line_location(line, content.original_text(), ctx)
+                                model.get_new_line_location(line, match_text, ctx)
                             })
                         })
                     });
 
                 if used_fallback {
                     fallback_count += 1;
-                    if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-                        comment.outdated = true;
-                    }
+                    comment.outdated = true;
                 } else {
                     comment.outdated = false;
                     comment.target = AttachedReviewCommentTarget::Line {
@@ -4938,7 +4944,7 @@ impl CodeReviewView {
                 Empty::new().finish()
             } else {
                 let header = SavePosition::new(
-                    self.render_file_header(file, appearance, app),
+                    self.render_file_header(file, false, appearance, app),
                     &self.file_diff_header_position(file_index),
                 )
                 .finish();
@@ -4980,7 +4986,7 @@ impl CodeReviewView {
                 .finish(),
             );
             if is_item_being_scrolled && !is_first_item_with_no_scroll {
-                let sticky_file_header = self.render_file_header(file, appearance, app);
+                let sticky_file_header = self.render_file_header(file, true, appearance, app);
                 stack.add_positioned_child(
                     sticky_file_header,
                     // We effectively make this an absolutely positioned header.
@@ -5001,10 +5007,16 @@ impl CodeReviewView {
             .finish()
     }
 
-    /// Renders the file header with name and status
+    /// Renders the file header with name and status.
+    ///
+    /// `is_pinned` is true for the sticky header overlay drawn on top of the diff
+    /// while scrolling within an expanded file. When pinned, the diff content
+    /// scrolls underneath the header, so the header's backing must be opaque all
+    /// the way into its corners (see the corner-radius handling below).
     fn render_file_header(
         &self,
         file: &FileState,
+        is_pinned: bool,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -5216,9 +5228,25 @@ impl CodeReviewView {
         .with_defer_events_to_children()
         .finish();
 
+        // The inner header keeps its rounded top corners for the card look. The
+        // outer backing, however, must be square when the header is pinned as a
+        // sticky overlay: the diff scrolls directly beneath it, and a rounded
+        // backing leaves the corner notches transparent, letting the green/red
+        // diff highlight show through the rounded corners. Squaring the backing
+        // fills those notches with the opaque panel background (`outer_bg`),
+        // which matches what the corners reveal at rest. We only do this when
+        // pinned so the at-rest card is visually unchanged. This avoids clipping
+        // the diff content (which previously inflated the editor's min height and
+        // broke the selection popup / comment box sizing — see #13091 / #13194).
+        let outer_corner_radius = if is_pinned {
+            CornerRadius::default()
+        } else {
+            inner_corner_radius
+        };
+
         Container::new(inner_header)
             .with_background(outer_bg)
-            .with_corner_radius(inner_corner_radius)
+            .with_corner_radius(outer_corner_radius)
             .finish()
     }
 

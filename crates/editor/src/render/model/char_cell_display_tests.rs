@@ -115,6 +115,43 @@ fn ghosts_interleave_before_their_line_and_wrap() {
 }
 
 #[test]
+fn ghost_graphemes_wrap_by_cluster_width() {
+    let state = state("abc", 3);
+    state.set_temporary_blocks(vec![ghost("x\u{2328}\u{fe0f}y", 0)]);
+    assert_eq!(
+        summarize(&rows(&state, &[])),
+        vec![
+            (
+                DisplayRowKind::Ghost { ghost_index: 0 },
+                char_range(0..3),
+                false,
+            ),
+            (
+                DisplayRowKind::Ghost { ghost_index: 0 },
+                char_range(3..4),
+                true,
+            ),
+            (buffer(0), char_range(0..3), false),
+        ]
+    );
+}
+
+/// Keeps an oversized multi-character grapheme within one display row.
+#[test]
+fn oversized_grapheme_does_not_wrap_at_zero_width_continuation() {
+    let state = state("\u{2328}\u{fe0f}x", 1);
+    assert_eq!(
+        summarize(&rows(&state, &[])),
+        vec![
+            (buffer(0), char_range(0..2), false),
+            (buffer(0), char_range(2..3), true),
+        ]
+    );
+    assert_eq!(point(&state, 1, &[]), Some((0, 2)));
+    assert_eq!(point(&state, 2, &[]), Some((1, 0)));
+}
+
+#[test]
 fn interior_hidden_ranges_become_gaps_edges_render_nothing() {
     // Lines 0-1 hidden (leading), 3-5 hidden (interior), 7 hidden (trailing).
     let state = state("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7", 20);
@@ -196,6 +233,14 @@ mod geometry {
 
         // Points past the display have no corresponding buffer offset.
         assert_eq!(offset(&state, 99, 0, &hidden), None);
+    }
+    #[test]
+    fn display_width_uses_retained_grapheme_metadata() {
+        let state = state("a\u{2328}\u{fe0f}b", 20);
+        let lattice = state.display_lattice(&[]);
+        assert_eq!(lattice.display_width(char_range(0..1)), 1);
+        assert_eq!(lattice.display_width(char_range(1..3)), 2);
+        assert_eq!(lattice.display_width(char_range(0..4)), 4);
     }
 
     #[test]

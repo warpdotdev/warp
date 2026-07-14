@@ -6,7 +6,6 @@
 
 use std::cell::RefCell;
 use std::cmp::{max, min};
-use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -107,16 +106,6 @@ where
         area: TuiRect,
         clamp_outside: bool,
     ) -> Option<TuiGridPoint> {
-        if clamp_outside {
-            let delta = if position.y < area.y {
-                -1
-            } else if position.y >= area.bottom() {
-                1
-            } else {
-                0
-            };
-            self.scroll_by(delta, usize::from(area.height));
-        }
         self.resolve_selection_point(position, area, clamp_outside)
     }
 
@@ -186,7 +175,6 @@ where
             range.end.row.saturating_add(1)
         };
         let last_row = min(end_row_exclusive, viewport_bottom);
-        let mut visible_cells = BTreeMap::new();
         let mut selection_rects = Vec::new();
         for row in first_row..last_row {
             let y = area
@@ -204,12 +192,6 @@ where
                 area.width
             };
             if start_col < end_col {
-                for col in start_col..end_col {
-                    visible_cells.insert(
-                        TuiGridPoint { row, col },
-                        buffer[(area.x.saturating_add(col), y)].symbol().to_owned(),
-                    );
-                }
                 selection_rects.push(TuiRect::new(
                     area.x.saturating_add(start_col),
                     y,
@@ -217,9 +199,6 @@ where
                     1,
                 ));
             }
-        }
-        if !selection.validate_and_snapshot(visible_cells) {
-            return;
         }
         for rect in selection_rects {
             toggle_selection_reverse(buffer, rect);
@@ -479,7 +458,8 @@ where
         }
 
         if matches!(self.state.position(), TuiViewportPosition::RowsFromTop(_))
-            && scroll_top > max_scroll_top
+            && scroll_top > 0
+            && scroll_top >= max_scroll_top
         {
             self.set_position(TuiViewportPosition::End);
         }

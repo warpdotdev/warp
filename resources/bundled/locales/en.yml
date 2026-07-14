@@ -2168,6 +2168,7 @@ en:
       empty: "No slash commands found"
     warping:
       label: "Warping..."
+      summarizing: "Summarizing conversation..."
     terminal:
       starting: "Starting terminal…"
       cannot_run_command: "cannot run — command already running"
@@ -2177,6 +2178,7 @@ en:
       ctrl_c_exit_hint: "ctrl-c again to exit"
       shell_mode_hint: "shell mode · esc to exit"
       copied_hint: "copied to clipboard"
+      copy_failed: "failed to copy to clipboard"
     zero_state:
       title: "Warp Agent"
       whats_new: "What's new"

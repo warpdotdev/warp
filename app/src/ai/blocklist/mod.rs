@@ -36,6 +36,10 @@ pub(crate) mod telemetry_banner;
 pub(crate) mod view_util;
 
 pub(crate) use action_model::recording_controller::RecordingController;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use action_model::recording_finalize::{
+    finalize_recording_for_conversation, FinalizeReason,
+};
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use action_model::AIActionStatus;

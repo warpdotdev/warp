@@ -361,9 +361,6 @@ pub enum FeatureFlag {
     /// Enables multiple agent profiles in settings for managing different AI agent configurations.
     MultiProfile,
 
-    /// Enables the /pr-comments slash command.
-    PRCommentsSlashCommand,
-
     /// Enables displaying imported PR review comments in the blocklist.
     PRCommentsV2,
 
@@ -708,16 +705,6 @@ pub enum FeatureFlag {
     /// orchestration-capable conversations. Layered on top of
     /// `OrchestrationV2`; has no effect when v2 is off.
     RunAgentsTool,
-
-    /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
-    /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
-    /// viewer-mode entry. Off by default; flipping it on activates the
-    /// per-orchestrator viewer-mode consumer and the broadcast `ChildSpawned`
-    /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
-    OrchestrationViewerStreamer,
-
-    /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
-    OwnerOrchestrationAncestorStreamer,
 
     /// On `wait_for_events`, confirms parent status against the server and
     /// registers an orchestrator for the owner-side ancestor stream so it

@@ -36,7 +36,7 @@ use string_offset::CharOffset;
 use warpui_core::text::TuiGridPoint;
 
 use super::{
-    CharCellTemporaryBlock, char_cell_display_width, char_cell_line_gap_position,
+    CharCellTemporaryBlock, char_cell_display_widths, char_cell_line_gap_position,
     char_cell_line_row_starts, char_cell_logical_line,
 };
 
@@ -122,6 +122,15 @@ impl<'a> DisplayLattice<'a> {
     /// The ghost blocks that `Ghost` rows' `ghost_index` values index into.
     pub fn ghosts(&self) -> &[CharCellTemporaryBlock] {
         &self.ghosts
+    }
+
+    /// The display columns occupied by the clamped buffer character `range`.
+    pub fn display_width(&self, range: Range<CharOffset>) -> u16 {
+        let start = range.start.as_usize().min(self.char_widths.len());
+        let end = range.end.as_usize().clamp(start, self.char_widths.len());
+        self.char_widths[start..end]
+            .iter()
+            .fold(0u16, |width, &next| width.saturating_add(u16::from(next)))
     }
 
     /// The [`TuiGridPoint`] of the gap before 0-based `char_offset`.
@@ -319,10 +328,7 @@ fn push_ghost_rows(
     terminal_width: u16,
 ) {
     let content = ghost.content.strip_suffix('\n').unwrap_or(&ghost.content);
-    let widths: Vec<u8> = content
-        .chars()
-        .map(|c| char_cell_display_width(c) as u8)
-        .collect();
+    let widths = char_cell_display_widths(content);
     let row_starts = char_cell_line_row_starts(&widths, terminal_width);
     for (row, &start) in row_starts.iter().enumerate() {
         let end = row_starts.get(row + 1).copied().unwrap_or(widths.len());

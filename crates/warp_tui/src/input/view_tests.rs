@@ -15,8 +15,8 @@ use warp::tui_export::{
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
-    TuiPoint, TuiRect, TuiSize,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiSize,
 };
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
@@ -34,6 +34,7 @@ use crate::inline_menu::TuiInlineMenu;
 use crate::input_mode_policy::TuiInputModePolicy;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
 use crate::test_fixtures::add_test_semantic_selection;
+use crate::tui_builder::TuiUiBuilder;
 
 const W: u16 = 80;
 
@@ -46,6 +47,71 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
     let open = input_keymap_context(true);
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
+}
+
+#[test]
+fn slash_command_argument_hint_renders_as_ghost_text() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (view, menu_model, _) = build_view_with_inline_menu(ctx);
+            let input = "/export-to-file ";
+            view.update(ctx, |view, ctx| view.set_text(input, ctx));
+            menu_model.update(ctx, |model, _| {
+                model.set_argument_hint_text_for_test(Some("<optional filename>"));
+            });
+
+            let buffer = render_input_buffer(&view, ctx);
+            let line = &buffer.to_lines()[0];
+            assert!(line.starts_with("/export-to-file <optional filename>"));
+
+            let hint_column = input.chars().count() as u16;
+            let expected = TuiUiBuilder::from_app(ctx)
+                .dim_text_style()
+                .fg
+                .expect("ghost text has a foreground");
+            assert_eq!(buffer[(hint_column, 0)].fg, expected);
+        });
+    });
+}
+
+fn render_input_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> TuiBuffer {
+    let mut element = view.as_ref(ctx).render_element(ctx);
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(W, 20)),
+        &mut layout_ctx,
+        ctx,
+    );
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    element.render(area, &mut buffer, &mut paint_ctx);
+    buffer
+}
+
+#[test]
+fn recognized_slash_command_prefix_matches_menu_color() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (view, menu_model, _) = build_view_with_inline_menu(ctx);
+            view.update(ctx, |view, ctx| view.set_text("/plan argument", ctx));
+            menu_model.update(ctx, |model, _| {
+                model.set_highlighted_prefix_len_for_test(Some(5));
+            });
+
+            let buffer = render_input_buffer(&view, ctx);
+            let expected = TuiUiBuilder::from_app(ctx)
+                .slash_command_text_style()
+                .fg
+                .expect("slash-command text has a foreground");
+            assert_eq!(buffer[(0, 0)].fg, expected);
+            assert_eq!(buffer[(4, 0)].fg, expected);
+            assert_ne!(buffer[(5, 0)].fg, expected);
+        });
+    });
 }
 
 fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
@@ -196,6 +262,44 @@ fn escape_dismisses_menu_and_closed_menu_submit_falls_through() {
             assert_eq!(submitted.borrow().as_slice(), &["prompt"]);
             assert_eq!(text(&view, ctx), "prompt");
         });
+    });
+}
+
+#[test]
+fn multiline_paste_inserts_without_submitting_until_enter() {
+    App::test((), |mut app| async move {
+        let (view, submitted) = app.update(|ctx| {
+            let view = build_view(ctx);
+            let submitted = Rc::new(RefCell::new(Vec::new()));
+            let submitted_for_subscription = submitted.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiInputViewEvent::Submitted(text) = event {
+                    submitted_for_subscription.borrow_mut().push(text.clone());
+                }
+            });
+            (view, submitted)
+        });
+        let payload = "USER:\nhello\n\nAGENT:\nHi!\n";
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::InsertText(payload.to_owned())],
+            );
+        });
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), payload);
+            assert!(
+                submitted.borrow().is_empty(),
+                "paste must not emit a submission"
+            );
+        });
+
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+        });
+        assert_eq!(submitted.borrow().as_slice(), &[payload]);
     });
 }
 
@@ -579,6 +683,48 @@ fn cursor_accounts_for_zero_width_chars() {
         });
     });
 }
+#[test]
+fn cursor_accounts_for_multi_char_graphemes() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+
+            type_str(&view, ctx, "\u{2328}\u{fe0f}");
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((2, 0)),
+                "VS16 emoji occupies two columns"
+            );
+
+            type_str(&view, ctx, "👨‍👩‍👧‍👦");
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((4, 0)),
+                "ZWJ family adds two columns"
+            );
+
+            type_str(&view, ctx, "🇺🇸");
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((6, 0)),
+                "regional-indicator flag adds two columns"
+            );
+        });
+    });
+}
+
+#[test]
+fn multi_char_grapheme_wraps_as_one_unit() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
+            type_str(&view, ctx, "\u{2328}\u{fe0f}");
+
+            assert_eq!(cursor_and_height(&view, ctx), (Some((2, 1)), 2));
+        });
+    });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Soft-wrap growth
@@ -716,6 +862,31 @@ fn single_click_places_cursor() {
     });
 }
 
+#[test]
+fn clicks_map_around_wide_grapheme() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "a\u{2328}\u{fe0f}b");
+
+            mouse(&view, ctx, &left_down(2, 0, 1, false));
+            mouse(&view, ctx, &left_up(2, 0));
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((1, 0)),
+                "clicking inside the wide grapheme places the cursor before it"
+            );
+
+            mouse(&view, ctx, &left_down(3, 0, 1, false));
+            mouse(&view, ctx, &left_up(3, 0));
+            assert_eq!(
+                cursor_and_height(&view, ctx).0,
+                Some((3, 0)),
+                "clicking after the wide grapheme places the cursor after it"
+            );
+        });
+    });
+}
 /// Clicking the phantom deferred-wrap row (rendered when a logical line
 /// exactly fills the width) must resolve to the end-of-buffer gap — where the
 /// cursor visibly sits — not clamp into the preceding full row and teleport

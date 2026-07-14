@@ -189,7 +189,7 @@ pub(super) fn should_render_terminal_block(block: &Block, block_list: &BlockList
     // (`InteractionMode::to_agent_monitored`), which would otherwise surface the
     // block a second time.
     !block.is_agent_requested_command()
-        && block.is_visible(block_list.agent_view_state())
+        && block.is_visible(block_list.transcript_scope())
         && (block.started() || block.finished())
 }
 

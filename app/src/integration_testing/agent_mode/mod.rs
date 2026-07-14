@@ -18,8 +18,7 @@ pub use warpui::integration::RUNTIME_TAG_FAILURE_REASON;
 use warpui::{App, SingletonEntity as _, WindowId};
 
 use crate::ai::agent::{AIAgentActionType, AIAgentOutputStatus, FinishedAIAgentOutput};
-pub use crate::ai::blocklist::agent_view::AgentViewState;
-use crate::integration_testing::view_getters::terminal_view;
+pub use crate::integration_testing::view_getters::terminal_view;
 use crate::BlocklistAIHistoryModel;
 
 pub const TOTAL_REQUEST_COST_PREFIX: &str = "Total request cost: ";

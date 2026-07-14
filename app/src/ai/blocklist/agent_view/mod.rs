@@ -76,19 +76,8 @@ pub static ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE: LazyLock<Keystroke
     });
 
 /// Returns `true` when the current pane is in a cloud or remote context.
-pub fn is_in_cloud_context(
-    agent_view_state: &AgentViewState,
-    terminal_model: &TerminalModel,
-) -> bool {
-    let origin_is_cloud = matches!(
-        agent_view_state,
-        AgentViewState::Active { origin, .. }
-            if matches!(
-                origin,
-                AgentViewEntryOrigin::CloudAgent | AgentViewEntryOrigin::ThirdPartyCloudAgent
-            )
-    );
-    origin_is_cloud
+pub fn is_in_cloud_context(terminal_model: &TerminalModel) -> bool {
+    terminal_model.block_list().is_cloud_conversation_context()
         || terminal_model.is_conversation_transcript_viewer()
         || terminal_model.is_dummy_cloud_mode_session()
 }

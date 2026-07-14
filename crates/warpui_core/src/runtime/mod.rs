@@ -30,7 +30,8 @@ use std::time::Duration;
 use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event as CrosstermEvent,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -567,12 +568,32 @@ trait TerminalModeControl {
 }
 
 struct CrosstermModeControl;
+fn enter_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+    execute!(
+        out,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste,
+        Hide
+    )
+}
+
+fn leave_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+    execute!(
+        out,
+        Show,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )
+}
 
 impl TerminalModeControl for CrosstermModeControl {
     fn enter(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
-        if let Err(error) = execute!(out, EnterAlternateScreen, EnableMouseCapture, Hide) {
+        if let Err(error) = enter_terminal_screen(&mut out) {
+            let _ = leave_terminal_screen(&mut out);
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
@@ -581,7 +602,7 @@ impl TerminalModeControl for CrosstermModeControl {
 
     fn leave(&mut self) {
         let mut out = stdout();
-        let _ = execute!(out, Show, DisableMouseCapture, LeaveAlternateScreen);
+        let _ = leave_terminal_screen(&mut out);
         let _ = terminal::disable_raw_mode();
     }
 }

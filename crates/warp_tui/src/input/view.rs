@@ -38,7 +38,7 @@ use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
 use super::kill_buffer::KillBuffer;
-use crate::editor_element::{TuiEditorAction, TuiEditorElement};
+use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::keybindings::TUI_BINDING_GROUP;
@@ -478,6 +478,8 @@ pub enum TuiInputViewEvent {
 pub enum TuiInputAction {
     /// Insert a character (`Char(c)` key events).
     InsertChar(char),
+    /// Insert one complete bracketed-paste payload without submitting it.
+    InsertText(String),
     /// Insert a hard newline (`Shift+Enter`, `Ctrl+J`, `Alt+Enter`).
     InsertNewline,
     /// Submit the current input (`Enter`).
@@ -646,12 +648,32 @@ impl TuiInputView {
     /// boxes it (behind the shell-mode `!` gutter when active); tests construct
     /// it directly to exercise mouse dispatch.
     fn render_element(&self, ctx: &AppContext) -> TuiEditorElement {
-        TuiEditorElement::new(&self.model, ctx)
+        let builder = TuiUiBuilder::from_app(ctx);
+        let mut styles = TuiEditorStyles::default();
+        if let Some(range) = self
+            .inline_menu
+            .as_ref()
+            .and_then(|inline_menu| inline_menu.input_highlight_range(ctx))
+        {
+            styles
+                .text_overrides
+                .push((range, builder.slash_command_text_style()));
+        }
+        let mut element = TuiEditorElement::new(&self.model, ctx)
             .editable()
             .with_viewport_rows(self.max_visible_rows)
+            .with_styles(styles)
             .on_action(|action, event_ctx| {
                 event_ctx.dispatch_typed_action(TuiInputAction::from(action))
-            })
+            });
+        if let Some(hint_text) = self
+            .inline_menu
+            .as_ref()
+            .and_then(|inline_menu| inline_menu.input_argument_hint_text(ctx))
+        {
+            element = element.with_trailing_ghost_text(hint_text, builder.dim_text_style());
+        }
+        element
     }
     /// Collapses the current text selection to its head without changing text.
     pub(crate) fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
@@ -732,6 +754,7 @@ impl From<TuiEditorAction> for TuiInputAction {
     fn from(action: TuiEditorAction) -> Self {
         match action {
             TuiEditorAction::InsertChar(c) => Self::InsertChar(c),
+            TuiEditorAction::InsertText(text) => Self::InsertText(text),
             TuiEditorAction::SelectionStartAt { offset } => Self::SelectionStartAt { offset },
             TuiEditorAction::SelectionExtendTo { offset } => Self::SelectionExtendTo { offset },
             TuiEditorAction::SelectWordAt { offset } => Self::SelectWordAt { offset },
@@ -768,6 +791,9 @@ impl TypedActionView for TuiInputView {
                     let s = c.to_string();
                     self.model.update(ctx, |m, ctx| m.user_insert(&s, ctx));
                 }
+            }
+            TuiInputAction::InsertText(text) => {
+                self.model.update(ctx, |m, ctx| m.user_insert(text, ctx));
             }
             TuiInputAction::InsertNewline => {
                 self.model.update(ctx, |m, ctx| m.user_insert("\n", ctx));

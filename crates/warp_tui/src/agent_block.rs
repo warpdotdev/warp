@@ -16,7 +16,8 @@ use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentOutputMessageType,
     AIAgentTextSection, AIBlockModel, AIConversationId, BlockId, BlocklistAIActionEvent,
-    BlocklistAIActionModel, MessageId, ModelEvent, ModelEventDispatcher, TerminalModel,
+    BlocklistAIActionModel, MessageId, ModelEvent, ModelEventDispatcher, SummarizationType,
+    TerminalModel,
 };
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
@@ -31,7 +32,7 @@ use super::tui_file_edits_view::{TuiFileEditsView, TuiFileEditsViewEvent};
 use super::tui_shell_command_view::{TuiShellCommandView, TuiShellCommandViewEvent};
 use crate::agent_block_sections::{
     render_fallback_tool_call_section, render_input_section, render_plain_text_section,
-    render_thinking_section,
+    render_summarization_section, render_thinking_section,
 };
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 
@@ -47,6 +48,11 @@ enum TuiAIBlockSection {
     Thinking {
         message_id: MessageId,
         finished_duration: Option<Duration>,
+        body: String,
+    },
+    Summarization {
+        message_id: MessageId,
+        finished: bool,
         body: String,
     },
 }
@@ -451,6 +457,31 @@ impl TuiAIBlock {
                                 .join("\n"),
                         });
                     }
+                    AIAgentOutputMessageType::Summarization {
+                        text,
+                        finished_duration,
+                        summarization_type: SummarizationType::ConversationSummary,
+                        ..
+                    } => {
+                        let body = text
+                            .sections
+                            .iter()
+                            .filter_map(|section| match section {
+                                AIAgentTextSection::PlainText { text } => Some(text.text()),
+                                AIAgentTextSection::Code { .. }
+                                | AIAgentTextSection::Table { .. }
+                                | AIAgentTextSection::Image { .. }
+                                | AIAgentTextSection::MermaidDiagram { .. } => None,
+                            })
+                            .join("\n");
+                        if !body.is_empty() {
+                            sections.push(TuiAIBlockSection::Summarization {
+                                message_id: message.id.clone(),
+                                finished: finished_duration.is_some(),
+                                body,
+                            });
+                        }
+                    }
                     // Other message kinds are not rendered by the TUI transcript yet.
                     AIAgentOutputMessageType::Summarization { .. }
                     | AIAgentOutputMessageType::Subagent(_)
@@ -503,6 +534,17 @@ impl TuiAIBlock {
                     &self.thinking_states,
                     message_id,
                     *finished_duration,
+                    body,
+                    app,
+                ),
+                TuiAIBlockSection::Summarization {
+                    message_id,
+                    finished,
+                    body,
+                } => render_summarization_section(
+                    &self.thinking_states,
+                    message_id,
+                    *finished,
                     body,
                     app,
                 ),

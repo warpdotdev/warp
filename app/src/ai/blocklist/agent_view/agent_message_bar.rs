@@ -602,8 +602,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
             .with_is_disabled(!is_buffer_empty),
         );
 
-        let is_cloud_agent =
-            is_in_cloud_context(agent_view_controller.agent_view_state(), terminal_model);
+        let is_cloud_agent = is_in_cloud_context(terminal_model);
         let ai_settings = AISettings::as_ref(app);
 
         // Handoff to cloud only available for local agents.

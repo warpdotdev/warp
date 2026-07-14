@@ -1,6 +1,6 @@
 ---
 name: tui-verify-change
-description: Verify a change to Warp's headless TUI front-end (crates/warp_tui) by running it under tmux and reading the rendered screen back with `tmux capture-pane` — the agent sees the real frame, no computer_use required. Use whenever you change TUI UI, rendering, input, or behavior and need to confirm the real on-screen result.
+description: Verify a change to Warp's headless TUI front-end (crates/warp_tui) by running it — locally via ./script/run-tui, or in a headless cloud runner via a WARP_API_KEY dogfood build — and reading the rendered screen back (under tmux when it's installed, otherwise directly). Use whenever you change TUI UI, rendering, input, or behavior and need to confirm the real on-screen result.
 ---
 
 # tui-verify-change
@@ -9,14 +9,18 @@ Verify a change to Warp's **headless TUI** front-end (`crates/warp_tui`, and the
 cell-grid element library in `crates/warpui_core/src/elements/tui`) by running it
 and reading back the actual rendered screen.
 
-The whole point: **the TUI is a console program, so you can run it under `tmux`,
-drive it with `tmux send-keys`, and read the real rendered frame straight back
-with `tmux capture-pane`.** You (the agent) see the actual screen text — no
-`computer_use`, no real display, no cloud screenshot agent, and no relying on a
-separate watcher's description of what it saw. (Contrast the GUI-only
-`gui-onboarding-verification-skill`, `gui-integration-test`,
-`gui-integration-test-video`, and the `computer_use` / `verify-ui-change-in-cloud`
-flow.) This is the fast, preferred way to confirm a TUI change end-to-end.
+The whole point: **the TUI is a console program, so you can run it in a real
+terminal and read the actual rendered screen straight back.** When `tmux` is
+available it's the ideal driver — you run the TUI in a tmux pane, drive it with
+`tmux send-keys`, and read the frame back with `tmux capture-pane` — but tmux is
+**not required**: if it isn't installed you can still run and observe the TUI
+directly (see **If tmux isn't installed** under Step 2). Either way you (the
+agent) see the actual screen text — no `computer_use`, no real display, no cloud
+screenshot agent, and no relying on a separate watcher's description of what it
+saw. (Contrast the GUI-only `gui-onboarding-verification-skill`,
+`gui-integration-test`, `gui-integration-test-video`, and the `computer_use` /
+`verify-ui-change-in-cloud` flow.) This is the fast, preferred way to confirm a
+TUI change end-to-end.
 
 This skill covers the **manual live-run** verification. For a durable regression
 that runs in CI, also add a render-to-lines unit test per `tui-testing` — the two
@@ -34,6 +38,41 @@ it in.
 
 If your change is GUI-only (`app/`, WarpUI pixel `Element`/`View`), this is the
 wrong skill — use the GUI verification path instead.
+
+## Local vs cloud verification (pick your context first)
+
+*How* you build, run, and log in depends on **where you're running**. Decide this
+up front — it determines whether you use `./script/run-tui` or the `WARP_API_KEY`
+path below.
+
+- **Local context** — you're working in a local dev checkout, typically
+  alongside the user. Just run **`./script/run-tui`** directly: it builds
+  `warp_tui` and runs it, selecting the internal `local` channel when the
+  `warp-channel-config` generator is available and falling back to
+  `warp-tui-oss` otherwise. **Do not reach for `WARP_API_KEY`** here — it's
+  generally **not set** in a local environment, and you don't need it: a local
+  build reaches the authenticated state through the normal interactive
+  device-auth login flow (or you're already signed in on this machine). The
+  non-interactive `WARP_API_KEY` login below is a *cloud-runner* affordance, not
+  a local one, so don't let a missing key block you locally.
+- **Cloud context** — you're a headless cloud agent (e.g. the factory-client
+  runner) with no browser for device-auth, so reaching a **signed-in** surface
+  relies on the non-interactive `WARP_API_KEY` already in the environment. That
+  does **not** mean bypassing `./script/run-tui`: when the `warp-channel-config`
+  generator is available, `./script/run-tui` selects the internal **`local`
+  dogfood** binary, and with `WARP_API_KEY` inherited that binary logs in through
+  the **same** API-key path described below — so prefer `./script/run-tui`
+  whenever it resolves to a dogfood channel, rather than skipping the maintained
+  runner. Build and run a dogfood binary **explicitly** (`warp-tui-dev`, see
+  **Logging in non-interactively** below) only when `./script/run-tui` would fall
+  back to **`warp-tui-oss`** (no generator / no repo access) — OSS isn't a dogfood
+  channel and silently drops the key — or when you need a specific binary or
+  profile. Either way, in the cloud it's the inherited `WARP_API_KEY` that signs
+  you in; the browser device-auth login is the local-only path.
+
+The logged-**out** surface (the `Sign in to continue` placeholder and any pure
+element/layout) needs neither login path — a plain OSS build is enough in either
+context.
 
 ## Step 1 — Build the TUI
 
@@ -76,7 +115,13 @@ transcript / input** surface, you must reach the authenticated state (see the
 next section), or your change will sit behind the login gate and you'll only ever
 see `Sign in to continue`.
 
-### Logging in non-interactively (`WARP_API_KEY`)
+### Logging in non-interactively (`WARP_API_KEY`) — cloud context
+
+**This is the cloud path.** In a local checkout, skip it: run `./script/run-tui`
+and log in interactively (see **Local vs cloud verification** above), since
+`WARP_API_KEY` usually isn't set locally. Use the flow here when you're a
+headless cloud runner where the key *is* set and there's no browser for
+device-auth.
 
 You can reach the authenticated (`LoggedIn`) state headlessly — no browser, no
 device-auth flow — by launching a **dogfood-channel** TUI binary with a
@@ -144,6 +189,29 @@ tmux send-keys -t tuicheck "What is 2+2? Answer in one short sentence." && \
 
 Send special keys by name (`Enter`, `Escape`, `C-c` for Ctrl-C, `Up`/`Down`).
 When done, tear the session down: `tmux kill-session -t tuicheck`.
+
+### If tmux isn't installed
+
+`tmux` is the preferred driver because it gives you programmatic `send-keys` +
+`capture-pane`, but it is **not** a hard requirement — never block verification
+just because tmux is missing. Check with `command -v tmux`; if it's absent, fall
+back:
+
+- **Local context:** the simplest path is to run `./script/run-tui` directly in a
+  real terminal and read the rendered output yourself — you already have a PTY.
+  When you're working alongside the user, you can also have them run it and report
+  what renders. Installing tmux is optional, not a prerequisite.
+- **Cloud / no-tmux context:** run the built binary inside another PTY wrapper so
+  you can still capture output — e.g. `script` (util-linux):
+  `script -qe -c './target/debug/warp-tui-oss' /tmp/tui.log`, then read
+  `/tmp/tui.log`. If tmux is installable in your environment
+  (`apt-get install -y tmux`) and that's cheaper, do that and use the flow above
+  instead. If none of these work, run the binary directly, capture whatever
+  output you can, and **say so** in the PR/thread rather than implying a
+  tmux-driven capture.
+
+Everything else in this skill (what to look for, the snapshot test, the evidence)
+is identical whether or not tmux drove the run.
 
 ### Iterate loop
 
@@ -233,3 +301,20 @@ those cover authoring TUI UI and writing durable tests.
 
 GUI-only counterparts (do **not** use for TUI work): `gui-integration-test`,
 `gui-integration-test-video`, `gui-onboarding-verification-skill`.
+
+## Improving this skill over time (self-improvement loop)
+
+The aim is for this skill to get better **over time** — **not** for every run to
+end in an edit. Most runs should need no change here; don't manufacture trivial
+wording tweaks just to have improved something, and never let this step turn into
+busywork.
+
+Act only when a run surfaces a **genuine, notable gap** — a step that **didn't
+work** as written, a command that failed, a path that moved, missing
+local-vs-cloud or tmux handling, or an assumption that didn't hold. When that
+happens, don't just work around it silently: capture the specific problem (what
+you expected vs. what actually happened) and **propose the fix in a _separate_
+PR** — separate from the change you were verifying, so the skill improvement is
+reviewable on its own and the original PR stays scoped. Make the smallest correct
+edit to `.agents/skills/tui-verify-change/SKILL.md` (follow the `update-skill`
+conventions) that would have made the run go smoothly.

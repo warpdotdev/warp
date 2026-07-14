@@ -8272,7 +8272,6 @@ fn test_agent_view_terminal_only_initial_input_config_unlocked_when_autodetectio
 
 #[test]
 fn test_terminal_only_ai_enter_enters_agent_view_and_clears_buffer() {
-    use crate::ai::blocklist::agent_view::AgentViewState;
     use crate::ai::blocklist::InputConfig;
 
     App::test((), |mut app| async move {
@@ -8320,13 +8319,11 @@ fn test_terminal_only_ai_enter_enters_agent_view_and_clears_buffer() {
 
         // Agent view should now be active.
         terminal.read(&app, |terminal, _| {
-            let state = terminal
-                .model
-                .lock()
-                .block_list()
-                .agent_view_state()
-                .clone();
-            assert!(matches!(state, AgentViewState::Active { .. }));
+            let state = *terminal.model.lock().block_list().transcript_scope();
+            assert!(matches!(
+                state,
+                crate::terminal::model::block::TranscriptScope::Conversation(_)
+            ));
         });
     });
 }

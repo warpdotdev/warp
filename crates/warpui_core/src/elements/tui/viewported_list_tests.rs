@@ -134,6 +134,41 @@ fn mouse(app: &App, element: &mut impl TuiElement, size: TuiSize, event: TuiEven
     })
 }
 
+/// Dispatches one mouse event against an element laid out for `size` but
+/// hit-tested within `area`.
+fn mouse_in_area(
+    app: &App,
+    element: &mut impl TuiElement,
+    size: TuiSize,
+    area: TuiRect,
+    event: TuiEvent,
+) -> bool {
+    app.read(|app_ctx| {
+        let mut rendered_views = EntityIdMap::default();
+        let mut ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
+        element.layout(TuiConstraint::tight(size), &mut ctx, app_ctx);
+        let mut event_ctx = TuiEventContext::default();
+        event_ctx.set_origin_view(Some(EntityId::new()));
+        element.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx)
+    })
+}
+
+/// Lays out for `size` and renders into `area`.
+fn render_in_area(app: &App, element: &mut impl TuiElement, size: TuiSize, area: TuiRect) {
+    app.read(|app_ctx| {
+        let mut rendered_views = EntityIdMap::default();
+        let mut ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
+        element.layout(TuiConstraint::tight(size), &mut ctx, app_ctx);
+        let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, area.right(), area.bottom()));
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        element.render(area, &mut buffer, &mut paint_ctx);
+    });
+}
+
 /// Returns a left-button press for selection tests.
 fn left_down(x: u16, y: u16, click_count: u32, is_first_mouse: bool) -> TuiEvent {
     TuiEvent::LeftMouseDown {
@@ -263,6 +298,43 @@ fn rows_from_top_past_content_clamps_to_end() {
 }
 
 #[test]
+fn collapsing_bottom_content_at_new_max_restores_end_anchor() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 4), fake_item(2, 2)]);
+        let items_handle = content.items.clone();
+        let state = TuiViewportedListState::new_at_end();
+        state.scroll_to_rows_from_top(1);
+        let mut viewport = viewport_with_state(state.clone(), content)
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
+        let size = TuiSize::new(8, 4);
+
+        render_viewport(&app, &mut viewport, size);
+        assert_eq!(state.position(), TuiViewportPosition::RowsFromTop(1));
+
+        // The bottom item's header is visible on the last viewport row while
+        // its body extends one row below it. Collapsing the body changes the
+        // maximum scroll top from 2 to exactly the requested offset, 1.
+        *items_handle.borrow_mut() = vec![fake_item(1, 4), fake_item(2, 1)];
+        let lines = render_viewport(&app, &mut viewport, size);
+        assert_eq!(
+            state.position(),
+            TuiViewportPosition::End,
+            "a viewport at the new maximum must resume following the end",
+        );
+        assert_eq!(&lines[0][..3], "1:1");
+        assert_eq!(&lines[3][..3], "2:0");
+
+        // Once re-anchored, subsequent growth must move the window down rather
+        // than leave it fixed at RowsFromTop(1).
+        *items_handle.borrow_mut() = vec![fake_item(1, 4), fake_item(2, 2)];
+        let lines = render_viewport(&app, &mut viewport, size);
+        assert!(state.is_at_end());
+        assert_eq!(&lines[0][..3], "1:2");
+        assert_eq!(&lines[3][..3], "2:1");
+    });
+}
+
+#[test]
 fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
@@ -374,6 +446,7 @@ fn selectable_viewport_extends_into_post_scroll_rows() {
         render_viewport(&app, &mut element, size);
         mouse(&app, &mut element, size, left_down(0, 0, 1, false));
         mouse(&app, &mut element, size, left_drag(2, 2));
+        render_viewport(&app, &mut element, size);
         mouse(&app, &mut element, size, left_up(2, 2));
 
         assert_eq!(copies.borrow().as_slice(), ["1:0\n1:1\n1:2"]);
@@ -462,6 +535,253 @@ fn selectable_viewport_preserves_selection_while_scrolling() {
         assert!(wheel(&app, &mut element, size, 1.0));
         assert!(selection.range().is_some());
         assert!(!state.is_at_end());
+    });
+}
+
+/// While a drag selection is active, dragging above the top edge and below the
+/// bottom edge must keep the selection alive and auto-scroll toward that edge.
+#[test]
+fn selectable_viewport_keeps_selection_when_dragging_past_edges() {
+    App::test((), |app| async move {
+        let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
+        // 15 rows, a 4-row viewport in a slot at screen y=2. Start mid-scroll so
+        // both scroll-up and scroll-down are possible.
+        let state = TuiViewportedListState::new_at_end();
+        state.scroll_to_rows_from_top(5);
+        let viewport = viewport_with_state(state.clone(), content);
+        let selection = TuiSelectionHandle::default();
+        let selectable = TuiSelectable::new(selection.clone(), viewport);
+        let mut element = TuiScrollable::new(selectable.finish_scrollable());
+        let size = TuiSize::new(8, 4);
+        let area = TuiRect::new(0, 2, 8, 4);
+
+        mouse_in_area(&app, &mut element, size, area, left_down(0, 3, 1, false));
+        render_in_area(&app, &mut element, size, area);
+        assert!(selection.is_selecting());
+
+        let before_down = state.position();
+        mouse_in_area(&app, &mut element, size, area, left_drag(2, 9));
+        render_in_area(&app, &mut element, size, area);
+        assert!(
+            selection.is_selecting(),
+            "selection survives past-bottom drag"
+        );
+        assert!(selection.range().is_some());
+        assert_ne!(
+            before_down,
+            state.position(),
+            "past-bottom drag scrolls down"
+        );
+
+        let before_up = state.position();
+        mouse_in_area(&app, &mut element, size, area, left_drag(2, 0));
+        render_in_area(&app, &mut element, size, area);
+        assert!(selection.is_selecting(), "selection survives past-top drag");
+        assert!(selection.range().is_some());
+        assert_ne!(before_up, state.position(), "past-top drag scrolls up");
+    });
+}
+
+/// The top terminal row scrolls upward because mouse coordinates cannot move
+/// above row zero.
+#[test]
+fn selectable_viewport_scrolls_up_from_top_terminal_row() {
+    App::test((), |app| async move {
+        let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
+        let state = TuiViewportedListState::new_at_end();
+        state.scroll_to_rows_from_top(5);
+        let viewport = viewport_with_state(state.clone(), content);
+        let selection = TuiSelectionHandle::default();
+        let selectable = TuiSelectable::new(selection.clone(), viewport);
+        let mut element = TuiScrollable::new(selectable.finish_scrollable());
+        let size = TuiSize::new(8, 4);
+        let area = TuiRect::new(0, 0, 8, 4);
+
+        mouse_in_area(&app, &mut element, size, area, left_down(0, 2, 1, false));
+        render_in_area(&app, &mut element, size, area);
+        assert!(mouse_in_area(
+            &app,
+            &mut element,
+            size,
+            area,
+            left_drag(2, 0)
+        ));
+        assert_eq!(state.position(), TuiViewportPosition::RowsFromTop(4));
+    });
+}
+
+/// Content whose glyph for the row at `scroll_top + 1` differs from other rows,
+/// so a one-row scroll changes the rendered symbol of a row that stays visible
+/// across the scroll (models a rich/partially-clipped block re-rendering at a
+/// new offset).
+#[derive(Clone)]
+struct ScrollSensitiveContent {
+    row_count: usize,
+}
+
+impl TuiViewportedElement for ScrollSensitiveContent {
+    fn visible_items(
+        &self,
+        window: TuiViewportWindow,
+        _available_width: u16,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiViewportContent {
+        scroll_sensitive_content(self.row_count, window)
+    }
+
+    fn selection_content(
+        &self,
+        window: TuiViewportWindow,
+        _available_width: u16,
+        _app: &AppContext,
+    ) -> Option<TuiViewportContent> {
+        Some(scroll_sensitive_content(self.row_count, window))
+    }
+}
+
+fn scroll_sensitive_content(row_count: usize, window: TuiViewportWindow) -> TuiViewportContent {
+    let items = (0..row_count)
+        .map(|row| TuiVisibleViewportItem {
+            origin_y: row,
+            element: Box::new(
+                TuiText::new(if row == window.scroll_top.saturating_add(1) {
+                    "@".to_owned()
+                } else {
+                    ".".to_owned()
+                })
+                .truncate(),
+            ),
+        })
+        .collect();
+    TuiViewportContent {
+        content_height: row_count,
+        items,
+    }
+}
+
+/// Dragging past an edge must not clear the selection even when the scroll
+/// re-render changes the glyph of a still-visible selected cell.
+#[test]
+fn drag_past_edge_preserves_selection_when_scroll_changes_a_visible_glyph() {
+    App::test((), |app| async move {
+        let content = ScrollSensitiveContent { row_count: 10 };
+        let state = TuiViewportedListState::new_at_end();
+        state.scroll_to_rows_from_top(5);
+        let viewport = TuiViewportedList::new(state.clone(), content);
+        let selection = TuiSelectionHandle::default();
+        let selectable = TuiSelectable::new(selection.clone(), viewport);
+        let mut element = TuiScrollable::new(selectable.finish_scrollable());
+        let size = TuiSize::new(8, 4);
+        let area = TuiRect::new(0, 2, 8, 4);
+
+        // Establish a real range, then drag past the bottom edge so the marker
+        // moves off a still-visible selected row.
+        mouse_in_area(&app, &mut element, size, area, left_down(0, 3, 1, false));
+        render_in_area(&app, &mut element, size, area);
+        mouse_in_area(&app, &mut element, size, area, left_drag(0, 5));
+        render_in_area(&app, &mut element, size, area);
+        assert!(selection.range().is_some());
+
+        mouse_in_area(&app, &mut element, size, area, left_drag(2, 9));
+        render_in_area(&app, &mut element, size, area);
+
+        assert!(
+            selection.range().is_some(),
+            "selection must persist across drag-past-edge scrolling"
+        );
+        assert!(selection.is_selecting());
+    });
+}
+
+/// Content whose row 1 glyph is toggled externally, modeling streaming output.
+#[derive(Clone)]
+struct ToggleContent {
+    row_count: usize,
+    toggled: Rc<Cell<bool>>,
+}
+
+impl ToggleContent {
+    fn content(&self) -> TuiViewportContent {
+        let toggled = self.toggled.get();
+        let items = (0..self.row_count)
+            .map(|row| TuiVisibleViewportItem {
+                origin_y: row,
+                element: Box::new(
+                    TuiText::new(if row == 1 && toggled {
+                        "#".to_owned()
+                    } else {
+                        ".".to_owned()
+                    })
+                    .truncate(),
+                ),
+            })
+            .collect();
+        TuiViewportContent {
+            content_height: self.row_count,
+            items,
+        }
+    }
+}
+
+impl TuiViewportedElement for ToggleContent {
+    fn visible_items(
+        &self,
+        _window: TuiViewportWindow,
+        _available_width: u16,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiViewportContent {
+        self.content()
+    }
+
+    fn selection_content(
+        &self,
+        _window: TuiViewportWindow,
+        _available_width: u16,
+        _app: &AppContext,
+    ) -> Option<TuiViewportContent> {
+        Some(self.content())
+    }
+}
+
+/// A streaming glyph change immediately after mouse-up must not clear the
+/// settled selection.
+#[test]
+fn repaint_after_mouse_up_preserves_selection_on_glyph_change() {
+    App::test((), |app| async move {
+        let toggled = Rc::new(Cell::new(false));
+        let content = ToggleContent {
+            row_count: 4,
+            toggled: toggled.clone(),
+        };
+        let state = TuiViewportedListState::new_at_end();
+        state.scroll_to_rows_from_top(0);
+        let viewport = TuiViewportedList::new(state, content);
+        let selection = TuiSelectionHandle::default();
+        let selectable = TuiSelectable::new(selection.clone(), viewport);
+        let mut element = TuiScrollable::new(selectable.finish_scrollable());
+        let size = TuiSize::new(8, 4);
+        let area = TuiRect::new(0, 2, 8, 4);
+
+        // Select rows 0..2 (covering row 1), then settle the selection.
+        mouse_in_area(&app, &mut element, size, area, left_down(0, 2, 1, false));
+        render_in_area(&app, &mut element, size, area);
+        mouse_in_area(&app, &mut element, size, area, left_drag(2, 4));
+        render_in_area(&app, &mut element, size, area);
+        mouse_in_area(&app, &mut element, size, area, left_up(2, 4));
+        assert!(selection.range().is_some());
+        assert!(!selection.is_selecting());
+
+        // Streaming re-render changes row 1's glyph; no new mouse events.
+        toggled.set(true);
+        render_in_area(&app, &mut element, size, area);
+
+        assert!(
+            selection.range().is_some(),
+            "a settled selection must survive a streaming glyph change"
+        );
+        assert!(!selection.is_selecting());
     });
 }
 
