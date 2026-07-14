@@ -37,7 +37,6 @@ pub(crate) enum TuiInlineMenuRowStyle {
 }
 
 pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
-const INLINE_MENU_BORDER_ROWS: usize = 2;
 
 /// A presentation-only row in a TUI inline menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -457,7 +456,7 @@ impl TuiElement for TuiInlineMenuElement {
     }
 }
 
-/// Returns the result rows available after reserving border and header chrome.
+/// Returns the result rows available after reserving header chrome.
 pub(crate) const fn result_row_capacity(
     allocated_height: u16,
     has_title: bool,
@@ -465,7 +464,7 @@ pub(crate) const fn result_row_capacity(
 ) -> usize {
     let title_rows = if has_title { 1 } else { 0 };
     let tab_rows = if has_tabs { 1 } else { 0 };
-    (allocated_height as usize).saturating_sub(INLINE_MENU_BORDER_ROWS + title_rows + tab_rows)
+    (allocated_height as usize).saturating_sub(title_rows + tab_rows)
 }
 
 fn visible_result_capacity(snapshot: &TuiInlineMenuSnapshot, allocated_height: u16) -> usize {
@@ -487,7 +486,7 @@ fn build_inline_menu(
     allocated_height: u16,
 ) -> Box<dyn TuiElement> {
     let slash_command_columns = tui_two_column_layout(
-        usize::from(allocated_width.saturating_sub(2)),
+        usize::from(allocated_width),
         snapshot.rows.iter().filter_map(|row| {
             if row.style != TuiInlineMenuRowStyle::SlashCommand {
                 return None;
@@ -554,9 +553,7 @@ fn build_inline_menu(
         }
     }
 
-    TuiContainer::new(column.finish())
-        .with_border_style(builder.accent_border_style())
-        .finish()
+    column.finish()
 }
 
 /// Clamps stale scroll offsets and moves the viewport only as far as needed to

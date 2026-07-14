@@ -655,8 +655,9 @@ impl TuiInputView {
         let builder = TuiUiBuilder::from_app(ctx);
         let mut styles = TuiEditorStyles::default();
         if let Some(range) = self
-            .active_inline_menu(ctx)
-            .and_then(|inline_menu| inline_menu.input_highlight_range(ctx))
+            .inline_menus
+            .iter()
+            .find_map(|inline_menu| inline_menu.input_highlight_range(ctx))
         {
             styles
                 .text_overrides
@@ -670,8 +671,9 @@ impl TuiInputView {
                 event_ctx.dispatch_typed_action(TuiInputAction::from(action))
             });
         if let Some(hint_text) = self
-            .active_inline_menu(ctx)
-            .and_then(|inline_menu| inline_menu.input_argument_hint_text(ctx))
+            .inline_menus
+            .iter()
+            .find_map(|inline_menu| inline_menu.input_argument_hint_text(ctx))
         {
             element = element.with_trailing_ghost_text(hint_text, builder.dim_text_style());
         }

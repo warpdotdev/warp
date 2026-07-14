@@ -53,7 +53,7 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
 }
 
 #[test]
-fn slash_command_argument_hint_renders_as_ghost_text() {
+fn slash_command_argument_hint_renders_after_menu_closes() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let (view, menu_model, _) = build_view_with_inline_menu(ctx);
@@ -61,6 +61,10 @@ fn slash_command_argument_hint_renders_as_ghost_text() {
             view.update(ctx, |view, ctx| view.set_text(input, ctx));
             menu_model.update(ctx, |model, _| {
                 model.set_argument_hint_text_for_test(Some("<optional filename>"));
+            });
+            menu_model.update(ctx, |model, ctx| {
+                model.accept_selected(ctx);
+                assert!(!model.is_open());
             });
 
             let buffer = render_input_buffer(&view, ctx);
@@ -103,13 +107,17 @@ fn render_input_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> Tui
 }
 
 #[test]
-fn recognized_slash_command_prefix_matches_menu_color() {
+fn recognized_slash_command_prefix_matches_menu_color_after_menu_closes() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let (view, menu_model, _) = build_view_with_inline_menu(ctx);
             view.update(ctx, |view, ctx| view.set_text("/plan argument", ctx));
             menu_model.update(ctx, |model, _| {
                 model.set_highlighted_prefix_len_for_test(Some(5));
+            });
+            menu_model.update(ctx, |model, ctx| {
+                model.accept_selected(ctx);
+                assert!(!model.is_open());
             });
 
             let buffer = render_input_buffer(&view, ctx);
