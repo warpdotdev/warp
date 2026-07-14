@@ -10,20 +10,23 @@
 //! passes cannot do themselves.
 //!
 //! When configured with [`TuiTerminalContentElement::with_pty_input`], the same
-//! wrapper also gives the foreground process first refusal on key and paste
-//! events. Keeping both responsibilities here ensures the subtree measured for
-//! the PTY is also the subtree that owns its input.
+//! wrapper also gives the foreground process first refusal on key, paste, and
+//! pointer events. Keeping both responsibilities here ensures the subtree
+//! measured for the PTY is also the subtree that owns its input.
 
 use std::ops::Deref as _;
 use std::sync::Arc;
 
 use async_channel::Sender;
 use parking_lot::FairMutex;
-use warp::tui_export::{KeystrokeWithDetails, TerminalModel};
+use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel, ToEscapeSequence as _};
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
+use warp_terminal::model::mouse::{MouseAction, MouseButton, MouseState};
+use warp_terminal::model::Point;
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize,
+    TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiScreenRect,
+    TuiSize,
 };
 use warpui_core::AppContext;
 
@@ -47,7 +50,7 @@ impl TuiTerminalContentElement {
         }
     }
 
-    /// Gives the foreground process first refusal on key and paste events for
+    /// Gives the foreground process first refusal on input events for
     /// this terminal-content subtree.
     pub(crate) fn with_pty_input(mut self, model: Arc<FairMutex<TerminalModel>>) -> Self {
         self.pty_input_model = Some(model);
@@ -126,7 +129,21 @@ impl TuiElement for TuiTerminalContentElement {
                 | TuiEvent::LeftMouseDragged { .. }
                 | TuiEvent::MiddleMouseDown { .. }
                 | TuiEvent::RightMouseDown { .. }
-                | TuiEvent::MouseMoved { .. } => {}
+                | TuiEvent::MouseMoved { .. } => {
+                    let bytes =
+                        self.child
+                            .origin()
+                            .zip(self.child.size())
+                            .and_then(|(origin, size)| {
+                                pointer_pty_bytes(event, TuiScreenRect::new(origin, size), model)
+                            });
+                    if let Some(bytes) = bytes {
+                        event_ctx.dispatch_typed_action(
+                            TuiTerminalSessionAction::ForwardUserPtyBytes(bytes),
+                        );
+                        return true;
+                    }
+                }
             }
         }
         self.child.dispatch_event(event, event_ctx, app)
@@ -134,7 +151,7 @@ impl TuiElement for TuiTerminalContentElement {
 }
 
 /// Converts one semantic TUI input event to bytes for the foreground process.
-/// Pointer events and composing key events are left for the child subtree.
+/// Composing key and pointer events are handled separately.
 fn pty_bytes_for_event(event: &TuiEvent, model: &Arc<FairMutex<TerminalModel>>) -> Option<Vec<u8>> {
     match event {
         TuiEvent::KeyDown {
@@ -168,6 +185,75 @@ fn pty_bytes_for_event(event: &TuiEvent, model: &Arc<FairMutex<TerminalModel>>) 
     }
 }
 
+/// Encodes a supported pointer event for the foreground process.
+fn pointer_pty_bytes(
+    event: &TuiEvent,
+    bounds: TuiScreenRect,
+    model: &Arc<FairMutex<TerminalModel>>,
+) -> Option<Vec<u8>> {
+    let model = model.lock();
+    mouse_state_for_event(event, bounds, |mode| model.is_term_mode_set(mode))?
+        .to_escape_sequence(model.deref())
+}
+
+/// Converts a supported pointer event into the terminal's SGR mouse model.
+fn mouse_state_for_event(
+    event: &TuiEvent,
+    bounds: TuiScreenRect,
+    is_mode_set: impl Fn(TermMode) -> bool,
+) -> Option<MouseState> {
+    if !is_mode_set(TermMode::SGR_MOUSE) {
+        return None;
+    }
+
+    let reports_clicks = is_mode_set(TermMode::MOUSE_REPORT_CLICK)
+        || is_mode_set(TermMode::MOUSE_DRAG)
+        || is_mode_set(TermMode::MOUSE_MOTION);
+    let position = event.position()?;
+    if !bounds.contains(position) {
+        return None;
+    }
+    let point = Point::new(
+        usize::try_from(i32::from(position.y) - bounds.origin.y).ok()?,
+        usize::try_from(i32::from(position.x) - bounds.origin.x).ok()?,
+    );
+
+    let state = match event {
+        TuiEvent::LeftMouseDown { modifiers, .. } if reports_clicks && !modifiers.shift => {
+            MouseState::new(MouseButton::Left, MouseAction::Pressed, *modifiers)
+        }
+        TuiEvent::RightMouseDown { modifiers, .. } if reports_clicks && !modifiers.shift => {
+            MouseState::new(MouseButton::Right, MouseAction::Pressed, *modifiers)
+        }
+        TuiEvent::LeftMouseUp { modifiers, .. } if reports_clicks && !modifiers.shift => {
+            MouseState::new(MouseButton::Left, MouseAction::Released, *modifiers)
+        }
+        TuiEvent::LeftMouseDragged { modifiers, .. }
+            if (is_mode_set(TermMode::MOUSE_DRAG) || is_mode_set(TermMode::MOUSE_MOTION))
+                && !modifiers.shift =>
+        {
+            MouseState::new(MouseButton::LeftDrag, MouseAction::Pressed, *modifiers)
+        }
+        TuiEvent::MouseMoved {
+            modifiers,
+            is_synthetic: false,
+            ..
+        } if is_mode_set(TermMode::MOUSE_MOTION) => {
+            MouseState::new(MouseButton::Move, MouseAction::Pressed, *modifiers)
+        }
+        TuiEvent::ScrollWheel {
+            delta: (_, rows), ..
+        } if reports_clicks && *rows != 0 => MouseState::new(
+            MouseButton::Wheel,
+            MouseAction::Scrolled {
+                delta: i32::try_from(*rows).ok()?,
+            },
+            Default::default(),
+        ),
+        _ => return None,
+    };
+    Some(state.set_point(point))
+}
 fn paste_bytes(text: &str, needs_bracketed_paste: bool) -> Vec<u8> {
     let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
     if !needs_bracketed_paste {
