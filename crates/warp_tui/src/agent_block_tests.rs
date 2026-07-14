@@ -535,6 +535,34 @@ fn finished_reasoning_renders_collapsed_thought_for_header() {
     });
 }
 
+/// Duration-only reasoning records do not create empty thinking sections.
+#[test]
+fn empty_finished_reasoning_is_omitted() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    reasoning_message("r1", Some(Duration::from_secs(15)), ""),
+                    plain_text_message("m2", "after"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    TuiAIBlockSection::PlainText("after".to_owned()),
+                ]
+            );
+        });
+    });
+}
+
 #[test]
 fn manual_expand_override_shows_finished_reasoning_body() {
     App::test((), |mut app| async move {

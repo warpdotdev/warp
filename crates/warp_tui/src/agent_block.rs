@@ -471,22 +471,28 @@ impl TuiAIBlock {
                         text,
                         finished_duration,
                     } => {
-                        sections.push(TuiAIBlockSection::Thinking {
-                            message_id: message.id.clone(),
-                            finished_duration: *finished_duration,
-                            body: text
-                                .sections
-                                .iter()
-                                .filter_map(|section| match section {
-                                    AIAgentTextSection::PlainText { text } => Some(text.text()),
-                                    // The TUI can't render these section kinds yet.
-                                    AIAgentTextSection::Code { .. }
-                                    | AIAgentTextSection::Table { .. }
-                                    | AIAgentTextSection::Image { .. }
-                                    | AIAgentTextSection::MermaidDiagram { .. } => None,
-                                })
-                                .join("\n"),
-                        });
+                        let body = text
+                            .sections
+                            .iter()
+                            .filter_map(|section| match section {
+                                AIAgentTextSection::PlainText { text } => Some(text.text()),
+                                // The TUI can't render these section kinds yet.
+                                AIAgentTextSection::Code { .. }
+                                | AIAgentTextSection::Table { .. }
+                                | AIAgentTextSection::Image { .. }
+                                | AIAgentTextSection::MermaidDiagram { .. } => None,
+                            })
+                            .join("\n");
+                        // Some providers intentionally emit duration/signature-only reasoning
+                        // records for conversation continuity when no user-visible summary exists;
+                        // omit them because they have no content to render.
+                        if !body.is_empty() {
+                            sections.push(TuiAIBlockSection::Thinking {
+                                message_id: message.id.clone(),
+                                finished_duration: *finished_duration,
+                                body,
+                            });
+                        }
                     }
                     AIAgentOutputMessageType::Summarization {
                         text,
