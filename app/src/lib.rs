@@ -551,6 +551,8 @@ impl LaunchMode {
     /// (`crates/http_server`), which serves app-installation detection and profiling on a
     /// fixed port. Only non-headless GUI instances start it, since co-located headless
     /// processes (daemon, CLI, proxy, TUI) would otherwise contend for the fixed port.
+    // Only the native http-server registration calls this, so it is unused on wasm.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn should_start_local_http_server(&self) -> bool {
         !self.is_headless()
     }
