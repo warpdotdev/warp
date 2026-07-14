@@ -5284,9 +5284,7 @@ impl Workspace {
             }
 
             // If the agent management view is open, we want to close it when we activate a new tab.
-            if FeatureFlag::AgentManagementView.is_enabled() {
-                self.set_is_agent_management_view_open(false, ctx);
-            }
+            self.set_is_agent_management_view_open(false, ctx);
 
             self.set_active_tab_index(index, ctx);
             self.focus_active_tab(ctx);
@@ -5450,9 +5448,7 @@ impl Workspace {
 
         // If the agent management view is open, we want to close it when we change focus to rename a tab.
         // This function doesn't call `activate_tab_internal`, which is why we need the extra check here.
-        if FeatureFlag::AgentManagementView.is_enabled() {
-            self.set_is_agent_management_view_open(false, ctx);
-        }
+        self.set_is_agent_management_view_open(false, ctx);
 
         self.set_active_tab_index(index, ctx);
 
@@ -20817,9 +20813,7 @@ impl Workspace {
             .finish();
         } else {
             // Copy from our saved tab_bar_state to ensure all tabs get rendered with the same state
-            let active_tab_index = if FeatureFlag::AgentManagementView.is_enabled()
-                && self.current_workspace_state.is_agent_management_view_open
-            {
+            let active_tab_index = if self.current_workspace_state.is_agent_management_view_open {
                 None
             } else {
                 Some(self.active_tab_index)
@@ -21896,9 +21890,7 @@ impl Workspace {
     ) -> Box<dyn Element> {
         let active_tab_data = &self.tabs[self.active_tab_index];
 
-        let active_content = if FeatureFlag::AgentManagementView.is_enabled()
-            && self.current_workspace_state.is_agent_management_view_open
-        {
+        let active_content = if self.current_workspace_state.is_agent_management_view_open {
             ChildView::new(&self.agent_management_view).finish()
         } else {
             ChildView::new(&active_tab_data.pane_group).finish()
@@ -24707,9 +24699,7 @@ impl TypedActionView for Workspace {
                 ctx.notify();
             }
             ToggleAgentManagementView => {
-                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-                    && FeatureFlag::AgentManagementView.is_enabled()
-                {
+                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                     let is_open = !self.current_workspace_state.is_agent_management_view_open;
                     self.set_is_agent_management_view_open(is_open, ctx);
 
@@ -24728,18 +24718,14 @@ impl TypedActionView for Workspace {
                 }
             }
             OpenAgentManagementView => {
-                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-                    && FeatureFlag::AgentManagementView.is_enabled()
-                {
+                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                     self.set_is_agent_management_view_open(true, ctx);
                     ctx.focus(&self.agent_management_view);
                     ctx.notify();
                 }
             }
             ViewAgentRunsForEnvironment { environment_id } => {
-                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-                    && FeatureFlag::AgentManagementView.is_enabled()
-                {
+                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                     self.set_is_agent_management_view_open(true, ctx);
                     ctx.focus(&self.agent_management_view);
 
@@ -24792,9 +24778,7 @@ impl TypedActionView for Workspace {
                 self.add_terminal_pane_in_ai_mode(*zero_state_prompt_suggestion_type, ctx);
             }
             OpenCloudAgentSetupGuide => {
-                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-                    && FeatureFlag::AgentManagementView.is_enabled()
-                {
+                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                     self.set_is_agent_management_view_open(true, ctx);
                     ctx.focus(&self.agent_management_view);
                     self.agent_management_view.update(ctx, |view, ctx| {

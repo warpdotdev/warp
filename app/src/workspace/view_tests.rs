@@ -3505,8 +3505,6 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
 
 #[test]
 fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempotent() {
-    let _agent_management_guard = FeatureFlag::AgentManagementView.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 

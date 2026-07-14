@@ -30,7 +30,6 @@ use crate::terminal::TerminalModel;
 use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
-use crate::FeatureFlag;
 
 const CONVERSATION_TOKEN: &str = "server-conversation-token";
 
@@ -69,7 +68,6 @@ fn setup_app_with_creator(
     permissions_fixture: ConversationPermissionFixture,
     creator_uid: Option<String>,
 ) -> TestHandles {
-    let _agent_management_guard = FeatureFlag::AgentManagementView.override_enabled(false);
     match auth_fixture {
         AuthFixture::LoggedIn => {
             app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -88,7 +86,7 @@ fn setup_app_with_creator(
         )
     });
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
-    app.add_singleton_model(AgentConversationsModel::new);
+    app.add_singleton_model(|_| AgentConversationsModel::new_empty_for_test());
 
     let terminal_view_id = EntityId::new();
     let task_id = ambient_task_id(1);
@@ -130,11 +128,10 @@ fn setup_owned_task_without_server_metadata(app: &mut App) -> TestHandles {
 }
 
 fn setup_task_without_server_metadata_for_creator(app: &mut App, creator_uid: &str) -> TestHandles {
-    let _agent_management_guard = FeatureFlag::AgentManagementView.override_enabled(false);
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
-    app.add_singleton_model(AgentConversationsModel::new);
+    app.add_singleton_model(|_| AgentConversationsModel::new_empty_for_test());
 
     let terminal_view_id = EntityId::new();
     let task_id = ambient_task_id(1);
