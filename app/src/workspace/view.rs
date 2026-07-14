@@ -605,6 +605,7 @@ const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_
 const NEW_SESSION_SIDECAR_POSITION_ID: &str = "new_session_sidecar";
 const NEW_SESSION_MENU_WIDTH: f32 = 300.;
 const NEW_SESSION_MENU_WINDOW_MARGIN: f32 = 8.;
+const NEW_SESSION_MENU_VERTICAL_BUTTON_OFFSET_Y: f32 = 4.;
 const NEW_SESSION_SIDECAR_WIDTH: f32 = 300.;
 
 /// Shared position ID for the move-to-group sidecar overlay, used by both the
@@ -6724,7 +6725,7 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let menu_items = self.unified_new_session_menu_items(ctx);
-        let menu_height = Self::new_session_menu_max_height(anchor, ctx);
+        let menu_height = self.new_session_menu_max_height(anchor, ctx);
         ctx.update_view(&self.new_session_dropdown_menu, |context_menu, view_ctx| {
             // Match the Figma mock width (OptionMenuItem component is 268px).
             context_menu.set_width(268.);
@@ -6744,13 +6745,42 @@ impl Workspace {
         ctx.notify();
     }
 
-    fn new_session_menu_max_height(anchor: NewSessionMenuAnchor, ctx: &ViewContext<Self>) -> f32 {
+    fn new_session_menu_max_height(
+        &self,
+        anchor: NewSessionMenuAnchor,
+        ctx: &ViewContext<Self>,
+    ) -> f32 {
         let Some(window) = ctx.windows().platform_window(ctx.window_id()) else {
             return 480.;
         };
-        let available_height =
-            window.size().y() - anchor.position().y() - NEW_SESSION_MENU_WINDOW_MARGIN;
+        let anchor_y = self.new_session_menu_height_anchor_y(anchor, ctx);
+        let available_height = window.size().y() - anchor_y - NEW_SESSION_MENU_WINDOW_MARGIN;
         available_height.max(120.)
+    }
+
+    fn new_session_menu_height_anchor_y(
+        &self,
+        anchor: NewSessionMenuAnchor,
+        ctx: &ViewContext<Self>,
+    ) -> f32 {
+        let use_vertical_tabs =
+            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        match anchor {
+            NewSessionMenuAnchor::AddTabButton(position)
+                if use_vertical_tabs && self.vertical_tabs_panel_open =>
+            {
+                ctx.element_position_by_id_at_last_frame(
+                    self.window_id,
+                    vertical_tabs::VERTICAL_TABS_ADD_TAB_POSITION_ID,
+                )
+                .map(|position| {
+                    position.lower_left().y() + NEW_SESSION_MENU_VERTICAL_BUTTON_OFFSET_Y
+                })
+                .unwrap_or_else(|| position.y().max(TOTAL_TAB_BAR_HEIGHT))
+            }
+            NewSessionMenuAnchor::AddTabButton(position)
+            | NewSessionMenuAnchor::Pointer(position) => position.y(),
+        }
     }
 
     pub fn open_new_session_dropdown_menu(
@@ -26557,7 +26587,7 @@ impl View for Workspace {
                         ChildView::new(&self.new_session_dropdown_menu).finish(),
                         OffsetPositioning::offset_from_save_position_element(
                             vertical_tabs::VERTICAL_TABS_ADD_TAB_POSITION_ID,
-                            vec2f(0., 4.),
+                            vec2f(0., NEW_SESSION_MENU_VERTICAL_BUTTON_OFFSET_Y),
                             PositionedElementOffsetBounds::WindowBySize,
                             anchor,
                             child_anchor,
