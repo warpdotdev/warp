@@ -78,22 +78,7 @@ use crate::view_components::compactible_split_action_button::CompactibleSplitAct
 /// For horizontal padding, use [`INLINE_ACTION_HORIZONTAL_PADDING`] for consistency.
 pub const REQUESTED_COMMAND_BODY_VERTICAL_PADDING: f32 = 16.;
 
-const REQUESTED_COMMAND_REJECT_LABEL: &str = "Reject";
-const REQUESTED_COMMAND_ACCEPT_LABEL: &str = "Run";
-const REQUESTED_COMMAND_EDIT_LABEL: &str = "Edit";
-const REQUESTED_COMMAND_MINIMIZE_LABEL: &str = "Done";
-
-const LOADING_MESSAGE: &str = "Generating command...";
-const COMMAND_WAITING_FOR_USER_MESSAGE: &str = "OK if I run this command and read the output?";
-const MCP_TOOL_WAITING_FOR_USER_MESSAGE: &str = "OK if I call this MCP tool?";
-const MONITORING_COMMAND_MESSAGE: &str = "Agent is monitoring command...";
-const AGENT_NEEDS_INPUT_MESSAGE: &str = "Agent needs your input to continue";
-const USER_TOOK_CONTROL_COMMAND_MESSAGE: &str = "User is in control.";
-const USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE: &str = "Paused agent. User is in control.";
-const AGENT_REQUESTED_USER_TAKE_CONTROL_COMMAND_MESSAGE: &str = "User in control";
-const AGENT_ERRORED_COMMAND_MESSAGE: &str = "Agent ran into an issue. Take over control.";
 pub const VIEWING_COMMAND_DETAIL_MESSAGE: &str = "Viewing command detail";
-const VIEWING_MCP_TOOL_DETAIL_MESSAGE: &str = "Viewing MCP tool call detail";
 
 const EDIT_COMMAND_ACTION_NAME: &str = "requested_command:edit";
 
@@ -170,7 +155,10 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         EDIT_COMMAND_ACTION_NAME,
-        "Edit requested command",
+        crate::menu_label(
+            "requested_command.edit_action_label",
+            "Edit requested command",
+        ),
         RequestedCommandViewAction::OpenEditMode,
     )
     .with_key_binding(cmd_or_ctrl_shift("e"))
@@ -380,7 +368,7 @@ impl RequestedCommandView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let cancel_button = CompactibleActionButton::new(
-            REQUESTED_COMMAND_REJECT_LABEL.to_string(),
+            crate::menu_label("requested_command.reject_label", "Reject").to_string(),
             Some(KeystrokeSource::Fixed(
                 CANCEL_REQUESTED_COMMAND_KEYSTROKE.clone(),
             )),
@@ -393,7 +381,7 @@ impl RequestedCommandView {
 
         let position_id_prefix = format!("{action_id:?}");
         let accept_and_autoexecute_split_button = CompactibleSplitActionButton::new(
-            REQUESTED_COMMAND_ACCEPT_LABEL.to_string(),
+            crate::menu_label("requested_command.accept_label", "Run").to_string(),
             Some(KeystrokeSource::Fixed(
                 ENTER_ACCEPT_REQUESTED_COMMAND_KEYSTROKE.clone(),
             )),
@@ -409,7 +397,7 @@ impl RequestedCommandView {
         );
 
         let edit_button = CompactibleActionButton::new(
-            REQUESTED_COMMAND_EDIT_LABEL.to_string(),
+            crate::menu_label("requested_command.edit_label", "Edit").to_string(),
             Some(KeystrokeSource::Binding(EDIT_COMMAND_ACTION_NAME)),
             ButtonSize::InlineActionHeader,
             RequestedCommandViewAction::OpenEditMode,
@@ -419,7 +407,7 @@ impl RequestedCommandView {
         );
 
         let minimize_button = CompactibleActionButton::new(
-            REQUESTED_COMMAND_MINIMIZE_LABEL.to_string(),
+            crate::menu_label("requested_command.minimize_label", "Done").to_string(),
             Some(KeystrokeSource::Fixed(
                 MINIMIZE_REQUESTED_COMMAND_KEYSTROKE.clone(),
             )),
@@ -736,15 +724,18 @@ impl RequestedCommandView {
             .unwrap_or_default();
 
             let accept_item = MenuItemFields::new_with_label(
-                REQUESTED_COMMAND_ACCEPT_LABEL,
+                crate::menu_label("requested_command.accept_label", "Run"),
                 accept_keystroke.as_str(),
             )
             .with_on_select_action(RequestedCommandViewAction::Accept)
             .into_item();
 
-            let auto_item = MenuItemFields::new_with_label("Auto-approve", auto_keystroke.as_str())
-                .with_on_select_action(RequestedCommandViewAction::AcceptAndAutoExecute)
-                .into_item();
+            let auto_item = MenuItemFields::new_with_label(
+                crate::menu_label("requested_command.auto_approve", "Auto-approve"),
+                auto_keystroke.as_str(),
+            )
+            .with_on_select_action(RequestedCommandViewAction::AcceptAndAutoExecute)
+            .into_item();
 
             self.accept_split_button_menu.update(ctx, |menu, ctx| {
                 menu.set_items(vec![accept_item, auto_item], ctx);
@@ -794,7 +785,12 @@ impl RequestedCommandView {
                 citations_padding,
                 app,
             )
-            .map(|citation| ("Copied from", citation))
+            .map(|citation| {
+                (
+                    crate::menu_label("requested_command.copied_from_prefix", "Copied from"),
+                    citation,
+                )
+            })
         } else {
             // Otherwise, we render all the citations (if any) and mention that the command was derived from them.
             render_citation_chips(
@@ -804,7 +800,12 @@ impl RequestedCommandView {
                 citations_padding,
                 app,
             )
-            .map(|citations| ("Derived from", citations))
+            .map(|citations| {
+                (
+                    crate::menu_label("requested_command.derived_from_prefix", "Derived from"),
+                    citations,
+                )
+            })
         };
 
         let citations_footer = citations_footer_props.map(|(prefix, suffix)| {
@@ -845,7 +846,10 @@ impl RequestedCommandView {
             ) if show_for_action_id == &self.action_id => {
                 *shown.lock() = true;
                 Some(render_autonomy_checkbox_setting_speedbump_footer(
-                    "Always allow Oz to execute read-only commands (relies on model)",
+                    crate::menu_label(
+                        "requested_command.always_allow_readonly_commands",
+                        "Always allow Oz to execute read-only commands (relies on model)",
+                    ),
                     *checked,
                     AIBlockAction::ToggleAutoexecuteReadonlyCommandsSpeedbumpCheckbox,
                     self.autoexecute_readonly_commands_speedbump_checkbox_handle
@@ -902,7 +906,11 @@ impl RequestedCommandView {
                 )
                 .with_child(
                     Text::new(
-                        "Your profile is set to always ask for permission to execute commands.",
+                        crate::menu_label(
+                            "requested_command.profile_ask_permission",
+                            "Your profile is set to always ask for permission to execute commands.",
+                        )
+                        .to_string(),
                         appearance.ui_font_family(),
                         font_size,
                     )
@@ -917,7 +925,11 @@ impl RequestedCommandView {
                             appearance
                                 .ui_builder()
                                 .link(
-                                    "Manage command execution setting".into(),
+                                    crate::menu_label(
+                                        "requested_command.manage_execution_setting",
+                                        "Manage command execution setting",
+                                    )
+                                    .to_string(),
                                     None,
                                     Some(Box::new(move |ctx| {
                                         ctx.dispatch_typed_action(
@@ -1177,8 +1189,16 @@ impl RequestedCommandView {
             }
             Some(AIActionStatus::Blocked) => {
                 title = match &self.action_type {
-                    RequestedActionViewType::Command => COMMAND_WAITING_FOR_USER_MESSAGE.into(),
-                    RequestedActionViewType::McpTool => MCP_TOOL_WAITING_FOR_USER_MESSAGE.into(),
+                    RequestedActionViewType::Command => crate::menu_label(
+                        "requested_command.command_waiting_message",
+                        "OK if I run this command and read the output?",
+                    )
+                    .into(),
+                    RequestedActionViewType::McpTool => crate::menu_label(
+                        "requested_command.mcp_tool_waiting_message",
+                        "OK if I call this MCP tool?",
+                    )
+                    .into(),
                 };
             }
             Some(AIActionStatus::RunningAsync) | Some(AIActionStatus::Finished(..))
@@ -1198,11 +1218,23 @@ impl RequestedCommandView {
                                         );
 
                                     if is_errored {
-                                        AGENT_ERRORED_COMMAND_MESSAGE.into()
+                                        crate::menu_label(
+                                            "requested_command.agent_errored_message",
+                                            "Agent ran into an issue. Take over control.",
+                                        )
+                                        .into()
                                     } else if *is_blocked {
-                                        AGENT_NEEDS_INPUT_MESSAGE.into()
+                                        crate::menu_label(
+                                            "requested_command.agent_needs_input_message",
+                                            "Agent needs your input to continue",
+                                        )
+                                        .into()
                                     } else {
-                                        MONITORING_COMMAND_MESSAGE.into()
+                                        crate::menu_label(
+                                            "requested_command.monitoring_message",
+                                            "Agent is monitoring command...",
+                                        )
+                                        .into()
                                     }
                                 }
                                 LongRunningCommandControlState::User { reason } => {
@@ -1210,15 +1242,27 @@ impl RequestedCommandView {
                                 }
                             }
                         } else {
-                            VIEWING_COMMAND_DETAIL_MESSAGE.into()
+                            crate::menu_label(
+                                "requested_command.viewing_command_detail",
+                                VIEWING_COMMAND_DETAIL_MESSAGE,
+                            )
+                            .into()
                         }
                     }
-                    RequestedActionViewType::McpTool => VIEWING_MCP_TOOL_DETAIL_MESSAGE.into(),
+                    RequestedActionViewType::McpTool => crate::menu_label(
+                        "requested_command.viewing_mcp_tool_detail",
+                        "Viewing MCP tool call detail",
+                    )
+                    .into(),
                 };
             }
             None => {
                 if self.block_model.status(app).is_streaming() {
-                    title = LOADING_MESSAGE.into();
+                    title = crate::menu_label(
+                        "requested_command.loading_message",
+                        "Generating command...",
+                    )
+                    .into();
 
                     if !self
                         .block_model
@@ -1239,7 +1283,11 @@ impl RequestedCommandView {
                     // mid-flight.
                     let title_str = self.get_header_title_text();
                     title = if title_str.trim().is_empty() {
-                        LOADING_MESSAGE.into()
+                        crate::menu_label(
+                            "requested_command.loading_message",
+                            "Generating command...",
+                        )
+                        .into()
                     } else {
                         title_str.into()
                     };
@@ -1258,7 +1306,11 @@ impl RequestedCommandView {
                 // Show cancelled command loading message when the command was cancelled during generation,
                 // and then restored with an empty title as a result.
                 if title.is_empty() {
-                    title = LOADING_MESSAGE.into();
+                    title = crate::menu_label(
+                        "requested_command.loading_message",
+                        "Generating command...",
+                    )
+                    .into();
                     font_color_override = Some(blended_colors::text_disabled(
                         appearance.theme(),
                         appearance.theme().surface_2(),
@@ -1472,11 +1524,18 @@ pub(crate) fn header_message_for_user_take_over_reason(
     reason: &UserTakeOverReason,
 ) -> &'static str {
     match reason {
-        UserTakeOverReason::Manual => USER_TOOK_CONTROL_COMMAND_MESSAGE,
-        UserTakeOverReason::Stop { .. } => USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE,
-        UserTakeOverReason::TransferFromAgent { .. } => {
-            AGENT_REQUESTED_USER_TAKE_CONTROL_COMMAND_MESSAGE
-        }
+        UserTakeOverReason::Manual => crate::menu_label(
+            "requested_command.user_took_control_message",
+            "User is in control.",
+        ),
+        UserTakeOverReason::Stop { .. } => crate::menu_label(
+            "requested_command.user_stopped_subagent_message",
+            "Paused agent. User is in control.",
+        ),
+        UserTakeOverReason::TransferFromAgent { .. } => crate::menu_label(
+            "requested_command.agent_requested_control_message",
+            "User in control",
+        ),
     }
 }
 
@@ -1614,7 +1673,10 @@ impl View for RequestedCommandView {
                     });
                     render_json_tree(
                         &mcp_request.args,
-                        Some("Request"),
+                        Some(crate::menu_label(
+                            "requested_command.mcp_request_label",
+                            "Request",
+                        )),
                         &self.mcp_request_tree_state,
                         &colors,
                         &format!("{}-req", self.position_id_prefix),
@@ -1627,16 +1689,29 @@ impl View for RequestedCommandView {
                     let mut col =
                         Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
                     col.add_child(
-                        Text::new_inline("Request".to_string(), font_family, TREE_FONT_SIZE)
-                            .with_color(colors.annotation)
-                            .soft_wrap(false)
-                            .finish(),
+                        Text::new_inline(
+                            crate::menu_label("requested_command.mcp_request_label", "Request")
+                                .to_string(),
+                            font_family,
+                            TREE_FONT_SIZE,
+                        )
+                        .with_color(colors.annotation)
+                        .soft_wrap(false)
+                        .finish(),
                     );
                     col.add_child(
-                        Text::new_inline("(no arguments)".to_string(), font_family, TREE_FONT_SIZE)
-                            .with_color(colors.annotation)
-                            .soft_wrap(false)
-                            .finish(),
+                        Text::new_inline(
+                            crate::menu_label(
+                                "requested_command.mcp_no_arguments",
+                                "(no arguments)",
+                            )
+                            .to_string(),
+                            font_family,
+                            TREE_FONT_SIZE,
+                        )
+                        .with_color(colors.annotation)
+                        .soft_wrap(false)
+                        .finish(),
                     );
                     col.finish()
                 };
@@ -1686,7 +1761,10 @@ impl View for RequestedCommandView {
                                 });
                             render_json_tree(
                                 &value,
-                                Some("Response"),
+                                Some(crate::menu_label(
+                                    "requested_command.mcp_response_label",
+                                    "Response",
+                                )),
                                 &self.mcp_response_tree_state,
                                 &colors,
                                 &format!("{}-resp", self.position_id_prefix),
@@ -1701,7 +1779,11 @@ impl View for RequestedCommandView {
                                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
                             col.add_child(
                                 Text::new_inline(
-                                    "Response".to_string(),
+                                    crate::menu_label(
+                                        "requested_command.mcp_response_label",
+                                        "Response",
+                                    )
+                                    .to_string(),
                                     font_family,
                                     TREE_FONT_SIZE,
                                 )
@@ -1722,7 +1804,11 @@ impl View for RequestedCommandView {
                                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
                             col.add_child(
                                 Text::new_inline(
-                                    "Response".to_string(),
+                                    crate::menu_label(
+                                        "requested_command.mcp_response_label",
+                                        "Response",
+                                    )
+                                    .to_string(),
                                     font_family,
                                     TREE_FONT_SIZE,
                                 )
@@ -1732,7 +1818,11 @@ impl View for RequestedCommandView {
                             );
                             col.add_child(
                                 Text::new_inline(
-                                    "Cancelled".to_string(),
+                                    crate::menu_label(
+                                        "requested_command.mcp_cancelled",
+                                        "Cancelled",
+                                    )
+                                    .to_string(),
                                     font_family,
                                     TREE_FONT_SIZE,
                                 )
@@ -2037,18 +2127,20 @@ impl TypedActionView for RequestedCommandView {
                     .as_deref()
                     .is_some_and(|t| !t.is_empty());
 
-                let copy_item: MenuItem<RequestedCommandViewAction> = MenuItemFields::new("Copy")
-                    .with_on_select_action(RequestedCommandViewAction::CopyMcpSelection)
-                    .with_disabled(!has_selection)
-                    .into_item();
+                let copy_item: MenuItem<RequestedCommandViewAction> =
+                    MenuItemFields::new(crate::menu_label("requested_command.copy", "Copy"))
+                        .with_on_select_action(RequestedCommandViewAction::CopyMcpSelection)
+                        .with_disabled(!has_selection)
+                        .into_item();
 
                 let json_for_menu = json_text.clone();
-                let copy_json_item: MenuItem<RequestedCommandViewAction> =
-                    MenuItemFields::new("Copy JSON")
-                        .with_on_select_action(RequestedCommandViewAction::CopyJsonToClipboard {
-                            text: json_for_menu,
-                        })
-                        .into_item();
+                let copy_json_item: MenuItem<RequestedCommandViewAction> = MenuItemFields::new(
+                    crate::menu_label("requested_command.copy_json", "Copy JSON"),
+                )
+                .with_on_select_action(RequestedCommandViewAction::CopyJsonToClipboard {
+                    text: json_for_menu,
+                })
+                .into_item();
 
                 self.mcp_context_menu.update(ctx, move |menu, ctx| {
                     menu.set_items(vec![copy_item, copy_json_item], ctx);
