@@ -20,7 +20,9 @@ use std::sync::Arc;
 use async_channel::Sender;
 use parking_lot::FairMutex;
 use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel, ToEscapeSequence as _};
-use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
+use warp_terminal::model::escape_sequences::{
+    alt_screen_scroll_to_pty_bytes, ModeProvider, BRACKETED_PASTE_END, BRACKETED_PASTE_START,
+};
 use warp_terminal::model::mouse::{MouseAction, MouseButton, MouseState};
 use warp_terminal::model::Point;
 use warpui_core::elements::tui::{
@@ -185,15 +187,57 @@ fn pty_bytes_for_event(event: &TuiEvent, model: &Arc<FairMutex<TerminalModel>>) 
     }
 }
 
-/// Encodes a supported pointer event for the foreground process.
+/// Encodes a pointer event using the current terminal state.
 fn pointer_pty_bytes(
     event: &TuiEvent,
     bounds: TuiScreenRect,
     model: &Arc<FairMutex<TerminalModel>>,
 ) -> Option<Vec<u8>> {
     let model = model.lock();
-    mouse_state_for_event(event, bounds, |mode| model.is_term_mode_set(mode))?
-        .to_escape_sequence(model.deref())
+    mouse_event_to_pty_bytes(
+        event,
+        bounds,
+        |mode| model.is_term_mode_set(mode),
+        model.is_alt_screen_active(),
+        model.deref(),
+    )
+}
+
+/// Encodes a supported pointer event for the foreground process.
+fn mouse_event_to_pty_bytes<T: ModeProvider>(
+    event: &TuiEvent,
+    bounds: TuiScreenRect,
+    is_mode_set: impl Fn(TermMode) -> bool,
+    allow_arrow_fallback: bool,
+    mode_provider: &T,
+) -> Option<Vec<u8>> {
+    if let TuiEvent::ScrollWheel {
+        position,
+        delta: (_, rows),
+        ..
+    } = event
+    {
+        if !bounds.contains(*position) {
+            return None;
+        }
+        let point = Point::new(
+            usize::try_from(i32::from(position.y) - bounds.origin.y).ok()?,
+            usize::try_from(i32::from(position.x) - bounds.origin.x).ok()?,
+        );
+        let report_mouse = is_mode_set(TermMode::SGR_MOUSE);
+        if !report_mouse && !allow_arrow_fallback {
+            return None;
+        }
+        return alt_screen_scroll_to_pty_bytes(
+            i32::try_from(*rows).ok()?,
+            point,
+            report_mouse,
+            mode_provider,
+        );
+    }
+
+    mouse_state_for_event(event, bounds, is_mode_set)
+        .and_then(|state| state.to_escape_sequence(mode_provider))
 }
 
 /// Converts a supported pointer event into the terminal's SGR mouse model.
@@ -205,10 +249,10 @@ fn mouse_state_for_event(
     if !is_mode_set(TermMode::SGR_MOUSE) {
         return None;
     }
-
-    let reports_clicks = is_mode_set(TermMode::MOUSE_REPORT_CLICK)
-        || is_mode_set(TermMode::MOUSE_DRAG)
-        || is_mode_set(TermMode::MOUSE_MOTION);
+    let reports_clicks = is_mode_set(TermMode::MOUSE_REPORT_CLICK);
+    let reports_drag = is_mode_set(TermMode::MOUSE_DRAG);
+    let reports_motion = is_mode_set(TermMode::MOUSE_MOTION);
+    let reports_clicks = reports_clicks || reports_drag || reports_motion;
     let position = event.position()?;
     if !bounds.contains(position) {
         return None;
@@ -229,8 +273,7 @@ fn mouse_state_for_event(
             MouseState::new(MouseButton::Left, MouseAction::Released, *modifiers)
         }
         TuiEvent::LeftMouseDragged { modifiers, .. }
-            if (is_mode_set(TermMode::MOUSE_DRAG) || is_mode_set(TermMode::MOUSE_MOTION))
-                && !modifiers.shift =>
+            if (reports_drag || reports_motion) && !modifiers.shift =>
         {
             MouseState::new(MouseButton::LeftDrag, MouseAction::Pressed, *modifiers)
         }
@@ -238,18 +281,7 @@ fn mouse_state_for_event(
             modifiers,
             is_synthetic: false,
             ..
-        } if is_mode_set(TermMode::MOUSE_MOTION) => {
-            MouseState::new(MouseButton::Move, MouseAction::Pressed, *modifiers)
-        }
-        TuiEvent::ScrollWheel {
-            delta: (_, rows), ..
-        } if reports_clicks && *rows != 0 => MouseState::new(
-            MouseButton::Wheel,
-            MouseAction::Scrolled {
-                delta: i32::try_from(*rows).ok()?,
-            },
-            Default::default(),
-        ),
+        } if reports_motion => MouseState::new(MouseButton::Move, MouseAction::Pressed, *modifiers),
         _ => return None,
     };
     Some(state.set_point(point))

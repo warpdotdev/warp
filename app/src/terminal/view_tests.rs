@@ -3843,44 +3843,6 @@ fn test_navigate_blocks() {
 // }
 
 #[test]
-fn test_alt_scroll_sequences() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-
-        let terminal = add_window_with_terminal(&mut app, None);
-        // Test scrolling a distance of zero lines.
-        terminal.update(&mut app, |view, _| {
-            let content = view.alt_scroll_sequences(0);
-            assert!(content.is_empty());
-        });
-        // Scroll down 3 lines
-        terminal.update(&mut app, |view, _| {
-            let content = view.alt_scroll_sequences(-3);
-            assert_eq!(content.len(), 3 * 3);
-            assert_eq!(
-                content
-                    .into_iter()
-                    .filter(|b| *b == escape_sequences::EscCodes::ARROW_DOWN)
-                    .count(),
-                3
-            );
-        });
-        // Scroll up 5 lines
-        terminal.update(&mut app, |view, _| {
-            let content = view.alt_scroll_sequences(5);
-            assert_eq!(content.len(), 5 * 3);
-            assert_eq!(
-                content
-                    .into_iter()
-                    .filter(|b| *b == escape_sequences::EscCodes::ARROW_UP)
-                    .count(),
-                5
-            );
-        });
-    })
-}
-
-#[test]
 fn test_not_bootstrapped() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

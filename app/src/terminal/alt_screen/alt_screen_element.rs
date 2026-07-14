@@ -472,20 +472,13 @@ impl AltScreenElement {
             .alt_screen_mut()
             .accumulate_lines_to_scroll(delta);
 
-        if should_intercept_scroll(&self.model.lock(), app) {
-            ctx.dispatch_typed_action(TerminalAction::AltScroll { delta });
-        } else {
-            let point = self.coord_to_point(local_position);
-
-            ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
-                MouseState::new(
-                    MouseButton::Wheel,
-                    MouseAction::Scrolled { delta },
-                    Default::default(),
-                )
-                .set_point(point),
-            ));
-        }
+        let point = self.coord_to_point(local_position);
+        let report_mouse = !should_intercept_scroll(&self.model.lock(), app);
+        ctx.dispatch_typed_action(TerminalAction::AltScroll {
+            delta,
+            point,
+            report_mouse,
+        });
         true
     }
 
