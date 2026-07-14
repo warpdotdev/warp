@@ -5956,12 +5956,11 @@ impl CodeReviewView {
                         ctx,
                     );
 
-                    // Enter agent view if enabled and not already active
-                    if FeatureFlag::AgentView.is_enabled()
-                        && !terminal_view
-                            .agent_view_controller()
-                            .as_ref(ctx)
-                            .is_active()
+                    // Enter agent view if not already active
+                    if !terminal_view
+                        .agent_view_controller()
+                        .as_ref(ctx)
+                        .is_active()
                     {
                         terminal_view.enter_agent_view_for_new_conversation(
                             None,
@@ -6170,12 +6169,11 @@ impl CodeReviewView {
                             context_model.register_diff_hunk_attachment(diff_hunk_key, attachment);
                         });
 
-                    // Enter agent view if enabled and not already active
-                    if FeatureFlag::AgentView.is_enabled()
-                        && !terminal_view
-                            .agent_view_controller()
-                            .as_ref(ctx)
-                            .is_active()
+                    // Enter agent view if not already active
+                    if !terminal_view
+                        .agent_view_controller()
+                        .as_ref(ctx)
+                        .is_active()
                     {
                         terminal_view.enter_agent_view_for_new_conversation(
                             None,

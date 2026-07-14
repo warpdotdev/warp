@@ -89,11 +89,7 @@ pub static INVOKE_SKILL: LazyLock<StaticCommand> = LazyLock::new(|| StaticComman
 pub static ADD_PROMPT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/add-prompt",
     description: "Add new Agent prompt",
-    icon_path: if FeatureFlag::AgentView.is_enabled() {
-        "bundled/svg/prompt.svg"
-    } else {
-        "bundled/svg/agentmode.svg"
-    },
+    icon_path: "bundled/svg/prompt.svg",
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -651,9 +647,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(CHANGELOG);
     }
 
-    if FeatureFlag::AgentView.is_enabled() {
-        commands.push(PROMPTS.clone());
-    }
+    commands.push(PROMPTS.clone());
 
     commands.push(OPEN_CODE_REVIEW);
 

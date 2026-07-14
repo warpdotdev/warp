@@ -131,20 +131,16 @@ impl SlashCommandRequest {
         // When AgentView is enabled, enter agent view which creates the conversation
         // and ensures AI blocks render correctly in the agent view.
         let Some(conversation_id) = conversation_id.or_else(|| {
-            if FeatureFlag::AgentView.is_enabled() {
-                controller.context_model.update(ctx, |context_model, ctx| {
-                    context_model
-                        .try_start_new_conversation(
-                            AgentViewEntryOrigin::SlashCommand {
-                                trigger: SlashCommandTrigger::input(),
-                            },
-                            ctx,
-                        )
-                        .ok()
-                })
-            } else {
-                Some(controller.start_new_conversation_for_request(ctx).id())
-            }
+            controller.context_model.update(ctx, |context_model, ctx| {
+                context_model
+                    .try_start_new_conversation(
+                        AgentViewEntryOrigin::SlashCommand {
+                            trigger: SlashCommandTrigger::input(),
+                        },
+                        ctx,
+                    )
+                    .ok()
+            })
         }) else {
             report_error!("Failed to get conversation ID for slash command request");
             return;

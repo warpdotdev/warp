@@ -13,7 +13,6 @@ use selection::BlockListSelection;
 pub use selection::SelectionRange;
 use sum_tree::{Dimension, Item, SeekBias, SumTree};
 use warp_core::command::ExitCode;
-use warp_core::features::FeatureFlag;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::color::ColorU;
 use warpui::r#async::executor::Background;
@@ -110,10 +109,6 @@ impl RichContentItem {
     }
 
     pub fn should_hide_for_transcript_scope(&self, transcript_scope: &TranscriptScope) -> bool {
-        if !FeatureFlag::AgentView.is_enabled() {
-            return false;
-        }
-
         match transcript_scope {
             TranscriptScope::Unfiltered => false,
             TranscriptScope::Terminal => self.agent_view_conversation_id.is_some(),

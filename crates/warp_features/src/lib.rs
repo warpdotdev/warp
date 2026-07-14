@@ -538,8 +538,6 @@ pub enum FeatureFlag {
     /// Enables scheduled ambient agents.
     ScheduledAmbientAgents,
 
-    AgentView,
-
     /// Enables block context functionality in Agent View.
     AgentViewBlockContext,
 

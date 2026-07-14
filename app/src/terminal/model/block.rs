@@ -20,7 +20,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 pub use serialized_block::*;
 use warp_core::command::ExitCode;
-use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_terminal::model::grid::Dimensions as _;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
@@ -431,8 +430,6 @@ pub struct Block {
     restored_block_was_local: Option<bool>,
 
     /// Tracks which views (terminal and/or agent conversations) this block should be visible in.
-    ///
-    /// This is only used if `FeatureFlag::AgentView` is enabled.
     agent_view_visibility: AgentViewVisibility,
 
     /// Whether natural language detection (NLD) was overridden (i.e., the user had manually locked
@@ -1406,43 +1403,41 @@ impl Block {
         if self.hidden {
             return true;
         }
-        if FeatureFlag::AgentView.is_enabled() {
-            match transcript_scope {
-                TranscriptScope::Conversation(active_id) => {
-                    // Agent view is active - show only blocks that belong to this conversation
-                    let visible_in_conversation = match &self.agent_view_visibility {
-                        AgentViewVisibility::Terminal {
-                            pending_conversation_ids,
-                            conversation_ids,
-                        } => {
-                            pending_conversation_ids.contains(active_id)
-                                || conversation_ids.contains(active_id)
-                        }
-                        AgentViewVisibility::Agent {
-                            origin_conversation_id,
-                            pending_other_conversation_ids,
-                            other_conversation_ids,
-                        } => {
-                            active_id == origin_conversation_id
-                                || pending_other_conversation_ids.contains(active_id)
-                                || other_conversation_ids.contains(active_id)
-                        }
-                    };
-                    if !visible_in_conversation {
-                        return true;
+        match transcript_scope {
+            TranscriptScope::Conversation(active_id) => {
+                // Agent view is active - show only blocks that belong to this conversation
+                let visible_in_conversation = match &self.agent_view_visibility {
+                    AgentViewVisibility::Terminal {
+                        pending_conversation_ids,
+                        conversation_ids,
+                    } => {
+                        pending_conversation_ids.contains(active_id)
+                            || conversation_ids.contains(active_id)
                     }
-                }
-                TranscriptScope::Terminal => {
-                    // Terminal view - hide blocks that were created in agent mode
-                    if matches!(
-                        self.agent_view_visibility,
-                        AgentViewVisibility::Agent { .. }
-                    ) {
-                        return true;
+                    AgentViewVisibility::Agent {
+                        origin_conversation_id,
+                        pending_other_conversation_ids,
+                        other_conversation_ids,
+                    } => {
+                        active_id == origin_conversation_id
+                            || pending_other_conversation_ids.contains(active_id)
+                            || other_conversation_ids.contains(active_id)
                     }
+                };
+                if !visible_in_conversation {
+                    return true;
                 }
-                TranscriptScope::Unfiltered => {}
             }
+            TranscriptScope::Terminal => {
+                // Terminal view - hide blocks that were created in agent mode
+                if matches!(
+                    self.agent_view_visibility,
+                    AgentViewVisibility::Agent { .. }
+                ) {
+                    return true;
+                }
+            }
+            TranscriptScope::Unfiltered => {}
         }
 
         let is_bootstrap_block = self.bootstrap_stage == BootstrapStage::WarpInput;

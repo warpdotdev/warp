@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
@@ -478,26 +477,25 @@ impl View for PlanAndTodoListView {
         );
         let icon_size = (base_icon_size * 1.1).min(text_line_height);
 
-        let todo_list = self.todo_list(app);
         let ai_document_id = self.ai_document_id(app);
+        let todo_list = self.todo_list(app);
+        let has_todo_list = todo_list.is_some();
+        let has_planning_document = ai_document_id.is_some();
 
         let mut row = Flex::row();
-        // Only show plan chip when AgentView is not enabled
-        if !FeatureFlag::AgentView.is_enabled() {
-            if let Some(ai_document_id) = ai_document_id {
-                row.add_child(self.render_plan_button(
-                    ai_document_id,
-                    todo_list.is_some(),
-                    icon_size,
-                    appearance,
-                    app,
-                ));
-            }
+        if let Some(ai_document_id) = ai_document_id {
+            row.add_child(self.render_plan_button(
+                ai_document_id,
+                has_todo_list,
+                icon_size,
+                appearance,
+                app,
+            ));
         }
         if let Some(todo_list) = todo_list {
             row.add_child(self.render_todo_button(
                 &todo_list,
-                ai_document_id.is_some() && !FeatureFlag::AgentView.is_enabled(),
+                has_planning_document,
                 icon_size,
                 appearance,
                 app,

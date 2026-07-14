@@ -72,8 +72,6 @@ impl Input {
     }
 
     /// Renders the input when there is an active `AgentView`.
-    ///
-    /// Only used when `FeatureFlag::AgentView` is enabled.
     pub(super) fn render_agent_input(&self, app: &AppContext) -> Box<dyn Element> {
         if self.is_cloud_mode_input_v2_composing(app) {
             return self.render_cloud_mode_v2_composing_input(app);

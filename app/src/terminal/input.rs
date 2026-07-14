@@ -23,7 +23,6 @@ mod suggestions_mode_menu;
 pub mod suggestions_mode_model;
 mod terminal;
 mod terminal_message_bar;
-mod universal;
 pub mod user_query;
 
 use std::any::Any;
@@ -82,10 +81,10 @@ use warpui::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
 use warpui::color::ColorU;
 use warpui::elements::{
     resizable_state_handle, Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, DispatchEventResult, DropTargetData, Element, EventHandler,
-    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType,
-    ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius,
-    ResizableStateHandle, SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor,
+    CornerRadius, DispatchEventResult, DropTargetData, Element, EventHandler, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
+    ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius, ResizableStateHandle,
+    SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor,
 };
 pub use warpui::elements::{ParentElement as _, Stack};
 pub use warpui::geometry::vector::{vec2f, Vector2F};
@@ -173,10 +172,10 @@ use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::ai::blocklist::{
-    ai_brand_color, ai_indicator_height, render_ai_agent_mode_icon, render_ai_follow_up_icon,
-    AttachmentType, BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
+    ai_brand_color, ai_indicator_height, AttachmentType, BlocklistAIActionModel,
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
     InputTypeAutoDetectionSource, PendingAttachment, PendingFile, QueuedQuery, QueuedQueryEvent,
     QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
@@ -470,8 +469,6 @@ pub const SET_INPUT_MODE_UNLOCKED_AGENT_ACTION_NAME: &str = "input:set_mode_unlo
 /// Action name for setting input mode to unlocked terminal mode (with natural language detection)
 pub const SET_INPUT_MODE_UNLOCKED_TERMINAL_ACTION_NAME: &str = "input:set_mode_unlocked_terminal";
 
-const START_NEW_CONVERSATION_KEYBINDING_NAME: &str = "input:start_new_agent_conversation";
-
 /// The position ID used to identify the start of the replacement span for completions.
 const COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID: &str =
     "start_of_completions_replacement_span";
@@ -482,9 +479,6 @@ const MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING: usize = 2;
 
 const AI_COMMAND_SEARCH_TRIGGER: &str = "#";
 const QUEUED_PROMPT_INLINE_EDITOR_OPEN_CONTEXT: &str = "QueuedPromptInlineEditorOpen";
-
-/// If the editor buffer matches this prefix, AI input is enabled.
-const AI_INPUT_PREFIX: &str = "* ";
 
 /// If the editor buffer matches this prefix, terminal input is enabled and locked.
 const TERMINAL_INPUT_PREFIX: &str = "!";
@@ -787,9 +781,7 @@ impl InputSuggestionsMode {
             InputSuggestionsMode::SkillMenu => Some("Search skills"),
             InputSuggestionsMode::ModelSelector => Some("Search models"),
             InputSuggestionsMode::ProfileSelector => Some("Search profiles"),
-            InputSuggestionsMode::SlashCommands if FeatureFlag::AgentView.is_enabled() => {
-                Some("Search commands")
-            }
+            InputSuggestionsMode::SlashCommands => Some("Search commands"),
             InputSuggestionsMode::PromptsMenu => Some("Search prompts"),
             InputSuggestionsMode::IndexedReposMenu => Some("Search indexed repos"),
             InputSuggestionsMode::PlanMenu { .. } => Some("Search plans"),
@@ -1985,22 +1977,6 @@ pub fn init(app: &mut AppContext) {
         .with_group(bindings::BindingGroup::WarpAi.as_str())
         .with_custom_action(CustomAction::AISearch),
         EditableBinding::new(
-            START_NEW_CONVERSATION_KEYBINDING_NAME,
-            "New agent conversation",
-            InputAction::StartNewAgentConversation {
-                origin: AgentViewEntryOrigin::Input {
-                    was_prompt_autodetected: false,
-                },
-            },
-        )
-        .with_enabled(|| !FeatureFlag::AgentView.is_enabled())
-        .with_group(bindings::BindingGroup::WarpAi.as_str())
-        .with_context_predicate(
-            id!("Input") & id!(flags::IS_ANY_AI_ENABLED) & id!("TerminalView_NonEmptyBlockList"),
-        )
-        .with_mac_key_binding("cmd-shift-N")
-        .with_linux_or_windows_key_binding("ctrl-alt-shift-N"),
-        EditableBinding::new(
             "input:enable_auto_detection",
             "Trigger Auto Detection",
             InputAction::EnableAutoDetection,
@@ -2067,19 +2043,17 @@ pub fn init(app: &mut AppContext) {
             & id!(flags::PASSIVE_CODE_DIFF_KEYBINDINGS_ENABLED),
     )]);
 
-    if FeatureFlag::AgentView.is_enabled() {
-        app.register_fixed_bindings([FixedBinding::new(
-            "shift-?",
-            InputAction::ToggleAgentViewShortcuts,
-            id!("Input")
-                & !id!("IMEOpen")
-                & id!(flags::EMPTY_INPUT_BUFFER)
-                & id!(flags::ACTIVE_AGENT_VIEW)
-                & !id!("LongRunningCommand")
-                & !id!(QUEUED_PROMPT_INLINE_EDITOR_OPEN_CONTEXT)
-                & !(id!(flags::TERMINAL_MODE_INPUT) & id!(flags::LOCKED_INPUT)),
-        )]);
-    }
+    app.register_fixed_bindings([FixedBinding::new(
+        "shift-?",
+        InputAction::ToggleAgentViewShortcuts,
+        id!("Input")
+            & !id!("IMEOpen")
+            & id!(flags::EMPTY_INPUT_BUFFER)
+            & id!(flags::ACTIVE_AGENT_VIEW)
+            & !id!("LongRunningCommand")
+            & !id!(QUEUED_PROMPT_INLINE_EDITOR_OPEN_CONTEXT)
+            & !(id!(flags::TERMINAL_MODE_INPUT) & id!(flags::LOCKED_INPUT)),
+    )]);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2870,8 +2844,7 @@ impl Input {
                             let is_universal_developer_input_enabled = InputSettings::as_ref(app)
                                 .is_universal_developer_input_enabled(app);
 
-                            if (!FeatureFlag::AgentView.is_enabled()
-                                || !agent_view_controller_clone.as_ref(app).is_active())
+                            if !agent_view_controller_clone.as_ref(app).is_active()
                                 && should_render_prompt_using_editor_decorator_elements(
                                     is_universal_developer_input_enabled,
                                     &ai_input_model,
@@ -2937,11 +2910,7 @@ impl Input {
                             ai_input_model_clone.as_ref(app).is_ai_input_enabled();
                         let appearance = Appearance::as_ref(app);
                         if is_ai_input_enabled {
-                            let color_identifier = if FeatureFlag::AgentView.is_enabled() {
-                                AnsiColorIdentifier::Magenta
-                            } else {
-                                AnsiColorIdentifier::Yellow
-                            };
+                            let color_identifier = AnsiColorIdentifier::Magenta;
                             let cursor_color = color_identifier
                                 .to_ansi_color(&appearance.theme().terminal_colors().normal);
                             let selection_color = ColorU::new(
@@ -2991,9 +2960,7 @@ impl Input {
                                 .insert(flags::CTRL_ENTER_ACCEPTS_PROMPT_SUGGESTION);
                         }
 
-                        if FeatureFlag::AgentView.is_enabled() {
-                            context.set.insert(flags::AGENT_VIEW_ENABLED);
-                        }
+                        context.set.insert(flags::AGENT_VIEW_ENABLED);
 
                         if !other_agent_view_controller_clone.as_ref(app).is_active()
                             && !cfg!(target_os = "macos")
@@ -3501,14 +3468,12 @@ impl Input {
                 ctx,
             )
         });
-        if FeatureFlag::AgentView.is_enabled() {
-            ctx.subscribe_to_view(&inline_conversation_menu_view, |me, _, event, ctx| {
-                me.handle_conversation_menu_event(event, ctx);
-            });
-            ctx.subscribe_to_model(&inline_terminal_menu_positioner, |_, _, _, ctx| {
-                ctx.notify();
-            });
-        }
+        ctx.subscribe_to_view(&inline_conversation_menu_view, |me, _, event, ctx| {
+            me.handle_conversation_menu_event(event, ctx);
+        });
+        ctx.subscribe_to_model(&inline_terminal_menu_positioner, |_, _, _, ctx| {
+            ctx.notify();
+        });
 
         let inline_repos_menu_view = ctx.add_view(|ctx| {
             InlineReposMenuView::new(
@@ -3594,11 +3559,9 @@ impl Input {
                 ctx,
             )
         });
-        if FeatureFlag::AgentView.is_enabled() {
-            ctx.subscribe_to_view(&user_query_menu_view, |me, _, event, ctx| {
-                me.handle_user_query_menu_event(event, ctx);
-            });
-        }
+        ctx.subscribe_to_view(&user_query_menu_view, |me, _, event, ctx| {
+            me.handle_user_query_menu_event(event, ctx);
+        });
 
         let inline_plan_menu_view = ctx.add_view(|ctx| {
             InlinePlanMenuView::new(
@@ -3892,11 +3855,9 @@ impl Input {
             ai_input_model.input_type(),
             ai_settings.is_voice_input_enabled(ctx),
         ) {
-            (InputType::AI, true) => crate::editor::VoiceTranscriptionOptions::Enabled {
-                // If UDI is enabled, we show the button below the text input
-                show_button: !self.should_show_universal_developer_input(ctx)
-                    && !FeatureFlag::AgentView.is_enabled(),
-            },
+            (InputType::AI, true) => {
+                crate::editor::VoiceTranscriptionOptions::Enabled { show_button: false }
+            }
             (InputType::Shell, true) => {
                 crate::editor::VoiceTranscriptionOptions::Enabled { show_button: false }
             }
@@ -4366,7 +4327,6 @@ impl Input {
         *edit_origin == EditOrigin::UserTyped
             && AISettings::as_ref(ctx).is_ampersand_handoff_enabled(ctx)
             && !is_powershell_with_nld_enabled
-            && FeatureFlag::AgentView.is_enabled()
             && self.agent_view_controller.as_ref(ctx).is_fullscreen()
             && !is_cloud
             && !CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
@@ -4882,8 +4842,7 @@ impl Input {
             self.close_slash_commands_menu(ctx);
         } else {
             self.system_insert("/", ctx);
-            let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
-                && self.agent_view_controller.as_ref(ctx).is_fullscreen();
+            let is_in_agent_view = self.agent_view_controller.as_ref(ctx).is_fullscreen();
             send_telemetry_from_ctx!(
                 TelemetryEvent::OpenSlashMenu {
                     source: SlashMenuSource::SlashButton,
@@ -4902,8 +4861,7 @@ impl Input {
     ) {
         match event {
             InlineConversationMenuEvent::NavigateToConversation { item_id } => {
-                let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
-                    && self.agent_view_controller.as_ref(ctx).is_fullscreen();
+                let is_in_agent_view = self.agent_view_controller.as_ref(ctx).is_fullscreen();
                 send_telemetry_from_ctx!(
                     TelemetryEvent::InlineConversationMenuItemSelected { is_in_agent_view },
                     ctx
@@ -5365,8 +5323,7 @@ impl Input {
         self.suggestions_mode_model.update(ctx, |model, ctx| {
             model.set_mode(InputSuggestionsMode::ConversationMenu, ctx);
         });
-        let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(ctx).is_fullscreen();
+        let is_in_agent_view = self.agent_view_controller.as_ref(ctx).is_fullscreen();
         send_telemetry_from_ctx!(
             TelemetryEvent::InlineConversationMenuOpened { is_in_agent_view },
             ctx
@@ -5424,8 +5381,7 @@ impl Input {
                     destination,
                 });
 
-                let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
-                    && self.agent_view_controller.as_ref(ctx).is_active();
+                let is_in_agent_view = self.agent_view_controller.as_ref(ctx).is_active();
                 send_telemetry_from_ctx!(
                     TelemetryEvent::SlashCommandAccepted {
                         command_details: SlashCommandAcceptedDetails::StaticCommand {
@@ -5723,8 +5679,7 @@ impl Input {
                     exchange_id: *exchange_id,
                 });
 
-                let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
-                    && self.agent_view_controller.as_ref(ctx).is_active();
+                let is_in_agent_view = self.agent_view_controller.as_ref(ctx).is_active();
                 send_telemetry_from_ctx!(
                     TelemetryEvent::SlashCommandAccepted {
                         command_details: SlashCommandAcceptedDetails::StaticCommand {
@@ -5847,9 +5802,7 @@ impl Input {
         }
 
         // Enter agent view if not already active
-        if FeatureFlag::AgentView.is_enabled()
-            && !self.agent_view_controller.as_ref(ctx).is_active()
-        {
+        if !self.agent_view_controller.as_ref(ctx).is_active() {
             self.agent_view_controller.update(ctx, |controller, ctx| {
                 let _ = controller.try_enter_agent_view(
                     None,
@@ -6633,15 +6586,11 @@ impl Input {
         }
 
         let ai_settings = AISettings::as_ref(ctx);
-        if FeatureFlag::AgentView.is_enabled() {
-            if self.agent_view_controller.as_ref(ctx).is_fullscreen() {
-                if !ai_settings.is_ai_autodetection_enabled(ctx) {
-                    return;
-                }
-            } else if !ai_settings.is_nld_in_terminal_enabled(ctx) {
+        if self.agent_view_controller.as_ref(ctx).is_fullscreen() {
+            if !ai_settings.is_ai_autodetection_enabled(ctx) {
                 return;
             }
-        } else if !ai_settings.is_ai_autodetection_enabled(ctx) {
+        } else if !ai_settings.is_nld_in_terminal_enabled(ctx) {
             return;
         }
 
@@ -6763,13 +6712,6 @@ impl Input {
             }
             UniversalDeveloperInputButtonBarEvent::OpenSlashCommandMenu => {
                 self.focus_input_box(ctx);
-                if !FeatureFlag::AgentView.is_enabled() {
-                    self.ensure_agent_mode_for_ai_features(
-                        false,
-                        Some(InputTypeAutoDetectionSource::SlashCommand),
-                        ctx,
-                    );
-                }
                 self.toggle_legacy_slash_commands_menu(ctx);
             }
         }
@@ -6796,7 +6738,7 @@ impl Input {
     /// callers without a meaningful source may pass `None`.
     pub fn ensure_agent_mode_for_ai_features(
         &mut self,
-        should_override_shell_lock: bool,
+        _should_override_shell_lock: bool,
         decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -6804,10 +6746,7 @@ impl Input {
         let config = ai_input_model.input_config();
 
         // Don't force agent mode if user has explicitly locked to Shell mode
-        if (!should_override_shell_lock || FeatureFlag::AgentView.is_enabled())
-            && config.is_locked
-            && !config.input_type.is_ai()
-        {
+        if config.is_locked && !config.input_type.is_ai() {
             return;
         }
         self.enter_ai_mode(decision_source, ctx);
@@ -9235,15 +9174,10 @@ impl Input {
             self.editor.update(ctx, |editor, editor_ctx| {
                 editor.handle_action(&EditorAction::VimEscape, editor_ctx);
             });
-        } else if FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(ctx).is_active()
-            && has_attached_context
-        {
+        } else if self.agent_view_controller.as_ref(ctx).is_active() && has_attached_context {
             self.clear_attached_context(ctx);
         } else {
-            if FeatureFlag::AgentView.is_enabled()
-                && !self.agent_view_controller.as_ref(ctx).is_fullscreen()
-            {
+            if !self.agent_view_controller.as_ref(ctx).is_fullscreen() {
                 if self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
                     // This implies the contents of the terminal input are autodetected as an agent
                     // prompt; overrides the autodetection by explicitly setting input mode back to
@@ -10288,59 +10222,8 @@ impl Input {
                 let is_input_mode_locked = self.ai_input_model.as_ref(ctx).is_input_type_locked();
                 let buffer_text = self.buffer_text(ctx);
 
-                // If the last buffer didn't start with the AI input prefix and the current buffer does, then enable AI input.
-                if FeatureFlag::AgentMode.is_enabled()
-                    && !FeatureFlag::AgentView.is_enabled()
-                    && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-                    && (!is_ai_input_enabled || !is_input_mode_locked)
-                {
-                    if buffer_text.starts_with(AI_INPUT_PREFIX)
-                        && *edit_origin == EditOrigin::UserTyped
-                    {
-                        let last_buffer_text = self.editor.as_ref(ctx).last_buffer_text(ctx);
-
-                        if !last_buffer_text.starts_with(AI_INPUT_PREFIX) {
-                            // Remove the prefix from the editor contents.
-                            let is_input_buffer_empty =
-                                self.editor.update(ctx, |editor_view, ctx| {
-                                    if let Some(query) =
-                                        editor_view.buffer_text(ctx).strip_prefix(AI_INPUT_PREFIX)
-                                    {
-                                        editor_view.set_buffer_text(query, ctx);
-                                    }
-                                    editor_view.buffer_text(ctx).is_empty()
-                                });
-
-                            self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                                ai_input_model.set_input_config(
-                                    InputConfig {
-                                        input_type: InputType::AI,
-                                        is_locked: true,
-                                    },
-                                    is_input_buffer_empty,
-                                    Some(InputTypeAutoDetectionSource::AgentModePrefix),
-                                    ctx,
-                                );
-                            });
-                        }
-                    } else if buffer_text.is_empty() && is_input_mode_locked {
-                        self.ai_input_model.update(ctx, |input_model, ctx| {
-                            input_model.set_input_config_for_classic_mode(
-                                input_model
-                                    .input_config()
-                                    .unlocked_if_autodetection_enabled(false, ctx),
-                                ctx,
-                            );
-                        });
-                    }
-
-                    ctx.notify();
-                }
-
                 let ai_settings = AISettings::as_ref(ctx);
-                if FeatureFlag::AgentView.is_enabled()
-                    && buffer_text.is_empty()
-                    && self.prefix_mode(ctx) != InputPrefixMode::CloudHandoff
+                if buffer_text.is_empty() && self.prefix_mode(ctx) != InputPrefixMode::CloudHandoff
                 {
                     let last_buffer_text = self.editor.as_ref(ctx).last_buffer_text(ctx);
                     let was_shell_mode_prefix_stripped =
@@ -10394,9 +10277,7 @@ impl Input {
                     });
                 if FeatureFlag::AgentMode.is_enabled()
                     && !is_locked_shell_mode
-                    && (!FeatureFlag::AgentView.is_enabled()
-                        || is_agent_view_active
-                        || is_cli_agent_bash_mode_input_open)
+                    && (is_agent_view_active || is_cli_agent_bash_mode_input_open)
                     && !is_agent_in_control_or_tagged_in
                     && self.prefix_mode(ctx) != InputPrefixMode::CloudHandoff
                 {
@@ -11314,11 +11195,6 @@ impl Input {
             return true;
         }
 
-        let is_udi_enabled = InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
-        if !is_udi_enabled && !FeatureFlag::AgentView.is_enabled() {
-            return false;
-        }
-
         // Check if Agent Mode enabled, in active agent view, or if the buffer is empty
         // (if the buffer is empty, we assume that the user wants the images to be attached).
         let ai_input = self.ai_input_model.as_ref(ctx);
@@ -11455,10 +11331,7 @@ impl Input {
             .block_list()
             .active_block()
             .is_active_and_long_running();
-        if !FeatureFlag::AgentView.is_enabled()
-            || self.agent_view_controller.as_ref(ctx).is_active()
-            || is_in_long_running_command
-        {
+        if self.agent_view_controller.as_ref(ctx).is_active() || is_in_long_running_command {
             return;
         }
 
@@ -11575,8 +11448,7 @@ impl Input {
 
         // When the agent view is active, the classic-mode AI icon toggling and follow-up clearing
         // logic below does not apply.
-        if FeatureFlag::AgentView.is_enabled() && self.agent_view_controller.as_ref(ctx).is_active()
-        {
+        if self.agent_view_controller.as_ref(ctx).is_active() {
             return;
         }
 
@@ -13070,9 +12942,7 @@ impl Input {
         ai_query: String,
         ctx: &mut ViewContext<Self>,
     ) {
-        if FeatureFlag::AgentView.is_enabled()
-            && !self.agent_view_controller.as_ref(ctx).is_active()
-        {
+        if !self.agent_view_controller.as_ref(ctx).is_active() {
             self.agent_view_controller.update(ctx, |controller, ctx| {
                 let _ =
                     controller.try_enter_agent_view(None, AgentViewEntryOrigin::ProjectEntry, ctx);
@@ -13084,9 +12954,7 @@ impl Input {
     }
 
     pub(crate) fn initiate_clone_repository(&mut self, url: String, ctx: &mut ViewContext<Self>) {
-        if FeatureFlag::AgentView.is_enabled()
-            && !self.agent_view_controller.as_ref(ctx).is_active()
-        {
+        if !self.agent_view_controller.as_ref(ctx).is_active() {
             self.agent_view_controller.update(ctx, |controller, ctx| {
                 let _ =
                     controller.try_enter_agent_view(None, AgentViewEntryOrigin::ProjectEntry, ctx);
@@ -13576,21 +13444,6 @@ impl Input {
         // NaturalLanguageCommandSearch has its own `cmd+enter` behaviour, not expected to execute here
         let mode = self.suggestions_mode_model.as_ref(ctx).mode().clone();
         match &mode {
-            InputSuggestionsMode::CompletionSuggestions { .. }
-            | InputSuggestionsMode::HistoryUp { .. }
-                // If FeatureFlag::AgentView is enabled, cmd-enter should unconditionally enter the
-                // agent view with the current buffer contents as agent input.
-                //
-                // I'm (ZB) not even sure what this legacy behavior is for, because if you have any
-                // selected completion or history suggestion, that suggestion has already been
-                // inserted into the buffer so enter (without cmd- prefix) would directly execute
-                // it anyway.
-                if !FeatureFlag::AgentView.is_enabled() =>
-            {
-                self.input_suggestions.update(ctx, |suggestions, ctx| {
-                    suggestions.confirm_and_execute(ctx);
-                });
-            }
             InputSuggestionsMode::DynamicWorkflowEnumSuggestions {
                 dynamic_enum_status: DynamicEnumSuggestionStatus::Unapproved,
                 command,
@@ -13599,9 +13452,7 @@ impl Input {
                 let editor_model = self.editor.read(ctx, |view, ctx| view.snapshot_model(ctx));
                 self.get_enum_suggestions_async(command.clone(), editor_model, ctx);
             }
-            InputSuggestionsMode::ModelSelector
-                if FeatureFlag::InlineMenuHeaders.is_enabled() =>
-            {
+            InputSuggestionsMode::ModelSelector if FeatureFlag::InlineMenuHeaders.is_enabled() => {
                 self.inline_model_selector_view
                     .update(ctx, |view, ctx| view.accept_selected_item(true, ctx));
             }
@@ -13614,9 +13465,7 @@ impl Input {
                     .update(ctx, |view, ctx| view.accept_selected_item(true, ctx));
             }
             _ => {
-                if FeatureFlag::AgentView.is_enabled()
-                    && self.maybe_handle_cmd_or_ctrl_shift_enter_for_slash_command(ctx)
-                {
+                if self.maybe_handle_cmd_or_ctrl_shift_enter_for_slash_command(ctx) {
                     return;
                 }
                 // In cloud mode (ambient agent), Cmd+Enter should exit cloud mode entirely and start a
@@ -13650,7 +13499,6 @@ impl Input {
                         })
                         .cloned()
                 };
-
 
                 if let Some(command) = cmd_enter_slash_command {
                     self.select_slash_command(&command, SlashCommandTrigger::keybinding(), ctx);
@@ -14212,9 +14060,7 @@ impl Input {
 
         // If the agent view is inactive but the current input is detected as AI, submitting
         // this query triggers entering the agent view.
-        if FeatureFlag::AgentView.is_enabled()
-            && !self.agent_view_controller.as_ref(ctx).is_active()
-        {
+        if !self.agent_view_controller.as_ref(ctx).is_active() {
             let prompt = self.editor.as_ref(ctx).buffer_text(ctx);
             let prompt = prompt.trim().to_owned();
             // Don't enter the agent view if input is autodetected as AI but the input is empty.
@@ -14770,8 +14616,7 @@ impl Input {
         // unambiguously "talk to the agent"; letting the classifier flip the input back to
         // shell mode would be a bug.
         let has_locking_attachment = self.ai_context_model.as_ref(ctx).has_locking_attachment();
-        let should_unlock = FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(ctx).is_fullscreen()
+        let should_unlock = self.agent_view_controller.as_ref(ctx).is_fullscreen()
             && is_input_buffer_empty
             && AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
             && !has_locking_attachment;
@@ -14913,18 +14758,8 @@ impl Input {
         if matches!(edit_origin, EditOrigin::UserTyped) {
             self.model.lock().set_is_input_dirty(true);
         }
-        // If not in Agent Mode, clear any active text selections in the blocklist when inserting
-        // new text. Note that the TerminalModel lock is instantly dropped after this expression,
-        // since it's stored in a temporary variable.
-        //
-        // When `FeatureFlag::AgentView` is enabled, blocks are attachable as AI context in terminal
-        // mode. Selections are preserved so they can be attached to the query when entering the
-        // agent view.
-        if !self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
-            && !FeatureFlag::AgentView.is_enabled()
-        {
-            self.model.lock().block_list_mut().clear_selection();
-        }
+        // Blocks are attachable as AI context in terminal mode, so selections are preserved
+        // here (they can be attached to the query when entering the agent view).
 
         ctx.focus(&self.editor);
         self.editor.update(ctx, |editor, ctx| match edit_origin {
@@ -15478,8 +15313,7 @@ impl Input {
             .with_height(2. * appearance.line_height_ratio() * appearance.monospace_font_size())
             .finish();
         let should_use_udi_spacing = self.should_show_universal_developer_input(app)
-            || (FeatureFlag::AgentView.is_enabled()
-                && self.agent_view_controller.as_ref(app).is_active());
+            || self.agent_view_controller.as_ref(app).is_active();
         let mut container: Container = Container::new(constrained_banner);
         let (suggestion_to_prompt_padding, suggestion_to_input_border_padding) =
             if should_use_udi_spacing {
@@ -15639,10 +15473,9 @@ impl Input {
             terminal_settings.terminal_input_spacing(appearance.line_height_ratio(), app);
         let mut bottom_padding = terminal_spacing.editor_bottom_padding;
 
-        // When `FeatureFlag::AgentView` is enabled, always render with UDI-style spacing values,
-        // regardless of terminal/agent mode or prompt setting.
-        let is_udi_style_spacing =
-            self.should_show_universal_developer_input(app) || FeatureFlag::AgentView.is_enabled();
+        // Always render with UDI-style spacing values, regardless of terminal/agent mode or
+        // prompt setting.
+        let is_udi_style_spacing = true;
 
         let is_compact_mode =
             matches!(terminal_settings.spacing_mode.value(), SpacingMode::Compact)
@@ -16010,35 +15843,21 @@ impl TypedActionView for Input {
                     return;
                 }
 
-                if FeatureFlag::AgentView.is_enabled() {
-                    if let AgentViewEntryOrigin::Keybinding(keystroke) = origin {
-                        let should_start_new_conversation =
-                            self.agent_view_controller.update(ctx, |controller, ctx| {
-                                controller.should_start_new_conversation_for_keystroke(
-                                    keystroke.clone(),
-                                    ctx,
-                                )
-                            });
-                        if !should_start_new_conversation {
-                            return;
-                        }
+                if let AgentViewEntryOrigin::Keybinding(keystroke) = origin {
+                    let should_start_new_conversation =
+                        self.agent_view_controller.update(ctx, |controller, ctx| {
+                            controller
+                                .should_start_new_conversation_for_keystroke(keystroke.clone(), ctx)
+                        });
+                    if !should_start_new_conversation {
+                        return;
                     }
-                    ctx.emit(Event::EnterAgentView {
-                        initial_prompt: None,
-                        conversation_id: None,
-                        origin: origin.clone(),
-                    });
-                } else if self.should_show_universal_developer_input(ctx) {
-                    // Clear follow-up state (start a fresh conversation)
-                    self.ai_context_model.update(ctx, |ai_context_model, ctx| {
-                        ai_context_model
-                            .set_pending_query_state_for_new_conversation(origin.clone(), ctx);
-                    });
-                    self.enter_ai_mode(
-                        Some(InputTypeAutoDetectionSource::StartNewConversation),
-                        ctx,
-                    );
                 }
+                ctx.emit(Event::EnterAgentView {
+                    initial_prompt: None,
+                    conversation_id: None,
+                    origin: origin.clone(),
+                });
             }
             InputAction::OpenInlineHistoryMenu => {
                 self.open_inline_history_menu(ctx);
@@ -16137,14 +15956,12 @@ impl View for Input {
 
         // Keep Input's keymap context in sync with TerminalView's context for AgentView-related
         // bindings (e.g. cmd-i).
-        if FeatureFlag::AgentView.is_enabled() {
-            ctx.set.insert(flags::AGENT_VIEW_ENABLED);
-            let agent_view_state = self.agent_view_controller.as_ref(app).agent_view_state();
-            if agent_view_state.is_fullscreen() {
-                ctx.set.insert(flags::ACTIVE_AGENT_VIEW);
-            } else if agent_view_state.is_inline() {
-                ctx.set.insert(flags::ACTIVE_INLINE_AGENT_VIEW);
-            }
+        ctx.set.insert(flags::AGENT_VIEW_ENABLED);
+        let agent_view_state = self.agent_view_controller.as_ref(app).agent_view_state();
+        if agent_view_state.is_fullscreen() {
+            ctx.set.insert(flags::ACTIVE_AGENT_VIEW);
+        } else if agent_view_state.is_inline() {
+            ctx.set.insert(flags::ACTIVE_INLINE_AGENT_VIEW);
         }
 
         if self.buffer_text(app).is_empty() {
@@ -16299,7 +16116,6 @@ impl View for Input {
         if CLIAgentSessionsModel::as_ref(app).is_input_open(self.terminal_view_id) {
             return self.render_cli_agent_input(app);
         }
-        let is_universal_input = self.should_show_universal_developer_input(app);
         let should_show_status_footer =
             self.ambient_agent_view_model()
                 .is_some_and(|ambient_agent_model| {
@@ -16308,17 +16124,10 @@ impl View for Input {
 
         if FeatureFlag::CloudMode.is_enabled() && should_show_status_footer {
             self.render_ambient_agent_status_footer(app)
-        } else if FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(app).is_active()
-        {
+        } else if self.agent_view_controller.as_ref(app).is_active() {
             self.render_agent_input(app)
-        } else if FeatureFlag::AgentView.is_enabled()
-            && !self.agent_view_controller.as_ref(app).is_active()
-            && !should_render_ps1_prompt(&self.model.lock(), app)
-        {
+        } else if !should_render_ps1_prompt(&self.model.lock(), app) {
             self.render_terminal_input(app)
-        } else if !FeatureFlag::AgentView.is_enabled() && is_universal_input {
-            self.render_universal_developer_input(app)
         } else {
             self.render_classic_input(app)
         }
@@ -16400,10 +16209,10 @@ fn render_prefix_mode_indicator(
 }
 fn maybe_render_ai_input_indicators(
     ai_input_model: &ModelHandle<BlocklistAIInputModel>,
-    ai_context_model: &ModelHandle<BlocklistAIContextModel>,
+    _ai_context_model: &ModelHandle<BlocklistAIContextModel>,
     agent_view_controller: &ModelHandle<AgentViewController>,
     handoff_compose_state: &ModelHandle<HandoffComposeState>,
-    ai_follow_up_icon_mouse_state: MouseStateHandle,
+    _ai_follow_up_icon_mouse_state: MouseStateHandle,
     terminal_view_id: EntityId,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
@@ -16447,41 +16256,7 @@ fn maybe_render_ai_input_indicators(
         return None;
     }
 
-    if !ai_input_model.is_ai_input_enabled() || FeatureFlag::AgentView.is_enabled() {
-        return None;
-    }
-
-    let is_universal_developer_input_enabled =
-        InputSettings::as_ref(app).is_universal_developer_input_enabled(app);
-
-    // If universal developer input is enabled, don't show any AI indicators
-    if is_universal_developer_input_enabled {
-        return None;
-    }
-
-    let ai_icon = render_ai_agent_mode_icon(
-        app,
-        AnsiColorIdentifier::Yellow.to_ansi_color(&appearance.theme().terminal_colors().normal),
-    );
-
-    let all_icons = if ai_context_model
-        .as_ref(app)
-        .is_targeting_existing_conversation(app)
-    {
-        let reply_icon = render_ai_follow_up_icon(ai_follow_up_icon_mouse_state, app);
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(ai_icon)
-            .with_child(reply_icon)
-            .finish()
-    } else {
-        ai_icon
-    };
-    Some(
-        Container::new(all_icons)
-            .with_margin_right(em_width)
-            .finish(),
-    )
+    None
 }
 
 #[cfg(feature = "integration_tests")]

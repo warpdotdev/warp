@@ -859,8 +859,6 @@ define_settings_group!(AISettings, settings: [
     // This field should not be referenced directly -- use the
     // `is_nld_in_terminal_enabled()` getter.
     // Controls whether natural language detection is enabled in the terminal input.
-    //
-    // This is only used when `FeatureFlag::AgentView` is enabled.
     nld_in_terminal_enabled_internal: NLDInTerminalEnabled {
         type: bool,
         default: false,
@@ -1898,15 +1896,13 @@ impl AISettings {
 
     /// Returns `true` if input autodetection is enabled.
     ///
-    /// If `FeatureFlag::AgentView` is enabled, this specifically gates NLD enablement in the agent
-    /// view only.
+    /// This specifically gates NLD enablement in the agent view only.
     pub fn is_ai_autodetection_enabled(&self, app: &warpui::AppContext) -> bool {
         self.is_any_ai_enabled(app) && *self.ai_autodetection_enabled_internal
     }
 
     /// Returns `true` if NLD is enabled in the terminal.
     ///
-    /// This is only used when `FeatureFlag::AgentView` is enabled.
     /// If the user has not explicitly set this setting, it defaults to the value of
     /// `ai_autodetection_enabled_internal`.
     pub fn is_nld_in_terminal_enabled(&self, app: &warpui::AppContext) -> bool {

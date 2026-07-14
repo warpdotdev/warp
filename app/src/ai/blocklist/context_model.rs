@@ -672,17 +672,10 @@ impl BlocklistAIContextModel {
     /// Returns `true` if a new conversation may be created.
     pub fn can_start_new_conversation(&self) -> bool {
         let terminal_model = self.terminal_model.lock();
-        if FeatureFlag::AgentView.is_enabled() {
-            !terminal_model
-                .block_list()
-                .active_block()
-                .is_active_and_long_running()
-        } else {
-            !terminal_model
-                .block_list()
-                .active_block()
-                .is_agent_in_control()
-        }
+        !terminal_model
+            .block_list()
+            .active_block()
+            .is_active_and_long_running()
     }
 
     /// Returns the conversation ID the pending query is following up for, if any.

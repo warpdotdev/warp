@@ -145,9 +145,7 @@ impl TerminalView {
         };
         self.pane_configuration.update(ctx, |pane_config, ctx| {
             pane_config.set_title(new_pane_title, ctx);
-            if FeatureFlag::AgentView.is_enabled() {
-                pane_config.refresh_pane_header_overflow_menu_items(ctx);
-            }
+            pane_config.refresh_pane_header_overflow_menu_items(ctx);
             pane_config.notify_header_content_changed(ctx);
         });
         self.update_agent_view_pane_header(ctx);
@@ -198,10 +196,6 @@ impl TerminalView {
     /// Updates the pane header's shareable object based on agent view state.
     /// This should be called when entering/exiting agent view or when the conversation changes.
     pub(super) fn update_agent_view_pane_header(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::AgentView.is_enabled() {
-            return;
-        }
-
         // In cloud mode, we want to preserve the shared session sharing dialog even after the shared session has ended.
         // We need this to be able to view and change permissions on a cloud mode shared session that failed before
         // any conversation started, to view cloud mode sessions that failed during setup.
@@ -240,7 +234,7 @@ impl TerminalView {
     /// Renders the back button for the pane header, or an empty element if the
     /// back button should not be shown.
     fn maybe_render_header_back_button(&self, app: &AppContext) -> Box<dyn Element> {
-        if !FeatureFlag::AgentView.is_enabled() || warpui::platform::is_mobile_device() {
+        if warpui::platform::is_mobile_device() {
             return Flex::row().finish();
         }
 
@@ -385,8 +379,7 @@ impl TerminalView {
         app: &AppContext,
     ) -> (Box<dyn Element>, f32) {
         let appearance = Appearance::as_ref(app);
-        let is_fullscreen_agent_view = FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(app).is_fullscreen();
+        let is_fullscreen_agent_view = self.agent_view_controller.as_ref(app).is_fullscreen();
         let icon_color = Some(
             appearance
                 .theme()
@@ -467,9 +460,7 @@ impl TerminalView {
     }
 
     fn render_parent_conversation_header_card(&self, app: &AppContext) -> Option<Box<dyn Element>> {
-        if !(FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(app).is_fullscreen())
-        {
+        if !self.agent_view_controller.as_ref(app).is_fullscreen() {
             return None;
         }
 
@@ -498,9 +489,7 @@ impl TerminalView {
         // breadcrumb row instead. When no children have arrived yet,
         // `OrchestrationPillBar::pill_specs` returns `None` and the pill
         // bar's `render` short-circuits to `Empty`.
-        if FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(app).is_fullscreen()
-        {
+        if self.agent_view_controller.as_ref(app).is_fullscreen() {
             // The wrapping `Flex::column` would otherwise pass an infinite
             // vertical max constraint down to its non-flex children. That
             // breaks the title's vertical centering: with infinite max.y,
@@ -556,8 +545,7 @@ impl TerminalView {
         header_ctx: &view::HeaderRenderContext,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let is_fullscreen_agent_view = FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(app).is_fullscreen();
+        let is_fullscreen_agent_view = self.agent_view_controller.as_ref(app).is_fullscreen();
         let parent_conversation_header_card = self.render_parent_conversation_header_card(app);
 
         let left = self.maybe_render_header_back_button(app);
@@ -708,8 +696,7 @@ impl BackingView for TerminalView {
             .lock()
             .shared_session_status()
             .is_sharer_or_viewer();
-        let is_fullscreen_agent_view = FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(app).is_fullscreen();
+        let is_fullscreen_agent_view = self.agent_view_controller.as_ref(app).is_fullscreen();
         is_shared
             || is_fullscreen_agent_view
             || FeatureFlag::ContextWindowUsageV2.is_enabled()
@@ -915,11 +902,7 @@ impl TerminalView {
         self.ai_context_model
             .as_ref(ctx)
             .selected_conversation(ctx)
-            .filter(|conversation| {
-                !conversation.is_entirely_passive()
-                    && (conversation.title().is_some_and(|title| !title.is_empty())
-                        || FeatureFlag::AgentView.is_enabled())
-            })
+            .filter(|conversation| !conversation.is_entirely_passive())
     }
 
     fn selected_conversation_display_title_for_chrome(
@@ -927,16 +910,10 @@ impl TerminalView {
         conversation: &AIConversation,
         is_ambient_agent: bool,
     ) -> String {
-        if FeatureFlag::AgentView.is_enabled() {
-            conversation
-                .title()
-                .filter(|title| !title.is_empty())
-                .unwrap_or_else(|| default_agent_conversation_title(is_ambient_agent))
-        } else {
-            conversation
-                .title()
-                .expect("checked above that title exists")
-        }
+        conversation
+            .title()
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| default_agent_conversation_title(is_ambient_agent))
     }
 
     /// Returns `true` while a cloud-mode ambient agent run is still spinning up. This covers

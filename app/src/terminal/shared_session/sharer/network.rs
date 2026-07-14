@@ -38,7 +38,6 @@ use session_sharing_protocol::sharer::{
     SessionTerminatedReason, TeamAccessLevelUpdateResponse, UpdatePendingUserRoleResponse,
     UpstreamMessage,
 };
-use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_server_client::iap::IapManager;
 use warpui::r#async::Timer;
@@ -851,7 +850,7 @@ impl Network {
                         source_type: network.source.source_type.clone(),
                         source_task_id: network.source.source_task_id.clone(),
                         feature_support: FeatureSupport {
-                            supports_agent_view: FeatureFlag::AgentView.is_enabled(),
+                            supports_agent_view: true,
                             supports_full_role: true,
                             supports_full_role_for_real: true,
                         },
@@ -1120,7 +1119,7 @@ impl Network {
                             latest_block_id: latest_block_id.into(),
                             selection: network.cached_latest_state.selection.clone(),
                             feature_support: FeatureSupport {
-                                supports_agent_view: FeatureFlag::AgentView.is_enabled(),
+                                supports_agent_view: true,
                                 supports_full_role: true,
                                 supports_full_role_for_real: true,
                             },

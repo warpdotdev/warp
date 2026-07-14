@@ -624,7 +624,6 @@ default = [
     "oz_identity_federation",
     "sync_ambient_plans",
     "conversation_artifacts",
-    "agent_view",
     "agent_view_block_context",
     "agent_view_conversation_list_view",
     "inline_slash_commands",
@@ -752,7 +751,7 @@ ambient_agents_command_line = []
 ambient_agents_image_upload = []
 scheduled_ambient_agents = []
 allow_ignoring_input_suggestions = []
-inline_slash_commands = ["agent_view"]
+inline_slash_commands = []
 
 # Enable this feature to track heap usage and automatically produce a heap
 # profile report when app memory usage exceeds a 10GB threshold.
@@ -950,14 +949,13 @@ global_search = []
 file_and_diff_set_comments = []
 revert_to_checkpoints = []
 rewind_slash_command = []
-agent_view = []
-agent_view_block_context = ["agent_view"]
+agent_view_block_context = []
 warp_managed_secrets = []
 v4a_file_diffs = []
 agent_tips = []
-agent_toolbar_editor = ["agent_view"]
+agent_toolbar_editor = []
 cloud_conversations = []
-agent_view_prompt_chip = ["agent_view"]
+agent_view_prompt_chip = []
 ambient_agents_rtc = []
 team_api_keys = []
 named_agents = []
@@ -966,13 +964,13 @@ cloud_mode = []
 cloud_mode_from_local_session = []
 cloud_mode_image_context = []
 force_classic_completions = []
-agent_view_conversation_list_view = ["agent_view"]
-inline_history_menu = ["agent_view"]
-inline_repo_menu = ["agent_view"]
+agent_view_conversation_list_view = []
+inline_history_menu = []
+inline_repo_menu = []
 summarization_via_message_replacement = []
 lsp_as_a_tool = []
-inline_model_selector = ["agent_view"]
-inline_profile_selector = ["agent_view"]
+inline_model_selector = []
+inline_profile_selector = []
 restore_prompt_on_inline_model_selector_search = []
 oz_platform_skills = []
 oz_identity_federation = []

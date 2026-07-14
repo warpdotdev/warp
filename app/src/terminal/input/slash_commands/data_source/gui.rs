@@ -210,13 +210,9 @@ impl GuiSlashCommandDataSource {
         availability
     }
 
-    /// View-related availability bits for the GUI's legacy terminal-view and agent-view
-    /// modalities. When the AgentView feature flag is disabled, both bits are set so either
-    /// requirement is satisfied.
+    /// View-related availability bits for the GUI's terminal-view and agent-view modalities.
     fn view_availability(is_agent_view_active: bool) -> Availability {
-        if !FeatureFlag::AgentView.is_enabled() {
-            Availability::AGENT_VIEW | Availability::TERMINAL_VIEW
-        } else if is_agent_view_active {
+        if is_agent_view_active {
             Availability::AGENT_VIEW
         } else {
             Availability::TERMINAL_VIEW

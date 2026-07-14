@@ -667,12 +667,7 @@ pub fn render_warping_indicator_base(
         )
         .with_padding_right(CONTENT_HORIZONTAL_PADDING);
 
-        if FeatureFlag::AgentView.is_enabled() {
-            container = container.with_padding_left(*terminal::view::PADDING_LEFT);
-        } else {
-            container = container
-                .with_padding_left(CONTENT_HORIZONTAL_PADDING + (STATUS_ICON_SIZE_DELTA / 2.));
-        }
+        container = container.with_padding_left(*terminal::view::PADDING_LEFT);
 
         container.finish()
     }

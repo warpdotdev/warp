@@ -2990,14 +2990,12 @@ impl AgentDriver {
         if matches!(&task_prompt, AgentRunPrompt::ServerSide { .. }) {
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| {
-                    if FeatureFlag::AgentView.is_enabled() {
-                        terminal.enter_agent_view(
-                            None,
-                            restored_conversation_id,
-                            AgentViewEntryOrigin::Cli,
-                            ctx,
-                        );
-                    }
+                    terminal.enter_agent_view(
+                        None,
+                        restored_conversation_id,
+                        AgentViewEntryOrigin::Cli,
+                        ctx,
+                    );
                     terminal
                         .model
                         .lock()
@@ -3324,19 +3322,12 @@ impl AgentDriver {
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {
                     AgentRunPrompt::Local(prompt_str) => {
-                        if FeatureFlag::AgentView.is_enabled() {
-                            terminal.enter_agent_view(
-                                Some(prompt_str),
-                                restored_conversation_id,
-                                AgentViewEntryOrigin::Cli,
-                                ctx,
-                            );
-                        } else {
-                            terminal.set_ai_input_mode_with_query(Some(&prompt_str), ctx);
-                            terminal
-                                .input()
-                                .update(ctx, |input, ctx| input.input_enter(ctx));
-                        }
+                        terminal.enter_agent_view(
+                            Some(prompt_str),
+                            restored_conversation_id,
+                            AgentViewEntryOrigin::Cli,
+                            ctx,
+                        );
                     }
                     AgentRunPrompt::ServerSide {
                         skill,
