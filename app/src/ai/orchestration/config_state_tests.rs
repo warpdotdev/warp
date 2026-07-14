@@ -89,4 +89,3 @@ fn resolve_from_config_sanitizes_disabled_local_codex() {
         RunAgentsExecutionMode::Local
     ));
 }
-

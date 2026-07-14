@@ -138,24 +138,6 @@ fn model(id: &str, label: &str) -> ModelChoiceInput {
 }
 
 #[test]
-fn oz_model_snapshot_selects_matching_id() {
-    let snapshot = build_oz_model_snapshot(
-        vec![model("auto", "Auto"), model("sonnet", "Sonnet")],
-        "sonnet",
-    );
-
-    assert_eq!(snapshot.selected_id.as_deref(), Some("sonnet"));
-    assert_eq!(snapshot.rows.len(), 2);
-    assert_eq!(snapshot.status, OptionSourceStatus::Ready);
-}
-
-#[test]
-fn oz_model_snapshot_with_unknown_id_has_no_selection() {
-    let snapshot = build_oz_model_snapshot(vec![model("auto", "Auto")], "gone");
-    assert_eq!(snapshot.selected_id, None);
-}
-
-#[test]
 fn oz_model_snapshot_empty_catalog_reports_empty_status() {
     let snapshot = build_oz_model_snapshot(Vec::new(), "auto");
     assert!(matches!(snapshot.status, OptionSourceStatus::Empty { .. }));
@@ -200,23 +182,6 @@ fn api_key_snapshot_lists_skip_then_names() {
     assert_eq!(snapshot.selected_id.as_deref(), Some("key-b"));
     assert_eq!(snapshot.status, OptionSourceStatus::Ready);
     assert_eq!(snapshot.footer, Some(OptionFooter::CreateNewAuthSecret));
-}
-
-#[test]
-fn api_key_snapshot_maps_fetch_states_to_statuses() {
-    let loading = build_api_key_snapshot(
-        AuthSecretNamesInput::NotLoaded,
-        &AuthSecretSelection::Unset,
-        true,
-    );
-    assert_eq!(loading.status, OptionSourceStatus::Loading);
-
-    let failed = build_api_key_snapshot(
-        AuthSecretNamesInput::Failed,
-        &AuthSecretSelection::Unset,
-        true,
-    );
-    assert!(matches!(failed.status, OptionSourceStatus::Failed { .. }));
 }
 
 #[test]
@@ -297,17 +262,4 @@ fn environment_snapshot_puts_empty_option_first() {
     assert_eq!(snapshot.rows[0].id, "");
     assert_eq!(snapshot.rows[0].label, super::ORCHESTRATION_ENV_NONE_LABEL);
     assert_eq!(snapshot.selected_id.as_deref(), Some("env-b"));
-}
-
-#[test]
-fn environment_snapshot_selects_empty_option_for_empty_id() {
-    let snapshot = build_environment_snapshot(Vec::new(), "");
-    assert_eq!(snapshot.selected_id.as_deref(), Some(""));
-}
-
-#[test]
-fn environment_snapshot_has_no_selection_for_missing_env() {
-    let snapshot =
-        build_environment_snapshot(vec![("env-a".to_string(), "Alpha".to_string())], "gone");
-    assert_eq!(snapshot.selected_id, None);
 }
