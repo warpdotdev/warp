@@ -2,8 +2,11 @@
 #![allow(clippy::disallowed_types)]
 use std::ffi::OsStr;
 use std::io::Read as _;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -122,46 +125,67 @@ fn run_command_with_timeout(
     timeout: Duration,
 ) -> Result<Vec<u8>, CacheSetupError> {
     command.stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = command.spawn().map_err(|_| CacheSetupError::SpawnFailed)?;
     let stdout = child.stdout.take().ok_or(CacheSetupError::SpawnFailed)?;
-    let stdout_reader = thread::spawn(move || {
+    let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = std::io::BufReader::new(stdout).read_to_end(&mut bytes);
-        bytes
+        let _ = stdout_tx.send(bytes);
     });
     let started = Instant::now();
 
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let bytes = stdout_reader
-                    .join()
-                    .map_err(|_| CacheSetupError::SpawnFailed)?;
-                return if status.success() {
-                    Ok(bytes)
-                } else {
-                    Err(CacheSetupError::NonzeroExit {
+                if !status.success() {
+                    terminate_process_group(&mut child);
+                    return Err(CacheSetupError::NonzeroExit {
                         exit_code: status.code(),
-                    })
+                    });
+                }
+                let remaining = timeout.saturating_sub(started.elapsed());
+                return match stdout_rx.recv_timeout(remaining) {
+                    Ok(bytes) => Ok(bytes),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        terminate_process_group(&mut child);
+                        Err(CacheSetupError::Timeout)
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        terminate_process_group(&mut child);
+                        Err(CacheSetupError::SpawnFailed)
+                    }
                 };
             }
             Ok(None) if started.elapsed() < timeout => {
                 thread::sleep(PROCESS_POLL_INTERVAL);
             }
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_reader.join();
+                terminate_process_group(&mut child);
                 return Err(CacheSetupError::Timeout);
             }
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_reader.join();
+                terminate_process_group(&mut child);
                 return Err(CacheSetupError::SpawnFailed);
             }
         }
     }
+}
+
+fn terminate_process_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid;
+
+        // The command is spawned as its process-group leader, so a negative PID
+        // terminates spacectl and descendants that inherited its stdout pipe.
+        let _ = kill(Pid::from_raw(-(child.id() as i32)), Signal::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn report_degradations(report: &CacheSetupReport) -> bool {

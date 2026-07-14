@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use build_cache::{
     build_export_script, CacheScope, CacheSetupError, CacheSetupReport, InvocationReport,
@@ -89,6 +91,18 @@ fn process_runner_classifies_spawn_nonzero_and_timeout() {
         run_command_with_timeout(timeout, Duration::from_millis(10)),
         Err(CacheSetupError::Timeout)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn timeout_returns_bounded_when_descendant_keeps_stdout_open() {
+    let mut command = Command::new("sh");
+    command.args(["-c", "sleep 5 &"]);
+    let started = Instant::now();
+    let result = run_command_with_timeout(command, Duration::from_millis(100));
+
+    assert_eq!(result, Err(CacheSetupError::Timeout));
+    assert!(started.elapsed() < Duration::from_secs(1));
 }
 
 #[test]
