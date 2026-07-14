@@ -1,8 +1,12 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
+use futures::executor::block_on;
 use instant::Instant;
-use warp_core::channel::IapConfig;
+use warp_core::channel::{ChannelState, IapConfig};
+use warpui_core::r#async::BoxFuture;
 
 use super::*;
 
@@ -163,4 +167,190 @@ fn sts_response_parses_and_ignores_extra_fields() {
     let parsed: StsTokenExchangeResponse =
         serde_json::from_str(r#"{"access_token": "federated", "expires_in": 3600}"#).unwrap();
     assert_eq!(parsed.access_token, "federated");
+}
+
+/// Records how many times it was asked to mint, so tests can assert whether the
+/// injected-JWT fast path or the minter fallback was taken.
+struct FakeMinter {
+    calls: Arc<AtomicUsize>,
+    token: String,
+}
+
+impl IapIdentityTokenMinter for FakeMinter {
+    fn mint_identity_token(
+        &self,
+        _audience: String,
+        _requested_duration: Duration,
+    ) -> BoxFuture<'static, anyhow::Result<String>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let token = self.token.clone();
+        Box::pin(async move { Ok(token) })
+    }
+}
+
+fn fake_minter(token: &str) -> (Arc<dyn IapIdentityTokenMinter>, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let minter: Arc<dyn IapIdentityTokenMinter> = Arc::new(FakeMinter {
+        calls: calls.clone(),
+        token: token.to_string(),
+    });
+    (minter, calls)
+}
+
+fn bootstrap_jwt(aud: &str, exp: u64) -> String {
+    jwt_with_payload(&format!(r#"{{"aud":"{aud}","exp":{exp}}}"#))
+}
+
+fn wif_endpoints(base: &str) -> WifEndpoints {
+    WifEndpoints {
+        sts_token_url: format!("{base}/v1/token"),
+        iam_generate_id_token_url_template: format!(
+            "{base}/v1/projects/-/serviceAccounts/{{sa_email}}:generateIdToken"
+        ),
+    }
+}
+
+const TEST_SA_EMAIL: &str = "iap-access@example.iam.gserviceaccount.com";
+
+#[test]
+fn resolve_wif_identity_token_prefers_valid_injected_jwt() {
+    let (minter, calls) = fake_minter("freshly-minted");
+    let injected = bootstrap_jwt("//iam/providers/p", now_unix() + 3600);
+
+    let token = block_on(resolve_wif_identity_token(
+        injected.clone(),
+        "//iam/providers/p",
+        &minter,
+    ))
+    .unwrap();
+
+    assert_eq!(token, injected);
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "minter must not be called");
+}
+
+#[test]
+fn resolve_wif_identity_token_mints_when_injected_expired() {
+    let (minter, calls) = fake_minter("freshly-minted");
+    let injected = bootstrap_jwt("//iam/providers/p", 1);
+
+    let token = block_on(resolve_wif_identity_token(
+        injected,
+        "//iam/providers/p",
+        &minter,
+    ))
+    .unwrap();
+
+    assert_eq!(token, "freshly-minted");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn fetch_iap_token_via_wif_returns_token_on_success() {
+    let mut server = ChannelState::mock_server();
+    let base = server.url();
+
+    let sts = server
+        .mock("POST", "/v1/token")
+        .with_status(200)
+        .with_body(r#"{"access_token":"federated-abc"}"#)
+        .create();
+    let id_token = jwt_with_payload(&format!(r#"{{"exp":{}}}"#, now_unix() + 3600));
+    let iam = server
+        .mock(
+            "POST",
+            mockito::Matcher::Regex(r"/serviceAccounts/.*:generateIdToken$".to_string()),
+        )
+        .match_header("authorization", "Bearer federated-abc")
+        .with_status(200)
+        .with_body(format!(r#"{{"token":"{id_token}"}}"#))
+        .create();
+
+    let (minter, calls) = fake_minter("unused");
+    let injected = bootstrap_jwt("//iam/providers/oz-oidc-staging-iap", now_unix() + 3600);
+    let endpoints = wif_endpoints(&base);
+
+    let cached = block_on(fetch_iap_token_via_wif(
+        minter,
+        injected,
+        "iap-client-id".to_string(),
+        TEST_SA_EMAIL.to_string(),
+        &endpoints,
+    ))
+    .unwrap();
+
+    assert_eq!(cached.token, id_token);
+    assert!(cached.expires_at > Instant::now());
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a valid injected JWT should skip the minter"
+    );
+    sts.assert();
+    iam.assert();
+}
+
+#[test]
+fn fetch_iap_token_via_wif_errors_on_sts_failure() {
+    let mut server = ChannelState::mock_server();
+    let base = server.url();
+    let _sts = server
+        .mock("POST", "/v1/token")
+        .with_status(400)
+        .with_body("bad subject token")
+        .create();
+
+    let (minter, _) = fake_minter("unused");
+    let injected = bootstrap_jwt("//iam/providers/p", now_unix() + 3600);
+    let endpoints = wif_endpoints(&base);
+
+    let err = block_on(fetch_iap_token_via_wif(
+        minter,
+        injected,
+        "iap-client-id".to_string(),
+        TEST_SA_EMAIL.to_string(),
+        &endpoints,
+    ))
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("STS token exchange failed"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn fetch_iap_token_via_wif_errors_on_iam_failure() {
+    let mut server = ChannelState::mock_server();
+    let base = server.url();
+    let _sts = server
+        .mock("POST", "/v1/token")
+        .with_status(200)
+        .with_body(r#"{"access_token":"federated-abc"}"#)
+        .create();
+    let _iam = server
+        .mock(
+            "POST",
+            mockito::Matcher::Regex(r"/serviceAccounts/.*:generateIdToken$".to_string()),
+        )
+        .with_status(403)
+        .with_body("permission denied")
+        .create();
+
+    let (minter, _) = fake_minter("unused");
+    let injected = bootstrap_jwt("//iam/providers/p", now_unix() + 3600);
+    let endpoints = wif_endpoints(&base);
+
+    let err = block_on(fetch_iap_token_via_wif(
+        minter,
+        injected,
+        "iap-client-id".to_string(),
+        TEST_SA_EMAIL.to_string(),
+        &endpoints,
+    ))
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("generateIdToken failed"),
+        "unexpected error: {err:#}"
+    );
 }

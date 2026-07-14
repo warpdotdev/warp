@@ -319,7 +319,27 @@ impl IapManager {
         let service_account_email = state.service_account_email().to_string();
 
         ctx.spawn(
-            async move { fetch_iap_token_via_wif(minter, iap_audience, service_account_email).await },
+            async move {
+                // The env var persists for the process lifetime, so its `aud` stays
+                // readable even once the token itself has expired, which is what
+                // refresh-time minting needs.
+                let injected_jwt = std::env::var(STAGING_IAP_BOOTSTRAP_TOKEN_ENV_VAR)
+                    .ok()
+                    .filter(|jwt| !jwt.is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{STAGING_IAP_BOOTSTRAP_TOKEN_ENV_VAR} is unset; cannot mint an IAP token via WIF"
+                        )
+                    })?;
+                fetch_iap_token_via_wif(
+                    minter,
+                    injected_jwt,
+                    iap_audience,
+                    service_account_email,
+                    &WifEndpoints::production(),
+                )
+                .await
+            },
             move |manager, result, ctx| manager.apply_refresh_result(result, ctx),
         );
     }
@@ -450,43 +470,66 @@ struct GenerateIdTokenResponse {
     token: String,
 }
 
+/// GCP endpoints for the WIF mint. `production()` targets the real Google
+/// endpoints; tests override them to point at a mock server.
+struct WifEndpoints {
+    sts_token_url: String,
+    /// `generateIdToken` URL carrying a `{sa_email}` placeholder for the
+    /// impersonated service account.
+    iam_generate_id_token_url_template: String,
+}
+
+impl WifEndpoints {
+    fn production() -> Self {
+        Self {
+            sts_token_url: STS_TOKEN_URL.to_string(),
+            iam_generate_id_token_url_template: IAM_GENERATE_ID_TOKEN_URL.to_string(),
+        }
+    }
+}
+
+/// Leg 1 of the WIF mint: pick the OIDC subject token for the STS exchange.
+/// Prefer the injected bootstrap JWT while it's still valid so a cold runner
+/// needn't call the IAP-gated identity-token endpoint; once it expires, mint a
+/// fresh one via the server (now reachable through IAP).
+async fn resolve_wif_identity_token(
+    injected_jwt: String,
+    federation_audience: &str,
+    minter: &Arc<dyn IapIdentityTokenMinter>,
+) -> Result<String> {
+    if get_expires_at(&injected_jwt).is_ok() {
+        Ok(injected_jwt)
+    } else {
+        minter
+            .mint_identity_token(federation_audience.to_string(), WIF_IDENTITY_TOKEN_DURATION)
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to mint Warp identity token: {err:#}"))
+    }
+}
+
 /// Mints an IAP-valid ID token for a sandboxed Oz runner via Workload Identity
 /// Federation: Warp OIDC JWT -> GCP STS federated token -> IAM `generateIdToken`
 /// impersonating the IAP access service account. Requires no local gcloud.
 async fn fetch_iap_token_via_wif(
     minter: Arc<dyn IapIdentityTokenMinter>,
+    injected_jwt: String,
     iap_audience: String,
     service_account_email: String,
+    endpoints: &WifEndpoints,
 ) -> Result<CachedToken> {
     // The WIF provider resource name is the `aud` of the server-injected bootstrap
     // JWT, so we read it straight off that token instead of carrying it as
-    // separate client config. The env var persists for the process lifetime, so
-    // its `aud` stays readable even once the token itself has expired.
-    let injected_jwt = std::env::var(STAGING_IAP_BOOTSTRAP_TOKEN_ENV_VAR)
-        .ok()
-        .filter(|jwt| !jwt.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!("{STAGING_IAP_BOOTSTRAP_TOKEN_ENV_VAR} is unset; cannot mint an IAP token via WIF")
-        })?;
+    // separate client config.
     let federation_audience = parse_aud_from_jwt(&injected_jwt)
         .ok_or_else(|| anyhow::anyhow!("injected OIDC JWT has no readable `aud` claim"))?;
 
-    // Leg 1: obtain a Warp-signed OIDC JWT (audience = the WIF provider resource
-    // name). Prefer the injected bootstrap JWT while it's still valid so a cold
-    // runner needn't call the IAP-gated identity-token endpoint; once it expires,
-    // mint a fresh one via the server (now reachable through IAP).
-    let identity_token = if get_expires_at(&injected_jwt).is_ok() {
-        injected_jwt
-    } else {
-        minter
-            .mint_identity_token(federation_audience.clone(), WIF_IDENTITY_TOKEN_DURATION)
-            .await
-            .map_err(|err| anyhow::anyhow!("failed to mint Warp identity token: {err:#}"))?
-    };
+    // Leg 1: obtain the Warp-signed OIDC JWT used as the STS subject token.
+    let identity_token =
+        resolve_wif_identity_token(injected_jwt, &federation_audience, &minter).await?;
 
     // Leg 2: exchange the JWT at GCP STS for a federated access token.
     let response = http_client::Client::new()
-        .post(STS_TOKEN_URL)
+        .post(&endpoints.sts_token_url)
         .form(&StsTokenExchangeRequest {
             grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
             audience: &federation_audience,
@@ -513,7 +556,9 @@ async fn fetch_iap_token_via_wif(
     // audience is the IAP OAuth client ID. IAM authorizes this only if the
     // runner's federated identity holds roles/iam.serviceAccountTokenCreator on
     // the service account.
-    let url = IAM_GENERATE_ID_TOKEN_URL.replace("{sa_email}", &service_account_email);
+    let url = endpoints
+        .iam_generate_id_token_url_template
+        .replace("{sa_email}", &service_account_email);
     let response = http_client::Client::new()
         .post(&url)
         .bearer_auth(&sts_response.access_token)
