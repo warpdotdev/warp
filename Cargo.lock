@@ -15921,6 +15921,7 @@ dependencies = [
  "parking_lot",
  "pathfinder_color",
  "pathfinder_geometry",
+ "rangemap",
  "serde_json",
  "similar",
  "string-offset",
