@@ -1,15 +1,20 @@
 //! Reusable active-menu routing and character-cell presentation for TUI inline menus.
 use std::ops::Range;
+use std::rc::Rc;
 
 use string_offset::CharOffset;
-use warp::tui_export::AcceptSlashCommandOrSavedPrompt;
+use warp::tui_export::{AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId};
+use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InlineMenuSelection};
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiFlex,
-    TuiLayoutContext, TuiPaintContext, TuiRect, TuiSize, TuiText,
+    TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiText,
 };
 use warpui_core::elements::CrossAxisAlignment;
-use warpui_core::{AppContext, ModelAsRef, ModelHandle, UpdateModel};
+use warpui_core::{AppContext, ModelHandle};
 
+use crate::conversation_menu::TuiConversationMenuModel;
+use crate::model_menu::TuiModelMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_column_layout::{
@@ -30,6 +35,9 @@ pub(crate) enum TuiInlineMenuRowStyle {
     Default,
     SlashCommand,
 }
+
+pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
+const INLINE_MENU_BORDER_ROWS: usize = 2;
 
 /// A presentation-only row in a TUI inline menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,28 +79,169 @@ pub(crate) struct TuiInlineMenuSnapshot {
     pub(crate) max_visible_rows: usize,
     pub(crate) status: Option<TuiInlineMenuStatus>,
 }
+/// Reusable list mechanics shared by the slash-command, conversation, and model menus.
+#[derive(Debug, Clone)]
+pub(crate) struct TuiInlineMenuListState<Row> {
+    rows: Vec<Row>,
+    selection: InlineMenuSelection,
+    is_loading: bool,
+    scroll_offset: usize,
+}
+
+impl<Row> Default for TuiInlineMenuListState<Row> {
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            selection: InlineMenuSelection::default(),
+            is_loading: false,
+            scroll_offset: 0,
+        }
+    }
+}
+
+impl<Row> TuiInlineMenuListState<Row> {
+    pub(crate) fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    pub(crate) fn is_loading(&self) -> bool {
+        self.is_loading
+    }
+
+    pub(crate) fn set_loading(&mut self, is_loading: bool) {
+        self.is_loading = is_loading;
+    }
+
+    pub(crate) fn selected_index(&self) -> Option<usize> {
+        self.selection.selected_index()
+    }
+
+    pub(crate) fn selected_row(&self) -> Option<&Row> {
+        self.selected_index().and_then(|index| self.rows.get(index))
+    }
+
+    pub(crate) fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    /// Replaces the current rows and applies a caller-selected preferred row.
+    pub(crate) fn replace_rows(
+        &mut self,
+        rows: Vec<Row>,
+        is_loading: bool,
+        preferred_index: Option<usize>,
+        max_visible_rows: usize,
+        mut is_selectable: impl FnMut(&Row) -> bool,
+    ) {
+        self.rows = rows;
+        self.is_loading = is_loading;
+        self.selection.clear();
+        if let Some(index) = preferred_index {
+            self.selection.select(index, self.rows.len(), |index| {
+                self.rows.get(index).is_some_and(&mut is_selectable)
+            });
+        }
+        self.keep_selected_visible(max_visible_rows);
+    }
+
+    /// Reconciles mixer-ordered rows, preserving the previous results while loading.
+    pub(crate) fn reconcile_mixer_rows(
+        &mut self,
+        rows: Vec<Row>,
+        is_loading: bool,
+        max_visible_rows: usize,
+        mut is_selectable: impl FnMut(&Row) -> bool,
+    ) -> InlineMenuResultsUpdate {
+        self.is_loading = is_loading;
+        let update = self
+            .selection
+            .reconcile_results(is_loading, rows.len(), |index| {
+                rows.get(index).is_some_and(&mut is_selectable)
+            });
+        if !matches!(update, InlineMenuResultsUpdate::Loading) {
+            self.rows = rows;
+            self.keep_selected_visible(max_visible_rows);
+        }
+        update
+    }
+
+    pub(crate) fn select_next(
+        &mut self,
+        max_visible_rows: usize,
+        mut is_selectable: impl FnMut(&Row) -> bool,
+    ) {
+        self.selection.select_next(self.rows.len(), |index| {
+            self.rows.get(index).is_some_and(&mut is_selectable)
+        });
+        self.keep_selected_visible(max_visible_rows);
+    }
+
+    pub(crate) fn select_previous(
+        &mut self,
+        max_visible_rows: usize,
+        mut is_selectable: impl FnMut(&Row) -> bool,
+    ) {
+        self.selection.select_previous(self.rows.len(), |index| {
+            self.rows.get(index).is_some_and(&mut is_selectable)
+        });
+        self.keep_selected_visible(max_visible_rows);
+    }
+
+    fn keep_selected_visible(&mut self, max_visible_rows: usize) {
+        if let Some(selected_index) = self.selection.selected_index() {
+            keep_selected_visible(
+                self.rows.len(),
+                selected_index,
+                max_visible_rows,
+                &mut self.scroll_offset,
+            );
+        } else {
+            self.scroll_offset = self
+                .scroll_offset
+                .min(self.rows.len().saturating_sub(max_visible_rows));
+        }
+    }
+}
 
 /// Domain action produced by accepting the selected item in an active menu.
 #[derive(Debug, Clone)]
 pub(crate) enum TuiInlineMenuAccepted {
     SlashCommand(AcceptSlashCommandOrSavedPrompt),
+    Conversation(AgentConversationEntryId),
+    Model(LLMId),
 }
 
-/// The active TUI inline menu.
-///
-/// This is the input and placement boundary shared by menu kinds. Each variant
-/// retains its own query state and accepted action, while all variants expose
-/// the same navigation, dismissal, snapshot, and rendering behavior.
-#[derive(Clone)]
-pub(crate) enum TuiInlineMenu {
-    SlashCommands(ModelHandle<TuiSlashCommandModel>),
+/// Type-erased operations shared by TUI inline-menu model handles.
+pub(crate) trait TuiInlineMenuHandle {
+    /// Returns whether this menu is open.
+    fn is_open(&self, ctx: &AppContext) -> bool;
+    /// Returns the input range highlighted by this menu.
+    fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>>;
+    /// Returns the input argument hint shown by this menu.
+    fn input_argument_hint_text(&self, ctx: &AppContext) -> Option<&'static str>;
+    /// Moves selection to the previous row.
+    fn select_previous(&self, ctx: &mut AppContext);
+    /// Moves selection to the next row.
+    fn select_next(&self, ctx: &mut AppContext);
+    /// Accepts the selected row.
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted>;
+    /// Dismisses the menu.
+    fn dismiss(&self, ctx: &mut AppContext);
+    /// Returns the menu's presentation snapshot.
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot>;
 }
+
+/// Cloneable type-erased handle for one TUI inline menu.
+#[derive(Clone)]
+pub(crate) struct TuiInlineMenu(Rc<dyn TuiInlineMenuHandle>);
 
 impl TuiInlineMenu {
+    /// Erases a concrete menu-model handle behind the shared routing interface.
+    pub(crate) fn new(handle: impl TuiInlineMenuHandle + 'static) -> Self {
+        Self(Rc::new(handle))
+    }
     pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
-        match self {
-            Self::SlashCommands(model) => model.as_ref(ctx).is_open(),
-        }
+        self.0.is_open(ctx)
     }
 
     pub(crate) fn render(&self, ctx: &AppContext) -> Option<Box<dyn TuiElement>> {
@@ -100,56 +249,135 @@ impl TuiInlineMenu {
             .map(|snapshot| render_inline_menu(&snapshot, &TuiUiBuilder::from_app(ctx)))
     }
     pub(crate) fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
-        match self {
-            Self::SlashCommands(model) => model.as_ref(ctx).highlighted_prefix_range(),
-        }
+        self.0.input_highlight_range(ctx)
     }
 
     pub(crate) fn input_argument_hint_text(&self, ctx: &AppContext) -> Option<&'static str> {
-        match self {
-            Self::SlashCommands(model) => model.as_ref(ctx).argument_hint_text(),
-        }
+        self.0.input_argument_hint_text(ctx)
     }
 
-    pub(crate) fn select_previous(&self, ctx: &mut impl UpdateModel) {
-        match self {
-            Self::SlashCommands(model) => {
-                model.update(ctx, |model, ctx| model.select_previous(ctx));
-            }
-        }
+    pub(crate) fn select_previous(&self, ctx: &mut AppContext) {
+        self.0.select_previous(ctx);
     }
 
-    pub(crate) fn select_next(&self, ctx: &mut impl UpdateModel) {
-        match self {
-            Self::SlashCommands(model) => {
-                model.update(ctx, |model, ctx| model.select_next(ctx));
-            }
-        }
+    pub(crate) fn select_next(&self, ctx: &mut AppContext) {
+        self.0.select_next(ctx);
     }
 
-    pub(crate) fn accept(
-        &self,
-        ctx: &mut (impl ModelAsRef + UpdateModel),
-    ) -> Option<TuiInlineMenuAccepted> {
-        match self {
-            Self::SlashCommands(model) => model
-                .update(ctx, |model, ctx| model.accept_selected(ctx))
-                .map(TuiInlineMenuAccepted::SlashCommand),
-        }
+    pub(crate) fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.0.accept(ctx)
     }
 
-    pub(crate) fn dismiss(&self, ctx: &mut impl UpdateModel) {
-        match self {
-            Self::SlashCommands(model) => {
-                model.update(ctx, |model, ctx| model.dismiss(ctx));
-            }
-        }
+    pub(crate) fn dismiss(&self, ctx: &mut AppContext) {
+        self.0.dismiss(ctx);
     }
 
     fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
-        match self {
-            Self::SlashCommands(model) => model.as_ref(ctx).snapshot(),
-        }
+        self.0.snapshot(ctx)
+    }
+}
+
+impl TuiInlineMenuHandle for ModelHandle<TuiSlashCommandModel> {
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open()
+    }
+    fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
+        self.as_ref(ctx).highlighted_prefix_range()
+    }
+
+    fn input_argument_hint_text(&self, ctx: &AppContext) -> Option<&'static str> {
+        self.as_ref(ctx).argument_hint_text()
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.update(ctx, |model, ctx| model.accept_selected(ctx))
+            .map(TuiInlineMenuAccepted::SlashCommand)
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot()
+    }
+}
+
+impl TuiInlineMenuHandle for ModelHandle<TuiConversationMenuModel> {
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open()
+    }
+
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.update(ctx, |model, ctx| model.accept_selected(ctx))
+            .map(TuiInlineMenuAccepted::Conversation)
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot()
+    }
+}
+
+impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open()
+    }
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.as_ref(ctx)
+            .accept_selected()
+            .map(TuiInlineMenuAccepted::Model)
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot()
     }
 }
 
@@ -188,11 +416,68 @@ impl TuiElement for TuiInlineMenuElement {
         size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        if let Some(content) = &self.content {
-            content.render(area, buffer, ctx);
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        if let Some(content) = self.content.as_mut() {
+            content.render(origin, surface, ctx);
         }
     }
+
+    /// Returns the laid-out content size.
+    fn size(&self) -> Option<TuiSize> {
+        self.content.as_ref()?.size()
+    }
+
+    /// Returns the painted content origin.
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.content.as_ref()?.origin()
+    }
+
+    /// Delegates child-view presentation to the laid-out content.
+    fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
+        if let Some(content) = self.content.as_mut() {
+            content.present(ctx);
+        }
+    }
+
+    /// Delegates event dispatch to the laid-out content.
+    fn dispatch_event(
+        &mut self,
+        event: &TuiEvent,
+        event_ctx: &mut TuiEventContext<'_>,
+        app: &AppContext,
+    ) -> bool {
+        self.content
+            .as_mut()
+            .is_some_and(|content| content.dispatch_event(event, event_ctx, app))
+    }
+}
+
+/// Returns the result rows available after reserving border and header chrome.
+pub(crate) const fn result_row_capacity(
+    allocated_height: u16,
+    has_title: bool,
+    has_tabs: bool,
+) -> usize {
+    let title_rows = if has_title { 1 } else { 0 };
+    let tab_rows = if has_tabs { 1 } else { 0 };
+    (allocated_height as usize).saturating_sub(INLINE_MENU_BORDER_ROWS + title_rows + tab_rows)
+}
+
+fn visible_result_capacity(snapshot: &TuiInlineMenuSnapshot, allocated_height: u16) -> usize {
+    let has_title = snapshot
+        .header
+        .as_ref()
+        .is_some_and(|header| header.title.is_some());
+    let has_tabs = snapshot
+        .header
+        .as_ref()
+        .is_some_and(|header| !header.tabs.is_empty());
+    result_row_capacity(allocated_height, has_title, has_tabs).min(snapshot.max_visible_rows)
 }
 
 fn build_inline_menu(
@@ -202,7 +487,7 @@ fn build_inline_menu(
     allocated_height: u16,
 ) -> Box<dyn TuiElement> {
     let slash_command_columns = tui_two_column_layout(
-        usize::from(allocated_width),
+        usize::from(allocated_width.saturating_sub(2)),
         snapshot.rows.iter().filter_map(|row| {
             if row.style != TuiInlineMenuRowStyle::SlashCommand {
                 return None;
@@ -269,16 +554,9 @@ fn build_inline_menu(
         }
     }
 
-    column.finish()
-}
-
-fn visible_result_capacity(snapshot: &TuiInlineMenuSnapshot, allocated_height: u16) -> usize {
-    let header_rows = snapshot.header.as_ref().map_or(0, |header| {
-        usize::from(header.title.is_some()) + usize::from(!header.tabs.is_empty())
-    });
-    usize::from(allocated_height)
-        .saturating_sub(header_rows)
-        .min(snapshot.max_visible_rows)
+    TuiContainer::new(column.finish())
+        .with_border_style(builder.accent_border_style())
+        .finish()
 }
 
 /// Clamps stale scroll offsets and moves the viewport only as far as needed to

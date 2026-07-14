@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize,
 };
 use crate::AppContext;
 
@@ -68,17 +68,24 @@ impl TuiElement for TuiAnimated {
             .layout(constraint, ctx, app)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        if let Some(child) = &self.child {
-            child.render(area, buffer, ctx);
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        if let Some(child) = &mut self.child {
+            child.render(origin, surface, ctx);
         }
         ctx.repaint_after(self.repaint_interval);
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        self.child
-            .as_ref()
-            .and_then(|child| child.cursor_position(area, ctx))
+    fn size(&self) -> Option<TuiSize> {
+        self.child.as_ref().and_then(|child| child.size())
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.child.as_ref().and_then(|child| child.origin())
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -90,14 +97,12 @@ impl TuiElement for TuiAnimated {
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
         self.child
             .as_mut()
-            .is_some_and(|child| child.dispatch_event(event, area, event_ctx, ctx, app))
+            .is_some_and(|child| child.dispatch_event(event, event_ctx, app))
     }
 }
 

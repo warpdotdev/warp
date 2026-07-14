@@ -141,6 +141,21 @@ impl TuiTranscriptView {
             BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => {
                 self.mark_exchange_dirty(*exchange_id, ctx);
             }
+            // Todo statuses are projections of conversation-wide state. A new
+            // list can cancel rows rendered by an older exchange, so dirty
+            // every todo-rendering block on this surface rather than only the
+            // exchange carrying the UpdateTodos message.
+            BlocklistAIHistoryEvent::UpdatedTodoList { .. } => {
+                self.mark_todo_blocks_dirty(ctx);
+            }
+            // The first pending item switches between InProgress and Stopped
+            // when its conversation starts or stops, without changing the
+            // output messages that own the rendered task list.
+            BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id, ..
+            } => {
+                self.mark_conversation_dirty(*conversation_id, ctx);
+            }
             BlocklistAIHistoryEvent::ReassignedExchange {
                 exchange_id,
                 new_conversation_id,
@@ -174,10 +189,8 @@ impl TuiTranscriptView {
             BlocklistAIHistoryEvent::StartedNewConversation { .. }
             | BlocklistAIHistoryEvent::CreatedSubtask { .. }
             | BlocklistAIHistoryEvent::UpgradedTask { .. }
-            | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
             | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-            | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::SplitConversation { .. }
             | BlocklistAIHistoryEvent::RestoredConversations { .. }
@@ -310,6 +323,59 @@ impl TuiTranscriptView {
         if let Some(view_id) = self.view_id_for_exchange(exchange_id, ctx) {
             self.mark_agent_block_dirty(view_id, ctx);
         }
+    }
+
+    /// Marks every todo-rendering agent block on this terminal surface dirty.
+    /// Todo-list updates are conversation-wide — a newly active list can
+    /// restyle rows in any older exchange as cancelled — but blocks without a
+    /// todo message never change appearance, so their cached heights and
+    /// layout stay untouched.
+    fn mark_todo_blocks_dirty(&mut self, ctx: &mut ViewContext<Self>) {
+        let view_ids = self
+            .agent_blocks
+            .borrow()
+            .iter()
+            .filter_map(|(view_id, view)| view.as_ref(ctx).renders_todos().then_some(*view_id))
+            .collect::<Vec<_>>();
+        if view_ids.is_empty() {
+            return;
+        }
+        let mut model = self.model.lock();
+        for view_id in view_ids {
+            model.block_list_mut().mark_rich_content_dirty(view_id);
+        }
+        drop(model);
+        ctx.notify();
+    }
+
+    /// Marks `conversation_id`'s todo-rendering agent blocks dirty.
+    /// Conversation status participates in the projected status of the first
+    /// pending todo (InProgress vs Stopped); no other TUI block content reads
+    /// it, so blocks without todo messages keep their cached layout.
+    fn mark_conversation_dirty(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let view_ids = self
+            .agent_blocks
+            .borrow()
+            .iter()
+            .filter_map(|(view_id, view)| {
+                let view = view.as_ref(ctx);
+                (view.conversation_id() == conversation_id && view.renders_todos())
+                    .then_some(*view_id)
+            })
+            .collect::<Vec<_>>();
+        if view_ids.is_empty() {
+            return;
+        }
+        let mut model = self.model.lock();
+        for view_id in view_ids {
+            model.block_list_mut().mark_rich_content_dirty(view_id);
+        }
+        drop(model);
+        ctx.notify();
     }
 
     fn reassign_exchange(

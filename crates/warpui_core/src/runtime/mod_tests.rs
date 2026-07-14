@@ -8,8 +8,8 @@ use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyM
 
 use super::*;
 use crate::elements::tui::{
-    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext,
-    TuiPaintContext, TuiStyle, TuiText,
+    TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiText,
 };
 use crate::keymap::macros::*;
 use crate::keymap::FixedBinding;
@@ -19,6 +19,8 @@ use crate::{AddWindowOptions, AppContext, Entity, TypedActionView, ViewContext};
 /// A trivial leaf element that paints a single line of text.
 struct TextElement {
     text: String,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiElement for TextElement {
@@ -29,17 +31,34 @@ impl TuiElement for TextElement {
         _app: &AppContext,
     ) -> TuiSize {
         let width = u16::try_from(self.text.chars().count()).unwrap_or(u16::MAX);
-        constraint.clamp(TuiSize::new(width, 1))
+        let size = constraint.clamp(TuiSize::new(width, 1));
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
-        buffer.set_stringn(
-            area.x,
-            area.y,
-            &self.text,
-            usize::from(area.width),
-            TuiStyle::default(),
-        );
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let size = self.size.unwrap();
+        for (column, character) in self.text.chars().take(usize::from(size.width)).enumerate() {
+            if let Some(cell) =
+                surface.cell_mut(origin.offset(i32::try_from(column).unwrap_or(i32::MAX), 0))
+            {
+                cell.set_char(character);
+            }
+        }
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 
@@ -58,6 +77,8 @@ impl TuiView for TextView {
     fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
         Box::new(TextElement {
             text: "hello".to_owned(),
+            size: None,
+            origin: None,
         })
     }
 }

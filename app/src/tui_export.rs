@@ -2,21 +2,31 @@
 
 pub use crate::menu_label;
 pub use repo_metadata::repositories::RepoDetectionSource;
+pub use warp_cli::agent::Harness;
+use warpui::SingletonEntity as _;
 
 pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
-    ConversationUsageTotals,
+    ConversationUsageTotals, TodoStatus,
 };
 pub use crate::ai::agent::task::TaskId;
+pub use crate::ai::agent::todos::AIAgentTodoList;
 pub use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText, AIAgentTextSection,
-    AskUserQuestionResult, CancellationReason, FileGlobV2Result, GrepResult, MessageId,
-    RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
+    AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText, AIAgentTextSection, AIAgentTodo,
+    AIAgentTodoId, AskUserQuestionResult, CancellationReason, FileGlobV2Result, GrepResult,
+    MessageId, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
-    StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, UserQueryMode,
+    StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, TodoOperation,
+    UserQueryMode,
+};
+pub use crate::ai::agent_conversations_model::{
+    query_conversation_entries, AgentConversationEntry, AgentConversationEntryId,
+    AgentConversationListEntryState, AgentConversationListPolicy, AgentConversationsModel,
+    AgentConversationsModelEvent, AgentManagementFilters, AgentRunDisplayStatus, HarnessFilter,
+    OwnerFilter,
 };
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
@@ -73,6 +83,7 @@ pub use crate::terminal::conversation_restoration::{
     RestoredConversationExchange,
 };
 pub use crate::terminal::event::AfterBlockCompletedEvent;
+pub use crate::terminal::input::models::{query_model_picker_choices, ModelPickerChoice};
 pub use crate::terminal::input::slash_command_model::{
     slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,
     ParsedSlashCommandInput,
@@ -115,3 +126,9 @@ pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;
+
+/// Returns whether cloud conversation metadata failed to load.
+pub fn agent_conversations_cloud_metadata_load_failed(app: &warpui::AppContext) -> bool {
+    crate::ai::agent_conversations_model::AgentConversationsModel::as_ref(app)
+        .cloud_conversation_metadata_load_failed()
+}

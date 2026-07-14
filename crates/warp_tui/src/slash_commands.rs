@@ -16,19 +16,16 @@ use warp::tui_export::{
     SlashCommandMixer, TuiSlashCommandDataSource, UpdatedActiveCommands,
 };
 use warp_editor::model::CoreEditorModel;
-use warp_search_core::inline_menu::{
-    InlineMenuResultsUpdate, InlineMenuSelection, InputDrivenInlineMenuLifecycle,
-};
+use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InputDrivenInlineMenuLifecycle};
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
-    keep_selected_visible, TuiInlineMenuRow, TuiInlineMenuRowStyle, TuiInlineMenuSnapshot,
-    TuiInlineMenuStatus,
+    result_row_capacity, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
 };
 
-const MAX_VISIBLE_ROWS: usize = 8;
+const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, false, false);
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct TuiSlashCommandRow {
     pub(crate) title: String,
@@ -65,17 +62,13 @@ fn argument_hint_text_for_parsed_input(
         .map(|hint| hint.text)
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub(crate) enum TuiSlashCommandState {
     #[default]
     Closed,
     Open {
         query: String,
-        rows: Vec<TuiSlashCommandRow>,
-        selection: InlineMenuSelection,
-        scroll_offset: usize,
-        is_loading: bool,
+        list: TuiInlineMenuListState<TuiSlashCommandRow>,
     },
 }
 
@@ -136,18 +129,17 @@ impl TuiSlashCommandModel {
         rows: Vec<TuiSlashCommandRow>,
         selected_index: usize,
     ) -> Self {
-        let mut selection = InlineMenuSelection::default();
-        selection.select(selected_index, rows.len(), |_| true);
+        let mut list = TuiInlineMenuListState::default();
+        list.replace_rows(rows, false, Some(selected_index), MAX_VISIBLE_ROWS, |_| {
+            true
+        });
         Self {
             input_editor,
             slash_commands_source: None,
             mixer,
             state: TuiSlashCommandState::Open {
                 query: String::new(),
-                rows,
-                selection,
-                scroll_offset: 0,
-                is_loading: false,
+                list,
             },
             lifecycle: InputDrivenInlineMenuLifecycle::default(),
             highlighted_prefix_len: None,
@@ -178,31 +170,17 @@ impl TuiSlashCommandModel {
     }
 
     pub(crate) fn selected_action(&self) -> Option<AcceptSlashCommandOrSavedPrompt> {
-        let TuiSlashCommandState::Open {
-            rows, selection, ..
-        } = &self.state
-        else {
+        let TuiSlashCommandState::Open { list, .. } = &self.state else {
             return None;
         };
-        selection
-            .selected_index()
-            .and_then(|index| rows.get(index))
-            .map(|row| row.action.clone())
+        list.selected_row().map(|row| row.action.clone())
     }
 
     pub(crate) fn select_previous(&mut self, ctx: &mut ModelContext<Self>) {
-        let TuiSlashCommandState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            ..
-        } = &mut self.state
-        else {
+        let TuiSlashCommandState::Open { list, .. } = &mut self.state else {
             return;
         };
-        if let Some(selected_index) = selection.select_previous(rows.len(), |_| true) {
-            keep_selected_visible(rows.len(), selected_index, MAX_VISIBLE_ROWS, scroll_offset);
-        }
+        list.select_previous(MAX_VISIBLE_ROWS, |_| true);
         ctx.emit(TuiSlashCommandModelEvent);
     }
 
@@ -219,18 +197,10 @@ impl TuiSlashCommandModel {
     }
 
     pub(crate) fn select_next(&mut self, ctx: &mut ModelContext<Self>) {
-        let TuiSlashCommandState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            ..
-        } = &mut self.state
-        else {
+        let TuiSlashCommandState::Open { list, .. } = &mut self.state else {
             return;
         };
-        if let Some(selected_index) = selection.select_next(rows.len(), |_| true) {
-            keep_selected_visible(rows.len(), selected_index, MAX_VISIBLE_ROWS, scroll_offset);
-        }
+        list.select_next(MAX_VISIBLE_ROWS, |_| true);
         ctx.emit(TuiSlashCommandModelEvent);
     }
 
@@ -253,18 +223,11 @@ impl TuiSlashCommandModel {
     }
 
     pub(crate) fn snapshot(&self) -> Option<TuiInlineMenuSnapshot> {
-        let TuiSlashCommandState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            is_loading,
-            ..
-        } = &self.state
-        else {
+        let TuiSlashCommandState::Open { list, .. } = &self.state else {
             return None;
         };
-        let status = if rows.is_empty() {
-            Some(if *is_loading {
+        let status = if list.rows().is_empty() {
+            Some(if list.is_loading() {
                 TuiInlineMenuStatus::Loading(
                     menu_label("tui.inline_menu.loading", "Loading slash commands…").to_owned(),
                 )
@@ -278,7 +241,8 @@ impl TuiSlashCommandModel {
         };
         Some(TuiInlineMenuSnapshot {
             header: None,
-            rows: rows
+            rows: list
+                .rows()
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
@@ -287,8 +251,8 @@ impl TuiSlashCommandModel {
                     style: TuiInlineMenuRowStyle::SlashCommand,
                 })
                 .collect(),
-            selected_index: selection.selected_index(),
-            scroll_offset: *scroll_offset,
+            selected_index: list.selected_index(),
+            scroll_offset: list.scroll_offset(),
             max_visible_rows: MAX_VISIBLE_ROWS,
             status,
         })
@@ -341,22 +305,23 @@ impl TuiSlashCommandModel {
     }
 
     fn run_query(&mut self, query: String, force: bool, ctx: &mut ModelContext<Self>) {
-        let (previous_rows, previous_selection, previous_scroll_offset) = match &self.state {
-            TuiSlashCommandState::Closed => (Vec::new(), InlineMenuSelection::default(), 0),
+        match &mut self.state {
+            TuiSlashCommandState::Closed => {
+                let mut list = TuiInlineMenuListState::default();
+                list.set_loading(true);
+                self.state = TuiSlashCommandState::Open {
+                    query: query.clone(),
+                    list,
+                };
+            }
             TuiSlashCommandState::Open {
-                rows,
-                selection,
-                scroll_offset,
-                ..
-            } => (rows.clone(), *selection, *scroll_offset),
-        };
-        self.state = TuiSlashCommandState::Open {
-            query: query.clone(),
-            rows: previous_rows,
-            selection: previous_selection,
-            scroll_offset: previous_scroll_offset,
-            is_loading: true,
-        };
+                query: current_query,
+                list,
+            } => {
+                *current_query = query.clone();
+                list.set_loading(true);
+            }
+        }
         self.mixer.update(ctx, |mixer, ctx| {
             if !force && mixer.current_query().is_some_and(|q| q.text == query) {
                 return;
@@ -375,37 +340,18 @@ impl TuiSlashCommandModel {
             )
         };
         let results_update = {
-            let TuiSlashCommandState::Open {
-                selection,
-                is_loading,
-                ..
-            } = &mut self.state
-            else {
+            let TuiSlashCommandState::Open { list, .. } = &mut self.state else {
                 return;
             };
-            *is_loading = mixer_is_loading;
-            selection.reconcile_results(mixer_is_loading, new_rows.len(), |_| true)
+            list.reconcile_mixer_rows(new_rows, mixer_is_loading, MAX_VISIBLE_ROWS, |_| true)
         };
-        let selected_index = match results_update {
+        match results_update {
             InlineMenuResultsUpdate::Loading => return,
             InlineMenuResultsUpdate::Empty => {
                 self.close(ctx);
                 return;
             }
-            InlineMenuResultsUpdate::Ready { selected_index } => selected_index,
-        };
-
-        let TuiSlashCommandState::Open {
-            scroll_offset,
-            rows,
-            ..
-        } = &mut self.state
-        else {
-            return;
-        };
-        *rows = new_rows;
-        if let Some(selected_index) = selected_index {
-            keep_selected_visible(rows.len(), selected_index, MAX_VISIBLE_ROWS, scroll_offset);
+            InlineMenuResultsUpdate::Ready { .. } => {}
         }
         ctx.emit(TuiSlashCommandModelEvent);
     }

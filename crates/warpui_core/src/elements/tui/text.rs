@@ -26,11 +26,11 @@
 use std::mem;
 
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Widget, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect, TuiSize,
-    TuiStyle,
+    TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiStyle,
 };
 use crate::AppContext;
 
@@ -41,6 +41,8 @@ pub struct TuiText {
     /// Base style beneath every span; span styles patch over it.
     style: TuiStyle,
     wrap: bool,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiText {
@@ -57,6 +59,8 @@ impl TuiText {
             spans: spans.into_iter().collect(),
             style: TuiStyle::default(),
             wrap: true,
+            size: None,
+            origin: None,
         }
     }
 
@@ -128,23 +132,44 @@ impl TuiElement for TuiText {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        if self.is_empty() {
-            return constraint.clamp(TuiSize::ZERO);
-        }
-        let paragraph = self.paragraph();
-        let height = u16::try_from(paragraph.line_count(constraint.max.width)).unwrap_or(u16::MAX);
-        let content_width = u16::try_from(paragraph.line_width()).unwrap_or(u16::MAX);
-        TuiSize::new(
-            constraint.constrain_width(content_width),
-            constraint.constrain_height(height),
-        )
+        let size = if self.is_empty() {
+            constraint.clamp(TuiSize::ZERO)
+        } else {
+            let paragraph = self.paragraph();
+            let height =
+                u16::try_from(paragraph.line_count(constraint.max.width)).unwrap_or(u16::MAX);
+            let content_width = u16::try_from(paragraph.line_width()).unwrap_or(u16::MAX);
+            TuiSize::new(
+                constraint.constrain_width(content_width),
+                constraint.constrain_height(height),
+            )
+        };
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
-        if area.is_empty() {
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        if size.width == 0 || size.height == 0 {
             return;
         }
-        Widget::render(self.paragraph(), area, buffer);
+        surface.render_widget(self.paragraph(), origin, size);
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 

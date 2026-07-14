@@ -2220,7 +2220,7 @@ en:
       cannot_run_command: "cannot run — command already running"
       new_conversation_blocked: "cannot start new conversation while terminal command is running"
       copied_to_clipboard: "Conversation sent to terminal clipboard"
-      restore_token_mismatch: "The restored conversation did not match the requested token."
+      restore_token_mismatch: "The restored conversation did not match the requested conversation."
       restore_only_oz_supported: "The Warp TUI only supports Oz/Warp conversations."
       restore_load_failed: "The conversation could not be loaded."
       no_active_conversation_to_export: "No active conversation to export"

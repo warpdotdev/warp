@@ -4,7 +4,11 @@ use parking_lot::FairMutex;
 use warpui::r#async::executor::Background;
 use warpui::{App, EntityId};
 
-use super::AgentViewConversationSelection;
+use super::{classify_gui_list_entry, AgentViewConversationSelection};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntryId, AgentConversationListEntryState,
+};
 use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewEntryOrigin, EphemeralMessageModel,
 };
@@ -14,6 +18,53 @@ use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::test_utils::block_size;
 use crate::terminal::TerminalModel;
 use crate::test_util::settings::initialize_settings_for_tests;
+#[test]
+fn gui_list_policy_classifies_selected_entry() {
+    let entry_id = AgentConversationEntryId::Conversation(AIConversationId::new());
+    assert_eq!(
+        classify_gui_list_entry(
+            Some(entry_id),
+            entry_id,
+            Some(EntityId::new()),
+            EntityId::new(),
+            || panic!("selected entries should not resolve an open action"),
+        ),
+        AgentConversationListEntryState::Selected
+    );
+}
+
+#[test]
+fn gui_list_policy_classifies_entry_open_elsewhere() {
+    let entry_id = AgentConversationEntryId::Conversation(AIConversationId::new());
+    assert_eq!(
+        classify_gui_list_entry(
+            None,
+            entry_id,
+            Some(EntityId::new()),
+            EntityId::new(),
+            || panic!("entries open elsewhere should not resolve an open action"),
+        ),
+        AgentConversationListEntryState::OpenElsewhere
+    );
+}
+
+#[test]
+fn gui_list_policy_classifies_available_entry() {
+    let entry_id = AgentConversationEntryId::Conversation(AIConversationId::new());
+    assert_eq!(
+        classify_gui_list_entry(None, entry_id, None, EntityId::new(), || true),
+        AgentConversationListEntryState::Available
+    );
+}
+
+#[test]
+fn gui_list_policy_classifies_unavailable_entry() {
+    let entry_id = AgentConversationEntryId::Conversation(AIConversationId::new());
+    assert_eq!(
+        classify_gui_list_entry(None, entry_id, None, EntityId::new(), || false),
+        AgentConversationListEntryState::Unavailable
+    );
+}
 
 #[test]
 fn gui_selection_delegates_to_agent_view() {

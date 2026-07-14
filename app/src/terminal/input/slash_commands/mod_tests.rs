@@ -44,6 +44,7 @@ fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
         (&*commands::NEW, TuiSlashCommand::New),
         (&*commands::COMPACT, TuiSlashCommand::Compact),
         (&*commands::PLAN, TuiSlashCommand::Plan),
+        (&commands::MODEL, TuiSlashCommand::Model),
         (
             &*commands::CREATE_NEW_PROJECT,
             TuiSlashCommand::CreateNewProject,
@@ -71,6 +72,13 @@ fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
         assert_eq!(TuiSlashCommand::from_static_command(command), None);
         assert!(!slash_command_is_supported_in_tui(command));
     }
+}
+
+#[test]
+fn model_command_is_supported_in_tui_without_becoming_a_prompt_command() {
+    assert!(slash_command_is_supported_in_tui(&commands::MODEL));
+    assert!(!slash_command_is_submitted_as_prompt(&commands::MODEL));
+    assert!(commands::MODEL.argument.is_none());
 }
 
 #[test]

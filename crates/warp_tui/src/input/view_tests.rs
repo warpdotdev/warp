@@ -10,13 +10,15 @@ use string_offset::CharOffset;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, SlashCommandId, SlashCommandMixer,
+    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, LLMId, SlashCommandId,
+    SlashCommandMixer,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPaintContext, TuiPoint, TuiRect, TuiSize,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScene,
+    TuiScreenPosition, TuiSize,
 };
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
@@ -32,6 +34,7 @@ use super::{
 use crate::editor_element::TuiEditorElement;
 use crate::inline_menu::TuiInlineMenu;
 use crate::input_mode_policy::TuiInputModePolicy;
+use crate::model_menu::TuiModelMenuModel;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
 use crate::test_fixtures::add_test_semantic_selection;
 use crate::tui_builder::TuiUiBuilder;
@@ -88,7 +91,14 @@ fn render_input_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> Tui
     let area = TuiRect::new(0, 0, size.width, size.height);
     let mut buffer = TuiBuffer::empty(area);
     let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-    element.render(area, &mut buffer, &mut paint_ctx);
+    {
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(
+            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+            &mut surface,
+            &mut paint_ctx,
+        );
+    }
     buffer
 }
 
@@ -127,7 +137,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         },
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            TuiInputView::new(model, input_mode, None, ctx)
+            TuiInputView::new(model, input_mode, Vec::new(), ctx)
         },
     );
     view
@@ -157,15 +167,42 @@ fn build_view_with_inline_menu(
         .collect();
     let menu_model =
         ctx.add_model(|_| TuiSlashCommandModel::new_for_test(input_model.clone(), mixer, rows, 0));
-    let inline_menu = TuiInlineMenu::SlashCommands(menu_model.clone());
+    let inline_menu = TuiInlineMenu::new(menu_model.clone());
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,
             ..Default::default()
         },
-        move |ctx| TuiInputView::new(input_model, input_mode, Some(inline_menu), ctx),
+        move |ctx| TuiInputView::new(input_model, input_mode, vec![inline_menu], ctx),
     );
     (view, menu_model, ids)
+}
+
+fn build_view_with_model_menu(
+    ctx: &mut AppContext,
+) -> (
+    ViewHandle<TuiInputView>,
+    ModelHandle<TuiModelMenuModel>,
+    LLMId,
+) {
+    ctx.add_singleton_model(|_| Appearance::mock());
+    add_test_semantic_selection(ctx);
+    let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let id = LLMId::from("gpt-5");
+    let id_for_model = id.clone();
+    let menu_model = ctx.add_model(|_| {
+        TuiModelMenuModel::new_for_test(input_model.clone(), vec![(id_for_model, true)], 0)
+    });
+    let inline_menu = TuiInlineMenu::new(menu_model.clone());
+    let (_window_id, view) = ctx.add_tui_window(
+        AddWindowOptions {
+            window_style: WindowStyle::NotStealFocus,
+            ..Default::default()
+        },
+        move |ctx| TuiInputView::new(input_model, input_mode, vec![inline_menu], ctx),
+    );
+    (view, menu_model, id)
 }
 
 fn selected_slash_command_id(
@@ -221,6 +258,29 @@ fn inline_menu_accept_dismisses_before_emitting_unchanged_payload() {
         app.read(|ctx| {
             assert_eq!(accepted.borrow().as_slice(), &[(ids[0], true)]);
             assert!(!menu_model.as_ref(ctx).is_open());
+        });
+    });
+}
+
+#[test]
+fn model_menu_accept_emits_selected_id_and_stays_open_for_persistence() {
+    App::test((), |mut app| async move {
+        let (view, menu_model, id, accepted) = app.update(|ctx| {
+            let (view, menu_model, id) = build_view_with_model_menu(ctx);
+            let accepted = Rc::new(RefCell::new(Vec::new()));
+            let accepted_for_subscription = accepted.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiInputViewEvent::AcceptedModel(id) = event {
+                    accepted_for_subscription.borrow_mut().push(id.clone());
+                }
+            });
+            (view, menu_model, id, accepted)
+        });
+
+        app.update(|ctx| dispatch(&view, ctx, &[TuiInputAction::Submit]));
+        app.read(|ctx| {
+            assert_eq!(accepted.borrow().as_slice(), &[id]);
+            assert!(menu_model.as_ref(ctx).is_open());
         });
     });
 }
@@ -346,9 +406,16 @@ fn cursor_and_height(
         rendered_views: &mut rendered_views,
     };
     let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut buffer = TuiBuffer::empty(area);
     let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-    let cursor =
-        element.cursor_position(TuiRect::new(0, 0, size.width, size.height), &mut paint_ctx);
+    {
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+    }
+    let cursor = paint_ctx
+        .terminal_cursor()
+        .and_then(|point| Some((u16::try_from(point.x).ok()?, u16::try_from(point.y).ok()?)));
     (cursor, size.height)
 }
 
@@ -831,13 +898,32 @@ fn laid_out_element(
     (element, TuiRect::new(0, 0, size.width, size.height))
 }
 
+/// Paints `element` and returns its retained scene.
+fn paint_event_scene(element: &mut dyn TuiElement, area: TuiRect) -> Rc<TuiScene> {
+    let mut rendered_views = EntityIdMap::default();
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    {
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(
+            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+            &mut surface,
+            &mut paint_ctx,
+        );
+    }
+    Rc::new(paint_ctx.scene.clone())
+}
+
 /// Drives the full mouse path for `event`: lay out the element, map the event to
 /// its editor action, and apply the corresponding [`TuiInputAction`] to the view.
 /// Returns whether an action fired (i.e. the event was not ignored).
 fn mouse(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, event: &TuiEvent) -> bool {
     let action = {
-        let (element, area) = laid_out_element(view, ctx);
-        element.mouse_action(event, area, ctx)
+        let (mut element, area) = laid_out_element(view, ctx);
+        let scene = paint_event_scene(&mut element, area);
+        let mut rendered_views = EntityIdMap::default();
+        let event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+        element.mouse_action(event, &event_ctx, ctx)
     };
     match action {
         Some(action) => {
@@ -1136,11 +1222,9 @@ fn escape_is_not_consumed_by_the_element() {
             let view = build_view(ctx);
             type_str(&view, ctx, "ab");
             let (mut element, area) = laid_out_element(&view, ctx);
+            let scene = paint_event_scene(&mut element, area);
             let mut rendered_views = EntityIdMap::default();
-            let mut lctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let mut event_ctx = TuiEventContext::default();
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
             event_ctx.set_origin_view(Some(view.id()));
             let escape = TuiEvent::KeyDown {
                 keystroke: Keystroke {
@@ -1152,7 +1236,7 @@ fn escape_is_not_consumed_by_the_element() {
                 is_composing: false,
             };
             assert!(
-                !element.dispatch_event(&escape, area, &mut event_ctx, &mut lctx, ctx),
+                !element.dispatch_event(&escape, &mut event_ctx, ctx),
                 "escape must not be consumed by the element"
             );
 
@@ -1224,10 +1308,22 @@ fn shell_mode_offsets_cursor_by_gutter() {
         app.update(|ctx| {
             let view = build_view(ctx);
             type_str(&view, ctx, "ab");
-            let (element, area) = laid_out_shell_row(&view, ctx);
+            let (mut element, area) = laid_out_shell_row(&view, ctx);
             let mut rendered_views = EntityIdMap::default();
+            let mut buffer = TuiBuffer::empty(area);
             let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-            assert_eq!(element.cursor_position(area, &mut paint_ctx), Some((4, 0)));
+            {
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(
+                    TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+                    &mut surface,
+                    &mut paint_ctx,
+                );
+            }
+            let cursor = paint_ctx.terminal_cursor().and_then(|point| {
+                Some((u16::try_from(point.x).ok()?, u16::try_from(point.y).ok()?))
+            });
+            assert_eq!(cursor, Some((4, 0)));
         });
     });
 }
@@ -1242,9 +1338,12 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             let view = build_view(ctx);
             type_str(&view, ctx, "hello world");
             let action = {
-                let (element, area) = laid_out_shell_content_slot(&view, ctx);
+                let (mut element, area) = laid_out_shell_content_slot(&view, ctx);
+                let scene = paint_event_scene(&mut element, area);
+                let mut rendered_views = EntityIdMap::default();
+                let event_ctx = TuiEventContext::new(scene, &mut rendered_views);
                 element
-                    .mouse_action(&left_down(2 + 3, 0, 1, false), area, ctx)
+                    .mouse_action(&left_down(2 + 3, 0, 1, false), &event_ctx, ctx)
                     .map(TuiInputAction::from)
             };
             let Some(TuiInputAction::SelectionStartAt { offset }) = action else {
@@ -1257,24 +1356,16 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             // release inside it fires the handler (which moves the cursor to
             // the buffer start); both halves are consumed.
             let (mut row, area) = laid_out_shell_row(&view, ctx);
+            let scene = paint_event_scene(row.as_mut(), area);
             let mut rendered_views = EntityIdMap::default();
-            let mut lctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let mut event_ctx = TuiEventContext::default();
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
             event_ctx.set_origin_view(Some(view.id()));
             assert!(
-                row.dispatch_event(
-                    &left_down(0, 0, 1, false),
-                    area,
-                    &mut event_ctx,
-                    &mut lctx,
-                    ctx
-                ),
+                row.dispatch_event(&left_down(0, 0, 1, false), &mut event_ctx, ctx),
                 "gutter presses must be consumed"
             );
             assert!(
-                row.dispatch_event(&left_up(0, 0), area, &mut event_ctx, &mut lctx, ctx),
+                row.dispatch_event(&left_up(0, 0), &mut event_ctx, ctx),
                 "the release completing a gutter click must be consumed"
             );
         });

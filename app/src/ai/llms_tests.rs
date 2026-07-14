@@ -10,6 +10,7 @@ use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
+use crate::terminal::input::models::query_model_picker_choices;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -151,6 +152,13 @@ fn endpoint(
         url: url.into(),
         api_key: api_key.into(),
         models,
+    }
+}
+
+fn disabled_agent_llm(id: &str, display_name: &str) -> LLMInfo {
+    LLMInfo {
+        disable_reason: Some(DisableReason::Unavailable),
+        ..agent_llm(id, display_name)
     }
 }
 
@@ -536,6 +544,38 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
     });
 }
 
+/// Runs picker-query assertions with searchable, selectable, and disabled model fixtures plus
+/// the app singletons consulted by model eligibility logic.
+fn with_model_picker_query_test_context(f: impl FnOnce(&LLMPreferences, &AppContext) + 'static) {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.read(|app_ctx| {
+            let agent_mode = AvailableLLMs::new(
+                "auto".into(),
+                vec![
+                    agent_llm("auto", "auto (cost-efficient)"),
+                    agent_llm("gpt-5", "GPT 5"),
+                    disabled_agent_llm("disabled-gpt", "GPT Disabled"),
+                ],
+                None,
+            )
+            .expect("choices are non-empty");
+            let preferences = LLMPreferences {
+                models_by_feature: ModelsByFeature {
+                    agent_mode,
+                    ..Default::default()
+                },
+                last_update: None,
+                base_llm_for_terminal_view: HashMap::new(),
+                custom_llms: Vec::new(),
+                custom_model_routers: Vec::new(),
+            };
+            f(&preferences, app_ctx);
+        });
+    });
+}
+
 #[test]
 fn active_models_use_default_when_usable() {
     App::test((), |mut app| async move {
@@ -647,6 +687,105 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
     });
 }
 
+#[test]
+fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
+    // Regression test for QUALITY-866: a profile whose model was set to a custom
+    // endpoint on device A should NOT be reset when device B syncs that profile
+    // but does not have the corresponding custom endpoint configured.
+    //
+    // Before the fix, `reconcile_disabled_model_preferences` would clear any model
+    // ID that couldn't be resolved locally, causing the profile to revert to Auto
+    // and syncing that change back to cloud — erasing the user's setting on device A.
+    //
+    // The `context_window_limit` clear is a separately-guarded branch in
+    // `reconcile_disabled_model_preferences` (gated on
+    // `preferred_base_model_is_recognized`), so this test also sets a limit and
+    // asserts it is preserved for the unrecognized custom endpoint ID.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        // Simulate a model ID from a custom endpoint on another device.
+        // This device (device B) does NOT have the endpoint configured locally.
+        let remote_custom_model_id = LLMId::from("a1b2c3d4-5e6f-7890-abcd-ef1234567890");
+        // Intentionally skip adding the endpoint to ApiKeyManager.
+
+        let default_profile_id =
+            profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        // Also set a context window limit so the separately-guarded
+        // `context_window_limit` clear branch in `reconcile_disabled_model_preferences`
+        // is exercised: it must NOT clear the limit for an unrecognized model ID.
+        let preserved_context_window_limit: u32 = 200_000;
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(
+                default_profile_id,
+                Some(remote_custom_model_id.clone()),
+                ctx,
+            );
+            profiles.set_coding_model(
+                default_profile_id,
+                Some(remote_custom_model_id.clone()),
+                ctx,
+            );
+            profiles.set_cli_agent_model(
+                default_profile_id,
+                Some(remote_custom_model_id.clone()),
+                ctx,
+            );
+            profiles.set_context_window_limit(
+                default_profile_id,
+                Some(preserved_context_window_limit),
+                ctx,
+            );
+        });
+
+        // Trigger a model list refresh (as happens on login, network reconnect, etc.).
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(ModelsByFeature::default()), ctx);
+        });
+
+        // The model IDs should be PRESERVED even though no matching custom endpoint
+        // is configured on this device.
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(
+                profile.data().base_model.as_ref(),
+                Some(&remote_custom_model_id),
+                "base_model must be preserved for unknown custom endpoint IDs (cross-device sync)"
+            );
+            assert_eq!(
+                profile.data().coding_model.as_ref(),
+                Some(&remote_custom_model_id),
+                "coding_model must be preserved for unknown custom endpoint IDs (cross-device sync)"
+            );
+            assert_eq!(
+                profile.data().cli_agent_model.as_ref(),
+                Some(&remote_custom_model_id),
+                "cli_agent_model must be preserved for unknown custom endpoint IDs (cross-device sync)"
+            );
+            assert_eq!(
+                profile.data().context_window_limit,
+                Some(preserved_context_window_limit),
+                "context_window_limit must be preserved for unknown custom endpoint IDs (cross-device sync)"
+            );
+        });
+    });
+}
+
 // -- tui_agent_model_info tests --
 
 fn agent_llm(id: &str, display_name: &str) -> LLMInfo {
@@ -711,6 +850,38 @@ fn tui_agent_model_auto_resolves_to_the_default_model() {
             preferences.tui_agent_model_info("auto", app).id.as_str(),
             "auto"
         );
+    });
+}
+
+#[test]
+fn shared_model_picker_query_orders_filters_and_marks_disabled_choices() {
+    with_model_picker_query_test_context(|preferences, app| {
+        let all = query_model_picker_choices(
+            preferences,
+            preferences.get_base_llm_choices_for_agent_mode(app),
+            "",
+            app,
+        );
+        assert_eq!(
+            all.first().map(|choice| choice.llm.id.as_str()),
+            Some("auto")
+        );
+        assert_eq!(
+            all.last().map(|choice| choice.llm.id.as_str()),
+            Some("disabled-gpt")
+        );
+        assert!(!all.last().expect("disabled choice").is_selectable());
+
+        let filtered = query_model_picker_choices(
+            preferences,
+            preferences.get_base_llm_choices_for_agent_mode(app),
+            "gpt 5",
+            app,
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].llm.id.as_str(), "gpt-5");
+        assert!(filtered[0].name_match_result.is_some());
+        assert!(filtered[0].is_selectable());
     });
 }
 

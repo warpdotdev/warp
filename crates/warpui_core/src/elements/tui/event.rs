@@ -10,11 +10,15 @@
 //! conversion lives with the runtime.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
-use super::TuiPoint;
+use super::{
+    TuiElement, TuiLocalPoint, TuiPoint, TuiScene, TuiScreenPoint, TuiScreenRect, TuiSize,
+    TuiViewMapContext,
+};
 use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
-use crate::{Action, EntityId};
+use crate::{Action, EntityId, EntityIdMap};
 
 /// A terminal scroll delta `(columns, rows)`.
 pub type TuiScrollDelta = (isize, isize);
@@ -113,8 +117,9 @@ pub struct TuiEventDispatchResult {
     pub handled: bool,
 }
 
-#[derive(Default)]
-pub struct TuiEventContext {
+pub struct TuiEventContext<'a> {
+    scene: Rc<TuiScene>,
+    rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
     notified: HashSet<EntityId>,
     typed_actions: Vec<TuiDispatchedAction>,
     origin_view_id: Option<EntityId>,
@@ -128,7 +133,49 @@ pub(crate) struct TuiDispatchedAction {
     pub(crate) action: Box<dyn Action>,
 }
 
-impl TuiEventContext {
+impl<'a> TuiEventContext<'a> {
+    /// Creates dispatch state for the last painted element tree and scene.
+    pub fn new(
+        scene: Rc<TuiScene>,
+        rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
+    ) -> Self {
+        Self {
+            scene,
+            rendered_views,
+            notified: HashSet::new(),
+            typed_actions: Vec::new(),
+            origin_view_id: None,
+        }
+    }
+
+    /// Returns the visible portion of retained element bounds.
+    pub fn visible_rect(&self, origin: TuiScreenPoint, size: TuiSize) -> Option<TuiScreenRect> {
+        self.scene.visible_rect(origin, size)
+    }
+
+    /// Returns whether a higher painted layer covers `point`.
+    pub fn is_covered(&self, point: TuiScreenPoint) -> bool {
+        self.scene.is_covered(point)
+    }
+
+    /// Converts a terminal pointer position to signed element-local cells.
+    pub fn local_point(&self, origin: TuiScreenPoint, position: TuiPoint) -> TuiLocalPoint {
+        TuiLocalPoint::new(
+            i32::from(position.x).saturating_sub(origin.x),
+            i32::from(position.y).saturating_sub(origin.y),
+        )
+    }
+
+    /// Returns whether a pointer is inside visible, uncovered element bounds.
+    pub fn hit_test(&self, origin: TuiScreenPoint, size: TuiSize, position: TuiPoint) -> bool {
+        self.visible_rect(origin, size)
+            .is_some_and(|rect| rect.contains(position))
+            && !self.is_covered(TuiScreenPoint::new(
+                i32::from(position.x),
+                i32::from(position.y),
+                origin.z_index,
+            ))
+    }
     /// Queues a typed action to dispatch from the view currently being
     /// processed. Panics if called outside of view event processing, where
     /// there is no origin view to attribute the action to.
@@ -164,5 +211,11 @@ impl TuiEventContext {
     /// view's subtree.
     pub fn set_origin_view(&mut self, view_id: Option<EntityId>) -> Option<EntityId> {
         std::mem::replace(&mut self.origin_view_id, view_id)
+    }
+}
+
+impl TuiViewMapContext for TuiEventContext<'_> {
+    fn rendered_views_mut(&mut self) -> &mut EntityIdMap<Box<dyn TuiElement>> {
+        self.rendered_views
     }
 }

@@ -829,7 +829,7 @@ impl RequestedCommandView {
             .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
             .with_vertical_padding(4.)
             .with_background(theme.surface_1())
-            .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+            .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
             .finish()
         });
 
@@ -951,7 +951,7 @@ impl RequestedCommandView {
         .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
         .with_vertical_padding(8.)
         .with_border(Border::top(1.).with_border_fill(theme.surface_1()))
-        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
         .finish()
     }
 
@@ -1367,9 +1367,9 @@ impl RequestedCommandView {
             });
 
         if should_round_bottom_corners {
-            config = config.with_corner_radius_override(CornerRadius::with_all(Radius::Pixels(8.)));
+            config = config.with_corner_radius_override(CornerRadius::with_all(Radius::Pixels(7.)));
         } else {
-            config = config.with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)));
+            config = config.with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(7.)));
         }
 
         if let Some(font_override) = font_override {
@@ -1633,7 +1633,7 @@ impl View for RequestedCommandView {
                             REQUESTED_COMMAND_BODY_VERTICAL_PADDING - SCROLLBAR_WIDTH.as_f32() - 2.,
                         )
                         .with_background_color(theme.background().into_solid())
-                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
                         .finish(),
                 )
                 .with_max_height(MAX_EDITOR_HEIGHT)
@@ -1877,7 +1877,7 @@ impl View for RequestedCommandView {
                         .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
                         .with_vertical_padding(REQUESTED_COMMAND_BODY_VERTICAL_PADDING)
                         .with_background(theme.background())
-                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
                         .finish(),
                 );
             } else {
@@ -1928,7 +1928,7 @@ impl View for RequestedCommandView {
                         .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
                         .with_vertical_padding(REQUESTED_COMMAND_BODY_VERTICAL_PADDING)
                         .with_background(theme.background())
-                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
                         .finish(),
                 );
             }

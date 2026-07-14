@@ -26,15 +26,16 @@ use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use super::RequestInput;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata,
+    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata, TodoStatus,
     UpdateConversationError,
 };
 use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
 use crate::ai::agent::task::TaskId;
+use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
-    CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError, RequestCost,
-    Suggestions,
+    AIAgentTodoId, CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError,
+    RequestCost, Suggestions,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -944,6 +945,23 @@ impl BlocklistAIHistoryModel {
     ) -> Option<&ConversationStatus> {
         self.conversation(conversation_id)
             .map(|conversation| conversation.status())
+    }
+
+    /// Returns the render status of one todo item in the conversation's todo
+    /// history (see [`AIConversation::todo_status`]) — a narrow projection
+    /// for consumers that don't need the whole `AIConversation`.
+    pub fn todo_status(
+        &self,
+        conversation_id: &AIConversationId,
+        todo_id: &AIAgentTodoId,
+    ) -> Option<TodoStatus> {
+        self.conversation(conversation_id)?.todo_status(todo_id)
+    }
+
+    /// Returns the conversation's active (most recent) todo list, if any — a
+    /// narrow projection (see [`Self::todo_status`]).
+    pub fn active_todo_list(&self, conversation_id: &AIConversationId) -> Option<&AIAgentTodoList> {
+        self.conversation(conversation_id)?.active_todo_list()
     }
 
     /// Returns the terminal surface ID for the given conversation, if any.

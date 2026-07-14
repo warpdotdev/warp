@@ -82,7 +82,11 @@ Figma: none provided.
 
 23. A non-Oz token produces an explicit message that the Warp TUI only supports Oz/Warp conversations.
 
-24. Exiting while restoration is loading cancels the user-visible restore flow and exits normally. It does not print a resume hint for a conversation that was never successfully selected.
+24. While startup restoration is loading, Escape or Ctrl-C cancels the restore and continues into the provisional new TUI session as though `--resume` had not been supplied.
+    - The loading screen shows `Esc or Ctrl-C to cancel and start a new session`.
+    - The provisional conversation becomes interactive without requiring a restart.
+    - A late loader result is ignored and cannot replace the new session.
+    - The cancelled target does not become selected and does not produce an exit resume hint.
 
 ### Exit resume hint
 

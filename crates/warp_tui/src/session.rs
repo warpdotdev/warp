@@ -25,7 +25,9 @@ use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, ViewHandle}
 use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
 use crate::terminal_background::probe_and_select_theme;
-use crate::terminal_session_view::{TuiConversationRestoreOrigin, TuiTerminalSessionView};
+use crate::terminal_session_view::{
+    TuiConversationRestoreOrigin, TuiConversationRestoreTarget, TuiTerminalSessionView,
+};
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 
 #[derive(Parser)]
@@ -204,7 +206,7 @@ fn create_terminal_session_after_login(
                     if let Some(token) = resume_token {
                         surface.update(ctx, |view, ctx| {
                             view.restore_conversation(
-                                token,
+                                TuiConversationRestoreTarget::Server(token),
                                 TuiConversationRestoreOrigin::Startup,
                                 ctx,
                             );

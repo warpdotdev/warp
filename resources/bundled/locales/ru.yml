@@ -2221,7 +2221,7 @@ ru:
       cannot_run_command: "не удалось выполнить — команда уже запущена"
       new_conversation_blocked: "нельзя начать новый разговор, пока в терминале выполняется команда"
       copied_to_clipboard: "Разговор скопирован в буфер обмена терминала"
-      restore_token_mismatch: "Восстановленный разговор не соответствует запрошенному токену."
+      restore_token_mismatch: "Восстановленная беседа не совпадает с запрошенной беседой."
       restore_only_oz_supported: "Warp TUI поддерживает только разговоры Oz/Warp."
       restore_load_failed: "Не удалось загрузить разговор."
       no_active_conversation_to_export: "Нет активного разговора для экспорта"

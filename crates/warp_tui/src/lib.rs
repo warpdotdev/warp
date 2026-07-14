@@ -18,12 +18,14 @@ mod telemetry;
 mod tui_builder;
 mod ui;
 
+mod conversation_menu;
 mod conversation_selection;
 mod editor_element;
 mod exit_confirmation;
 mod inline_menu;
 mod input_mode_policy;
 mod keybindings;
+mod model_menu;
 mod resume;
 mod slash_commands;
 mod terminal_background;

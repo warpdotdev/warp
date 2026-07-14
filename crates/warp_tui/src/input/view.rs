@@ -26,7 +26,7 @@ use std::ops::Range;
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputTypeAutoDetectionSource,
+    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputTypeAutoDetectionSource, LLMId,
 };
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::selection::TextUnit;
@@ -465,6 +465,10 @@ pub enum TuiInputViewEvent {
     Submitted(String),
     /// The user selected a slash command menu item.
     AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
+    /// The user selected a conversation menu item.
+    AcceptedConversation(warp::tui_export::AgentConversationEntryId),
+    /// The user selected a model menu item.
+    AcceptedModel(LLMId),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -566,8 +570,8 @@ pub struct TuiInputView {
     model: ModelHandle<CodeEditorModel>,
     /// Shared input-mode state driving `!` shell-mode handling.
     input_mode: ModelHandle<BlocklistAIInputModel>,
-    /// Optional generalized inline menu used to route prioritized menu actions.
-    inline_menu: Option<TuiInlineMenu>,
+    /// Generalized inline menus used to route prioritized menu actions.
+    inline_menus: Vec<TuiInlineMenu>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
     kill_buffer: KillBuffer,
     /// Maximum number of visible rows before the input scrolls.
@@ -598,7 +602,7 @@ impl TuiInputView {
     pub(crate) fn new(
         model: ModelHandle<CodeEditorModel>,
         input_mode: ModelHandle<BlocklistAIInputModel>,
-        inline_menu: Option<TuiInlineMenu>,
+        inline_menus: Vec<TuiInlineMenu>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
@@ -612,7 +616,7 @@ impl TuiInputView {
         Self {
             model,
             input_mode,
-            inline_menu,
+            inline_menus,
             kill_buffer: KillBuffer::default(),
             max_visible_rows: 6,
             prefix_mouse_state: MouseStateHandle::default(),
@@ -651,8 +655,7 @@ impl TuiInputView {
         let builder = TuiUiBuilder::from_app(ctx);
         let mut styles = TuiEditorStyles::default();
         if let Some(range) = self
-            .inline_menu
-            .as_ref()
+            .active_inline_menu(ctx)
             .and_then(|inline_menu| inline_menu.input_highlight_range(ctx))
         {
             styles
@@ -667,8 +670,7 @@ impl TuiInputView {
                 event_ctx.dispatch_typed_action(TuiInputAction::from(action))
             });
         if let Some(hint_text) = self
-            .inline_menu
-            .as_ref()
+            .active_inline_menu(ctx)
             .and_then(|inline_menu| inline_menu.input_argument_hint_text(ctx))
         {
             element = element.with_trailing_ghost_text(hint_text, builder.dim_text_style());
@@ -741,12 +743,7 @@ impl TuiView for TuiInputView {
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
-        input_keymap_context(
-            self.inline_menu
-                .as_ref()
-                .is_some_and(|inline_menu| inline_menu.is_open(ctx))
-                || self.is_shell_mode(ctx),
-        )
+        input_keymap_context(self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx))
     }
 }
 
@@ -1110,12 +1107,9 @@ impl TuiInputView {
         ) {
             return false;
         }
-        let Some(inline_menu) = self.inline_menu.clone() else {
+        let Some(inline_menu) = self.active_inline_menu(ctx) else {
             return false;
         };
-        if !inline_menu.is_open(ctx) {
-            return false;
-        }
 
         match action {
             TuiInputAction::MoveUp => {
@@ -1129,6 +1123,12 @@ impl TuiInputView {
                     match accepted {
                         TuiInlineMenuAccepted::SlashCommand(action) => {
                             ctx.emit(TuiInputViewEvent::AcceptedSlashCommand(action));
+                        }
+                        TuiInlineMenuAccepted::Conversation(entry_id) => {
+                            ctx.emit(TuiInputViewEvent::AcceptedConversation(entry_id));
+                        }
+                        TuiInlineMenuAccepted::Model(id) => {
+                            ctx.emit(TuiInputViewEvent::AcceptedModel(id));
                         }
                     }
                 }
@@ -1144,18 +1144,24 @@ impl TuiInputView {
     /// order. New input modes should be added after the inline-menu branch so
     /// one Escape always closes the most local surface first.
     fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        if let Some(inline_menu) = self.inline_menu.clone() {
-            if inline_menu.is_open(ctx) {
-                inline_menu.dismiss(ctx);
-                ctx.notify();
-                return true;
-            }
+        if let Some(inline_menu) = self.active_inline_menu(ctx) {
+            inline_menu.dismiss(ctx);
+            ctx.notify();
+            return true;
         }
+
         if self.is_shell_mode(ctx) {
             self.exit_shell_mode(ctx);
             return true;
         }
         false
+    }
+
+    fn active_inline_menu(&self, ctx: &AppContext) -> Option<TuiInlineMenu> {
+        self.inline_menus
+            .iter()
+            .find(|menu| menu.is_open(ctx))
+            .cloned()
     }
 
     // ── Kill / yank ───────────────────────────────────────────────────────────
