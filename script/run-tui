@@ -8,11 +8,26 @@
 # GUI `./script/run`, the TUI is a console binary, so there is no `.app` bundle
 # step.
 #
-# On macOS the binary is built with `cargo build` and then codesigned with a
-# stable "Apple Development" identity (mirroring `./script/macos/run`). Keychain
-# item ACLs key off the code signature, so a stable signature means rebuilds
-# don't re-prompt for your keychain password. Ad-hoc signatures from a plain
-# `cargo run` change on every build, which is what causes repeated prompts.
+# Both platforms build with `cargo build` (rather than `cargo run`), with the
+# `standalone` feature (see crates/warp_tui/Cargo.toml), so the built binary's
+# path is known ahead of time. This lets us stage bundled resources (skills,
+# etc.) into the sibling `resources/` directory that
+# `warp_core::paths::bundled_resources_dir()` resolves next to the binary at
+# runtime, the same way `./script/macos/run` stages them into the GUI's
+# `.app` bundle via `script/prepare_bundled_resources`. Without this staging
+# step, `BundledSkill::detect()` (app/src/ai/skills/bundled.rs) finds no
+# bundled skills to load. `standalone` is only load-bearing on macOS (where
+# the TUI binary isn't inside a `.app` bundle, so `bundled_resources_dir()`
+# would otherwise look for a nonexistent `Contents/Resources`), but is
+# harmless on other platforms and mirrors `script/macos/bundle`, which builds
+# the production TUI artifact with `release_bundle,standalone` for the same
+# reason.
+#
+# On macOS the binary is also codesigned with a stable "Apple Development"
+# identity (mirroring `./script/macos/run`). Keychain item ACLs key off the
+# code signature, so a stable signature means rebuilds don't re-prompt for
+# your keychain password. Ad-hoc signatures from a plain `cargo run` change
+# on every build, which is what causes repeated prompts.
 #
 # Extra arguments are forwarded to `cargo` (e.g. `--release`); use `--` to
 # pass arguments through to the binary itself.
@@ -33,7 +48,7 @@ else
 fi
 
 # Split cargo arguments from binary arguments (after `--`), tracking the
-# profile so we can locate the built binary for codesigning on macOS.
+# profile so we can locate the built binary for staging/codesigning.
 CARGO_ARGS=()
 BIN_ARGS=()
 PROFILE_DIR="debug"
@@ -66,18 +81,26 @@ while (( "$#" )); do
   esac
 done
 
+# Resolve Cargo's actual target directory rather than assuming ./target
+# (honors CARGO_TARGET_DIR / build.target-dir).
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
+  TARGET_DIR="${REPO_ROOT}/target"
+fi
+TUI_BIN_PATH="${TARGET_DIR}/${PROFILE_DIR}/${BIN}"
+
+# Build with the `standalone` feature on every platform: the TUI is a plain
+# console binary rather than a `.app` bundle, so this is what makes
+# `bundled_resources_dir()` resolve the sibling `resources/` directory next
+# to the binary instead of looking for `Contents/Resources` (only load-bearing
+# on macOS, but harmless everywhere else — it also drops GUI-only async
+# assets via `warp_assets/standalone`). Mirrors `script/macos/bundle`, which
+# builds the production TUI artifact with `release_bundle,standalone` for the
+# same reason.
+echo "Building cargo build -p warp_tui --bin ${BIN} --features standalone (channel: ${CHANNEL})"
+cargo build -p warp_tui --bin "${BIN}" --features standalone "${CARGO_ARGS[@]}"
+
 if [[ "$(uname -s)" = "Darwin" ]]; then
-  echo "Building cargo build -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
-  cargo build -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
-
-  # Resolve Cargo's actual target directory rather than assuming ./target
-  # (honors CARGO_TARGET_DIR / build.target-dir).
-  TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
-  if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
-    TARGET_DIR="${REPO_ROOT}/target"
-  fi
-  TUI_BIN_PATH="${TARGET_DIR}/${PROFILE_DIR}/${BIN}"
-
   SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
   if [ -n "$SIGNING_CERT" ]; then
     echo "Codesigning ${TUI_BIN_PATH}..."
@@ -85,13 +108,17 @@ if [[ "$(uname -s)" = "Darwin" ]]; then
   else
     echo "Warning: no Apple Development signing identity found; skipping codesign (keychain may re-prompt on rebuilds)." >&2
   fi
-
-  exec "$TUI_BIN_PATH" "${BIN_ARGS[@]}"
-else
-  echo "Running cargo run -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
-  if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}" -- "${BIN_ARGS[@]}"
-  else
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
-  fi
 fi
+
+# Stage bundled resources (skills, etc.) into the sibling `resources/`
+# directory next to the binary, so `bundled_resources_dir()` finds them at
+# runtime. SKIP_SETTINGS_SCHEMA=1 skips settings-schema generation (an extra
+# cargo build; the `modify-settings` bundled skill stays inactive without it)
+# and NO_LICENSES=1 skips third-party license generation, both mirroring the
+# dev defaults of `./script/macos/run`.
+RESOURCES_DIR="${TARGET_DIR}/${PROFILE_DIR}/resources"
+echo "Preparing bundled resources at ${RESOURCES_DIR}..."
+SKIP_SETTINGS_SCHEMA=1 NO_LICENSES=1 \
+  "${REPO_ROOT}/script/prepare_bundled_resources" "${RESOURCES_DIR}" "${CHANNEL}"
+
+exec "$TUI_BIN_PATH" "${BIN_ARGS[@]}"
