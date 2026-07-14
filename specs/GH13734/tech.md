@@ -230,12 +230,14 @@ parsing already runs (paste path via `html_parser.rs`; file-viewer path via
 
 ### 5. Copy / export (product invariant 8)
 
-Serialization back to Markdown/HTML for a `vertical_align`-flagged fragment emits
-`<sub>…</sub>`/`<sup>…</sup>` around the fragment's text, mirroring however `<u>` is
-currently serialized on export (locate and reuse that existing code path — it must already
-exist since underline round-trips today). If Option B (Unicode substitution) were chosen
-instead, the substituted character round-trips as itself (no tag), which is a strictly
-worse and lossier export story — another point in favor of Option A.
+Canonical re-serialization back to Markdown/HTML for a `vertical_align`-flagged fragment
+emits `<sub>…</sub>`/`<sup>…</sup>` around the fragment's text, mirroring however `<u>` is
+currently canonically re-serialized on export (locate and reuse that existing code path —
+it must already exist since underline is already canonically re-serialized today). As
+elsewhere in Warp, this is not a byte-exact reproduction of the original source. If Option B
+(Unicode substitution) were chosen instead, the substituted character re-serializes as
+itself (no tag), which is a strictly worse and lossier export story — another point in
+favor of Option A.
 
 ## Testing and validation
 

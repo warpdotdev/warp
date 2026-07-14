@@ -43,10 +43,11 @@ In scope:
 - Nesting: `<sup>` inside `<sub>` (or vice versa) does not need to compound the offset in
   this slice — the tech spec picks a sane degraded behavior (e.g. innermost wins) and
   documents it, as long as it doesn't panic or produce garbled output.
-- Copy/export preserves the semantic markup (round-trips back to `<sub>`/`<sup>` HTML, or
+- Copy/export canonically re-serializes the semantic markup (emits `<sub>`/`<sup>` HTML, or
   an equivalent internal representation) — a user pasting or exporting content with
-  sub/superscript should not silently lose that information even if the *rendered*
-  glyph size can't fully round-trip.
+  sub/superscript should not silently lose that information. This is canonical
+  re-serialization, not byte-exact source preservation: the *rendered* glyph size, and the
+  original source's exact formatting, are not guaranteed to round-trip unchanged.
 - Degrade gracefully: an unterminated `<sub>`/`<sup>`, or one nested pathologically deep,
   renders without panicking — falling back to plain unstyled text for the unparseable
   portion rather than corrupting the rest of the document.
@@ -96,9 +97,11 @@ Out of scope (explicit non-goals):
    only the innermost tag's offset applies), since compounding true nested offsets is
    out of scope for this slice.
 
-8. Copy and export of content containing `<sub>`/`<sup>` preserves the tag semantics in
-   the copied/exported representation — round-tripping through Warp does not silently
-   collapse subscripted or superscripted text to plain baseline text.
+8. Copy and export of content containing `<sub>`/`<sup>` canonically re-serializes the tag
+   semantics into the copied/exported representation — the semantic markup survives a
+   round trip through Warp without silently collapsing subscripted or superscripted text
+   to plain baseline text, though the re-serialized output is not guaranteed to be
+   byte-identical to the original source.
 
 9. Only the `<sub>`/`<sup>` tags themselves carry meaning; any attributes on them
    (`class`, `style`, `id`, event handlers) are ignored, matching how other inline HTML
