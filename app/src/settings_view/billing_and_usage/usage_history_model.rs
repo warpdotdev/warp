@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::scalars::Time;
 use warpui::{Entity, ModelContext, SingletonEntity};
 

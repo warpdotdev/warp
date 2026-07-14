@@ -3,12 +3,17 @@
 #[cfg_attr(windows, path = "windows/mod.rs")]
 #[cfg(not(noop))]
 mod imp;
+// Env-var-gated mock recorder for exercising the recording UI on macOS,
+// where real capture is unsupported.
+#[cfg(macos)]
+mod mock;
 mod noop;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 
 use std::borrow::Cow;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -38,6 +43,14 @@ pub fn is_supported_on_current_platform() -> bool {
         imp::is_supported_on_current_platform()
     }
 }
+/// Why a capture process exited before an explicit stop.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RecordingExitKind {
+    LimitReached,
+    Crashed,
+}
+
+pub type RecordingExitState = Arc<Mutex<Option<RecordingExitKind>>>;
 
 #[derive(Debug, Error)]
 pub enum RecordingError {
@@ -65,6 +78,25 @@ pub fn create_actor() -> Box<dyn Actor> {
 /// Returns whether background, per-window control (driving a specific window without raising it
 /// or moving the cursor) is available on this client and OS. When false, callers should target
 /// the whole screen / frontmost application.
+///
+/// How faithfully "background" holds varies by platform:
+///
+/// - macOS: events are posted directly to the owning process (`CGEventPostToPid`), so a window
+///   can be driven even while fully covered, and nothing user-visible changes.
+/// - Linux X11: events come from a dedicated second input seat (an XInput2/MPX master pair), so
+///   the user's cursor, keyboard focus, and modifier state are untouched and applications see
+///   real (non-synthetic) input. The trade-offs, inherent to X11's position-routed event
+///   delivery, are:
+///   - Pointer actions land on the topmost window at the target point. If the target window is
+///     covered there, the actor first raises it *without* taking the user's focus; the action
+///     fails if the raise does not take effect. Keyboard input needs no raise: it follows the
+///     agent seat's own focus even while the window is covered.
+///   - A second visible cursor appears on screen while window-targeted actions run.
+///   - Under a click-to-focus window manager, the WM itself may react to an agent click by
+///     focusing/raising the target for the user too. WM-less servers (e.g. Xvfb in cloud
+///     environments) have no such side effect.
+/// - Linux Wayland and Windows: unsupported (this returns false); only whole-screen control is
+///   available.
 pub fn background_supported() -> bool {
     if cfg!(feature = "test-util") {
         noop::background_supported()
@@ -76,17 +108,18 @@ pub fn background_supported() -> bool {
 /// Enumerates the on-screen windows, returning their metadata so a caller can pick one to
 /// target. Returns an empty list on platforms where window enumeration is unsupported.
 pub fn enumerate_windows() -> Vec<WindowInfo> {
-    #[cfg(macos)]
+    #[cfg(any(macos, linux))]
     {
         imp::enumerate_windows()
     }
-    #[cfg(not(macos))]
+    #[cfg(not(any(macos, linux)))]
     {
         Vec::new()
     }
 }
 
-/// Experimental: lists on-screen windows as a formatted diagnostic string. macOS only.
+/// Experimental: lists on-screen windows as a formatted diagnostic string. macOS and Linux
+/// (X11) only.
 ///
 /// Unlike [`enumerate_windows`], which returns slim [`WindowInfo`] records for window selection
 /// and wire serialization, this function returns richer data including window bounds, formatted
@@ -98,17 +131,27 @@ pub fn experimental_list_windows() -> Result<String, String> {
     Ok(imp::list_windows())
 }
 
-/// Experimental: lists on-screen windows. Unsupported on this platform.
-#[cfg(not(macos))]
+/// Experimental: lists on-screen windows as a formatted diagnostic string. macOS and Linux
+/// (X11) only.
+#[cfg(linux)]
 pub fn experimental_list_windows() -> Result<String, String> {
-    Err("Window listing is only supported on macOS.".to_string())
+    imp::list_windows()
+}
+
+/// Experimental: lists on-screen windows. Unsupported on this platform.
+#[cfg(not(any(macos, linux)))]
+pub fn experimental_list_windows() -> Result<String, String> {
+    Err("Window listing is only supported on macOS and Linux (X11).".to_string())
 }
 
 /// The surface that a computer-use action or screenshot targets.
 ///
 /// `Screen` reproduces the legacy behavior of acting on the whole screen / frontmost
 /// application. `Window` drives a specific background window of a specific process without
-/// raising it or moving the global cursor.
+/// moving the global cursor or taking the user's keyboard focus. On macOS the window is never
+/// raised; on Linux X11 pointer events are routed by screen position, so a window that is
+/// covered at the action point is raised (without focus) before clicks and scrolls — see
+/// [`background_supported`] for the full per-platform semantics.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Target {
     /// Target the whole screen / frontmost application (legacy behavior).
@@ -116,12 +159,13 @@ pub enum Target {
     Screen,
     /// Target a specific background window of a specific process.
     Window {
-        /// The platform window id (a `CGWindowID` on macOS). Must be a concrete, non-zero id
-        /// selected from the enumerated window list. `0` is the "unknown" sentinel and is
-        /// rejected by the actor, since coordinate remapping and window capture both require a
-        /// known window.
+        /// The platform window id (a `CGWindowID` on macOS, an X window id on Linux X11). Must
+        /// be a concrete, non-zero id selected from the enumerated window list. `0` is the
+        /// "unknown" sentinel and is rejected by the actor, since coordinate remapping and
+        /// window capture both require a known window.
         window_id: u32,
-        /// The pid of the process that owns the window.
+        /// The pid of the process that owns the window. Used for event delivery on macOS;
+        /// informational on Linux X11, where events are addressed by window id.
         pid: i32,
     },
 }
@@ -151,7 +195,7 @@ impl TargetedAction {
 /// Mirrors the fields of the `WindowInfo` API message.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WindowInfo {
-    /// The platform window id (a `CGWindowID` on macOS).
+    /// The platform window id (a `CGWindowID` on macOS, an X window id on Linux X11).
     pub window_id: u32,
     /// The pid of the process that owns the window.
     pub pid: i32,
@@ -189,8 +233,13 @@ pub trait Actor: Send + Sync + 'static {
 ///
 /// A real recorder is only available on Linux (X11); every other platform, and
 /// any `test-util` build, gets a no-op recorder that reports recording as
-/// unsupported.
+/// unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a mock
+/// recorder for UI testing (see `mock`).
 pub fn create_recorder() -> Box<dyn Recorder> {
+    #[cfg(macos)]
+    if std::env::var_os("WARP_MOCK_RECORDER").is_some() {
+        return Box::new(mock::Recorder::new());
+    }
     if cfg!(feature = "test-util") {
         Box::new(noop::Recorder::new())
     } else {
@@ -244,6 +293,7 @@ impl Default for RecordingConfig {
 pub struct RecordingHandle {
     width: u32,
     height: u32,
+    exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
     // populated by the real Linux recorder; the no-op recorders never construct
     // a handle.
@@ -252,7 +302,11 @@ pub struct RecordingHandle {
     #[cfg(linux)]
     started_at: instant::Instant,
     #[cfg(linux)]
-    process: tokio::process::Child,
+    process: Option<tokio::process::Child>,
+    // The handle owns and deletes partial output until `Recorder::stop`
+    // validates the file and transfers its path to `RecordingOutput`.
+    #[cfg(linux)]
+    cleanup_on_drop: bool,
 }
 
 impl RecordingHandle {
@@ -264,6 +318,68 @@ impl RecordingHandle {
     /// The applied capture height in pixels.
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    /// Checks whether capture exited without an explicit stop.
+    pub fn poll_exit(&mut self) -> Option<RecordingExitKind> {
+        if let Some(kind) = *self
+            .exit_state
+            .lock()
+            .expect("recording exit state poisoned")
+        {
+            return Some(kind);
+        }
+
+        #[cfg(linux)]
+        if let Some(process) = self.process.as_mut()
+            && let Ok(Some(status)) = process.try_wait()
+        {
+            let kind = if status.success() {
+                RecordingExitKind::LimitReached
+            } else {
+                RecordingExitKind::Crashed
+            };
+            *self
+                .exit_state
+                .lock()
+                .expect("recording exit state poisoned") = Some(kind);
+            return Some(kind);
+        }
+
+        None
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn new_test(width: u32, height: u32) -> (Self, RecordingExitState) {
+        let exit_state = Arc::new(Mutex::new(None));
+        let handle = Self {
+            width,
+            height,
+            exit_state: exit_state.clone(),
+            #[cfg(linux)]
+            path: PathBuf::new(),
+            #[cfg(linux)]
+            started_at: instant::Instant::now(),
+            #[cfg(linux)]
+            process: None,
+            #[cfg(linux)]
+            cleanup_on_drop: false,
+        };
+        (handle, exit_state)
+    }
+}
+
+#[cfg(linux)]
+impl Drop for RecordingHandle {
+    fn drop(&mut self) {
+        // A handle can be abandoned without reaching `Recorder::stop`, notably
+        // when a start action finishes after cancellation. The child process's
+        // kill-on-drop handles ffmpeg; this removes its partial output. A
+        // successful stop disables cleanup and transfers file ownership.
+        if self.cleanup_on_drop {
+            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(self.path.with_extension("log"));
+        }
     }
 }
 
@@ -285,6 +401,10 @@ pub enum RecordingCompletionStatus {
     Completed,
     StoppedEarly,
 }
+
+#[cfg(test)]
+#[path = "recording_tests.rs"]
+mod recording_tests;
 
 /// A key that can be pressed or released.
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -331,6 +451,18 @@ pub enum Action {
     KeyUp {
         key: Key,
     },
+}
+
+impl Action {
+    /// Whether this action is a no-op placeholder rather than a real
+    /// interaction. Agents that only want the post-actions screenshot emit a
+    /// zero-duration wait, since `use_computer` requires at least one action.
+    /// This cannot catch every semantically inert batch (e.g. a mouse move to
+    /// the current position), but the zero-wait idiom is the documented
+    /// screenshot pattern.
+    pub fn is_no_op(&self) -> bool {
+        matches!(self, Action::Wait(duration) if duration.is_zero())
+    }
 }
 
 /// The direction of a scroll action.

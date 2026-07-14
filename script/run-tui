@@ -32,11 +32,13 @@ else
     CHANNEL="oss"
 fi
 
-# Split cargo arguments from binary arguments (after `--`), tracking the
-# profile so we can locate the built binary for codesigning on macOS.
+# Split cargo arguments from binary arguments (after `--`), tracking the profile
+# and target triple so we can locate the built binary (for codesigning on macOS)
+# and stage resources beside it, matching where Cargo actually writes the output.
 CARGO_ARGS=()
 BIN_ARGS=()
 PROFILE_DIR="debug"
+TARGET_TRIPLE=""
 while (( "$#" )); do
   case "$1" in
     --)
@@ -59,6 +61,21 @@ while (( "$#" )); do
         exit 1
       fi
       ;;
+    --target)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        TARGET_TRIPLE="$2"
+        CARGO_ARGS+=("$1" "$2")
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    --target=*)
+      TARGET_TRIPLE="${1#--target=}"
+      CARGO_ARGS+=("$1")
+      shift
+      ;;
     *)
       CARGO_ARGS+=("$1")
       shift
@@ -66,17 +83,45 @@ while (( "$#" )); do
   esac
 done
 
+# Build with the `standalone` feature so `bundled_resources_dir()` resolves the
+# sibling `resources/` directory next to the executable at runtime (matching how
+# the packaged TUI is built in script/macos/bundle). Without it, the app can't
+# locate its bundled skills when run outside a `.app` bundle.
+CARGO_ARGS+=(--features standalone)
+
+# Resolve Cargo's actual target directory rather than assuming ./target
+# (honors CARGO_TARGET_DIR / build.target-dir).
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
+  TARGET_DIR="${REPO_ROOT}/target"
+fi
+
+# Cargo writes to target/<triple>/<profile> when building for an explicit
+# --target, and target/<profile> otherwise. Mirror that layout so we stage
+# resources beside — and exec — the exact binary Cargo produced.
+BUILD_DIR="${TARGET_DIR}"
+if [ -n "${TARGET_TRIPLE}" ]; then
+  BUILD_DIR="${BUILD_DIR}/${TARGET_TRIPLE}"
+fi
+BUILD_DIR="${BUILD_DIR}/${PROFILE_DIR}"
+
+# Stage bundled skills next to the binary so the standalone TUI can resolve them
+# at runtime. License generation and the settings schema are skipped to keep dev
+# runs fast (mirroring script/macos/run); the vast majority of bundled skills are
+# always active and don't depend on the schema.
+prepare_tui_bundled_resources() {
+  echo "Preparing bundled resources at ${BUILD_DIR}/resources (channel: ${CHANNEL})..."
+  NO_LICENSES=1 SKIP_SETTINGS_SCHEMA=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
+    "${BUILD_DIR}/resources" "${CHANNEL}"
+}
+
 if [[ "$(uname -s)" = "Darwin" ]]; then
   echo "Building cargo build -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
   cargo build -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
 
-  # Resolve Cargo's actual target directory rather than assuming ./target
-  # (honors CARGO_TARGET_DIR / build.target-dir).
-  TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
-  if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
-    TARGET_DIR="${REPO_ROOT}/target"
-  fi
-  TUI_BIN_PATH="${TARGET_DIR}/${PROFILE_DIR}/${BIN}"
+  prepare_tui_bundled_resources
+
+  TUI_BIN_PATH="${BUILD_DIR}/${BIN}"
 
   SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
   if [ -n "$SIGNING_CERT" ]; then
@@ -88,10 +133,12 @@ if [[ "$(uname -s)" = "Darwin" ]]; then
 
   exec "$TUI_BIN_PATH" "${BIN_ARGS[@]}"
 else
-  echo "Running cargo run -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
-  if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}" -- "${BIN_ARGS[@]}"
-  else
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
-  fi
+  echo "Building cargo build -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
+  cargo build -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
+
+  prepare_tui_bundled_resources
+
+  TUI_BIN_PATH="${BUILD_DIR}/${BIN}"
+  echo "Running ${TUI_BIN_PATH}"
+  exec "${TUI_BIN_PATH}" "${BIN_ARGS[@]}"
 fi

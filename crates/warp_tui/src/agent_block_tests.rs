@@ -1,38 +1,49 @@
+use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
-    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection,
-    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, Appearance, LLMId,
-    MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared, TaskId, UserQueryMode,
+    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIBlockModel, AIBlockOutputStatus,
+    AIConversationId, AIRequestType, Appearance, LLMId, MessageId, OutputStatusUpdateCallback,
+    RequestCommandOutputResult, ServerOutputId, Shared, SummarizationType, TaskId, TerminalModel,
+    UserQueryMode,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
-use warpui::SingletonEntity;
+use warpui::platform::WindowStyle;
+use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPoint, TuiRect, TuiSize,
+    Color, Modifier, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
 };
 use warpui_core::elements::Fill as CoreFill;
-use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext};
+use warpui_core::{App, AppContext, EntityIdMap, ViewContext, ViewHandle};
 
-use super::{TuiAIBlock, TuiAIBlockSection};
+use super::{TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection, TuiToolCallView};
+use crate::agent_block_sections::render_fallback_tool_call_section;
+use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
+use crate::tui_shell_command_view::TuiShellCommandViewAction;
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
-    App::test((), |app| async move {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: vec![query_input("hello")],
                 status: complete_output(vec![AIAgentTextSection::PlainText {
                     text: "one\ntwo\nthree".to_owned().into(),
                 }]),
-            });
-            assert_eq!(block.desired_height(20, app_ctx), 6);
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(desired_height(block, 20, app_ctx), 6);
 
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
@@ -47,36 +58,42 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["≫ hello", "", "one", "two", "three", ""],
+                vec!["", "≫ hello", "", "one", "two", "three"],
             );
-            assert_eq!(frame.buffer[(0, 0)].fg, expected_prompt_text_color(app_ctx));
-            assert_eq!(frame.buffer[(0, 0)].bg, expected_input_background(app_ctx));
-            assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
-            assert_eq!(frame.buffer[(2, 0)].fg, expected_prompt_text_color(app_ctx));
-            assert_eq!(frame.buffer[(19, 0)].bg, expected_input_background(app_ctx));
-            assert_eq!(frame.buffer[(0, 2)].fg, expected_output_text_color(app_ctx));
+            assert_eq!(
+                frame.buffer[(0, 1)].fg,
+                expected_prompt_prefix_color(app_ctx)
+            );
+            assert_eq!(frame.buffer[(0, 1)].bg, expected_input_background(app_ctx));
+            assert!(frame.buffer[(0, 1)].modifier.contains(Modifier::BOLD));
+            assert_eq!(frame.buffer[(2, 1)].fg, expected_prompt_text_color(app_ctx));
+            assert_eq!(frame.buffer[(19, 1)].bg, expected_input_background(app_ctx));
+            assert_eq!(frame.buffer[(0, 3)].fg, expected_output_text_color(app_ctx));
             // The block paints no background of its own, so output rows show the
             // terminal's own background.
-            assert_eq!(frame.buffer[(0, 2)].bg, Color::Reset);
-            assert_eq!(frame.buffer[(19, 2)].bg, Color::Reset);
+            assert_eq!(frame.buffer[(0, 3)].bg, Color::Reset);
+            assert_eq!(frame.buffer[(19, 3)].bg, Color::Reset);
         });
     });
 }
 
 #[test]
 fn simple_agent_block_reflows_height_at_narrow_width() {
-    App::test((), |app| async move {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: vec![query_input("hello world")],
                 status: complete_output(vec![AIAgentTextSection::PlainText {
                     text: "streamed output".to_owned().into(),
                 }]),
-            });
-
-            let wide = block.desired_height(40, app_ctx);
-            let narrow = block.desired_height(6, app_ctx);
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            let wide = desired_height(block, 40, app_ctx);
+            let narrow = desired_height(block, 6, app_ctx);
             assert!(narrow > wide, "narrow text should occupy more logical rows");
         });
     });
@@ -86,28 +103,51 @@ fn expected_prompt_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
     CoreFill::from(theme.foreground()).into()
 }
+fn expected_prompt_prefix_color(app: &AppContext) -> Color {
+    let theme = Appearance::as_ref(app).theme();
+    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into()
+}
 
 fn expected_input_background(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
     let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-    CoreFill::from(theme.background().blend(&accent.with_opacity(20))).into()
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&accent.with_opacity(10))
+            .blend(&accent.with_opacity(10)),
+    )
+    .into()
 }
 
 fn expected_output_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()
+    let opacity = theme.details().main_text_opacity;
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(opacity)),
+    )
+    .into()
 }
 
 fn expected_tool_call_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into()
+    let opacity = theme.details().sub_text_opacity;
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(opacity)),
+    )
+    .into()
 }
 
 #[test]
 fn agent_block_extracts_input_and_plain_text_from_model() {
-    App::test((), |app| async move {
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: vec![query_input("hello")],
                 status: complete_output(vec![
                     AIAgentTextSection::PlainText {
@@ -117,7 +157,10 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
                         text: "two".to_owned().into(),
                     },
                 ]),
-            });
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
@@ -132,19 +175,22 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
 
 #[test]
 fn agent_block_renders_tool_calls_in_message_order() {
-    App::test((), |app| async move {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let action = test_action("action-1");
-            let block = test_agent_block(FakeAgentBlockModel {
+        let action = test_action("action-1");
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: complete_output_messages(vec![
                     plain_text_message("message-1", "before"),
                     action_message("message-2", action.clone()),
                     plain_text_message("message-3", "after"),
                 ]),
-            });
-
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
@@ -160,7 +206,8 @@ fn agent_block_renders_tool_calls_in_message_order() {
                 TuiRect::new(0, 0, 40, 6),
                 app_ctx,
             );
-            // Each section carries its own bottom padding, so a blank row follows every section.
+            // The block starts with one row of top padding, and a blank row
+            // separates adjacent sections.
             assert_eq!(
                 frame
                     .buffer
@@ -168,32 +215,41 @@ fn agent_block_renders_tool_calls_in_message_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["before", "", "executed a tool call", "", "after", ""],
+                vec!["", "before", "", "○ Init project", "", "after"],
             );
+            // A pending tool call renders a dim grey glyph and a dim label.
             assert_eq!(
-                frame.buffer[(0, 2)].fg,
+                frame.buffer[(0, 3)].fg,
                 expected_tool_call_text_color(app_ctx)
             );
-            assert!(frame.buffer[(0, 2)].modifier.contains(Modifier::DIM));
+            assert!(frame.buffer[(0, 3)].modifier.contains(Modifier::DIM));
+            assert_eq!(
+                frame.buffer[(2, 3)].fg,
+                expected_tool_call_text_color(app_ctx)
+            );
+            assert!(frame.buffer[(2, 3)].modifier.contains(Modifier::DIM));
         });
     });
 }
 
 #[test]
 fn agent_block_renders_multiple_tool_calls_in_order() {
-    App::test((), |app| async move {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let first = test_action("action-1");
-            let second = test_action("action-2");
-            let block = test_agent_block(FakeAgentBlockModel {
+        let first = test_action("action-1");
+        let second = test_action("action-2");
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: complete_output_messages(vec![
                     action_message("message-1", first.clone()),
                     action_message("message-2", second.clone()),
                 ]),
-            });
-
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
@@ -215,43 +271,171 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["executed a tool call", "", "executed a tool call", ""],
+                vec!["", "○ Init project", "", "○ Init project"],
             );
         });
     });
 }
 
 #[test]
-fn agent_block_desired_height_accounts_for_tool_call_stub() {
+fn tool_call_row_glyph_and_colors_reflect_state() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
-                inputs: Vec::new(),
-                status: complete_output_messages(vec![action_message(
-                    "message-1",
-                    test_action("action-1"),
-                )]),
-            });
-            // One tool-call stub line plus the section's bottom padding row.
-            assert_eq!(block.desired_height(40, app_ctx), 2);
+            let theme = Appearance::as_ref(app_ctx).theme();
+            let green: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.green)).into();
+            let yellow: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.yellow)).into();
+            let red: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.red)).into();
+            let primary = expected_output_text_color(app_ctx);
+            let muted = expected_tool_call_text_color(app_ctx);
+
+            let render = |action: &AIAgentAction, status: Option<&AIActionStatus>| {
+                let mut presenter = TuiPresenter::new();
+                presenter.present_element(
+                    render_fallback_tool_call_section(action, status, false, None, app_ctx),
+                    TuiRect::new(0, 0, 40, 1),
+                    app_ctx,
+                )
+            };
+
+            // Succeeded: green check in the gutter, normal-foreground label.
+            let action = test_action("action-1");
+            let succeeded = finished_status(&action, AIAgentActionResultType::InitProject);
+            let frame = render(&action, Some(&succeeded));
+            assert_eq!(
+                frame.buffer.to_lines()[0].trim_end(),
+                "✓ Init project — done"
+            );
+            assert_eq!(frame.buffer[(0, 0)].fg, green);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
+            assert!(!frame.buffer[(2, 0)].modifier.contains(Modifier::DIM));
+
+            // Running: yellow dot.
+            let frame = render(&action, Some(&AIActionStatus::RunningAsync));
+            assert_eq!(frame.buffer.to_lines()[0].trim_end(), "● Init project…");
+            assert_eq!(frame.buffer[(0, 0)].fg, yellow);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
+
+            // Failed (denylisted command): red x, normal-foreground label.
+            let command_action = test_command_action("action-2", "git status");
+            let failed = finished_status(
+                &command_action,
+                AIAgentActionResultType::RequestCommandOutput(
+                    RequestCommandOutputResult::Denylisted {
+                        command: "git status".to_owned(),
+                    },
+                ),
+            );
+            let frame = render(&command_action, Some(&failed));
+            assert_eq!(
+                frame.buffer.to_lines()[0].trim_end(),
+                "✗ `git status` denied (denylisted)"
+            );
+            assert_eq!(frame.buffer[(0, 0)].fg, red);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
+
+            // Cancelled: grey block, normal-foreground label.
+            let cancelled = finished_status(
+                &command_action,
+                AIAgentActionResultType::RequestCommandOutput(
+                    RequestCommandOutputResult::CancelledBeforeExecution,
+                ),
+            );
+            let frame = render(&command_action, Some(&cancelled));
+            assert_eq!(
+                frame.buffer.to_lines()[0].trim_end(),
+                "■ Cancelled `git status`"
+            );
+            assert_eq!(frame.buffer[(0, 0)].fg, muted);
+            assert!(!frame.buffer[(0, 0)].modifier.contains(Modifier::DIM));
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
         });
     });
 }
 
 #[test]
-fn agent_block_ignores_unsupported_message_variants() {
-    App::test((), |app| async move {
+fn agent_block_desired_height_accounts_for_tool_call_stub() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message(
+                    "message-1",
+                    test_action("action-1"),
+                )]),
+            },
+        );
         app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+            let block = block.as_ref(app_ctx);
+            // One tool-call stub line plus the block's top padding row.
+            assert_eq!(desired_height(block, 40, app_ctx), 2);
+        });
+    });
+}
+
+#[test]
+fn shell_command_disclosure_invalidates_agent_block_layout() {
+    App::test((), |mut app| async move {
+        let action = test_command_action("action-1", "printf result");
+        let action_id = action.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", action)]),
+            },
+        );
+        let layout_invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = layout_invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::LayoutInvalidated => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        let shell_view = app.read(|ctx| {
+            let Some(TuiToolCallView::ShellCommand(view)) =
+                block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("shell-command child view");
+            };
+            view.clone()
+        });
+        app.update(|ctx| {
+            let window_id = shell_view.window_id(ctx);
+            ctx.dispatch_typed_action_for_view(
+                window_id,
+                shell_view.id(),
+                &TuiShellCommandViewAction::ToggleExpanded,
+            );
+        });
+
+        assert_eq!(layout_invalidations.get(), 1);
+    });
+}
+#[test]
+fn agent_block_ignores_unsupported_message_variants() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: complete_output_messages(vec![
                     plain_text_message("message-1", "before"),
                     debug_output_message("message-2", "debug noise"),
                     plain_text_message("message-3", "after"),
                 ]),
-            });
-
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
@@ -265,9 +449,10 @@ fn agent_block_ignores_unsupported_message_variants() {
 
 #[test]
 fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
-    App::test((), |app| async move {
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: complete_output(vec![
                     AIAgentTextSection::Code {
@@ -279,8 +464,10 @@ fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
                         text: "visible".to_owned().into(),
                     },
                 ]),
-            });
-
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
                 vec![TuiAIBlockSection::PlainText("visible".to_owned())]
@@ -291,14 +478,17 @@ fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
 
 #[test]
 fn streaming_reasoning_renders_thinking_header_with_body() {
-    App::test((), |app| async move {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: reasoning_status(None, "line one\nline two"),
-            });
-
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
                 vec![TuiAIBlockSection::Thinking {
@@ -308,7 +498,7 @@ fn streaming_reasoning_renders_thinking_header_with_body() {
                 }]
             );
 
-            let rendered = render_block_lines(&block, 40, app_ctx);
+            let rendered = render_block_lines(block, 40, app_ctx);
             assert_eq!(rendered[0], "Thinking... ▾");
             // Body lines are indented four spaces beneath the header.
             assert_eq!(rendered[1], "    line one");
@@ -319,15 +509,18 @@ fn streaming_reasoning_renders_thinking_header_with_body() {
 
 #[test]
 fn finished_reasoning_renders_collapsed_thought_for_header() {
-    App::test((), |app| async move {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: reasoning_status(Some(Duration::from_secs(15)), "hidden body"),
-            });
-
-            let rendered = render_block_lines(&block, 40, app_ctx);
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            let rendered = render_block_lines(block, 40, app_ctx);
             assert_eq!(rendered[0], "Thought for 15 seconds ▸");
             // Collapsed by default once finished: the reasoning body is not rendered.
             assert!(rendered.iter().all(|line| !line.contains("hidden body")));
@@ -337,19 +530,23 @@ fn finished_reasoning_renders_collapsed_thought_for_header() {
 
 #[test]
 fn manual_expand_override_shows_finished_reasoning_body() {
-    App::test((), |app| async move {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: reasoning_status(Some(Duration::from_secs(2)), "revealed body"),
-            });
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             // A manual expand wins over the collapsed-when-finished default.
             block
                 .thinking_states
                 .set_collapsed(MessageId::new("reasoning-1".to_owned()), false);
 
-            let rendered = render_block_lines(&block, 40, app_ctx);
+            let rendered = render_block_lines(block, 40, app_ctx);
             assert_eq!(rendered[0], "Thought for 2 seconds ▾");
             assert!(rendered.iter().any(|line| line.contains("revealed body")));
         });
@@ -357,45 +554,29 @@ fn manual_expand_override_shows_finished_reasoning_body() {
 }
 
 #[test]
-fn header_click_records_a_manual_collapse_override() {
-    App::test((), |app| async move {
+fn thinking_action_records_a_manual_collapse_override() {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: reasoning_status(None, "body"),
-            });
-
-            let mut element = block.render_element(app_ctx);
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let area = TuiRect::new(0, 0, 40, 5);
-            element.layout(TuiConstraint::loose(TuiSize::new(40, 5)), &mut ctx, app_ctx);
-
-            // Click the `Thinking...` header row. The runtime attributes
-            // dispatch to a rendered view, so give the context an origin view
-            // for the toggle's `notify()`.
-            let mut event_ctx = TuiEventContext::default();
-            event_ctx.set_origin_view(Some(EntityId::new()));
-            let handled = element.dispatch_event(
-                &TuiEvent::LeftMouseDown {
-                    position: TuiPoint::new(0, 0),
-                    modifiers: ModifiersState::default(),
-                    click_count: 1,
-                    is_first_mouse: false,
+            },
+        );
+        let message_id = MessageId::new("reasoning-1".to_owned());
+        app.update(|ctx| {
+            ctx.dispatch_typed_action_for_view(
+                block.window_id(ctx),
+                block.id(),
+                &TuiAIBlockAction::SetThinkingCollapsed {
+                    message_id: message_id.clone(),
+                    collapsed: true,
                 },
-                area,
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
             );
-            assert!(handled);
-
-            // The streaming block was expanded, so the click records a collapse
-            // override that wins over the expanded-while-streaming default.
-            let message_id = MessageId::new("reasoning-1".to_owned());
+        });
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             assert!(block.thinking_states.is_collapsed(&message_id, false));
         });
     });
@@ -403,16 +584,20 @@ fn header_click_records_a_manual_collapse_override() {
 
 #[test]
 fn reasoning_interleaves_with_plain_text_in_message_order() {
-    App::test((), |app| async move {
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: complete_output_messages(vec![
                     plain_text_message("m1", "before"),
                     reasoning_message("r1", None, "thinking"),
                     plain_text_message("m2", "after"),
                 ]),
-            });
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
@@ -430,20 +615,115 @@ fn reasoning_interleaves_with_plain_text_in_message_order() {
 }
 
 #[test]
-fn multiple_reasoning_blocks_render_independent_collapse_state() {
-    App::test((), |app| async move {
+fn completed_conversation_summary_renders_collapsed_in_message_order() {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    summarization_message(
+                        "summary-1",
+                        Some(Duration::from_secs(3)),
+                        SummarizationType::ConversationSummary,
+                        "condensed context",
+                    ),
+                    plain_text_message("m2", "after"),
+                ]),
+            },
+        );
         app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    TuiAIBlockSection::Summarization {
+                        message_id: MessageId::new("summary-1".to_owned()),
+                        finished: true,
+                        body: "condensed context".to_owned(),
+                    },
+                    TuiAIBlockSection::PlainText("after".to_owned()),
+                ]
+            );
+            assert_eq!(
+                render_block_lines(block, 40, app_ctx),
+                vec!["before", "Conversation summarized ▸", "after"]
+            );
+        });
+    });
+}
+
+#[test]
+fn expanded_conversation_summary_shows_its_body() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![summarization_message(
+                    "summary-1",
+                    Some(Duration::from_secs(3)),
+                    SummarizationType::ConversationSummary,
+                    "condensed context",
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            block
+                .thinking_states
+                .set_collapsed(MessageId::new("summary-1".to_owned()), false);
+            assert_eq!(
+                render_block_lines(block, 40, app_ctx),
+                vec!["Conversation summarized ▾", "    condensed context"]
+            );
+        });
+    });
+}
+
+#[test]
+fn tool_call_result_summaries_remain_hidden() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![summarization_message(
+                    "summary-1",
+                    Some(Duration::from_secs(3)),
+                    SummarizationType::ToolCallResultSummary,
+                    "tool output",
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            assert!(block.as_ref(app_ctx).sections(app_ctx).is_empty());
+        });
+    });
+}
+
+#[test]
+fn multiple_reasoning_blocks_render_independent_collapse_state() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: complete_output_messages(vec![
                     reasoning_message("r1", Some(Duration::from_secs(3)), "done body"),
                     reasoning_message("r2", None, "still going"),
                 ]),
-            });
-
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
             // The finished block collapses; the streaming one stays expanded.
-            let rendered = render_block_lines(&block, 40, app_ctx);
+            let rendered = render_block_lines(block, 40, app_ctx);
             assert_eq!(rendered[0], "Thought for 3 seconds ▸");
             assert_eq!(rendered[1], "Thinking... ▾");
             assert_eq!(rendered[2], "    still going");
@@ -457,13 +737,31 @@ struct FakeAgentBlockModel {
     status: AIBlockOutputStatus,
 }
 
-/// Builds an agent block with fresh test identity.
-fn test_agent_block(model: FakeAgentBlockModel) -> TuiAIBlock {
-    TuiAIBlock::new(
-        AIConversationId::new(),
-        AIAgentExchangeId::new(),
-        Rc::new(model),
-    )
+/// Builds an agent block with fresh test identity, registered in a fresh TUI
+/// window and backed by a real action model.
+fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<TuiAIBlock> {
+    let (action_model, model_events) = add_test_action_model_and_events(app);
+    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiAIBlock::new(
+                AIConversationId::new(),
+                AIAgentExchangeId::new(),
+                Rc::new(model),
+                action_model,
+                &model_events,
+                terminal_model,
+                ctx,
+            )
+        })
+    })
 }
 
 impl AIBlockModel for FakeAgentBlockModel {
@@ -559,6 +857,33 @@ fn test_action(id: &str) -> AIAgentAction {
     }
 }
 
+/// Builds a shell-command tool-call action.
+fn test_command_action(id: &str, command: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::RequestCommandOutput {
+            command: command.to_owned(),
+            is_read_only: None,
+            is_risky: None,
+            wait_until_completion: true,
+            uses_pager: None,
+            rationale: None,
+            citations: Vec::new(),
+        },
+        requires_result: true,
+    }
+}
+
+/// Builds a `Finished` status carrying `result` for `action`.
+fn finished_status(action: &AIAgentAction, result: AIAgentActionResultType) -> AIActionStatus {
+    AIActionStatus::Finished(Arc::new(AIAgentActionResult {
+        id: action.id.clone(),
+        task_id: action.task_id.clone(),
+        result,
+    }))
+}
+
 /// Builds an output status with a single reasoning message (id `reasoning-1`)
 /// whose body is one plain-text section.
 fn reasoning_status(finished_duration: Option<Duration>, body: &str) -> AIBlockOutputStatus {
@@ -589,6 +914,28 @@ fn reasoning_message(
     }
 }
 
+fn summarization_message(
+    id: &str,
+    finished_duration: Option<Duration>,
+    summarization_type: SummarizationType,
+    body: &str,
+) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::Summarization {
+            text: AIAgentText {
+                sections: vec![AIAgentTextSection::PlainText {
+                    text: body.to_owned().into(),
+                }],
+            },
+            finished_duration,
+            summarization_type,
+            token_count: None,
+        },
+        citations: Vec::new(),
+    }
+}
+
 /// Builds a text output message from a single plain-text string.
 fn plain_text_message(id: &str, text: &str) -> AIAgentOutputMessage {
     text_message(
@@ -599,10 +946,29 @@ fn plain_text_message(id: &str, text: &str) -> AIAgentOutputMessage {
     )
 }
 
+/// Measures the block by laying out its rendered element with an empty layout
+/// context; these tests exercise blocks with no registered child views.
+fn desired_height(block: &TuiAIBlock, width: u16, app: &AppContext) -> usize {
+    let mut rendered_views = EntityIdMap::default();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let mut element = block.render_element(app);
+    usize::from(
+        element
+            .layout(
+                TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                &mut ctx,
+                app,
+            )
+            .height,
+    )
+}
+
 /// Renders the block at `width` and returns its non-empty rows, trimmed of
 /// trailing padding, so header/body assertions ignore blank rows.
 fn render_block_lines(block: &TuiAIBlock, width: u16, app: &AppContext) -> Vec<String> {
-    let height = block.desired_height(width, app).max(1) as u16;
+    let height = desired_height(block, width, app).max(1) as u16;
     let mut presenter = TuiPresenter::new();
     let frame = presenter.present_element(
         block.render_element(app),

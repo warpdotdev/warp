@@ -199,6 +199,20 @@
 # Self-hosted agents
 /crates/remote_server/ @kevinyang372 @alokedesai
 
+# Orchestration (multi-agent parent/child runs, orchestration UI)
+/app/src/ai/blocklist/orchestration_event_streamer.rs @Advait-M @cephalonaut
+/app/src/ai/blocklist/orchestration_events.rs @Advait-M @cephalonaut
+/app/src/ai/blocklist/orchestration_topology.rs @Advait-M @cephalonaut
+/app/src/ai/blocklist/agent_view/orchestration_avatar.rs @Advait-M @cephalonaut
+/app/src/ai/blocklist/agent_view/orchestration_conversation_links.rs @Advait-M @cephalonaut
+/app/src/ai/blocklist/agent_view/orchestration_pill_bar.rs @Advait-M @cephalonaut
+/app/src/ai/blocklist/agent_view/orchestration_pill_bar_model.rs @Advait-M @cephalonaut
+/app/src/ai/blocklist/block/view_impl/orchestration.rs @Advait-M @cephalonaut
+/app/src/ai/blocklist/inline_action/orchestration_controls.rs @Advait-M @cephalonaut
+/app/src/workspace/view/orchestration_launch_modal/ @Advait-M @cephalonaut
+/app/src/ai/document/orchestration_config_block.rs @Advait-M @cephalonaut
+/crates/ai/src/agent/orchestration_config.rs @Advait-M @cephalonaut
+
 # Scheduled agents / Warp CLI / cloud and ambient agents
 /app/src/ai/ambient_agents/ @bnavetta
 /app/src/terminal/view/ambient_agent/ @bnavetta

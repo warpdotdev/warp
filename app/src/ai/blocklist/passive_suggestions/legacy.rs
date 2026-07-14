@@ -10,6 +10,7 @@ use command::r#async::Command;
 use parking_lot::FairMutex;
 use serde_json::json;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::r#async::{FutureExt as AsyncFutureExt, SpawnedFutureHandle, Timer};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
@@ -28,7 +29,6 @@ use crate::ai::predict::generate_am_query_suggestions::{
 };
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::network::NetworkStatus;
-use crate::report_error;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::PromptSuggestionFallbackReason;
 use crate::settings::AISettings;
@@ -619,9 +619,9 @@ fn build_prompt_suggestions_request(
         let terminal_width = model.block_list().size().columns();
         let Some(current_block) = model.block_list().block_with_id(&block.serialized_block.id)
         else {
-            log::error!(
-                "Failed to fetch prompt suggestions, could not find block with ID: {:?}",
-                block.serialized_block.id
+            report_error!(
+                "Failed to fetch prompt suggestions, could not find block with ID",
+                extra: { "block_id" => ?block.serialized_block.id }
             );
             return None;
         };

@@ -19,7 +19,7 @@ use super::{Input, InputAction, InputDropTargetData};
 use crate::ai::blocklist::agent_view::shortcuts::{
     render_agent_shortcuts_view, AgentShortcutsViewContext,
 };
-use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
+use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::ai::blocklist::InputType;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::appearance::Appearance;
@@ -219,7 +219,7 @@ impl Input {
             styles::default_border_color(appearance.theme())
         };
 
-        let mut input = Container::new(
+        let input = Container::new(
             Hoverable::new(self.hoverable_handle.clone(), |_| drop_target)
                 .on_hover(|is_hovered, ctx, _app, _position| {
                     ctx.dispatch_typed_action(InputAction::SetUDIHovered(is_hovered));
@@ -230,13 +230,8 @@ impl Input {
                 .finish(),
         )
         .with_border(Border::top(1.).with_border_color(border_color))
-        .with_padding_bottom(4.);
-
-        if self.agent_view_controller.as_ref(app).is_inline() {
-            input = input.with_background(agent_view_bg_fill(app));
-        }
-
-        let input = input.finish();
+        .with_padding_bottom(4.)
+        .finish();
 
         let mut column = Flex::column();
 

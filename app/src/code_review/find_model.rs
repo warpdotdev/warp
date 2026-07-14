@@ -10,6 +10,8 @@ use warp_editor::content::find::SearchConfig;
 #[cfg(not(target_family = "wasm"))]
 use warp_editor::search::Searcher;
 use warp_editor::search::{RestorableSearchResults, SelectedResult};
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ViewHandle, WeakViewHandle};
 
@@ -240,7 +242,7 @@ impl CodeReviewFindModel {
         let view = self.weak_view_handle.upgrade(ctx);
         if view.is_none() {
             if ChannelState::enable_debug_features() {
-                log::error!(
+                report_error!(
                     "Failed to upgrade WeakViewHandle<CodeReviewView> in get_editor_searcher"
                 );
             }
@@ -255,8 +257,9 @@ impl CodeReviewFindModel {
 
         if editor_handle.is_none() {
             if ChannelState::enable_debug_features() {
-                log::error!(
-                    "Failed to find editor with id {editor_id:?} in CodeReviewView editor handles"
+                report_error!(
+                    "Failed to find editor in CodeReviewView editor handles",
+                    extra: { "editor_id" => ?editor_id }
                 );
             }
             return None;

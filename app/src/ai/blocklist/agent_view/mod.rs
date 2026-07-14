@@ -27,11 +27,9 @@ pub use inline_agent_view_header::*;
 pub use orchestration_pill_bar::{render_orchestration_breadcrumbs, OrchestrationPillBar};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill;
 use warpui::fonts::Properties;
 use warpui::keymap::Keystroke;
-use warpui::{AppContext, SingletonEntity};
 pub use zero_state_block::*;
 
 use crate::terminal::model::TerminalModel;
@@ -78,32 +76,10 @@ pub static ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE: LazyLock<Keystroke
     });
 
 /// Returns `true` when the current pane is in a cloud or remote context.
-pub fn is_in_cloud_context(
-    agent_view_state: &AgentViewState,
-    terminal_model: &TerminalModel,
-) -> bool {
-    let origin_is_cloud = matches!(
-        agent_view_state,
-        AgentViewState::Active { origin, .. }
-            if matches!(
-                origin,
-                AgentViewEntryOrigin::CloudAgent | AgentViewEntryOrigin::ThirdPartyCloudAgent
-            )
-    );
-    origin_is_cloud
+pub fn is_in_cloud_context(terminal_model: &TerminalModel) -> bool {
+    terminal_model.block_list().is_cloud_conversation_context()
         || terminal_model.is_conversation_transcript_viewer()
         || terminal_model.is_dummy_cloud_mode_session()
-}
-
-pub fn agent_view_bg_fill(app: &AppContext) -> Fill {
-    let appearance = Appearance::as_ref(app);
-    appearance.theme().surface_overlay_1()
-}
-
-pub fn agent_view_bg_color(app: &AppContext) -> ColorU {
-    agent_view_bg_fill(app)
-        .blend(&Appearance::as_ref(app).theme().background())
-        .into_solid()
 }
 
 pub struct AgentViewHeaderTheme;

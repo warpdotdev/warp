@@ -1,6 +1,7 @@
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use ai::diff_validation::DiffType;
 use warp_core::ui::appearance::Appearance;
@@ -29,7 +30,7 @@ pub enum LocalCodeEditorEvent {
     #[allow(dead_code)]
     FileSaved,
     #[allow(dead_code)]
-    FailedToSave { error: Rc<FileSaveError> },
+    FailedToSave { error: Arc<FileSaveError> },
     #[allow(dead_code)]
     DiffAccepted,
     #[allow(dead_code)]

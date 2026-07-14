@@ -6,12 +6,14 @@ use std::fmt::Display;
 use std::ops::Deref;
 
 use ai::skills::SkillPathOrigin;
+use anyhow::Context as _;
 use field_mask::{FieldMaskError, FieldMaskOperation};
 use helper::{MessageExt, SubagentExt, ToolCallExt};
 use itertools::Itertools;
 use prost_types::FieldMask;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use warp_errors::report_error;
 use warp_multi_agent_api::message::tool_call::subagent::Metadata;
 use warp_multi_agent_api::message::Message;
 use warp_multi_agent_api::{self as api};
@@ -250,10 +252,11 @@ impl Task {
                     skill_path_origin,
                 },
                 false,
+            )
+            .context(
+                "Failed to update last exchange from messages upon converting to a server created task",
             ) {
-                log::error!(
-                    "Failed to update last exchange from messages upon converting to a server created task: {e:?}"
-                );
+                report_error!(e);
             }
         }
         Ok(self)
@@ -774,7 +777,7 @@ impl Task {
             .enumerate()
             .find(|(_, m)| message.id == m.id)
         else {
-            log::error!("Message not found for append client action.");
+            report_error!("Message not found for append client action.");
             return Err(UpdateTaskError::MessageNotFound);
         };
         let updated_message =

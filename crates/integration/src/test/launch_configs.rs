@@ -182,6 +182,7 @@ pub fn test_launch_config_single_child_branch() -> Builder {
                             shell: None,
                         }],
                     },
+                    commands: Vec::new(),
                     color: None,
                 }],
             }],
@@ -311,6 +312,7 @@ pub fn test_with_launch_config_with_active_tab_index() -> Builder {
                                 shell: None,
                             }],
                         },
+                        commands: Vec::new(),
                         color: None,
                     };
                     3
@@ -390,6 +392,7 @@ pub fn test_with_launch_config_with_active_pane() -> Builder {
                             },
                         ],
                     },
+                    commands: Vec::new(),
                     color: None,
                 }],
             }],
@@ -468,6 +471,7 @@ pub fn test_with_launch_config_with_no_active_pane() -> Builder {
                             },
                         ],
                     },
+                    commands: Vec::new(),
                     color: None,
                 }],
             }],

@@ -1,6 +1,6 @@
 use super::TuiChildView;
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiElement, TuiLayoutContext, TuiPresentationContext, TuiRect, TuiText,
+    TuiBuffer, TuiBufferExt, TuiElement, TuiPaintContext, TuiPresentationContext, TuiRect, TuiText,
 };
 use crate::{EntityId, EntityIdMap};
 
@@ -14,9 +14,7 @@ fn embeds_and_renders_the_stub_at_the_given_area() {
     );
 
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 3, 1));
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
+    let mut ctx = TuiPaintContext::new(&mut rendered_views);
     // Render offset one column in: the embedded glyph must land at x = 1.
     view.render(TuiRect::new(1, 0, 2, 1), &mut buffer, &mut ctx);
     assert_eq!(buffer.to_lines(), vec![" Z "]);

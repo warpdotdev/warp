@@ -8,8 +8,8 @@ use markdown_parser::{parse_markdown, FormattedText, FormattedTextFragment, Form
 use parking_lot::FairMutex;
 use settings::Setting;
 use warp_core::features::FeatureFlag;
-use warp_core::report_if_error;
 use warp_core::ui::Icon;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Clipped, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
     HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
@@ -29,8 +29,8 @@ use warpui::{
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_color, AgentViewController, AgentViewEntryOrigin,
-    ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE, ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
+    AgentViewController, AgentViewEntryOrigin, ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
+    ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::conversation_navigation::ConversationNavigationData;
@@ -617,9 +617,9 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
             .finish(),
     );
 
-    let bg = agent_view_bg_color(app);
-    let sub_text_color = theme.sub_text_color(bg.into()).into_solid();
-    let main_text_color = theme.main_text_color(bg.into()).into_solid();
+    let bg = theme.background();
+    let sub_text_color = theme.sub_text_color(bg).into_solid();
+    let main_text_color = theme.main_text_color(bg).into_solid();
 
     match description {
         AgentViewDescription::PlainText(text_items) => {
@@ -804,9 +804,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
     if should_show_init_callout {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let main_text_color = theme
-            .main_text_color(agent_view_bg_color(app).into())
-            .into_solid();
+        let main_text_color = theme.main_text_color(theme.background()).into_solid();
         let init_message = Message::new(vec![
             MessageItem::keystroke(Keystroke {
                 key: "/init".to_owned(),
@@ -1178,9 +1176,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                 appearance.monospace_font_size() - 2.,
                 appearance.ui_font_family(),
                 appearance.monospace_font_family(),
-                theme
-                    .main_text_color(agent_view_bg_color(app).into())
-                    .into_solid(),
+                theme.main_text_color(theme.background()).into_solid(),
                 state_handles
                     .update_hyperlinks
                     .get(i)

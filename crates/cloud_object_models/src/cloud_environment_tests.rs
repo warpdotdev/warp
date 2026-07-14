@@ -28,9 +28,63 @@ fn deserialize_legacy_environment_without_providers() {
     );
     assert_eq!(
         env.base_image,
-        BaseImage::DockerImage("ubuntu:latest".into())
+        Some(BaseImage::DockerImage("ubuntu:latest".into()))
     );
     assert_eq!(env.setup_commands, vec!["echo hello"]);
+}
+
+#[test]
+fn deserialize_environment_without_docker_image() {
+    // Environments that don't pin a base image must still deserialize; the
+    // server may omit the docker image entirely.
+    let json = serde_json::json!({
+        "name": "no-image-env",
+        "github_repos": [{"owner": "warpdotdev", "repo": "warp"}],
+        "setup_commands": ["echo hello"]
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    assert_eq!(env.name, "no-image-env");
+    assert_eq!(env.base_image, None);
+    assert_eq!(env.base_image_display(), "");
+    assert_eq!(env.setup_commands, vec!["echo hello"]);
+}
+
+#[test]
+fn serialize_environment_without_docker_image_omits_field() {
+    let env = AmbientAgentEnvironment {
+        name: "no-image-env".into(),
+        description: None,
+        code_forge: None,
+        github_repos: vec![],
+        source_repos: None,
+        base_image: None,
+        setup_commands: vec![],
+        providers: ProvidersConfig::default(),
+        secrets: None,
+    };
+
+    let json = serde_json::to_value(&env).unwrap();
+    assert!(!json.as_object().unwrap().contains_key("docker_image"));
+}
+
+#[test]
+fn roundtrip_serde_without_docker_image() {
+    let env = AmbientAgentEnvironment {
+        name: "no-image-rt".into(),
+        description: None,
+        code_forge: None,
+        github_repos: vec![GithubRepo::new("owner".into(), "repo".into())],
+        source_repos: None,
+        base_image: None,
+        setup_commands: vec!["make build".into()],
+        providers: ProvidersConfig::default(),
+        secrets: None,
+    };
+
+    let serialized = serde_json::to_string(&env).unwrap();
+    let deserialized: AmbientAgentEnvironment = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(env, deserialized);
 }
 
 #[test]

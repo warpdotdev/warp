@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::skills::SkillPathOrigin;
+use ai::skills::{ParsedSkill, SkillPathOrigin, SkillReference};
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
 use input_context::{input_context_for_request, parse_context_attachments};
@@ -24,6 +24,7 @@ use pending_response_streams::PendingResponseStreams;
 use session_sharing_protocol::common::ParticipantId;
 pub use slash_command::*;
 use warp_core::assertions::safe_assert;
+use warp_errors::report_error;
 use warp_multi_agent_api::{message, Task, ToolType};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -58,6 +59,7 @@ use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::skills::{ActiveSkillLookupError, SkillManager};
 use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::features::FeatureFlag;
@@ -188,8 +190,6 @@ pub enum BlocklistAIControllerEvent {
     ExecuteLocalHarnessCommand {
         command: String,
     },
-
-    FreeTierLimitCheckTriggered,
 }
 
 #[derive(Debug)]
@@ -755,9 +755,8 @@ impl BlocklistAIController {
                 })
                 .collect_vec()
         } else {
-            // Custom AI inputs like CodeReview and FetchReviewComments are encoded as
-            // top-level request variants (`request::input::Type::CodeReview`,
-            // `request::input::Type::FetchReviewComments`, etc.), and `convert_input`
+            // Custom AI inputs like CodeReview are encoded as top-level request
+            // variants (`request::input::Type::CodeReview`, etc.), and `convert_input`
             // only emits those variants in the single-input path.
             //
             // Tool call results are encoded differently: they only exist inside
@@ -766,9 +765,9 @@ impl BlocklistAIController {
             // CodeReview-style input and a ToolCallResult in the same request.
             //
             // So if we prepend an ActionResult here, `convert_input` has to fall back
-            // to the multi-input `UserInputs` path, where CodeReview / FetchReviewComments
-            // are ignored entirely. The stale tool result is preserved, but the custom
-            // AI input disappears from the request.
+            // to the multi-input `UserInputs` path, where CodeReview is ignored
+            // entirely. The stale tool result is preserved, but the custom AI input
+            // disappears from the request.
             vec![]
         };
 
@@ -857,7 +856,7 @@ impl BlocklistAIController {
         // If the request failed, re-insert the dirty events so they aren't
         // silently lost.
         if let Err(e) = &send_result {
-            log::error!("Failed to send agent request: {e:?}");
+            report_error!(e);
             if !taken_dirty_events.is_empty() {
                 AIDocumentModel::handle(ctx).update(ctx, |model, _| {
                     model.set_dirty_orchestration_events(conversation_id, taken_dirty_events);
@@ -1013,7 +1012,8 @@ impl BlocklistAIController {
             }) {
                 Ok(task_id) => task_id,
                 Err(e) => {
-                    log::error!("Could not create CLI subagent task optimistically: {e:?}");
+                    report_error!(anyhow::Error::new(e)
+                        .context("Could not create CLI subagent task optimistically"));
                     return;
                 }
             };
@@ -1188,7 +1188,7 @@ impl BlocklistAIController {
             .shared_session_status()
             .is_viewer();
         if is_viewer {
-            log::error!("Viewers should never attempt to send queries directly");
+            report_error!("Viewers should never attempt to send queries directly");
         }
 
         // Ensure we capture all pending context blocks before promoting and attaching them to the conversation.
@@ -1229,7 +1229,8 @@ impl BlocklistAIController {
                 }) {
                     Ok(task_id) => (task_id, Some(running_command)),
                     Err(e) => {
-                        log::error!("Could not create CLI subagent task optimistically: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Could not create CLI subagent task optimistically"));
                         return;
                     }
                 }
@@ -1244,8 +1245,9 @@ impl BlocklistAIController {
             } else {
                 let history_model = BlocklistAIHistoryModel::as_ref(ctx);
                 let Some(conversation) = history_model.conversation(&conversation_id) else {
-                    log::error!(
-                        "Tried to send follow-up query for non-existent conversation: {conversation_id:?}"
+                    report_error!(
+                        "Tried to send follow-up query for non-existent conversation",
+                        extra: { "conversation_id" => ?conversation_id }
                     );
                     return;
                 };
@@ -1268,7 +1270,8 @@ impl BlocklistAIController {
                         block_id: block_id.to_string(),
                         agent_view_visibility: agent_view_visibility.into(),
                     }) {
-                        log::error!("Error sending UpdateBlockAgentViewVisibility event: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Error sending UpdateBlockAgentViewVisibility event"));
                     }
                 }
             }
@@ -1332,7 +1335,7 @@ impl BlocklistAIController {
             Some(id) => {
                 let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx).conversation(&id)
                 else {
-                    log::error!(
+                    report_error!(
                         "Tried to send custom AI input query as follow-up in non-existent conversation"
                     );
                     return;
@@ -1364,6 +1367,52 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         slash_command.send_request(self, None, None, ctx);
+    }
+    /// Starts the create-project agent flow with the supplied project description.
+    pub fn send_create_new_project_request(&mut self, query: String, ctx: &mut ModelContext<Self>) {
+        self.send_slash_command_request(SlashCommandRequest::CreateNewProject { query }, ctx);
+    }
+
+    /// Resolves a skill reference against this controller's active execution host.
+    pub(crate) fn resolve_skill_for_invocation(
+        &self,
+        reference: &SkillReference,
+        ctx: &AppContext,
+    ) -> Result<ParsedSkill, ActiveSkillLookupError> {
+        let path_origin = self.skill_path_origin(ctx);
+        SkillManager::handle(ctx)
+            .as_ref(ctx)
+            .active_skill_by_reference_with_origin(reference, &path_origin, ctx)
+            .cloned()
+    }
+
+    /// Sends an already-resolved skill invocation through the shared slash-command request path.
+    pub(crate) fn send_resolved_skill_invocation(
+        &mut self,
+        skill: ParsedSkill,
+        user_query: Option<String>,
+        queued_query_id: Option<QueuedQueryId>,
+        conversation_id: Option<AIConversationId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let request = SlashCommandRequest::InvokeSkill { skill, user_query };
+        if let Some(query_id) = queued_query_id {
+            self.send_queued_slash_command_request(request, query_id, conversation_id, ctx);
+        } else {
+            self.send_slash_command_request(request, ctx);
+        }
+    }
+
+    /// Resolves and sends a skill invocation for surfaces that do not need intermediate UI work.
+    pub fn send_invoke_skill_request(
+        &mut self,
+        reference: SkillReference,
+        user_query: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), ActiveSkillLookupError> {
+        let skill = self.resolve_skill_for_invocation(&reference, ctx)?;
+        self.send_resolved_skill_invocation(skill, user_query, None, None, ctx);
+        Ok(())
     }
 
     /// Same as [`Self::send_slash_command_request`] but marks the emitted `SentRequest`
@@ -1444,7 +1493,10 @@ impl BlocklistAIController {
             Some(id) => {
                 let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx).conversation(&id)
                 else {
-                    log::error!("[passive-suggestion-result] conversation not found for id {id:?}");
+                    report_error!(
+                        "[passive-suggestion-result] conversation not found",
+                        extra: { "id" => ?id }
+                    );
                     return;
                 };
                 WhichTask::Task {
@@ -1932,7 +1984,10 @@ impl BlocklistAIController {
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
-            log::error!("Tried to resume non-existent conversation: {conversation_id:?}");
+            report_error!(
+                "Tried to resume non-existent conversation",
+                extra: { "conversation_id" => ?conversation_id }
+            );
             return;
         };
         let task_id = {
@@ -2396,20 +2451,16 @@ impl BlocklistAIController {
             &conversation_data.server_conversation_token,
         );
 
-        // Safety net: if the connected Grok subscription's OAuth token is
-        // nearing or past expiry, kick off a background refresh so upcoming
-        // requests can authenticate even when the proactive refresh loop
-        // isn't running. This request still carries the currently stored
-        // token; the server is the authority on its validity. The Gemini
-        // Enterprise (GEAP) analog re-arms a parked or never-armed WIF
-        // credential refresh chain the same way.
+        // Safety net: re-arm the Gemini Enterprise (GEAP) credential refresh
+        // chain if it was parked or never armed, so upcoming requests can
+        // authenticate. The connected Grok subscription's request-time OAuth
+        // refresh is handled in the response stream's send path
+        // (`ResponseStream::spawn_request`).
         #[cfg(not(target_family = "wasm"))]
         {
             use ::ai::api_keys::ApiKeyManager;
 
-            let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
             ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                manager.refresh_grok_tokens_if_needed(byo_allowed, ctx);
                 crate::ai::geap_credentials::refresh_geap_credentials_if_needed(manager, ctx);
             });
         }
@@ -2874,9 +2925,8 @@ impl BlocklistAIController {
                                         )
                                     });
                                 if let Err(e) = apply_result {
-                                    log::error!(
-                                        "Failed to apply client actions to conversation: {e:?}"
-                                    );
+                                    report_error!(anyhow::Error::new(e)
+                                        .context("Failed to apply client actions to conversation"));
                                 }
                             }
                         }
@@ -3340,7 +3390,6 @@ impl BlocklistAIController {
             LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
                 llm_preferences.refresh_authed_models(ctx);
             });
-            ctx.emit(BlocklistAIControllerEvent::FreeTierLimitCheckTriggered);
         }
     }
 }

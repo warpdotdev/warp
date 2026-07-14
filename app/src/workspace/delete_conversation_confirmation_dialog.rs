@@ -1,5 +1,6 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ChildAnchor, ChildView, Container, OffsetPositioning, ParentAnchor, ParentOffsetBounds,
     Stack,
@@ -162,7 +163,7 @@ impl TypedActionView for DeleteConversationConfirmationDialog {
         match action {
             DeleteConversationConfirmationAction::Confirm => {
                 let Some(source) = self.source.clone() else {
-                    log::error!("Delete confirm button pressed with no source");
+                    report_error!("Delete confirm button pressed with no source");
                     return;
                 };
                 ctx.emit(DeleteConversationConfirmationEvent::Confirm { source });

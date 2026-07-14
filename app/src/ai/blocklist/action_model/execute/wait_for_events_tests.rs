@@ -91,7 +91,8 @@ fn execute_invokes_parent_registration_and_honors_child_short_circuit() {
         let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
 
         let terminal_view_id = EntityId::new();
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // A streamer whose server fetch must never be called: the child
         // short-circuit precedes any `get_ambient_agent_task` call.

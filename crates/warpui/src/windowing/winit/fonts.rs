@@ -54,6 +54,7 @@ struct FontFamily {
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod loader {
     use anyhow::Result;
+    use warp_errors::report_error;
 
     use super::*;
     use crate::windowing::winit::fonts::linux::{Error, FontconfigLoader};
@@ -62,14 +63,14 @@ mod loader {
         let manager = match FontconfigLoader::new() {
             Ok(x) => x,
             Err(e) => {
-                log::error!("Failed to load system fonts: {e:?}");
+                report_error!(anyhow::Error::new(e).context("Failed to load system fonts"));
                 return LoadedSystemFonts(vec![]);
             }
         };
         let handles = match manager.get_all_families() {
             Ok(x) => x,
             Err(e) => {
-                log::error!("Failed to load system fonts: {e:?}");
+                report_error!(anyhow::Error::new(e).context("Failed to load system fonts"));
                 return LoadedSystemFonts(vec![]);
             }
         };

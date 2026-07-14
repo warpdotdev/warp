@@ -37,6 +37,7 @@ pub fn terminal_view_for_viewer(app: &mut App) -> ViewHandle<TerminalView> {
             user_default_shell_unsupported_banner_model_handle,
             server_api,
             model_event_sender,
+            false, // is_ambient_agent
             ctx,
         )
     });

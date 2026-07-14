@@ -11,6 +11,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_errors::{report_error, report_if_error};
 use warpui::elements::{
     Align, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -40,6 +41,7 @@ use crate::appearance::Appearance;
 use crate::auth::auth_manager::AuthManager;
 use crate::channel::ChannelState;
 use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{AISettings, CustomSecretRegex, PrivacySettings, RegexDisplayInfo};
 use crate::settings_view::privacy::AddRegexModalViewState;
@@ -57,7 +59,6 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, CustomerType, UgcCollectionEnablementSetting,
 };
-use crate::{report_if_error, send_telemetry_from_ctx};
 
 const FONT_SIZE: f32 = 12.;
 
@@ -450,11 +451,14 @@ impl PrivacyPageView {
                     .set_value(new_user_secret_regex_list, ctx)
                     .is_err()
                 {
-                    log::error!("Failed to add custom regex to secret regex list");
+                    report_error!("Failed to add custom regex to secret regex list");
                 }
                 ctx.notify();
             } else {
-                log::error!("Invalid regex pattern: {pattern}");
+                report_error!(
+                    "Invalid regex pattern",
+                    extra: { "pattern" => %pattern }
+                );
             }
         });
     }
@@ -552,7 +556,7 @@ impl TypedActionView for PrivacyPageView {
                                 .set_value(new_user_secret_regex_list, ctx)
                                 .is_err()
                             {
-                                log::error!(
+                                report_error!(
                                     "Failed to add recommended regex to custom secret regex list"
                                 );
                             }

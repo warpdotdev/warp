@@ -83,6 +83,16 @@ fn non_press_key_events_are_ignored() {
     event.kind = KeyEventKind::Release;
     assert!(crossterm_event_to_tui_event(CrosstermEvent::Key(event)).is_none());
 }
+#[test]
+fn paste_preserves_the_complete_payload() {
+    let payload = "USER:\nhello\n\nAGENT:\nHi!\n";
+    let Some(TuiEvent::Paste { text }) =
+        crossterm_event_to_tui_event(CrosstermEvent::Paste(payload.to_owned()))
+    else {
+        panic!("expected Paste");
+    };
+    assert_eq!(text, payload);
+}
 
 #[test]
 fn pure_modifier_keys_have_no_tui_equivalent() {

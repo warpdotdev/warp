@@ -29,6 +29,7 @@ test-util = ["warpui_core/test-util"]
 experimental-wgpu-renderer = ["dep:wgpu", "dep:bytemuck", "dep:version-compare"]
 
 [dependencies]
+warp_errors.workspace = true
 async-task.workspace = true
 anyhow.workspace = true
 bytemuck = { workspace = true, features = ["derive"], optional = true }
@@ -74,6 +75,7 @@ core-graphics = "0.25.0"
 core-text = "21.0.0"
 dispatch = "0.2.0"
 font-kit.workspace = true
+foreign-types = "0.5"
 libc.workspace = true
 objc.workspace = true
 objc2.workspace = true

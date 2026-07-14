@@ -18,6 +18,7 @@
 //! deregistered) is the parent's responsibility.
 use settings::Setting;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warpui::elements::{
     Border, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
@@ -266,7 +267,9 @@ impl TypedActionView for SshRemoteServerChoiceView {
                     let mode = SshExtensionInstallMode::AlwaysInstall;
                     WarpifySettings::handle(ctx).update(ctx, |settings, ctx| {
                         if let Err(e) = settings.ssh_extension_install_mode.set_value(mode, ctx) {
-                            log::error!("Failed to persist ssh_extension_install_mode: {e}");
+                            report_error!(
+                                e.context("Failed to persist ssh_extension_install_mode")
+                            );
                         }
                     });
                     send_telemetry_from_ctx!(
@@ -283,7 +286,9 @@ impl TypedActionView for SshRemoteServerChoiceView {
                     let mode = SshExtensionInstallMode::NeverInstall;
                     WarpifySettings::handle(ctx).update(ctx, |settings, ctx| {
                         if let Err(e) = settings.ssh_extension_install_mode.set_value(mode, ctx) {
-                            log::error!("Failed to persist ssh_extension_install_mode: {e}");
+                            report_error!(
+                                e.context("Failed to persist ssh_extension_install_mode")
+                            );
                         }
                     });
                     send_telemetry_from_ctx!(

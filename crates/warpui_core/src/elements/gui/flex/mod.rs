@@ -4,6 +4,7 @@ use std::any::Any;
 
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_errors::report_error;
 pub use wrap::*;
 
 use super::{
@@ -209,7 +210,10 @@ impl Element for Flex {
 See https://www.notion.so/warpdev/Debugging-Flex-acc03383be5644a8af29d9c52b1142bd?pvs=4#fff43263616d8008b3e3efe280686886 for troubleshooting steps"
             );
             if constraint.max_along(self.axis).is_infinite() {
-                log::error!("A flex that should expand to a max space can't be rendered in an infinite max constraint\n{location_info}");
+                report_error!(
+                    "A flex that should expand to a max space can't be rendered in an infinite max constraint",
+                    extra: { "location" => %location_info }
+                );
             }
         }
 
@@ -273,7 +277,10 @@ See https://www.notion.so/warpdev/Debugging-Flex-acc03383be5644a8af29d9c52b1142b
 See https://www.notion.so/warpdev/Debugging-Flex-acc03383be5644a8af29d9c52b1142bd?pvs=4#057b1e4ba7b844f7ad2e69433b295363 for troubleshooting steps"
             );
             if constraint.max_along(self.axis).is_infinite() {
-                log::error!("flex contains flexible children but has an infinite constraint along the flex axis{location_info}");
+                report_error!(
+                    "flex contains flexible children but has an infinite constraint along the flex axis",
+                    extra: { "location" => %location_info }
+                );
             }
 
             let mut remaining_space = (constraint.max_along(self.axis) - fixed_space).max(0.);

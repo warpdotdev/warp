@@ -5,6 +5,7 @@ use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Deserializer, Serialize};
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -381,10 +382,14 @@ impl CLISubagentController {
         let interaction_mode_debug = format!("{:?}", active_block.interaction_mode());
         let lrc_state_debug = format!("{:?}", active_block.long_running_control_state());
         if let Err(e) = active_block.take_over_control_for_user(reason.clone()) {
-            log::error!(
-                "Failed to take control for user: {e:?}, reason={reason:?}, \
-                 block_id={block_id:?}, interaction_mode={interaction_mode_debug}, \
-                 lrc_state={lrc_state_debug}"
+            report_error!(
+                anyhow::Error::new(e).context("Failed to take control for user"),
+                extra: {
+                    "reason" => ?reason,
+                    "block_id" => ?block_id,
+                    "interaction_mode" => %interaction_mode_debug,
+                    "lrc_state" => %lrc_state_debug
+                }
             );
             return;
         }
@@ -444,9 +449,9 @@ impl CLISubagentController {
             .and_then(|state| state.user_take_over_reason())
             .is_some_and(|reason| reason.is_transfer_from_agent());
         if let Err(e) = active_block.handoff_control_to_agent() {
-            log::error!(
-                "Failed to handoff control to agent: {e:?}, \
-                 block_id={block_id:?}, lrc_state={lrc_state_debug}"
+            report_error!(
+                anyhow::Error::new(e).context("Failed to handoff control to agent"),
+                extra: { "block_id" => ?block_id, "lrc_state" => %lrc_state_debug }
             );
             return;
         }
@@ -465,7 +470,8 @@ impl CLISubagentController {
                         AgentViewEntryOrigin::LongRunningCommand,
                         ctx,
                     ) {
-                        log::error!("Failed to enter inline agent view for LRC handoff: {e}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Failed to enter inline agent view for LRC handoff"));
                     }
                 }
             });
@@ -582,7 +588,8 @@ impl CLISubagentController {
                     task_id,
                     *conversation_id,
                 ) {
-                    log::error!("Could not update interaction mode to agent-monitored: {e:?}",);
+                    report_error!(anyhow::Error::new(e)
+                        .context("Could not update interaction mode to agent-monitored"));
                     return;
                 };
 
@@ -635,9 +642,9 @@ impl CLISubagentController {
                                 }
                             }
                             Err(e) => {
-                                log::error!(
-                                    "Tried to upgrade CLISubagent task ID for non-existent block: {e:?}"
-                                );
+                                report_error!(e.context(
+                                    "Tried to upgrade CLISubagent task ID for non-existent block"
+                                ));
                             }
                         }
                     }

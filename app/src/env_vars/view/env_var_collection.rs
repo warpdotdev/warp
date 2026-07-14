@@ -1,5 +1,6 @@
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, AnchorPair, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
@@ -736,7 +737,7 @@ impl EnvVarCollectionView {
                         Box::new(cloud_env_var.clone()),
                     )));
                 } else {
-                    log::error!("Env var not found and could not be invoked");
+                    report_error!("Env var not found and could not be invoked");
                     let window_id = ctx.window_id();
                     crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
@@ -860,7 +861,7 @@ impl EnvVarCollectionView {
                 }
             }
             ActiveEnvVarCollection::None => {
-                log::error!("Tried to save EVC, but none were active")
+                report_error!("Tried to save EVC, but none were active")
             }
         }
     }

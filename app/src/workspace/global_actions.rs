@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_errors::report_error;
 use warp_graphql::mutations::create_anonymous_user::AnonymousUserType;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, SingletonEntity, TypedActionView};
@@ -163,7 +164,7 @@ fn save_app(_: &(), ctx: &mut AppContext) {
     let event = ModelEvent::Snapshot(app_state);
 
     if let Err(err) = model_event_sender.send(event) {
-        log::error!("Error trying to send model event {err:?}");
+        report_error!(anyhow::Error::new(err).context("Error trying to send model event"));
     }
 }
 
@@ -189,7 +190,7 @@ fn create_anonymous_user(_: &(), ctx: &mut AppContext) {
         warpui::r#async::block_on(auth_client.create_anonymous_user(None, anonymous_user_type));
     match result {
         Ok(user) => log::info!("Successfully created anonymous user {user:?}"),
-        Err(err) => log::error!("Failed to create anonymous user: {err:?}"),
+        Err(err) => report_error!(err.context("Failed to create anonymous user")),
     }
 }
 

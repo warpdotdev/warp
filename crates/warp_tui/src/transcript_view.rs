@@ -8,26 +8,70 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, RichContentItem, RichContentType,
-    TerminalModel,
+    BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, ConversationBlockRestorationPlan, ModelEventDispatcher,
+    RichContentItem, RichContentType, TerminalModel,
 };
+use warp_core::semantic_selection::SemanticSelection;
 use warpui_core::elements::tui::{
-    TuiElement, TuiScrollable, TuiScrollableElement, TuiViewportVerticalAlignment,
-    TuiViewportedList, TuiViewportedListState,
+    TuiElement, TuiRowResize, TuiScrollable, TuiScrollableElement, TuiSelectable,
+    TuiSelectionHandle, TuiViewportVerticalAlignment, TuiViewportedList, TuiViewportedListState,
 };
 use warpui_core::{
-    AppContext, Entity, EntityId, SingletonEntity, TuiView, TypedActionView, ViewContext,
+    AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TuiView, TypedActionView,
+    ViewContext,
 };
 
-use super::agent_block::TuiAIBlock;
+use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
+use super::terminal_block::should_render_terminal_block;
 use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
+
+/// Rows of blank space above every transcript block. Terminal blocks get it
+/// via [`TRANSCRIPT_BLOCK_SPACING`]'s `padding_top`; agent blocks apply the
+/// same top padding directly, so every adjacent block pair is separated by
+/// exactly this many rows.
+pub(crate) const BLOCK_TOP_PADDING_ROWS: u16 = 1;
+
+/// Block spacing baked into the terminal model's block heights for this
+/// transcript, passed in at session creation. The transcript renders whole
+/// rows, so fractional pixel-derived padding would ceil into several blank
+/// rows per block; instead every block gets exactly [`BLOCK_TOP_PADDING_ROWS`]
+/// blank rows above it, no reserved Warp-prompt height, and no memory-stats
+/// footer row (the transcript renders neither).
+pub(crate) const TRANSCRIPT_BLOCK_SPACING: BlockSpacing = BlockSpacing {
+    block_padding: BlockPadding {
+        padding_top: BLOCK_TOP_PADDING_ROWS as f32,
+        command_padding_top: 0.0,
+        middle: 0.0,
+        bottom: 0.0,
+    },
+    warp_prompt_height_lines: 0.0,
+    show_memory_stats: false,
+};
+
+/// Events emitted by the transcript to its owning session view.
+#[derive(Debug, Clone)]
+pub(super) enum TuiTranscriptViewEvent {
+    SelectionStarted,
+    SelectionEnded(String),
+}
+
+/// Selection actions originating from the transcript's element tree.
+#[derive(Debug, Clone)]
+pub(super) enum TuiTranscriptAction {
+    SelectionStarted,
+    SelectionEnded(String),
+}
 
 /// TUI transcript view over one terminal surface's canonical block-list order.
 pub(super) struct TuiTranscriptView {
     terminal_surface_id: EntityId,
     model: Arc<FairMutex<TerminalModel>>,
+    action_model: ModelHandle<BlocklistAIActionModel>,
+    model_events: ModelHandle<ModelEventDispatcher>,
     agent_blocks: AgentBlockRegistry,
     viewport: TuiViewportedListState,
+    selection: TuiSelectionHandle,
 }
 
 impl TuiTranscriptView {
@@ -35,6 +79,8 @@ impl TuiTranscriptView {
     pub(super) fn new(
         terminal_surface_id: EntityId,
         model: Arc<FairMutex<TerminalModel>>,
+        action_model: ModelHandle<BlocklistAIActionModel>,
+        model_events: &ModelHandle<ModelEventDispatcher>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(
@@ -45,9 +91,20 @@ impl TuiTranscriptView {
         Self {
             terminal_surface_id,
             model,
+            action_model,
+            model_events: model_events.clone(),
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             viewport: TuiViewportedListState::new_at_end(),
+            selection: TuiSelectionHandle::default(),
         }
+    }
+
+    fn mark_agent_block_dirty(&self, view_id: EntityId, ctx: &mut ViewContext<Self>) {
+        self.model
+            .lock()
+            .block_list_mut()
+            .mark_rich_content_dirty(view_id);
+        ctx.notify();
     }
 
     fn handle_history_event(
@@ -78,7 +135,7 @@ impl TuiTranscriptView {
                     .and_then(|conversation| conversation.get_task(task_id))
                     .is_some_and(should_show_task_in_blocklist);
                 if should_show {
-                    self.insert_agent_block(*conversation_id, *exchange_id, ctx);
+                    self.insert_agent_block(*conversation_id, *exchange_id, None, ctx);
                 }
             }
             BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => {
@@ -99,8 +156,20 @@ impl TuiTranscriptView {
                 conversation_id,
                 ..
             } => self.remove_conversation(*conversation_id, ctx),
-            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. } => {
-                self.clear_agent_blocks(ctx);
+            BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                active_conversation_id,
+                cleared_conversation_ids,
+                ..
+            } => {
+                let mut conversation_ids = cleared_conversation_ids.clone();
+                if let Some(active_conversation_id) = active_conversation_id {
+                    if !conversation_ids.contains(active_conversation_id) {
+                        conversation_ids.push(*active_conversation_id);
+                    }
+                }
+                for conversation_id in conversation_ids {
+                    self.remove_conversation(conversation_id, ctx);
+                }
             }
             BlocklistAIHistoryEvent::StartedNewConversation { .. }
             | BlocklistAIHistoryEvent::CreatedSubtask { .. }
@@ -123,6 +192,23 @@ impl TuiTranscriptView {
         }
     }
 
+    /// Whether the transcript has no visible content: no agent block and no
+    /// terminal block it would render (per [`should_render_terminal_block`];
+    /// the idle prompt block awaiting the first command doesn't count). The
+    /// session view fills the transcript slot with the zero state exactly
+    /// while this holds.
+    pub(super) fn is_empty(&self) -> bool {
+        if !self.agent_blocks.borrow().is_empty() {
+            return false;
+        }
+        let model = self.model.lock();
+        let block_list = model.block_list();
+        !block_list
+            .blocks()
+            .iter()
+            .any(|block| should_render_terminal_block(block, block_list))
+    }
+
     /// Returns the view id of the agent block rendering `exchange_id`, if any.
     fn view_id_for_exchange(
         &self,
@@ -141,6 +227,7 @@ impl TuiTranscriptView {
         &mut self,
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
+        command_block_index: Option<BlockIndex>,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.view_id_for_exchange(exchange_id, ctx).is_some() {
@@ -157,23 +244,71 @@ impl TuiTranscriptView {
         };
 
         let block_model = Rc::new(block_model);
-        let view = ctx.add_tui_view(|_| TuiAIBlock::new(conversation_id, exchange_id, block_model));
+        let action_model = self.action_model.clone();
+        let model_events = self.model_events.clone();
+        let terminal_model = self.model.clone();
+        let view = ctx.add_typed_action_tui_view(|ctx| {
+            TuiAIBlock::new(
+                conversation_id,
+                exchange_id,
+                block_model,
+                action_model,
+                &model_events,
+                terminal_model,
+                ctx,
+            )
+        });
         let view_id = view.id();
+        ctx.subscribe_to_view(&view, move |transcript, _, event, ctx| match event {
+            TuiAIBlockEvent::LayoutInvalidated => {
+                transcript
+                    .model
+                    .lock()
+                    .block_list_mut()
+                    .mark_rich_content_dirty(view_id);
+                ctx.notify();
+            }
+        });
         self.agent_blocks.borrow_mut().insert(view_id, view);
-        self.model.lock().block_list_mut().append_rich_content(
-            RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
-            false,
-        );
+        let item = RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false);
+        let mut model = self.model.lock();
+        match command_block_index {
+            Some(command_block_index) => model
+                .block_list_mut()
+                .insert_rich_content_before_block_index(item, command_block_index),
+            None => model.block_list_mut().append_rich_content(item, false),
+        }
         ctx.notify();
+    }
+
+    /// Materializes a shared restoration plan as TUI agent-block views.
+    pub(super) fn restore_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        restoration_plan: ConversationBlockRestorationPlan,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for restored_exchange in restoration_plan.into_exchanges() {
+            self.insert_agent_block(
+                conversation_id,
+                restored_exchange.exchange().id,
+                restored_exchange.command_block_index(),
+                ctx,
+            );
+        }
+        self.viewport.scroll_to_end();
+        ctx.notify();
+    }
+
+    /// Clears agent rich content before replacing the sole conversation.
+    pub(super) fn clear_for_replacement(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_agent_blocks(ctx);
+        self.viewport.scroll_to_end();
     }
 
     fn mark_exchange_dirty(&mut self, exchange_id: AIAgentExchangeId, ctx: &mut ViewContext<Self>) {
         if let Some(view_id) = self.view_id_for_exchange(exchange_id, ctx) {
-            self.model
-                .lock()
-                .block_list_mut()
-                .mark_rich_content_dirty(view_id);
-            ctx.notify();
+            self.mark_agent_block_dirty(view_id, ctx);
         }
     }
 
@@ -197,14 +332,11 @@ impl TuiTranscriptView {
             );
             return;
         };
-        agent_block.update(ctx, |view, _| {
-            view.replace_model(conversation_id, Rc::new(block_model))
+        agent_block.update(ctx, |view, ctx| {
+            view.replace_model(conversation_id, Rc::new(block_model));
+            ctx.notify();
         });
-        self.model
-            .lock()
-            .block_list_mut()
-            .mark_rich_content_dirty(view_id);
-        ctx.notify();
+        self.mark_agent_block_dirty(view_id, ctx);
     }
 
     fn remove_conversation(
@@ -221,6 +353,16 @@ impl TuiTranscriptView {
             })
             .collect::<Vec<_>>();
         for view_id in view_ids {
+            let rows = {
+                let model = self.model.lock();
+                model.block_list().rich_content_row_range(view_id)
+            };
+            if let Some(rows) = rows {
+                self.selection.rebase_for_row_resize(TuiRowResize {
+                    old_rows: rows,
+                    new_height: 0,
+                });
+            }
             self.agent_blocks.borrow_mut().remove(&view_id);
             self.model
                 .lock()
@@ -228,6 +370,13 @@ impl TuiTranscriptView {
                 .remove_rich_content(view_id);
         }
         ctx.notify();
+    }
+
+    /// Clears persistent selection owned by the transcript.
+    pub(super) fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.selection.clear() {
+            ctx.notify();
+        }
     }
 
     fn clear_agent_blocks(&mut self, ctx: &mut ViewContext<Self>) {
@@ -238,6 +387,7 @@ impl TuiTranscriptView {
             .copied()
             .collect::<Vec<_>>();
         self.agent_blocks.borrow_mut().clear();
+        self.selection.clear();
         let mut model = self.model.lock();
         for view_id in view_ids {
             model.block_list_mut().remove_rich_content(view_id);
@@ -247,7 +397,7 @@ impl TuiTranscriptView {
 }
 
 impl Entity for TuiTranscriptView {
-    type Event = ();
+    type Event = TuiTranscriptViewEvent;
 }
 
 impl TuiView for TuiTranscriptView {
@@ -259,19 +409,37 @@ impl TuiView for TuiTranscriptView {
         self.agent_blocks.borrow().keys().copied().collect()
     }
 
-    fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
+    fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let source = TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone());
-        TuiScrollable::new(
-            TuiViewportedList::new(self.viewport.clone(), source)
-                .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom)
-                .finish_scrollable(),
-        )
-        .finish()
+        let viewport = TuiViewportedList::new(self.viewport.clone(), source)
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
+        let semantic_selection = SemanticSelection::as_ref(app);
+        let selectable = TuiSelectable::new(self.selection.clone(), viewport)
+            .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
+            .with_smart_select_fn(semantic_selection.smart_select_fn())
+            .on_selection_start(|event_ctx, _| {
+                event_ctx.dispatch_typed_action(TuiTranscriptAction::SelectionStarted);
+            })
+            .on_copy(|text, event_ctx, _| {
+                event_ctx.dispatch_typed_action(TuiTranscriptAction::SelectionEnded(text));
+            });
+        TuiScrollable::new(selectable.finish_scrollable()).finish()
     }
 }
 
 impl TypedActionView for TuiTranscriptView {
-    type Action = ();
+    type Action = TuiTranscriptAction;
+
+    fn handle_action(&mut self, action: &TuiTranscriptAction, ctx: &mut ViewContext<Self>) {
+        match action {
+            TuiTranscriptAction::SelectionStarted => {
+                ctx.emit(TuiTranscriptViewEvent::SelectionStarted);
+            }
+            TuiTranscriptAction::SelectionEnded(text) => {
+                ctx.emit(TuiTranscriptViewEvent::SelectionEnded(text.clone()));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

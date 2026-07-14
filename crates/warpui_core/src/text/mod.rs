@@ -12,6 +12,12 @@ pub mod word_boundaries;
 pub mod words;
 
 pub use header::BlockHeaderSize;
+/// A row/column position in rendered character-cell content.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TuiGridPoint {
+    pub row: usize,
+    pub col: u16,
+}
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum SelectionType {

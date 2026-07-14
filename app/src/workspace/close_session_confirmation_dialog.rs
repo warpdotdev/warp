@@ -1,5 +1,6 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ChildAnchor, Container, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentOffsetBounds, Stack,
@@ -195,7 +196,7 @@ impl TypedActionView for CloseSessionConfirmationDialog {
             CloseSessionConfirmationAction::CloseSession { dont_show_again } => {
                 let Some(open_confirmation_source) = self.open_confirmation_source else {
                     // Should not be possible.
-                    log::error!(
+                    report_error!(
                         "Close session button pressed with no open confirmation dialog source"
                     );
                     return;

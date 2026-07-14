@@ -21,6 +21,7 @@ use session_sharing_protocol::sharer::{
 };
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
@@ -265,7 +266,7 @@ fn wire_up_terminal_view_session_sharing(
         });
         if let Some(network) = session_sharer_clone.borrow().as_ref() {
             let Ok(serialized_prompt) = serde_json::to_string(&prompt_snapshot) else {
-                log::error!("Failed to serialize prompt snapshot to send active prompt update to shared session server");
+                report_error!("Failed to serialize prompt snapshot to send active prompt update to shared session server");
                 return
             };
             network.update(ctx, |network, _| {
@@ -735,7 +736,7 @@ impl TerminalManager<TerminalView> {
         } else {
             let current_prompt_snapshot = prompt_type.as_ref(ctx).snapshot(ctx);
             let Ok(serialized_prompt) = serde_json::to_string(&current_prompt_snapshot) else {
-                log::error!(
+                report_error!(
                     "Failed to serialize prompt snapshot to send active prompt update to shared session server"
                 );
                 return;

@@ -2,6 +2,7 @@
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, FormattedTextElement,
     Hoverable, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
@@ -431,9 +432,9 @@ pub(super) fn render_send_message(
 
     if let Some(AIActionStatus::Finished(result)) = &status {
         let AIAgentActionResultType::SendMessageToAgent(result) = &result.result else {
-            log::error!(
-                "Unexpected action result type for send message action: {:?}",
-                result.result
+            report_error!(
+                "Unexpected action result type for send message action",
+                extra: { "result_type" => ?result.result }
             );
             return Empty::new().finish();
         };
@@ -568,9 +569,9 @@ pub(super) fn render_start_agent(
 
     if let Some(AIActionStatus::Finished(result)) = &status {
         let AIAgentActionResultType::StartAgent(result) = &result.result else {
-            log::error!(
-                "Unexpected action result type for start agent action: {:?}",
-                result.result
+            report_error!(
+                "Unexpected action result type for start agent action",
+                extra: { "result_type" => ?result.result }
             );
             return Empty::new().finish();
         };
@@ -638,9 +639,9 @@ pub(super) fn render_start_agent(
                 .get(action_id)
                 .cloned()
                 .unwrap_or_else(|| {
-                    log::error!(
-                        "Missing orchestration navigation card handle for StartAgent action {:?}",
-                        action_id
+                    report_error!(
+                        "Missing orchestration navigation card handle for StartAgent action",
+                        extra: { "action_id" => ?action_id }
                     );
                     MouseStateHandle::default()
                 });
@@ -880,9 +881,9 @@ fn render_collapsible_body(
     props: Props,
 ) -> Option<Box<dyn Element>> {
     let Some(state) = props.collapsible_block_states.get(message_id) else {
-        log::error!(
-            "Missing collapsible state for orchestration message {:?}",
-            message_id
+        report_error!(
+            "Missing collapsible state for orchestration message",
+            extra: { "message_id" => ?message_id }
         );
         return None;
     };

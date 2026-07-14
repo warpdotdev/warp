@@ -1,5 +1,8 @@
-use ai::agent::action::UploadArtifactRequest;
+use std::time::{Duration, SystemTime};
+
+use ai::agent::action::{UploadArtifactRequest, UseComputerRequest};
 use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
+use computer_use::{Action, ScreenshotParams, Target, TargetedAction};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
 use warp_util::host_id::HostId;
@@ -11,8 +14,13 @@ use watcher::HomeDirectoryWatcher;
 
 use super::{
     format_upload_artifact_text, parsed_skill_for_common_locations, read_skill_display_text,
+    should_decorate_recorded_use_computer, start_recording_card_text, stop_recording_card_text,
+    RecordingCardText,
 };
-use crate::ai::agent::UploadArtifactResult;
+use crate::ai::agent::{
+    RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
+    UploadArtifactResult,
+};
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -77,6 +85,107 @@ fn format_upload_artifact_text_includes_terminal_status() {
     assert_eq!(cancelled_text, "Upload artifact: reports/daily.txt");
 }
 
+#[test]
+fn start_recording_card_text_uses_static_title_and_description_subtext() {
+    let result = StartRecordingResult::Success(RecordingStarted {
+        recording_id: "rec-1".to_string(),
+        started_at: SystemTime::UNIX_EPOCH,
+        width_px: 1280,
+        height_px: 720,
+    });
+
+    let text = start_recording_card_text("Demo checkout flow", Some(&result));
+
+    assert_eq!(
+        text,
+        RecordingCardText {
+            primary: "Recording started".to_string(),
+            subtext: Some("Demo checkout flow".to_string()),
+        }
+    );
+}
+
+#[test]
+fn start_recording_card_text_includes_failure_copy() {
+    let result = StartRecordingResult::Error("unsupported platform".to_string());
+
+    let text = start_recording_card_text("Demo checkout flow", Some(&result));
+
+    assert_eq!(
+        text,
+        RecordingCardText {
+            primary: "Recording failed to start".to_string(),
+            subtext: Some("unsupported platform".to_string()),
+        }
+    );
+}
+
+#[test]
+fn stop_recording_card_text_includes_complete_duration() {
+    let result = StopRecordingResult::Success(RecordingStopped {
+        artifact_uid: "artifact-1".to_string(),
+        duration: Duration::from_secs(2),
+        width_px: 1280,
+        height_px: 720,
+        size_bytes: 42,
+        completion_status: computer_use::RecordingCompletionStatus::Completed,
+        termination_reason: "Stopped by agent".to_string(),
+    });
+
+    let text = stop_recording_card_text(Some(&result));
+
+    assert_eq!(
+        text,
+        RecordingCardText {
+            primary: "Recording saved".to_string(),
+            subtext: Some("0:02".to_string()),
+        }
+    );
+}
+
+#[test]
+fn stop_recording_card_text_includes_partial_duration_without_raw_reason() {
+    let result = StopRecordingResult::Success(RecordingStopped {
+        artifact_uid: "artifact-1".to_string(),
+        duration: Duration::from_secs(12),
+        width_px: 1280,
+        height_px: 720,
+        size_bytes: 42,
+        completion_status: computer_use::RecordingCompletionStatus::StoppedEarly,
+        termination_reason: "internal raw reason".to_string(),
+    });
+
+    let text = stop_recording_card_text(Some(&result));
+
+    assert_eq!(
+        text,
+        RecordingCardText {
+            primary: "Recording saved".to_string(),
+            subtext: Some("Partial recording • 0:12".to_string()),
+        }
+    );
+}
+
+#[test]
+fn use_computer_decoration_skips_screenshot_only_rows() {
+    // Agents that only want a screenshot emit a zero-duration wait plus
+    // screenshot params; a real wait is a captured interaction.
+    let mut request = UseComputerRequest {
+        action_summary: "Screenshot".to_string(),
+        actions: vec![TargetedAction::screen(Action::Wait(Duration::ZERO))],
+        screenshot_params: Some(ScreenshotParams {
+            max_long_edge_px: None,
+            max_total_px: None,
+            region: None,
+            target: Target::Screen,
+        }),
+    };
+    assert!(!should_decorate_recorded_use_computer(&request));
+
+    request.actions = vec![TargetedAction::screen(Action::Wait(Duration::from_secs(1)))];
+    assert!(should_decorate_recorded_use_computer(&request));
+}
+
 fn make_skill(name: &str) -> ParsedSkill {
     ParsedSkill {
         name: name.to_string(),
@@ -125,9 +234,12 @@ fn read_skill_display_text_no_double_slash_when_skill_not_found_with_path_refere
 
 #[test]
 fn read_skill_display_text_bundled_id_fallback_when_skill_not_found() {
+    // The fallback uses the user-facing label (the bare id), not the canonical
+    // `@warp-skill:<id>` reference form, so bundled-skill copy reads the same
+    // way as path-based skill copy.
     let reference = SkillReference::BundledSkillId("create-pr".to_string());
     let display = read_skill_display_text(None, &reference);
-    assert_eq!(display, "@warp-skill:create-pr");
+    assert_eq!(display, "create-pr");
 }
 
 fn remote_location(host_id: &HostId, path: &str) -> LocalOrRemotePath {

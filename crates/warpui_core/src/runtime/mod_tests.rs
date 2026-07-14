@@ -9,7 +9,7 @@ use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyM
 use super::*;
 use crate::elements::tui::{
     TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext,
-    TuiStyle, TuiText,
+    TuiPaintContext, TuiStyle, TuiText,
 };
 use crate::keymap::macros::*;
 use crate::keymap::FixedBinding;
@@ -32,7 +32,7 @@ impl TuiElement for TextElement {
         constraint.clamp(TuiSize::new(width, 1))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
         buffer.set_stringn(
             area.x,
             area.y,
@@ -327,6 +327,26 @@ impl TerminalModeControl for RecordingControl {
     }
 }
 
+#[test]
+fn terminal_screen_lifecycle_toggles_bracketed_paste() {
+    let mut enter_output = Vec::new();
+    enter_terminal_screen(&mut enter_output).unwrap();
+    assert!(
+        enter_output
+            .windows(b"\x1b[?2004h".len())
+            .any(|window| window == b"\x1b[?2004h"),
+        "entering the TUI should enable bracketed paste"
+    );
+
+    let mut leave_output = Vec::new();
+    leave_terminal_screen(&mut leave_output).unwrap();
+    assert!(
+        leave_output
+            .windows(b"\x1b[?2004l".len())
+            .any(|window| window == b"\x1b[?2004l"),
+        "leaving the TUI should disable bracketed paste"
+    );
+}
 #[test]
 fn raw_mode_guard_restores_on_drop() {
     let log = Rc::new(RefCell::new(Vec::new()));

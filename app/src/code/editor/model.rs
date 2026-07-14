@@ -61,7 +61,7 @@ use warpui::elements::{
 use warpui::text::point::Point;
 use warpui::text::TextBuffer;
 use warpui::units::{IntoPixels, Pixels};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
 use super::super::DiffResult;
 use super::comments::{EditorCommentsModel, PendingComment, PendingCommentEvent};
@@ -305,6 +305,8 @@ pub struct CodeEditorModel {
     hovered_symbol_range: Option<HoverableLink>,
     /// Automatically hide lines outside of the active diff with X context lines.
     hide_lines_outside_of_active_diff: Option<usize>,
+    /// Recalculate hidden lines after a diff for this buffer version or later completes.
+    recalculate_hidden_lines_after_diff: Option<BufferVersion>,
     /// Whether this editor was configured to use lazy layout.
     lazy_layout_enabled: bool,
     /// Whether the editor has completed at least one layout cycle.
@@ -371,10 +373,16 @@ impl CodeEditorModel {
             false, // lazy_layout_enabled: no lazy layout in TUI
             true,  // lazy_layout_initialized: no lazy layout in TUI
             ctx,
-            |_hidden_lines, ctx| {
+            |hidden_lines, ctx| {
+                let hidden_lines = hidden_lines.clone();
                 // CharCell layout never consults `RichTextStyles`, so pass a stub.
                 ctx.add_model(|ctx| {
-                    RenderState::new_tui(terminal_width, Self::tui_stub_text_styles(), ctx)
+                    RenderState::new_tui(
+                        terminal_width,
+                        Self::tui_stub_text_styles(),
+                        hidden_lines,
+                        ctx,
+                    )
                 })
             },
         )
@@ -387,7 +395,7 @@ impl CodeEditorModel {
     /// and event subscriptions are identical and wired up here.
     ///
     /// `build_render_state` receives the freshly-created `hidden_lines` handle so
-    /// the GUI path can attach it; the TUI path ignores it.
+    /// both paths can attach it to their `RenderState`.
     fn from_content(
         content: ModelHandle<Buffer>,
         show_current_line_highlights: bool,
@@ -457,6 +465,7 @@ impl CodeEditorModel {
             vim_visual_tails: vec![],
             hovered_symbol_range: None,
             hide_lines_outside_of_active_diff: None,
+            recalculate_hidden_lines_after_diff: None,
             lazy_layout_enabled,
             lazy_layout_initialized,
             pending_syntax_tree_bootstrap: false,
@@ -593,8 +602,7 @@ impl CodeEditorModel {
         }
     }
 
-    /// Set hide_lines_outside_of_active_diff. This will automatically set a delay rendering trigger to wait
-    /// for the next diff to be computed.
+    /// Hides lines outside the active diff after the current content's diff computes.
     pub fn hide_lines_outside_of_active_diff(
         &mut self,
         context_lines: usize,
@@ -603,23 +611,36 @@ impl CodeEditorModel {
         let buffer_version = self.buffer_version(ctx);
 
         self.hide_lines_outside_of_active_diff = Some(context_lines);
+        self.request_hidden_lines_recalculation_after_diff(buffer_version);
         self.delay_rendering = Some(DelayRendering::new(DelayRenderingTrigger::DiffUpdate(
             buffer_version,
         )));
     }
+    /// Requests hidden-line recalculation after a diff reaches `buffer_version`.
+    fn request_hidden_lines_recalculation_after_diff(&mut self, buffer_version: BufferVersion) {
+        self.recalculate_hidden_lines_after_diff = Some(
+            self.recalculate_hidden_lines_after_diff
+                .map_or(buffer_version, |pending_version| {
+                    pending_version.max(buffer_version)
+                }),
+        );
+    }
 
     /// We need to set the diff model base to the normalized version of the text. This is because the internal text
     /// representation of the content used for syntax tree highlighting and text rendering uses standard LF.
-    pub fn set_base(&self, base: &str, recompute_diff: bool, ctx: &mut ModelContext<Self>) {
+    pub fn set_base(&mut self, base: &str, recompute_diff: bool, ctx: &mut ModelContext<Self>) {
         let normalized_text = MultilineString::<LF>::apply(base);
         self.diff
             .update(ctx, |diff, _ctx| diff.set_base(normalized_text));
 
         if recompute_diff {
             let buffer_version = self.buffer_version(ctx);
+            if self.hide_lines_outside_of_active_diff.is_some() {
+                self.request_hidden_lines_recalculation_after_diff(buffer_version);
+            }
             let content = self.content().as_ref(ctx).text();
             self.diff.update(ctx, move |diff, ctx| {
-                diff.compute_diff(content, true, buffer_version, ctx)
+                diff.compute_diff(content, buffer_version, ctx)
             });
         }
     }
@@ -1437,7 +1458,8 @@ impl CodeEditorModel {
         }
     }
 
-    /// Re-calculate the hidden range given the active diff state.
+    /// Re-calculate the hidden line ranges given the active diff state. No-op
+    /// unless [`Self::hide_lines_outside_of_active_diff`] enabled hiding.
     fn calculate_hidden_lines(&mut self, ctx: &mut ModelContext<Self>) {
         if let Some(context_line) = self.hide_lines_outside_of_active_diff {
             let line_count = self.line_count(ctx);
@@ -1446,14 +1468,11 @@ impl CodeEditorModel {
             let mut visible_ranges: RangeSet<warp_editor::content::text::LineCount> =
                 RangeSet::new();
 
-            // Add ranges for diffs
+            // Add ranges for diffs. `modified_lines` yields 0-based line
+            // ranges, matching the hidden-range convention.
             for range in self.diff().as_ref(ctx).modified_lines() {
-                // Convert 1-indexed line ranges to 0-indexed
-                let start_line = range.start.saturating_sub(1);
-                let end_line = range.end.saturating_sub(1);
-
-                let context_start = start_line.saturating_sub(context_line);
-                let context_end = end_line + context_line;
+                let context_start = range.start.saturating_sub(context_line);
+                let context_end = range.end + context_line;
 
                 if context_start < context_end {
                     visible_ranges.insert(context_start.into()..context_end.into());
@@ -1476,16 +1495,17 @@ impl CodeEditorModel {
 
     fn handle_diff_model_event(&mut self, event: &DiffModelEvent, ctx: &mut ModelContext<Self>) {
         match event {
-            DiffModelEvent::DiffUpdated {
-                version,
-                should_recalculate_hidden_lines,
-            } => {
+            DiffModelEvent::DiffUpdated { version } => {
                 // If we are hiding lines based on active diffs, there are 3 steps here once the diff is computed:
                 // 1) If we should, recalculate hidden lines based on the updated diff state.
                 // 2) Flush any delayed rendering based on diff update trigger.
                 // 3) If hidden lines are recalculated, rebuild the current layout.
-                if *should_recalculate_hidden_lines {
+                let should_recalculate_hidden_lines = self
+                    .recalculate_hidden_lines_after_diff
+                    .is_some_and(|pending_version| *version >= pending_version);
+                if should_recalculate_hidden_lines {
                     self.calculate_hidden_lines(ctx);
+                    self.recalculate_hidden_lines_after_diff = None;
                 }
 
                 // Do not refresh diff state if there is an active delayed rendering. We should wait until the delayed rendering
@@ -1494,7 +1514,7 @@ impl CodeEditorModel {
                     self.refresh_diff_state(ctx);
                 }
 
-                let will_rebuild_layout = *should_recalculate_hidden_lines
+                let will_rebuild_layout = should_recalculate_hidden_lines
                     && self.hide_lines_outside_of_active_diff.is_some();
 
                 if self
@@ -1604,6 +1624,7 @@ impl CodeEditorModel {
                 }
 
                 if should_recalculate_hidden_lines {
+                    self.request_hidden_lines_recalculation_after_diff(*buffer_version);
                     if let Some(delay_rendering) = &mut self.delay_rendering {
                         delay_rendering.block_until =
                             DelayRenderingTrigger::DiffUpdate(*buffer_version);
@@ -1615,12 +1636,7 @@ impl CodeEditorModel {
                 }
 
                 self.diff.update(ctx, move |diff, ctx| {
-                    diff.compute_diff(
-                        content,
-                        should_recalculate_hidden_lines,
-                        *buffer_version,
-                        ctx,
-                    )
+                    diff.compute_diff(content, *buffer_version, ctx)
                 });
 
                 // If we are delaying rendering, push these updates to the delay rendering state. Otherwise, flush them to diff and rendering model.
@@ -1650,9 +1666,10 @@ impl CodeEditorModel {
                 // On content replacement with active hidden ranges, we should always recalculate hidden lines and delay rendering
                 // since all anchors will all be invalidated.
                 if self.hide_lines_outside_of_active_diff.is_some() {
+                    self.request_hidden_lines_recalculation_after_diff(*buffer_version);
                     let content = self.content().as_ref(ctx).text();
                     self.diff.update(ctx, move |diff, ctx| {
-                        diff.compute_diff(content, true, *buffer_version, ctx)
+                        diff.compute_diff(content, *buffer_version, ctx)
                     });
 
                     if self.delay_rendering.is_none() {
@@ -1918,6 +1935,88 @@ impl CodeEditorModel {
     pub fn cut(&mut self, ctx: &mut ModelContext<Self>) {
         self.copy(ctx);
         self.backspace(ctx);
+    }
+
+    // ── Char-cell (TUI) visual-row kill ──────────────────────────────────────
+
+    /// Deletes from the primary cursor to the end of its soft-wrapped visual
+    /// row, returning the deleted text; `None` when the cursor is already at
+    /// the row end. Char-cell (TUI) mode only — visual rows follow the
+    /// terminal-width wrap math.
+    pub fn kill_to_char_cell_visual_row_end(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<String> {
+        // `cursor_gap` is a 1-indexed gap position (gap 1 sits before the
+        // first character); `text_in_range` / `Delete` use those same
+        // coordinates, so the kill range starts exactly at `cursor_gap`.
+        let cursor_gap = self.primary_cursor_gap(ctx);
+        let cursor_offset = CharOffset::from(cursor_gap.as_usize().saturating_sub(1));
+        let row = self.char_cell_visual_row_range(cursor_offset, ctx)?;
+        if row.end <= cursor_offset {
+            return None;
+        }
+        // `text[i]` lives at gap `i + 1`, so the exclusive end gap is `row.end + 1`.
+        Some(self.delete_range_returning_text(cursor_gap..row.end + 1, ctx))
+    }
+
+    /// Deletes from the start of the primary cursor's soft-wrapped visual row
+    /// up to the cursor, returning the deleted text; `None` when the cursor
+    /// is already at the row start. Char-cell (TUI) mode only.
+    pub fn kill_to_char_cell_visual_row_start(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<String> {
+        let cursor_gap = self.primary_cursor_gap(ctx);
+        let cursor_offset = CharOffset::from(cursor_gap.as_usize().saturating_sub(1));
+        let row = self.char_cell_visual_row_range(cursor_offset, ctx)?;
+        if row.start >= cursor_offset {
+            return None;
+        }
+        Some(self.delete_range_returning_text(row.start + 1..cursor_gap, ctx))
+    }
+
+    /// The primary cursor as a 1-indexed gap offset.
+    fn primary_cursor_gap(&self, ctx: &impl ModelAsRef) -> CharOffset {
+        *self.selection.as_ref(ctx).cursors(ctx).first()
+    }
+
+    /// The soft-wrapped visual row containing 0-based `cursor_offset`, as
+    /// 0-based character offsets; `None` outside char-cell (TUI) mode.
+    fn char_cell_visual_row_range(
+        &self,
+        cursor_offset: CharOffset,
+        ctx: &impl ModelAsRef,
+    ) -> Option<Range<CharOffset>> {
+        let render = self.render_state.as_ref(ctx);
+        Some(render.char_cell()?.visual_row_char_range(cursor_offset))
+    }
+
+    /// Deletes `range` (1-indexed gap offsets) as a user edit, returning the
+    /// deleted text.
+    fn delete_range_returning_text(
+        &mut self,
+        range: Range<CharOffset>,
+        ctx: &mut ModelContext<Self>,
+    ) -> String {
+        let deleted = self
+            .content
+            .as_ref(ctx)
+            .text_in_range(range.clone())
+            .into_string();
+        let selection_model = self.selection_model.clone();
+        self.update_content(
+            |mut content, ctx| {
+                content.apply_edit(
+                    BufferEditAction::Delete(vec1![range]),
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        deleted
     }
 
     pub fn reset_content(&mut self, state: InitialBufferState, ctx: &mut ModelContext<Self>) {

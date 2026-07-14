@@ -17,6 +17,7 @@ use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_errors::report_error;
 use wgpu::rwh::HasDisplayHandle;
 use wgpu::{AdapterInfo, CompositeAlphaMode};
 #[cfg(windows)]
@@ -130,7 +131,7 @@ impl WindowManager {
             x11_manager: match x11::X11Manager::new() {
                 Ok(x11_manager) => Some(x11_manager),
                 Err(err) => {
-                    log::error!("error creating connection to Xorg server: {err:?}");
+                    report_error!(err.context("error creating connection to Xorg server"));
                     None
                 }
             },
@@ -843,7 +844,7 @@ impl Window {
         }
 
         let Some(scene) = scene.clone() else {
-            log::error!(
+            report_error!(
                 "A redraw of the window was requested but no scene was available to render"
             );
             return Ok(());
@@ -946,7 +947,7 @@ impl Window {
         {
             Ok(resources) => resources,
             Err(err) => {
-                log::error!("{err:#}");
+                report_error!(err.context("Failed to create window resources"));
                 return;
             }
         };
@@ -1473,7 +1474,7 @@ fn create_window(
             // This differs from `visible` which is not composited.
             // The window is uncloaked after the drawing the first frame.
             if let Err(e) = window.set_cloaked(true) {
-                log::error!("Failed to mark window as cloaked: {e:#?}");
+                report_error!(anyhow::Error::new(e).context("Failed to mark window as cloaked"));
             };
 
             if let Some(adjustment) = maybe_adjust_window_vertically(window) {
@@ -1511,7 +1512,9 @@ fn create_window(
                         log::info!("Rounded window corners not supported on Windows 10");
                     }
                     _ => {
-                        log::error!("Error setting rounded window corners: {err:#}");
+                        report_error!(
+                            anyhow::Error::new(err).context("Error setting rounded window corners")
+                        );
                     }
                 }
             }

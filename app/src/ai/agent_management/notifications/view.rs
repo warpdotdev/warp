@@ -1,4 +1,5 @@
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warpui::elements::new_scrollable::{ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
@@ -231,7 +232,10 @@ impl NotificationMailboxView {
         };
 
         let Some(mouse_state) = self.notification_mouse_states.get(index).cloned() else {
-            log::error!("missing mouse state for notification item at index {index}");
+            report_error!(
+                "missing mouse state for notification item",
+                extra: { "index" => %index }
+            );
             return Empty::new().finish();
         };
 

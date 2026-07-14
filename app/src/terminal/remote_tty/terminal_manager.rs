@@ -16,6 +16,7 @@ use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::remote_tty::event_loop::EventLoop;
 use crate::terminal::shell::{ShellName, ShellType};
+use crate::terminal::terminal_manager::BlockSpacing;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, wire_up_pty_controller_with_surface,
@@ -86,6 +87,7 @@ impl TerminalManager {
                 display_name: ShellName::blank(),
                 shell_type: ShellType::Zsh,
             },
+            BlockSpacing::for_gui(ctx),
             ctx,
         );
 

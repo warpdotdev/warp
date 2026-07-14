@@ -1427,6 +1427,51 @@ fn test_link_at_offset_uses_cached_cell_links() {
     assert_eq!(table.link_at_offset(CharOffset::from(3)), None);
 }
 
+#[test]
+fn test_first_hidden_section_line_range() {
+    let mut render_state = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        160.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    // A hidden section spanning 87 lines at the top of the file, followed by a
+    // visible paragraph. Because the hidden block is first, its start line is 0,
+    // so its full range is 0..87 — exactly what a bar double-click would expand.
+    content.push(BlockItem::Hidden(HiddenBlockConfig::new(
+        LineCount(87),
+        CharOffset::from(3066),
+        BlockLocation::Start,
+    )));
+    content.push(mock_paragraph(18.2, 0., 10));
+    render_state.set_content(content);
+
+    assert_eq!(
+        render_state.content().first_hidden_section_line_range(),
+        Some(LineCount(0)..LineCount(87)),
+        "first hidden section should resolve to its full line range"
+    );
+}
+
+#[test]
+fn test_first_hidden_section_line_range_none_without_hidden_sections() {
+    let mut render_state = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        160.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    content.push(mock_paragraph(18.2, 0., 10));
+    content.push(mock_paragraph(18.2, 0., 6));
+    render_state.set_content(content);
+
+    assert_eq!(
+        render_state.content().first_hidden_section_line_range(),
+        None,
+        "a diff with no hidden sections should resolve to None"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CharCell (TUI) layout helper tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1435,7 +1480,7 @@ mod char_cell {
     use string_offset::CharOffset;
 
     use crate::render::model::{
-        ColumnUnit, LineCount, SoftWrapPoint, char_cell_display_width, char_cell_line_row_starts,
+        ColumnUnit, LineCount, SoftWrapPoint, char_cell_display_widths, char_cell_line_row_starts,
         char_cell_max_line, char_cell_offset_to_softwrap_point, char_cell_softwrap_point_to_offset,
     };
 
@@ -1444,10 +1489,7 @@ mod char_cell {
     /// char-cell layout inputs without a full `RenderState`. `char_widths` holds
     /// the per-char display width (the derived data the layout actually needs).
     fn line_starts_for(text: &str) -> (Vec<usize>, Vec<u8>) {
-        let char_widths: Vec<u8> = text
-            .chars()
-            .map(|c| char_cell_display_width(c) as u8)
-            .collect();
+        let char_widths = char_cell_display_widths(text);
         let mut starts = vec![0_usize];
         for (i, ch) in text.chars().enumerate() {
             if ch == '\n' {
@@ -1608,11 +1650,27 @@ mod char_cell {
 
     #[test]
     fn display_width_basic() {
-        assert_eq!(char_cell_display_width('a'), 1);
-        // CJK ideographs are double-width.
-        assert_eq!(char_cell_display_width('你'), 2);
-        // A combining acute accent is zero-width.
-        assert_eq!(char_cell_display_width('\u{0301}'), 0);
+        assert_eq!(char_cell_display_widths("a"), vec![1]);
+        assert_eq!(char_cell_display_widths("你"), vec![2]);
+        assert_eq!(char_cell_display_widths("\u{0301}"), vec![0]);
+    }
+
+    #[test]
+    fn display_widths_preserve_char_offsets_for_graphemes() {
+        assert_eq!(char_cell_display_widths("\u{2328}\u{fe0f}"), vec![2, 0]);
+        assert_eq!(char_cell_display_widths("👨‍👩‍👧‍👦"), vec![2, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(char_cell_display_widths("🇺🇸"), vec![2, 0]);
+    }
+
+    #[test]
+    fn grapheme_wraps_as_one_display_unit() {
+        let (starts, widths) = line_starts_for("abc\u{2328}\u{fe0f}");
+        let before_emoji =
+            char_cell_offset_to_softwrap_point(CharOffset::from(3), &starts, &widths, 4);
+        let after_emoji =
+            char_cell_offset_to_softwrap_point(CharOffset::from(5), &starts, &widths, 4);
+        assert_eq!(before_emoji, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
+        assert_eq!(after_emoji, SoftWrapPoint::new(1, ColumnUnit::Chars(2)));
     }
 
     #[test]
@@ -1660,12 +1718,56 @@ mod char_cell {
     #[test]
     fn line_row_starts_breaks_on_wide_chars() {
         // width 4, "你好你好": two wide chars per row → break before index 2.
-        let widths: Vec<u8> = "你好你好"
-            .chars()
-            .map(|c| char_cell_display_width(c) as u8)
-            .collect();
+        let widths = char_cell_display_widths("你好你好");
         assert_eq!(char_cell_line_row_starts(&widths, 4), vec![0, 2]);
         // width 0 disables wrapping.
         assert_eq!(char_cell_line_row_starts(&widths, 0), vec![0]);
+    }
+}
+
+mod char_cell_scroll {
+    use string_offset::CharOffset;
+
+    use crate::render::model::CharCellState;
+
+    /// A 4-column state with five one-row logical lines ("l0".."l4").
+    fn five_row_state() -> CharCellState {
+        let state = CharCellState::new(4, None);
+        state.update_text("l0\nl1\nl2\nl3\nl4");
+        state
+    }
+
+    #[test]
+    fn scroll_by_clamps_to_scrollable_range() {
+        let state = five_row_state();
+        // 5 rows, 2 visible → max scroll 3.
+        state.scroll_by(-5, 2, CharOffset::zero(), &[]);
+        assert_eq!(state.scroll_offset(), 0);
+        state.scroll_by(2, 2, CharOffset::zero(), &[]);
+        assert_eq!(state.scroll_offset(), 2);
+        state.scroll_by(100, 2, CharOffset::zero(), &[]);
+        assert_eq!(state.scroll_offset(), 3);
+    }
+
+    #[test]
+    fn follow_cursor_moves_minimally_and_clamps_stale_offsets() {
+        let state = five_row_state();
+        // Cursor on the last row (char 12 = start of "l4") with a 2-row
+        // viewport scrolls just enough to keep it at the bottom.
+        state.follow_cursor(CharOffset::from(12), 2, &[]);
+        assert_eq!(state.scroll_offset(), 3);
+        // A cursor already visible does not move the viewport.
+        state.follow_cursor(CharOffset::from(9), 2, &[]);
+        assert_eq!(state.scroll_offset(), 3);
+        // Cursor back on row 0 scrolls the viewport to the top.
+        state.follow_cursor(CharOffset::zero(), 2, &[]);
+        assert_eq!(state.scroll_offset(), 0);
+
+        // Content shrinks while scrolled to the bottom; the stale offset is
+        // clamped before following the cursor.
+        state.scroll_by(3, 2, CharOffset::zero(), &[]);
+        state.update_text("l0\nl1");
+        state.follow_cursor(CharOffset::zero(), 2, &[]);
+        assert_eq!(state.scroll_offset(), 0);
     }
 }

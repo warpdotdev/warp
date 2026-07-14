@@ -7,10 +7,11 @@ use ai::index::full_source_code_embedding::manager::{
 };
 use ai::index::full_source_code_embedding::RetrievalID;
 use ai::index::locations::CodeContextLocation;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as _};
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 #[cfg(not(target_family = "wasm"))]
@@ -20,7 +21,7 @@ use crate::ai::blocklist::SessionContext;
 use crate::ai::get_relevant_files::api::{FileContext as FileContextRequest, GetRelevantFiles};
 use crate::ai::outline::{OutlineStatus, RepoOutlines};
 use crate::server::server_api::{AIApiError, ServerApiProvider};
-use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 #[cfg_attr(not(target_family = "wasm"), path = "remote_search/native.rs")]
 #[cfg_attr(target_family = "wasm", path = "remote_search/wasm.rs")]
 mod remote_search;
@@ -94,10 +95,11 @@ impl RequestHandle {
                 start_time: _,
             } => {
                 CodebaseIndexManager::handle(ctx).update(ctx, |index_manager, ctx| {
-                    if let Err(err) =
-                        index_manager.abort_retrieval_request(repo_path, retrieval_id.clone(), ctx)
+                    if let Err(err) = index_manager
+                        .abort_retrieval_request(repo_path, retrieval_id.clone(), ctx)
+                        .context("Failed to abort file retrieval request")
                     {
-                        log::error!("Failed to abort file retrieval request: {err:?}");
+                        report_error!(err);
                     }
                 });
             }

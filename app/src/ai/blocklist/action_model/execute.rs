@@ -73,7 +73,6 @@ use upload_artifact::UploadArtifactExecutor;
 use use_computer::UseComputerExecutor;
 use wait_for_events::WaitForEventsExecutor;
 use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use warp_files::{FileModel, TextFileReadResult};
 #[cfg(feature = "local_fs")]
@@ -668,14 +667,12 @@ impl BlocklistAIActionExecutor {
                 comments,
                 base_branch,
             } => {
-                if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-                    ctx.emit(BlocklistAIActionExecutorEvent::InsertCodeReviewComments {
-                        action_id: action.id,
-                        repo_path: repo_path.clone(),
-                        comments: comments.clone(),
-                        base_branch: base_branch.clone(),
-                    });
-                }
+                ctx.emit(BlocklistAIActionExecutorEvent::InsertCodeReviewComments {
+                    action_id: action.id,
+                    repo_path: repo_path.clone(),
+                    comments: comments.clone(),
+                    base_branch: base_branch.clone(),
+                });
                 ActionExecution::<()>::Sync(AIAgentActionResultType::InsertReviewComments(
                     InsertReviewCommentsResult::Success {
                         repo_path: repo_path.to_string_lossy().to_string(),
@@ -892,7 +889,7 @@ impl BlocklistAIActionExecutor {
                 AIAgentActionType::StartRecording { .. }
             ) {
                 RecordingController::handle(ctx).update(ctx, |controller, _| {
-                    controller.abort_start();
+                    controller.abort_start(running.conversation_id);
                 });
             } else if let AIAgentActionType::WaitForEvents { tool_call_id, .. } =
                 &running.action.action
@@ -914,6 +911,28 @@ impl BlocklistAIActionExecutor {
                 cancellation_reason: reason,
             });
         }
+    }
+
+    /// Drops executor-held per-action state now that the action has reached a
+    /// terminal result. Called from the action model's terminal-result choke
+    /// point (`handle_action_result`), which every outcome — success, failure,
+    /// or cancellation via any path — funnels through.
+    ///
+    /// Participation is per-executor opt-in: an executor may only be added
+    /// here if its per-action state is never read after the action's terminal
+    /// result. Prepared file edits qualify (consumed by execute, dead
+    /// otherwise). Do NOT add state that outlives completion, e.g. the
+    /// search-codebase executor's root repo paths (read at render time after
+    /// the action finishes) or long-running-command state (the command
+    /// outlives its action's snapshot result).
+    pub(super) fn discard_action_state(
+        &mut self,
+        action_id: &AIAgentActionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.request_file_edits_executor.update(ctx, |executor, _| {
+            executor.discard_pending(action_id);
+        });
     }
 
     pub fn cancel_all_running_async_actions_for_conversation(

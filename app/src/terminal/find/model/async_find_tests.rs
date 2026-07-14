@@ -27,6 +27,7 @@ fn make_match(row: u64) -> AbsoluteMatch {
     AbsoluteMatch {
         start: AbsolutePoint { row, col: 0 },
         end: AbsolutePoint { row, col: 5 },
+        is_filtered: false,
     }
 }
 
@@ -38,6 +39,7 @@ fn make_match_at(row: u64, start_col: usize, end_col: usize) -> AbsoluteMatch {
             col: start_col,
         },
         end: AbsolutePoint { row, col: end_col },
+        is_filtered: false,
     }
 }
 

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use settings::{Setting, ToggleableSetting};
+use warp_errors::report_if_error;
 use warpui::elements::{
     Container, CrossAxisAlignment, Flex, MainAxisAlignment, MouseStateHandle, ParentElement, Text,
 };
@@ -14,7 +15,6 @@ use warpui::{
 
 use crate::appearance::Appearance;
 use crate::editor::{self, EditorView, SingleLineEditorOptions, TextOptions};
-use crate::report_if_error;
 use crate::settings_view::features_page::render_group;
 use crate::settings_view::settings_page::{render_body_item, LocalOnlyIconState, ToggleState};
 use crate::undo_close::settings::UndoCloseEnabled;

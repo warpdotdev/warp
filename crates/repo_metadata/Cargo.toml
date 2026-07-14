@@ -23,6 +23,7 @@ walkdir.workspace = true
 itertools.workspace = true
 warpui_core.workspace = true
 warp_core.workspace = true
+warp_errors.workspace = true
 warp_util.workspace = true
 ignore = "0.4.23"
 once_cell.workspace = true

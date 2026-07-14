@@ -60,7 +60,6 @@ use super::view::{
 };
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
 use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
-use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
 use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
 use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
 use crate::appearance::Appearance;
@@ -74,7 +73,7 @@ use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scrol
 use crate::terminal::block_list_viewport::AutoscrollBehavior;
 use crate::terminal::blockgrid_renderer::BlockGridParams;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
-use crate::terminal::model::block::{Block, BlockSection};
+use crate::terminal::model::block::{Block, BlockSection, TranscriptScope};
 use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, TotalIndex,
 };
@@ -2159,7 +2158,7 @@ impl BlockListElement {
                 {
                     if block_list
                         .block_at(block_index)
-                        .map(|block| block.should_hide_block(block_list.agent_view_state()))
+                        .map(|block| block.should_hide_block(block_list.transcript_scope()))
                         .unwrap_or(true)
                     {
                         any_hidden = true;
@@ -2365,13 +2364,12 @@ impl BlockListElement {
         block_borders_enabled: bool,
         snackbar_header: &Option<SnackbarHeader>,
         ai_render_context: &BlocklistAIRenderContext,
-        agent_view_state: &AgentViewState,
+        transcript_scope: &TranscriptScope,
         ctx: &mut PaintContext,
-        app: &AppContext,
     ) {
-        let block_height = block.height(agent_view_state).as_f64() as f32 * cell_size.y();
+        let block_height = block.height(transcript_scope).as_f64() as f32 * cell_size.y();
         if block.is_restored()
-            && (!FeatureFlag::AgentView.is_enabled() || !agent_view_state.is_fullscreen())
+            && (!FeatureFlag::AgentView.is_enabled() || !transcript_scope.is_conversation())
         {
             ctx.scene
                 .draw_rect_with_hit_recording(RectF::new(
@@ -2379,16 +2377,6 @@ impl BlockListElement {
                     Vector2F::new(bounds.width(), block_height),
                 ))
                 .with_background(warp_theme.restored_blocks_overlay());
-        }
-
-        // Update the background for the current active long running command when the inline agent view is active.
-        if agent_view_state.is_inline() && block.is_active_and_long_running() {
-            ctx.scene
-                .draw_rect_with_hit_recording(RectF::new(
-                    grid_origin,
-                    Vector2F::new(bounds.width(), block_height),
-                ))
-                .with_background(agent_view_bg_fill(app));
         }
 
         let mut did_render_ai_stripe = false;
@@ -2482,7 +2470,7 @@ impl BlockListElement {
         ai_render_context: &BlocklistAIRenderContext,
         cursor_hint_text: Option<&mut Box<dyn Element>>,
         image_metadata: &HashMap<u32, StoredImageMetadata>,
-        agent_view_state: &AgentViewState,
+        transcript_scope: &TranscriptScope,
         ctx: &mut PaintContext,
         app: &AppContext,
     ) {
@@ -2496,9 +2484,8 @@ impl BlockListElement {
             block_borders_enabled,
             snackbar_header,
             ai_render_context,
-            agent_view_state,
+            transcript_scope,
             ctx,
-            app,
         );
 
         let cell_size_height = block_grid_params.grid_render_params.cell_size.y();
@@ -3787,7 +3774,7 @@ impl Element for BlockListElement {
         }
 
         let mut cli_subagent_views_to_paint = vec![];
-        let agent_view_state = model.block_list().agent_view_state();
+        let transcript_scope = model.block_list().transcript_scope();
 
         let items = self
             .visible_items
@@ -3841,7 +3828,7 @@ impl Element for BlockListElement {
 
                     // TODO(vorporeal): should probably use `Pixels` here
                     let block_pixel_height =
-                        block.height(agent_view_state).as_f64() as f32 * cell_size.y();
+                        block.height(transcript_scope).as_f64() as f32 * cell_size.y();
 
                     let block_bottom_y = grid_origin.y() + block_pixel_height;
                     let selection_bottom_y = snackbar_header
@@ -3864,7 +3851,7 @@ impl Element for BlockListElement {
                         );
 
                         let can_be_ai_context = self.ai_render_context.borrow().is_ai_input_enabled
-                            && block.can_be_ai_context(agent_view_state);
+                            && block.can_be_ai_context(transcript_scope);
 
                         ctx.scene
                             .draw_rect_with_hit_recording(RectF::new(
@@ -4065,7 +4052,7 @@ impl Element for BlockListElement {
                         self.ai_render_context.borrow().deref(),
                         self.cursor_hint_text_element.as_mut(),
                         &model.image_id_to_metadata,
-                        agent_view_state,
+                        transcript_scope,
                         ctx,
                         app,
                     );

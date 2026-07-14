@@ -7,6 +7,7 @@ use anyhow::Result;
 use futures::stream::{AbortHandle, Abortable};
 use futures::FutureExt;
 use thiserror::Error;
+use warp_errors::report_error;
 
 use crate::accessibility::AccessibilityContent;
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
@@ -300,7 +301,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
 
         async move {
             if rx.await.is_err() {
-                log::error!("sender unexpectedly dropped before receiver");
+                report_error!("sender unexpectedly dropped before receiver");
             }
         }
     }
@@ -445,7 +446,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
                 let abortable = Abortable::new(future, abort_registration);
                 let result = abortable.await;
                 if tx.send(result).is_err() {
-                    log::error!("Error sending background task result to main thread",);
+                    report_error!("Error sending background task result to main thread");
                 }
             }))
             .detach();
@@ -454,7 +455,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
             let output = match rx_result {
                 Ok(output) => output,
                 Err(_) => {
-                    log::error!("sender unexpectedly dropped before receiver");
+                    report_error!("sender unexpectedly dropped before receiver");
                     on_abort(model, ctx);
                     return;
                 }
@@ -541,7 +542,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         SpawnedLocalStream::new(
             async move {
                 if rx.await.is_err() {
-                    log::error!("sender unexpectedly dropped before receiver");
+                    report_error!("sender unexpectedly dropped before receiver");
                 }
             }
             .boxed_local(),

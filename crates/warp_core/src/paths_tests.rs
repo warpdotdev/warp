@@ -97,6 +97,19 @@ fn test_state_dir_path() {
 }
 
 #[test]
+fn test_tui_state_dir_is_tui_subdir_of_gui_state_base() {
+    let tui_dir = tui_state_dir();
+    assert_eq!(tui_dir.file_name(), Some(std::ffi::OsStr::new("tui")));
+
+    // The TUI state dir must be a direct `tui` child of the same base
+    // directory that holds the GUI's SQLite database (the secure state dir
+    // when available, otherwise the plain state dir), so the two front-ends
+    // keep sibling — never shared — databases.
+    let gui_state_base = secure_state_dir().unwrap_or_else(state_dir);
+    assert_eq!(tui_dir.parent(), Some(gui_state_base.as_path()));
+}
+
+#[test]
 fn test_project_path_for_warp_app_id() {
     let project_dirs = project_dirs_for_app_id(AppId::new("dev", "warp", "Warp"), None)
         .expect("should be able to compute project dirs");

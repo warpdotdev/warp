@@ -10,7 +10,7 @@ use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::ai::blocklist::agent_view::{agent_view_bg_color, AgentViewController};
+use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::inline_action::inline_action_icons;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
@@ -171,7 +171,7 @@ impl View for CloudModeSetupTextBlock {
         let icon_size = inline_action_icons::icon_size(app);
         let text_color = appearance
             .theme()
-            .disabled_text_color(agent_view_bg_color(app).into())
+            .disabled_text_color(appearance.theme().background())
             .into_solid();
         let expandable = Hoverable::new(self.mouse_state.clone(), move |_is_hovered| {
             Flex::row()

@@ -5,6 +5,7 @@ use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use itertools::Itertools;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
@@ -484,7 +485,7 @@ impl SearchCodebaseExecutor {
             ..
         } = input.action
         else {
-            log::error!("Expected a SearchCodebase action when preprocessing action");
+            report_error!("Expected a SearchCodebase action when preprocessing action");
             return futures::future::ready(()).boxed();
         };
 

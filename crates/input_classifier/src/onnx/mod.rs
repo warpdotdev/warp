@@ -9,6 +9,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use rust_embed::RustEmbed;
 use warp_completer::ParsedTokensSnapshot;
+use warp_errors::report_error;
 
 use crate::parser::parse_query_into_tokens;
 use crate::util::{
@@ -181,14 +182,14 @@ impl InputClassifier for OnnxClassifier {
                     Ok(result)
                 }
                 Err(e) => {
-                    log::error!("Failed to run inference (took {duration_ms:.2} ms): {e:#}");
+                    report_error!(&e, extra: { "duration_ms" => duration_ms });
                     Err(e)
                 }
             }
         }) {
             Ok(result) => result,
             Err(_) => {
-                log::error!(
+                report_error!(
                     "Caught panic while running inference; falling back to heuristic classifier."
                 );
                 self.has_panicked.on_panic();

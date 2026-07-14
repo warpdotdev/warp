@@ -141,7 +141,10 @@ pub struct ContextWindowSegment {
     pub token_count: i32,
 }
 
-fn convert_token_usage(
+/// Merges warp and byok per-model token usage rows into the persistence-layer
+/// `ModelTokenUsage` shape, preserving per-category breakdowns. Shared by the
+/// usage-history query and the conversation restore path (`crate::ai`).
+pub(crate) fn convert_token_usage(
     warp_token_usage: &[TokenUsage],
     byok_token_usage: &[TokenUsage],
 ) -> Vec<persistence::model::ModelTokenUsage> {

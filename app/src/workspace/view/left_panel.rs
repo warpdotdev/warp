@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
+use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
     resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide,
@@ -210,7 +211,7 @@ impl LeftPanelView {
         {
             Some(handle) => handle,
             None => {
-                log::error!("Couldn't retrieve left panel resizable state handle.");
+                report_error!("Couldn't retrieve left panel resizable state handle.");
                 resizable_state_handle(600.0)
             }
         };

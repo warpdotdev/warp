@@ -140,14 +140,6 @@ define_settings_group!(GeneralSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     },
-    free_tier_limit_hit_modal_dismissed: FreeTierLimitHitModalDismissed {
-        type: bool,
-        default: false,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
-        private: true,
-    },
     build_plan_migration_modal_dismissed: BuildPlanMigrationModalDismissed {
         type: bool,
         default: false,

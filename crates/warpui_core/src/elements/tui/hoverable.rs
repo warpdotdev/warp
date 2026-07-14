@@ -17,17 +17,19 @@
 //! against this element's area; a hover transition is recorded on the handle
 //! and queues a notification so the owning view re-renders. Mouse moves are
 //! never consumed, so sibling hoverables observe their own transitions from
-//! the same event. Other events are offered to the child first; an unconsumed
-//! [`LeftMouseDown`](TuiEvent::LeftMouseDown) inside the area runs the click
-//! handler and is reported handled. (Unlike the GUI's press-then-release click
-//! pairing, a click here is simply a mouse-down within the area; hover delays,
-//! click counts, and the other [`MouseState`] fields are unused.)
+//! the same event. Other events are offered to the child first; clicks use the
+//! GUI's press-then-release pairing: an unconsumed
+//! [`LeftMouseDown`](TuiEvent::LeftMouseDown) inside the area arms a pending
+//! click (recorded on the shared state, so [`MouseState::is_clicked`] styling
+//! works) and is consumed; the following [`LeftMouseUp`](TuiEvent::LeftMouseUp)
+//! disarms it, running the click handler only when released inside the area.
+//! (Hover delays and the other [`MouseState`] fields are unused.)
 
 use std::sync::MutexGuard;
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiPaintContext, TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
 use crate::elements::{MouseState, MouseStateHandle};
 use crate::AppContext;
@@ -50,8 +52,9 @@ impl TuiHoverable {
         }
     }
 
-    /// Registers `callback` to run when a `LeftMouseDown` within this element's
-    /// area reaches this element unhandled by the child.
+    /// Registers `callback` to run on a left click — a `LeftMouseDown` that
+    /// reaches this element unhandled by the child, followed by a
+    /// `LeftMouseUp`, both within this element's area.
     pub fn on_click(
         mut self,
         callback: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
@@ -76,11 +79,11 @@ impl TuiElement for TuiHoverable {
         self.child.layout(constraint, ctx, app)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
         self.child.render(area, buffer, ctx);
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
         self.child.cursor_position(area, ctx)
     }
 
@@ -115,16 +118,32 @@ impl TuiElement for TuiHoverable {
             return true;
         }
 
-        if let (TuiEvent::LeftMouseDown { position, .. }, Some(on_click)) =
-            (event, self.on_click.as_mut())
-        {
-            if area.contains_point(*position) {
-                on_click(event_ctx, app);
-                return true;
+        match event {
+            // Press inside the area: arm the pending click.
+            TuiEvent::LeftMouseDown {
+                position,
+                click_count,
+                ..
+            } if self.on_click.is_some() && area.contains_point(*position) => {
+                self.state().set_click_count(Some(*click_count));
+                event_ctx.notify();
+                true
             }
+            // Release while armed: disarm, and fire only when released inside
+            // the area (a release elsewhere cancels the click, as in the GUI).
+            TuiEvent::LeftMouseUp { position, .. } if self.state().is_clicked() => {
+                self.state().set_click_count(None);
+                event_ctx.notify();
+                if area.contains_point(*position) {
+                    if let Some(on_click) = self.on_click.as_mut() {
+                        on_click(event_ctx, app);
+                    }
+                    return true;
+                }
+                false
+            }
+            _ => false,
         }
-
-        false
     }
 }
 

@@ -56,6 +56,19 @@ impl LineDiffContent {
             .to_string()
     }
 
+    /// The source-line text for a comment imported from a provider diff hunk.
+    ///
+    /// Unlike [`Self::original_text`], this strips exactly one leading
+    /// unified-diff marker — `+`, `-`, or the space that context (unchanged)
+    /// lines carry — recovering the raw file line. It must only be used for
+    /// imported comments, whose `content` is always a diff line with exactly one
+    /// such prefix char; native comments store raw text (real leading
+    /// indentation is significant) and must use [`Self::original_text`] instead.
+    pub(crate) fn imported_original_text(&self) -> String {
+        let s = self.content.trim_end_matches('\n');
+        s.strip_prefix(['+', '-', ' ']).unwrap_or(s).to_string()
+    }
+
     pub(crate) fn from_content(diff_line: &str) -> Self {
         let lines_added = LineCount::from(if diff_line.starts_with('+') { 1 } else { 0 });
         let lines_removed = LineCount::from(if diff_line.starts_with('-') { 1 } else { 0 });

@@ -6,7 +6,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 use futures::StreamExt;
-use warp_core::errors::AnyhowErrorExt as _;
+use warp_errors::AnyhowErrorExt as _;
 
 use super::*;
 use crate::ai::agent_events::driver::agent_event_failure_should_log_error;
