@@ -152,6 +152,9 @@ pub enum ExecutionProfileEditorViewAction {
     SetBaseModel {
         id: LLMId,
     },
+    SetOrchestrationModel {
+        id: LLMId,
+    },
     /// Fired continuously while the user drags the context window slider.
     ContextWindowSliderDragged {
         value: u32,
@@ -241,6 +244,7 @@ pub struct ExecutionProfileEditorView {
     focus_handle: Option<PaneFocusHandle>,
     clipped_scroll_state: ClippedScrollStateHandle,
     base_model_dropdown: ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
+    orchestration_model_dropdown: ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
     context_window_slider_state: SliderStateHandle,
     context_window_editor: ViewHandle<EditorView>,
     last_synced_context_window_editor_value: Option<u32>,
@@ -536,6 +540,11 @@ impl ExecutionProfileEditorView {
             dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
             dropdown
         });
+        let orchestration_model_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
+            dropdown
+        });
 
         // Initialize the context window editor buffer with the profile's
         // persisted limit (or the active model's max as a sensible default).
@@ -648,6 +657,7 @@ impl ExecutionProfileEditorView {
             focus_handle: None,
             clipped_scroll_state: Default::default(),
             base_model_dropdown,
+            orchestration_model_dropdown,
             context_window_slider_state,
             context_window_editor,
             last_synced_context_window_editor_value,
@@ -761,6 +771,21 @@ impl ExecutionProfileEditorView {
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
+                    Self::refresh_filterable_model_dropdown(
+                        &me.orchestration_model_dropdown,
+                        current_permissions.orchestration_model.clone(),
+                        |prefs, app| prefs.get_orchestration_llm_choices(app).collect_vec(),
+                        |id| ExecutionProfileEditorViewAction::SetOrchestrationModel { id },
+                        |prefs, app| {
+                            prefs
+                                .get_default_orchestration_model(app)
+                                .unwrap_or_else(|| prefs.get_default_base_model(app))
+                                .id
+                                .clone()
+                        },
+                        &me.upgrade_footer_mouse_state,
+                        ctx,
+                    );
                     Self::refresh_coding_model_dropdown(
                         &me.coding_model_dropdown,
                         current_permissions.coding_model.clone(),
@@ -821,6 +846,21 @@ impl ExecutionProfileEditorView {
                     |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
                     |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
                     |prefs, app| prefs.get_default_base_model(app).id.clone(),
+                    &me.upgrade_footer_mouse_state,
+                    ctx,
+                );
+                Self::refresh_filterable_model_dropdown(
+                    &me.orchestration_model_dropdown,
+                    current_permissions.orchestration_model.clone(),
+                    |prefs, app| prefs.get_orchestration_llm_choices(app).collect_vec(),
+                    |id| ExecutionProfileEditorViewAction::SetOrchestrationModel { id },
+                    |prefs, app| {
+                        prefs
+                            .get_default_orchestration_model(app)
+                            .unwrap_or_else(|| prefs.get_default_base_model(app))
+                            .id
+                            .clone()
+                    },
                     &me.upgrade_footer_mouse_state,
                     ctx,
                 );
@@ -937,6 +977,21 @@ impl ExecutionProfileEditorView {
             |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
             |prefs, app| prefs.get_default_base_model(app).id.clone(),
+            &self.upgrade_footer_mouse_state,
+            ctx,
+        );
+        Self::refresh_filterable_model_dropdown(
+            &self.orchestration_model_dropdown,
+            current_permissions.orchestration_model.clone(),
+            |prefs, app| prefs.get_orchestration_llm_choices(app).collect_vec(),
+            |id| ExecutionProfileEditorViewAction::SetOrchestrationModel { id },
+            |prefs, app| {
+                prefs
+                    .get_default_orchestration_model(app)
+                    .unwrap_or_else(|| prefs.get_default_base_model(app))
+                    .id
+                    .clone()
+            },
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -1571,6 +1626,12 @@ impl TypedActionView for ExecutionProfileEditorView {
                     profiles_model.set_context_window_limit(self.profile_id, None, ctx);
                 });
                 self.sync_context_window_editor(ctx, true);
+                ctx.notify();
+            }
+            ExecutionProfileEditorViewAction::SetOrchestrationModel { id } => {
+                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
+                    profiles_model.set_orchestration_model(self.profile_id, Some(id.clone()), ctx);
+                });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::ContextWindowSliderDragged { value } => {

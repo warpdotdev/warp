@@ -19,13 +19,16 @@ use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentSaveStatus};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
+use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::appearance::Appearance;
+use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::PrivacySettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -54,6 +57,294 @@ fn with_plan_id(mut action: AIAgentAction, plan_id: &str) -> AIAgentAction {
     };
     request.plan_id = plan_id.to_string();
     action
+}
+
+fn set_orchestration_profile_model(app: &mut App, model_id: &str) {
+    let model_id = LLMId::from(model_id);
+    LLMPreferences::handle(app).update(app, |preferences, ctx| {
+        preferences.update_feature_model_choices(
+            Ok(ModelsByFeature {
+                agent_mode: AvailableLLMs::new(
+                    LLMId::from("auto"),
+                    [
+                        LLMInfo::new_for_test("auto"),
+                        LLMInfo::new_for_test(model_id.as_str()),
+                    ],
+                    None,
+                )
+                .expect("test model choices should be valid"),
+                ..Default::default()
+            }),
+            ctx,
+        );
+    });
+    AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+        let profile_id = *profiles.active_profile(None, ctx).id();
+        profiles.set_orchestration_model(profile_id, Some(model_id), ctx);
+    });
+}
+
+#[test]
+fn executor_defaults_omitted_oz_model_from_active_profile() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_orchestration_profile_model(&mut app, "profile-router");
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("oz").action
+        else {
+            panic!("expected run_agents action");
+        };
+
+        state.executor.update(&mut app, |executor, ctx| {
+            populate_default_orchestration_model_for_execution(
+                &mut request,
+                executor.terminal_view_id,
+                ctx,
+            );
+        });
+
+        assert_eq!(request.model_id, "profile-router");
+        let mode = run_agents_to_start_agent_mode(
+            &request.execution_mode,
+            &request.harness_type,
+            &request.model_id,
+            &request.skills,
+            None,
+            &request.agent_run_configs[0],
+        )
+        .expect("normalized request should map to a child launch");
+        assert!(matches!(
+            mode,
+            StartAgentExecutionMode::Remote { model_id, .. } if model_id == "profile-router"
+        ));
+    });
+}
+
+#[test]
+fn execute_fans_out_profile_router_to_every_oz_child_with_distinct_prompts() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_orchestration_profile_model(&mut app, "profile-router");
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        let mut action = remote_run_agents_action("oz");
+        let AIAgentActionType::RunAgents(request) = &mut action.action else {
+            panic!("expected run_agents action");
+        };
+        request.model_id.clear();
+        request.execution_mode = RunAgentsExecutionMode::Local;
+        request.base_prompt = "Shared orchestration context".to_string();
+        request.agent_run_configs = vec![
+            RunAgentsAgentRunConfig {
+                name: "researcher".to_string(),
+                prompt: "Investigate the parser".to_string(),
+                title: String::new(),
+            },
+            RunAgentsAgentRunConfig {
+                name: "tester".to_string(),
+                prompt: "Design regression coverage".to_string(),
+                title: String::new(),
+            },
+        ];
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+
+        for _ in 0..10 {
+            if captured.read(&app, |captured, _| captured.0.len()) == 2 {
+                break;
+            }
+            futures_lite::future::yield_now().await;
+        }
+
+        captured.read(&app, |captured, _| {
+            assert_eq!(captured.0.len(), 2);
+            assert_eq!(captured.0[0].name, "researcher");
+            assert_eq!(
+                captured.0[0].prompt,
+                "Shared orchestration context\n\nInvestigate the parser"
+            );
+            assert_eq!(captured.0[1].name, "tester");
+            assert_eq!(
+                captured.0[1].prompt,
+                "Shared orchestration context\n\nDesign regression coverage"
+            );
+            for request in &captured.0 {
+                assert_eq!(
+                    request.execution_mode,
+                    StartAgentExecutionMode::Local {
+                        harness_type: None,
+                        model_id: Some("profile-router".to_string()),
+                    }
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn executor_preserves_explicit_oz_model_over_profile_default() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_orchestration_profile_model(&mut app, "profile-router");
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("oz").action
+        else {
+            panic!("expected run_agents action");
+        };
+        request.model_id = "explicit-model".to_string();
+
+        state.executor.update(&mut app, |executor, ctx| {
+            populate_default_orchestration_model_for_execution(
+                &mut request,
+                executor.terminal_view_id,
+                ctx,
+            );
+        });
+
+        assert_eq!(request.model_id, "explicit-model");
+    });
+}
+
+#[test]
+fn executor_leaves_omitted_third_party_model_empty() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_orchestration_profile_model(&mut app, "profile-router");
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("claude").action
+        else {
+            panic!("expected run_agents action");
+        };
+
+        state.executor.update(&mut app, |executor, ctx| {
+            populate_default_orchestration_model_for_execution(
+                &mut request,
+                executor.terminal_view_id,
+                ctx,
+            );
+        });
+
+        assert!(request.model_id.is_empty());
+    });
+}
+
+#[test]
+fn executor_rejects_local_router_for_remote_oz() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("oz").action
+        else {
+            panic!("expected run_agents action");
+        };
+        request.model_id = "custom-router:local:private".to_string();
+
+        let error = state
+            .executor
+            .update(&mut app, |_, ctx| validate_request(&request, ctx))
+            .expect_err("local router should not be cloud-runnable");
+
+        assert!(error.contains("only available locally"));
+    });
+}
+
+#[test]
+fn executor_allows_local_router_for_local_oz() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("oz").action
+        else {
+            panic!("expected run_agents action");
+        };
+        request.execution_mode = RunAgentsExecutionMode::Local;
+        request.model_id = "custom-router:local:private".to_string();
+
+        state.executor.update(&mut app, |_, ctx| {
+            validate_request(&request, ctx).expect("local Oz should accept local routers");
+        });
+    });
+}
+
+#[test]
+fn executor_does_not_apply_oz_validation_to_third_party_model_namespace() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("claude").action
+        else {
+            panic!("expected run_agents action");
+        };
+        request.model_id = "custom-router:local:third-party-model-name".to_string();
+
+        state.executor.update(&mut app, |_, ctx| {
+            validate_request(&request, ctx)
+                .expect("third-party harness model namespaces should remain untouched");
+        });
+    });
+}
+
+#[test]
+fn executor_keeps_approved_model_over_profile_and_explicit_models() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_orchestration_profile_model(&mut app, "profile-router");
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("oz").action
+        else {
+            panic!("expected run_agents action");
+        };
+        request.model_id = "explicit-model".to_string();
+        resolve_request_from_config(
+            &mut request,
+            &OrchestrationConfig {
+                model_id: "approved-model".to_string(),
+                harness_type: "oz".to_string(),
+                execution_mode: OrchestrationExecutionMode::Remote {
+                    environment_id: "env-1".to_string(),
+                    worker_host: "warp".to_string(),
+                },
+            },
+        );
+
+        state.executor.update(&mut app, |executor, ctx| {
+            populate_default_orchestration_model_for_execution(
+                &mut request,
+                executor.terminal_view_id,
+                ctx,
+            );
+        });
+
+        assert_eq!(request.model_id, "approved-model");
+    });
+}
+
+#[test]
+fn run_agents_result_reports_normalized_model_as_resolved_model_id() {
+    let result = RunAgentsResult::Launched {
+        model_id: "profile-router".to_string(),
+        harness_type: "oz".to_string(),
+        execution_mode: RunAgentsLaunchedExecutionMode::Local,
+        agents: Vec::new(),
+    };
+
+    let wire_result =
+        warp_multi_agent_api::request::input::tool_call_result::Result::try_from(result)
+            .expect("launched result should convert");
+    let warp_multi_agent_api::request::input::tool_call_result::Result::RunAgentsResult(result) =
+        wire_result
+    else {
+        panic!("expected run_agents result");
+    };
+    let Some(warp_multi_agent_api::run_agents_result::Outcome::Launched(launched)) = result.outcome
+    else {
+        panic!("expected launched outcome");
+    };
+
+    assert_eq!(launched.resolved_model_id, "profile-router");
 }
 
 fn persist_plan_config(
@@ -164,6 +455,7 @@ fn execute_denies_duplicate_launched_agent() {
 
 fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTestState {
     initialize_settings_for_tests_with_mode(app, mode, false);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     let global_resource_handles = GlobalResourceHandles::mock(app);
     app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
     let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
@@ -173,6 +465,7 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
     app.add_singleton_model(BlocklistAIPermissions::new);
     let terminal_view_id = EntityId::new();
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(AuthManager::new_for_test);
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(TeamTesterStatus::mock);
@@ -186,6 +479,7 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
     });
     app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(LLMPreferences::new);
     let conversation_id = history.update(app, |history_model, ctx| {
         history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     });

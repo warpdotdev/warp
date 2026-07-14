@@ -51,6 +51,53 @@ fn test_server_metadata(
     }
 }
 
+#[test]
+fn test_restored_run_agents_result_preserves_resolved_model_id() {
+    let task_id = crate::ai::agent::task::TaskId::new("task".to_string());
+    let mut document_versions = HashMap::new();
+    let tool_call_result = api::message::ToolCallResult {
+        tool_call_id: "tool_call".to_string(),
+        context: None,
+        result: Some(api::message::tool_call_result::Result::RunAgentsResult(
+            api::RunAgentsResult {
+                outcome: Some(api::run_agents_result::Outcome::Launched(
+                    api::run_agents_result::Launched {
+                        resolved_model_id: "profile-router".to_string(),
+                        resolved_harness: Some(api::Harness {
+                            variant: Some(api::harness::Variant::Oz(api::harness::Oz {})),
+                        }),
+                        resolved_execution_mode: Some(
+                            api::run_agents_result::launched::ResolvedExecutionMode::Local(
+                                api::run_agents::Local {},
+                            ),
+                        ),
+                        agents: Vec::new(),
+                    },
+                )),
+            },
+        )),
+    };
+
+    let input = convert_tool_call_result_to_input(
+        &task_id,
+        &tool_call_result,
+        &HashMap::new(),
+        &mut document_versions,
+    )
+    .expect("run-agents result should restore");
+
+    let AIAgentInput::ActionResult { result, .. } = input else {
+        panic!("expected action-result input");
+    };
+    let crate::ai::agent::AIAgentActionResultType::RunAgents(
+        crate::ai::agent::RunAgentsResult::Launched { model_id, .. },
+    ) = result.result
+    else {
+        panic!("expected launched run-agents result");
+    };
+    assert_eq!(model_id, "profile-router");
+}
+
 fn test_skill() -> api::Skill {
     api::Skill {
         descriptor: Some(api::SkillDescriptor {

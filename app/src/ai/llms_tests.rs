@@ -154,6 +154,142 @@ fn endpoint(
     }
 }
 
+fn initialize_orchestration_preferences_test(
+    app: &mut App,
+) -> (
+    warpui::ModelHandle<AIExecutionProfilesModel>,
+    warpui::ModelHandle<LLMPreferences>,
+) {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|_| NetworkStatus::new());
+    app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(TeamTesterStatus::mock);
+    app.add_singleton_model(SyncQueue::mock);
+    app.add_singleton_model(UpdateManager::mock);
+    app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+    let profiles = app.add_singleton_model(|ctx| {
+        AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+    });
+    let preferences = app.add_singleton_model(LLMPreferences::new);
+    (profiles, preferences)
+}
+
+#[test]
+fn orchestration_default_prefers_usable_auto_over_agent_mode_default() {
+    App::test((), |mut app| async move {
+        let (_, preferences) = initialize_orchestration_preferences_test(&mut app);
+        let models = ModelsByFeature {
+            agent_mode: available(
+                "gpt-x",
+                vec![server_llm("gpt-x", None), server_llm("auto", None)],
+            ),
+            ..Default::default()
+        };
+        preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        preferences.read(&app, |preferences, app| {
+            assert_eq!(
+                preferences
+                    .get_active_orchestration_model(app, None)
+                    .expect("auto should be usable")
+                    .id
+                    .as_str(),
+                "auto"
+            );
+        });
+    });
+}
+
+#[test]
+fn orchestration_default_is_unset_when_no_agent_mode_model_is_usable() {
+    App::test((), |mut app| async move {
+        let (_, preferences) = initialize_orchestration_preferences_test(&mut app);
+        let models = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![
+                    server_llm("auto", Some(DisableReason::AdminDisabled)),
+                    server_llm("gpt-x", Some(DisableReason::Unavailable)),
+                ],
+            ),
+            ..Default::default()
+        };
+        preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        preferences.read(&app, |preferences, app| {
+            assert!(preferences
+                .get_active_orchestration_model(app, None)
+                .is_none());
+        });
+    });
+}
+
+#[test]
+fn reconciliation_clears_disabled_orchestration_model() {
+    App::test((), |mut app| async move {
+        let (profiles, preferences) = initialize_orchestration_preferences_test(&mut app);
+        let profile_id = profiles.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_orchestration_model(profile_id, Some(LLMId::from("disabled-model")), ctx);
+        });
+        let models = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![
+                    server_llm("auto", None),
+                    server_llm("disabled-model", Some(DisableReason::AdminDisabled)),
+                ],
+            ),
+            ..Default::default()
+        };
+
+        preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        profiles.read(&app, |profiles, ctx| {
+            assert_eq!(
+                profiles.default_profile(ctx).data().orchestration_model,
+                None
+            );
+        });
+    });
+}
+
+#[test]
+fn reconciliation_clears_deleted_local_router_orchestration_model() {
+    App::test((), |mut app| async move {
+        let (profiles, preferences) = initialize_orchestration_preferences_test(&mut app);
+        let profile_id = profiles.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_orchestration_model(
+                profile_id,
+                Some(LLMId::from("custom-router:local:deleted")),
+                ctx,
+            );
+        });
+
+        preferences.update(&mut app, |preferences, ctx| {
+            preferences.reconcile_stale_custom_router_selection(ctx);
+        });
+
+        profiles.read(&app, |profiles, ctx| {
+            assert_eq!(
+                profiles.default_profile(ctx).data().orchestration_model,
+                None
+            );
+        });
+    });
+}
+
 fn model(name: &str, alias: Option<&str>, config_key: &str) -> CustomEndpointModel {
     CustomEndpointModel {
         name: name.into(),

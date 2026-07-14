@@ -7,6 +7,7 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
+use crate::ai::llms::LLMId;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::user::TEST_USER_UID;
 use crate::auth::{AuthStateProvider, UserUid};
@@ -87,6 +88,33 @@ fn install_singletons(app: &mut App, auth_state: AuthStateProvider) {
     app.add_singleton_model(|_| TemplatableMCPServerManager::default());
     app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(UserWorkspaces::default_mock);
+}
+
+#[test]
+fn sets_orchestration_model_on_profile() {
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_logged_out_for_test());
+        let profiles = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let profile_id = profiles.read(&app, |profiles, _| profiles.default_profile_id());
+        let model_id = LLMId::from("custom-router:cloud:team-router");
+
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_orchestration_model(profile_id, Some(model_id.clone()), ctx);
+        });
+
+        profiles.read(&app, |profiles, ctx| {
+            assert_eq!(
+                profiles
+                    .default_profile(ctx)
+                    .data()
+                    .orchestration_model
+                    .as_ref(),
+                Some(&model_id)
+            );
+        });
+    });
 }
 
 /// Regression test for the onboarding autonomy bug where

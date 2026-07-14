@@ -27,12 +27,15 @@ use crate::ai::agent::{
     StartAgentExecutionMode,
 };
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
+use crate::ai::blocklist::inline_action::orchestration_controls::{
+    normalize_orchestration_model, remote_oz_model_incompatible, OrchestrationEditState,
+};
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::document::plan_publication::{
     prepare_plan_publications, wait_for_plan_publications,
 };
+use crate::ai::llms::LLMPreferences;
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
@@ -170,7 +173,7 @@ impl RunAgentsExecutor {
             return receiver;
         }
 
-        if let Err(error) = validate_request(&request) {
+        if let Err(error) = validate_request(&request, ctx) {
             log::warn!("RunAgentsExecutor: validation failure: {error}");
             let _ = sender.try_send(RunAgentsResult::Failure { error });
             return receiver;
@@ -414,6 +417,11 @@ impl RunAgentsExecutor {
         }
         let mut resolved_request = request.clone();
         resolve_request_from_approved_config(&mut resolved_request, input.conversation_id, ctx);
+        populate_default_orchestration_model_for_execution(
+            &mut resolved_request,
+            self.terminal_view_id,
+            ctx,
+        );
         populate_default_auth_secret_for_execution(&mut resolved_request, ctx);
         if self
             .duplicate_launched_agents_reason(&resolved_request, input.conversation_id, ctx)
@@ -483,6 +491,7 @@ fn prepare_request_for_execution(
     ctx: &ModelContext<RunAgentsExecutor>,
 ) -> Option<String> {
     let status = resolve_request_from_approved_config(request, parent_conversation_id, ctx);
+    populate_default_orchestration_model_for_execution(request, terminal_view_id, ctx);
     populate_default_auth_secret_for_execution(request, ctx);
     if let Some(reason) =
         duplicate_launched_agents_reason(request, parent_conversation_id, launched_agents, ctx)
@@ -669,9 +678,25 @@ fn populate_default_auth_secret_for_execution(
         default_auth_secret_name_for_harness(&request.harness_type, ctx);
 }
 
+fn populate_default_orchestration_model_for_execution(
+    request: &mut RunAgentsRequest,
+    terminal_view_id: EntityId,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) {
+    let profile_model_id = LLMPreferences::as_ref(ctx)
+        .get_active_orchestration_model(ctx, Some(terminal_view_id))
+        .map(|model| model.id.clone());
+    let mut edit_state = OrchestrationEditState::from_run_agents_fields(
+        &request.model_id,
+        &request.harness_type,
+        &request.execution_mode,
+    );
+    normalize_orchestration_model(&mut edit_state, None, profile_model_id.as_ref());
+    request.model_id = edit_state.model_id;
+}
+
 /// Unconditionally overrides run-wide fields on a `RunAgentsRequest`
-/// from the approved orchestration config, delegating to
-/// `OrchestrationEditState::override_from_approved_config`.
+/// from the approved orchestration config through the shared normalizer.
 fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &OrchestrationConfig) {
     // The approved plan config is the source of truth for these run-wide fields,
     // so callers pass a mutable request and continue with the normalized value.
@@ -680,7 +705,7 @@ fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &Orchestr
         &request.harness_type,
         &request.execution_mode,
     );
-    edit_state.override_from_approved_config(config);
+    normalize_orchestration_model(&mut edit_state, Some(config), None);
     request.model_id = edit_state.model_id;
     request.harness_type = edit_state.harness_type;
     request.execution_mode = edit_state.execution_mode;
@@ -688,7 +713,10 @@ fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &Orchestr
 
 /// Defence-in-depth validation; mirrors the card view's
 /// `accept_disabled_reason` check.
-fn validate_request(request: &RunAgentsRequest) -> Result<(), String> {
+fn validate_request(
+    request: &RunAgentsRequest,
+    ctx: &ModelContext<RunAgentsExecutor>,
+) -> Result<(), String> {
     if request.agent_run_configs.is_empty() {
         return Err("orchestrate: empty agent_run_configs".to_string());
     }
@@ -705,6 +733,17 @@ fn validate_request(request: &RunAgentsRequest) -> Result<(), String> {
     ) && request.harness_type.eq_ignore_ascii_case("opencode")
     {
         return Err("Remote child agents do not support the opencode harness yet.".to_string());
+    }
+    let edit_state = OrchestrationEditState::from_run_agents_fields(
+        &request.model_id,
+        &request.harness_type,
+        &request.execution_mode,
+    );
+    if remote_oz_model_incompatible(&edit_state, LLMPreferences::as_ref(ctx)) {
+        return Err(
+            "Selected orchestration model is only available locally. Choose a cloud-runnable model or router to continue."
+                .to_string(),
+        );
     }
     Ok(())
 }

@@ -171,6 +171,7 @@ pub(crate) struct RunAgentsCardDecisionEvent {
     pub agent_count: usize,
     pub harness: OrchestrationHarnessKind,
     pub execution_mode: OrchestrationExecutionModeKind,
+    pub model_id: String,
     /// Field names from [`orchestration_modified_field`] that diverged
     /// between the dispatched request and the LLM's original
     /// `RunAgentsRequest`. Empty when the user accepted without edits.

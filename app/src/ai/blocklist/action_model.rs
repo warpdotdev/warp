@@ -319,6 +319,10 @@ impl BlocklistAIActionModel {
         self.is_view_only = is_view_only;
     }
 
+    pub(crate) fn terminal_view_id(&self) -> EntityId {
+        self.terminal_view_id
+    }
+
     /// Marks an action as remotely executing on the viewer side.
     /// This is called when a viewer receives a CommandExecutionStarted event from the sharer,
     /// allowing the viewer's UI to show the action as running even though it's not executing locally.

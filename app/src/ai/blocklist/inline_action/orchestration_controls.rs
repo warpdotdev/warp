@@ -38,7 +38,7 @@ use crate::ai::connected_self_hosted_workers::{ConnectedSelfHostedWorkersModel, 
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
-use crate::ai::llms::LLMInfo;
+use crate::ai::llms::{LLMId, LLMInfo};
 use crate::ai::local_harness_setup::{
     local_harness_is_product_enabled, local_harness_product_disabled_message,
     local_harness_setup_state, LocalHarnessSetupState,
@@ -166,6 +166,36 @@ impl OrchestrationEditState {
     }
 }
 
+/// Applies approved-plan precedence, then fills only an omitted Oz/default-harness
+/// model from the active execution profile.
+pub fn normalize_orchestration_model(
+    state: &mut OrchestrationEditState,
+    approved_config: Option<&OrchestrationConfig>,
+    profile_model_id: Option<&LLMId>,
+) {
+    if let Some(config) = approved_config {
+        state.override_from_approved_config(config);
+    }
+    let harness = Harness::parse_orchestration_harness(&state.harness_type);
+    if state.model_id.trim().is_empty() && matches!(harness, Some(Harness::Oz) | None) {
+        if let Some(model_id) = profile_model_id {
+            state.model_id = model_id.to_string();
+        }
+    }
+}
+
+pub(crate) fn remote_oz_model_incompatible(
+    state: &OrchestrationEditState,
+    llm_preferences: &LLMPreferences,
+) -> bool {
+    if !state.execution_mode.is_remote() || state.model_id.trim().is_empty() {
+        return false;
+    }
+    let harness = Harness::parse_orchestration_harness(&state.harness_type);
+    matches!(harness, Some(Harness::Oz) | None)
+        && !llm_preferences.is_cloud_runnable_oz_model_id(&LLMId::from(state.model_id.as_str()))
+}
+
 impl OrchestrationEditState {
     pub(crate) fn sanitize_for_local_execution(&mut self) {
         let Some(harness) = Harness::parse_local_child_harness(&self.harness_type) else {
@@ -265,26 +295,6 @@ impl OrchestrationEditState {
                 )
             }
             RunAgentsExecutionMode::Remote { .. } => None,
-        }
-    }
-
-    /// Fills in empty fields from the approved orchestration config.
-    /// When the LLM omits harness/model/execution_mode to inherit from
-    /// the active config, the raw request arrives with defaults (empty
-    /// harness, empty model, Local mode). This resolves those to the
-    /// config values so the UI shows the intended settings.
-    pub fn resolve_from_config(&mut self, config: &OrchestrationConfig) {
-        if self.harness_type.is_empty() && !config.harness_type.is_empty() {
-            self.harness_type = config.harness_type.clone();
-        }
-        if self.model_id.is_empty() && !config.model_id.is_empty() {
-            self.model_id = config.model_id.clone();
-        }
-        if !self.execution_mode.is_remote() && config.execution_mode.is_remote() {
-            self.execution_mode = Self::from_orchestration_config(config).execution_mode;
-        }
-        if matches!(self.execution_mode, RunAgentsExecutionMode::Local) {
-            self.sanitize_for_local_execution();
         }
     }
 
@@ -481,7 +491,7 @@ fn get_base_model_choices<'a>(
 ) -> impl Iterator<Item = &'a LLMInfo> {
     llm_prefs
         .get_base_llm_choices_for_agent_mode(app)
-        .filter(move |llm| is_local || llm_prefs.custom_llm_info_for_id(&llm.id).is_none())
+        .filter(move |llm| is_local || llm_prefs.is_cloud_runnable_oz_model_id(&llm.id))
 }
 /// Populates the model picker based on the active harness.
 ///
@@ -630,14 +640,14 @@ pub fn is_model_in_filtered_choices<V: View>(
 /// string (the "Default model" entry).
 pub fn first_filtered_model_id<V: View>(
     harness_type: &str,
+    is_local: bool,
     ctx: &mut ViewContext<V>,
 ) -> Option<String> {
     let harness = Harness::parse_orchestration_harness(harness_type);
     match harness {
         Some(Harness::Oz) | None => {
             let llm_prefs = LLMPreferences::as_ref(ctx);
-            llm_prefs
-                .get_base_llm_choices_for_agent_mode(ctx)
+            get_base_model_choices(llm_prefs, ctx, is_local)
                 .next()
                 .map(|llm| llm.id.to_string())
         }
@@ -1174,6 +1184,12 @@ pub fn accept_disabled_reason_with_auth(
     if auth_secret_selection_required(state, ctx) {
         return Some("Select an API key for this harness to continue.".to_string());
     }
+    if remote_oz_model_incompatible(state, LLMPreferences::as_ref(ctx)) {
+        return Some(
+            "Selected orchestration model is only available locally. Choose a cloud-runnable model or router to continue."
+                .to_string(),
+        );
+    }
     None
 }
 
@@ -1402,12 +1418,12 @@ pub fn apply_harness_change<A: OrchestrationControlAction, V: View>(
         .cloned();
     if let Some(saved_id) = restored {
         state.model_id = saved_id;
-    } else if !is_model_in_filtered_choices(&state.model_id, &state.harness_type, is_local, ctx) {
-        // No saved model — fall back to conversation base model
-        // for Oz, or default for non-Oz.
+    } else if !is_model_in_filtered_choices(&state.model_id, &state.harness_type, is_local, ctx)
+        && !remote_oz_model_incompatible(state, LLMPreferences::as_ref(ctx))
+    {
         let reset_id = fallback_base_model_id(ctx)
             .filter(|id| is_model_in_filtered_choices(id, &state.harness_type, is_local, ctx))
-            .or_else(|| first_filtered_model_id(&state.harness_type, ctx))
+            .or_else(|| first_filtered_model_id(&state.harness_type, is_local, ctx))
             .unwrap_or_default();
         state.model_id = reset_id;
     }
@@ -1459,10 +1475,12 @@ pub fn apply_execution_mode_change<A: OrchestrationControlAction, V: View>(
             }
         }
     }
-    if !is_model_in_filtered_choices(&state.model_id, &state.harness_type, is_local, ctx) {
+    if !is_model_in_filtered_choices(&state.model_id, &state.harness_type, is_local, ctx)
+        && !remote_oz_model_incompatible(state, LLMPreferences::as_ref(ctx))
+    {
         let reset_id = fallback_base_model_id(ctx)
             .filter(|id| is_model_in_filtered_choices(id, &state.harness_type, is_local, ctx))
-            .or_else(|| first_filtered_model_id(&state.harness_type, ctx))
+            .or_else(|| first_filtered_model_id(&state.harness_type, is_local, ctx))
             .unwrap_or_default();
         state.model_id = reset_id;
     }
@@ -1504,8 +1522,10 @@ pub fn repopulate_all_pickers<A: OrchestrationControlAction, V: View>(
         populate_harness_picker(handle, &state.harness_type, is_local, ctx);
     }
     // Reset model if it disappeared from the harness's catalog.
-    if !is_model_in_filtered_choices(&state.model_id, &state.harness_type, is_local, ctx) {
-        if let Some(first_id) = first_filtered_model_id(&state.harness_type, ctx) {
+    if !is_model_in_filtered_choices(&state.model_id, &state.harness_type, is_local, ctx)
+        && !remote_oz_model_incompatible(state, LLMPreferences::as_ref(ctx))
+    {
+        if let Some(first_id) = first_filtered_model_id(&state.harness_type, is_local, ctx) {
             state.model_id = first_id;
         }
     }

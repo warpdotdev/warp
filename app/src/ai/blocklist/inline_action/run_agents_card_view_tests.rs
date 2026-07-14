@@ -9,7 +9,10 @@ use ai::skills::SkillReference;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::RunAgentsEditState;
-use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
+use crate::ai::blocklist::inline_action::orchestration_controls::{
+    normalize_orchestration_model, OrchestrationEditState,
+};
+use crate::ai::llms::LLMId;
 
 fn make_request(harness: &str, mode: RunAgentsExecutionMode) -> RunAgentsRequest {
     make_request_with_skills(harness, mode, Vec::new())
@@ -240,6 +243,19 @@ fn to_request_round_trips_request_fields() {
     assert_eq!(round_tripped.agent_run_configs, req.agent_run_configs);
     assert_eq!(round_tripped.skills, req.skills);
     assert_eq!(round_tripped.plan_id, req.plan_id);
+}
+
+#[test]
+fn confirmation_state_round_trip_uses_normalized_profile_model() {
+    let mut request = make_request("oz", RunAgentsExecutionMode::Local);
+    request.model_id.clear();
+    let mut state = RunAgentsEditState::from_request(&request);
+    let profile_model = LLMId::from("profile-router");
+
+    normalize_orchestration_model(&mut state.orch, None, Some(&profile_model));
+
+    assert_eq!(state.orch.model_id, "profile-router");
+    assert_eq!(state.to_request().model_id, "profile-router");
 }
 
 mod format_terminal_state_tests {
