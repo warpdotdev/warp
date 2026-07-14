@@ -55,11 +55,12 @@ fn text_overrides_follow_soft_wrapped_character_ranges() {
             };
             let element = TuiEditorElement::new(&model, ctx).with_styles(styles);
             let buffer = render_buffer(ctx, element, 4, 10);
-
+            // Unicode line breaking wraps after '/', so the styled "/plan"
+            // range spans "/" on row 0 and "plan" on row 1.
             assert_eq!(buffer[(0, 0)].fg, Color::Blue);
-            assert_eq!(buffer[(3, 0)].fg, Color::Blue);
             assert_eq!(buffer[(0, 1)].fg, Color::Blue);
-            assert_ne!(buffer[(1, 1)].fg, Color::Blue);
+            assert_eq!(buffer[(3, 1)].fg, Color::Blue);
+            assert_ne!(buffer[(0, 2)].fg, Color::Blue);
         });
     });
 }
