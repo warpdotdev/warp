@@ -411,6 +411,26 @@ impl CLIAgent {
             .flat_map(|workspace| workspace.teams.iter())
             .any(|team| team.uid.uid() == UBER_TEAM_UID)
     }
+
+    /// Returns whether `command` launches Warp's own headless TUI (`warp_tui`) —
+    /// e.g. `warp-tui`, `warp-tui-oss`, an absolute/relative path to either
+    /// (`target/debug/warp-tui`), or the `./script/run-tui` dev launcher.
+    ///
+    /// This mirrors [`Self::detect`] (which decides when to show the CLI agent
+    /// footer), but callers use it to *hide* the "Use agent" footer for the Warp
+    /// TUI, which is itself an agent surface. It is the single source of truth
+    /// for Warp-TUI command detection — update the matching here if the launch
+    /// surface changes.
+    pub fn command_is_warp_tui(command: &str, escape_char: Option<EscapeChar>) -> bool {
+        let Some(first_word) = Self::extract_first_command(command.trim_start(), escape_char)
+        else {
+            return false;
+        };
+        // Match on the executable's file name so absolute/relative paths work
+        // (e.g. `/path/to/warp-tui`, `./target/debug/warp-tui`).
+        let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
+        matches!(basename, "warp-tui" | "warp-tui-oss" | "run-tui")
+    }
 }
 
 /// Builds a prompt string from a batch of code review comments suitable for

@@ -8324,6 +8324,13 @@ impl TerminalView {
         if model.is_read_only() {
             return false;
         }
+        // Warp's own headless TUI (`warp_tui`) is itself an agent surface, so
+        // suppress the outer agent input bar while it runs in this pane. Uses
+        // the same command-based detection as the CLI agent footer (see
+        // `is_running_warp_tui`).
+        if self.is_running_warp_tui(model, app) {
+            return false;
+        }
         if self.conversation_ended_tombstone_view_id.is_some() {
             return false;
         }
@@ -27653,7 +27660,12 @@ impl View for TerminalView {
 
                     column.add_child(Shrinkable::new(1., output_area).finish());
 
+                    // Suppress the "Use agent" footer when the nested program is
+                    // Warp's own TUI (`warp_tui`) — it's already an agent surface,
+                    // so the outer footer would just stack on top of it. Other
+                    // full-screen TUIs (vim, htop, …) still get the footer.
                     if model.is_alt_screen_active()
+                        && !self.is_running_warp_tui(&model, app)
                         && self.should_render_use_agent_footer(&model, app)
                     {
                         column.add_child(ChildView::new(&self.use_agent_footer).finish());
