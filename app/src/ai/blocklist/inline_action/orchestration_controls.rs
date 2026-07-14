@@ -25,16 +25,10 @@ use warpui::{
     SingletonEntity, SizeConstraint, View, ViewContext, ViewHandle,
 };
 
-use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::blocklist::inline_action::host_picker::HostPicker;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
-use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
+use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
-use crate::ai::local_harness_setup::{
-    local_harness_is_product_enabled, local_harness_setup_state, LocalHarnessSetupState,
-};
 pub use crate::ai::orchestration::{
     accept_disabled_reason_with_auth, empty_env_recommendation_message,
     persist_environment_selection, persist_host_selection,
@@ -43,11 +37,11 @@ pub use crate::ai::orchestration::{
     OrchestrationConfigState, OrchestrationEditState, ORCHESTRATION_WARP_WORKER_HOST,
 };
 use crate::ai::orchestration::{
-    get_base_model_choices, harness_is_selectable, persist_auth_secret_selection,
-    resolve_recent_host_slug, ORCHESTRATION_ENV_NONE_LABEL,
+    api_key_snapshot, environment_snapshot, harness_snapshot, host_snapshot, model_snapshot,
+    persist_auth_secret_selection, OptionBadge, OptionFooter,
+    OptionSnapshot, OptionSourceStatus, AUTH_SECRET_INHERIT_LABEL,
 };
 use crate::appearance::Appearance;
-use crate::cloud_object::CloudObjectLookup as _;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -65,13 +59,9 @@ pub const ORCHESTRATION_PICKER_FONT_SIZE: f32 = 14.;
 pub const ORCHESTRATION_PICKER_RADIUS: f32 = 4.;
 pub const ORCHESTRATION_PICKER_MAX_WIDTH: f32 = 205.;
 
-const DEFAULT_MODEL_LABEL: &str = "Default model";
 const ORCHESTRATION_SEGMENTED_CONTROL_PADDING: f32 = 4.;
 const ORCHESTRATION_SEGMENT_VERTICAL_PADDING: f32 = 4.;
 
-/// Label shown in the auth secret picker when no secret is selected
-/// (the child agent will inherit credentials from its environment).
-const AUTH_SECRET_INHERIT_LABEL: &str = "Skip (advanced)";
 /// Label for the auth secret column.
 pub const AUTH_SECRET_COLUMN_LABEL: &str = "API key";
 const AUTH_SECRET_CREATE_NEW_LABEL: &str = "New API key…";
@@ -221,14 +211,39 @@ pub fn new_standard_filterable_picker_dropdown<A: OrchestrationControlAction, V:
     })
 }
 
-/// Populates the model picker based on the active harness.
+/// Builds the minimal execution mode carried by the synthetic edit
+/// states the `populate_*` helpers hand to the snapshot builders.
+fn snapshot_execution_mode(is_local: bool) -> RunAgentsExecutionMode {
+    if is_local {
+        RunAgentsExecutionMode::Local
+    } else {
+        RunAgentsExecutionMode::Remote {
+            environment_id: String::new(),
+            worker_host: String::new(),
+            computer_use_enabled: false,
+        }
+    }
+}
+
+/// Label of the snapshot row matching `selected_id`, if any.
+fn selected_row_label(snapshot: &OptionSnapshot) -> Option<String> {
+    snapshot.selected_id.as_ref().and_then(|id| {
+        snapshot
+            .rows
+            .iter()
+            .find(|row| &row.id == id)
+            .map(|row| row.label.clone())
+    })
+}
+
+/// Populates the model picker from [`model_snapshot`] for the active
+/// harness (Warp LLM catalog for Oz, "Default model" for local Codex,
+/// "Default model" plus the server-provided catalog otherwise).
 ///
-/// - **Oz / empty**: shows the Warp LLM catalog (existing behavior).
-/// - **Local Codex**: shows only a "Default model" entry (no model delivery
-///   possible for local Codex children).
-/// - **Other non-Oz harnesses**: shows "Default model" at the top, followed
-///   by the server-provided harness model catalog from
-///   `HarnessAvailabilityModel::models_for()`.
+/// The snapshot is the source of inclusion, ordering, and selection; Oz
+/// rows are additionally mapped back to their `LLMInfo` and rendered via
+/// [`available_model_menu_items`] so they keep provider/credential icons
+/// and disabled gating.
 pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>(
     dropdown: &ViewHandle<FilterableDropdown<A>>,
     initial_model_id: &str,
@@ -236,201 +251,106 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
     is_local: bool,
     ctx: &mut ViewContext<V>,
 ) {
-    let initial_model_id = initial_model_id.to_string();
-    let harness_type = harness_type.to_string();
+    let state = OrchestrationConfigState::from_run_agents_fields(
+        initial_model_id,
+        harness_type,
+        &snapshot_execution_mode(is_local),
+    );
+    let is_oz = matches!(
+        Harness::parse_orchestration_harness(harness_type),
+        Some(Harness::Oz) | None
+    );
     dropdown.update(ctx, |dropdown, ctx_dropdown| {
-        let harness = Harness::parse_orchestration_harness(&harness_type);
-        match harness {
-            Some(Harness::Oz) | None => {
-                // Oz / unset: Warp LLM catalog. Custom models excluded for
-                // cloud runs (not supported by remote workers).
-                // Order: auto models first, then custom models, then other models.
-                let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
-                let (auto_models, rest): (Vec<_>, Vec<_>) =
-                    get_base_model_choices(llm_prefs, ctx_dropdown, is_local)
-                        .partition(|llm| llm.id.as_str().starts_with("auto"));
-                let (custom_models, other_models): (Vec<_>, Vec<_>) = rest
-                    .into_iter()
-                    .partition(|llm| llm_prefs.custom_llm_info_for_id(&llm.id).is_some());
-                let ordered_choices: Vec<_> = auto_models
-                    .into_iter()
-                    .chain(custom_models)
-                    .chain(other_models)
-                    .collect();
-                let selected_display_name = ordered_choices
-                    .iter()
-                    .find(|llm| llm.id.to_string() == initial_model_id)
-                    .map(|llm| llm.menu_display_name());
-                let items = available_model_menu_items(
-                    ordered_choices,
-                    move |llm| {
-                        DropdownAction::select_action_and_close(A::model_changed(
-                            llm.id.to_string(),
-                        ))
-                    },
-                    None,
-                    None,
-                    false,
-                    false,
-                    ctx_dropdown,
-                );
-                dropdown.set_rich_items(items, ctx_dropdown);
-                if let Some(name) = &selected_display_name {
-                    dropdown.set_selected_by_name(name, ctx_dropdown);
-                }
-            }
-            Some(Harness::Codex) if is_local => {
-                // Local Codex: only "Default model" entry.
-                let items = vec![default_model_menu_item::<A>()];
-                dropdown.set_rich_items(items, ctx_dropdown);
-                dropdown.set_selected_by_name(DEFAULT_MODEL_LABEL, ctx_dropdown);
-            }
-            Some(harness) => {
-                // Non-Oz harness: "Default model" at top, then server-provided
-                // harness models.
-                let mut items: Vec<MenuItem<DropdownAction>> = vec![default_model_menu_item::<A>()];
-                let availability = HarnessAvailabilityModel::as_ref(ctx_dropdown);
-                if let Some(models) = availability.models_for(harness) {
-                    for model in models {
-                        let model_id = model.id.clone();
-                        let fields = MenuItemFields::new(&model.display_name)
-                            .with_on_select_action(DropdownAction::select_action_and_close(
-                                A::model_changed(model_id),
-                            ));
-                        items.push(MenuItem::Item(fields));
-                    }
-                }
-                // Find display name before set_rich_items borrows ctx_dropdown mutably.
-                let selected_display_name = if initial_model_id.is_empty() {
-                    Some(DEFAULT_MODEL_LABEL.to_string())
-                } else {
-                    availability
-                        .models_for(harness)
-                        .and_then(|models| {
-                            models
-                                .iter()
-                                .find(|m| m.id == initial_model_id)
-                                .map(|m| m.display_name.clone())
-                        })
-                        .or_else(|| Some(DEFAULT_MODEL_LABEL.to_string()))
-                };
-                dropdown.set_rich_items(items, ctx_dropdown);
-                if let Some(name) = &selected_display_name {
-                    dropdown.set_selected_by_name(name, ctx_dropdown);
-                }
-            }
+        let snapshot = model_snapshot(&state, ctx_dropdown);
+        let selected_label = selected_row_label(&snapshot);
+        let items = if is_oz {
+            let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
+            let all_choices: Vec<_> = llm_prefs
+                .get_base_llm_choices_for_agent_mode(ctx_dropdown)
+                .collect();
+            let ordered_choices: Vec<_> = snapshot
+                .rows
+                .iter()
+                .filter_map(|row| {
+                    all_choices
+                        .iter()
+                        .copied()
+                        .find(|llm| llm.id.to_string() == row.id)
+                })
+                .collect();
+            available_model_menu_items(
+                ordered_choices,
+                move |llm| {
+                    DropdownAction::select_action_and_close(A::model_changed(llm.id.to_string()))
+                },
+                None,
+                None,
+                false,
+                false,
+                ctx_dropdown,
+            )
+        } else {
+            snapshot
+                .rows
+                .into_iter()
+                .map(|row| {
+                    MenuItem::Item(MenuItemFields::new(&row.label).with_on_select_action(
+                        DropdownAction::select_action_and_close(A::model_changed(row.id)),
+                    ))
+                })
+                .collect()
+        };
+        dropdown.set_rich_items(items, ctx_dropdown);
+        if let Some(label) = &selected_label {
+            dropdown.set_selected_by_name(label, ctx_dropdown);
         }
     });
 }
 
-/// Creates a "Default model" menu item that emits an empty model_id.
-fn default_model_menu_item<A: OrchestrationControlAction>() -> MenuItem<DropdownAction> {
-    MenuItem::Item(
-        MenuItemFields::new(DEFAULT_MODEL_LABEL).with_on_select_action(
-            DropdownAction::select_action_and_close(A::model_changed(String::new())),
-        ),
-    )
-}
-
+/// Populates the harness picker from [`harness_snapshot`], mapping rows
+/// to menu items (icon/brand color from the row's harness, disabled
+/// reason to a disabled item with a tooltip).
 pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
     dropdown: &ViewHandle<Dropdown<A>>,
     initial_harness: &str,
     is_local: bool,
     ctx: &mut ViewContext<V>,
 ) {
-    let initial_harness = initial_harness.to_string();
+    let state = OrchestrationConfigState::from_run_agents_fields(
+        "",
+        initial_harness,
+        &snapshot_execution_mode(is_local),
+    );
     dropdown.update(ctx, |dropdown, ctx_dropdown| {
-        let availability = HarnessAvailabilityModel::as_ref(ctx_dropdown);
-        let harnesses = availability.available_harnesses();
-
-        let resolve_entry_harness = |harness: Harness, display_name: &str| match harness {
-            Harness::Unknown => [
-                Harness::Oz,
-                Harness::Claude,
-                Harness::OpenCode,
-                Harness::Gemini,
-                Harness::Codex,
-            ]
+        let snapshot = harness_snapshot(&state, ctx_dropdown);
+        let selected_label = selected_row_label(&snapshot);
+        let items: Vec<MenuItem<DropdownAction>> = snapshot
+            .rows
             .into_iter()
-            .find(|candidate| harness_display::display_name(*candidate) == display_name)
-            .unwrap_or(Harness::Unknown),
-            harness => harness,
-        };
-
-        // Sort selectable harnesses before disabled ones, preserving
-        // relative order within each group.
-        // Filter out Gemini — it is not yet supported as a multi-agent
-        // harness and causes an infinite "Spawning agents" hang.
-        let mut sorted: Vec<_> = harnesses
-            .iter()
-            .filter(|entry| {
-                let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-                harness != Harness::Gemini
-                    && (!is_local || local_harness_is_product_enabled(harness))
-            })
-            .collect();
-        sorted.sort_by_key(|entry| {
-            let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-            !(entry.enabled && harness_is_selectable(harness, is_local))
-        });
-
-        // Resolve the target harness so we can match by enum variant
-        // even when the `initial_harness` string is "claude" but the
-        // cached entry.harness deserialized as Unknown.
-        let target_harness = Harness::parse_orchestration_harness(&initial_harness);
-
-        let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
-        let mut selected_name: Option<String> = None;
-        let target_display = target_harness.map(|harness| availability.display_name_for(harness));
-
-        for entry in sorted {
-            let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-            let local_setup_state = if is_local {
-                Some(local_harness_setup_state(harness))
-            } else {
-                None
-            };
-            // Use the server-provided display_name for the label so stale
-            // cache entries (where harness deserializes as Unknown) still
-            // show the correct name.
-            let mut fields = MenuItemFields::new(&entry.display_name)
-                .with_icon(harness_display::icon_for(harness));
-            if let Some(color) = harness_display::brand_color(harness) {
-                fields = fields.with_override_icon_color(Fill::from(color));
-            }
-            let harness_str = harness.to_string();
-            let selectable = entry.enabled && harness_is_selectable(harness, is_local);
-            if selectable {
-                fields = fields.with_on_select_action(DropdownAction::select_action_and_close(
-                    A::harness_changed(harness_str.clone()),
-                ));
-            } else {
-                fields = fields.with_disabled(true);
-                let tooltip = match local_setup_state {
-                    Some(LocalHarnessSetupState::MissingHarness { tooltip }) => tooltip,
-                    Some(LocalHarnessSetupState::ProductDisabled { message }) => message,
-                    Some(LocalHarnessSetupState::Ready) | None => "Disabled by your administrator",
-                };
-                fields = fields.with_tooltip(tooltip);
-            }
-            // Match by harness string first, then fall back to matching
-            // the display_name against the client-side name for the target
-            // harness. This handles stale cache entries where entry.harness
-            // is Unknown but entry.display_name is still correct.
-            if selected_name.is_none() {
-                if harness_str.eq_ignore_ascii_case(&initial_harness) {
-                    selected_name = Some(entry.display_name.clone());
-                } else if let Some(target_display) = target_display {
-                    if entry.display_name == target_display {
-                        selected_name = Some(entry.display_name.clone());
+            .map(|row| {
+                let mut fields = MenuItemFields::new(&row.label);
+                if let Some(harness) = row.harness {
+                    fields = fields.with_icon(harness_display::icon_for(harness));
+                    if let Some(color) = harness_display::brand_color(harness) {
+                        fields = fields.with_override_icon_color(Fill::from(color));
                     }
                 }
-            }
-            items.push(MenuItem::Item(fields));
-        }
+                match row.disabled_reason {
+                    Some(reason) => {
+                        fields = fields.with_disabled(true).with_tooltip(reason);
+                    }
+                    None => {
+                        fields = fields.with_on_select_action(
+                            DropdownAction::select_action_and_close(A::harness_changed(row.id)),
+                        );
+                    }
+                }
+                MenuItem::Item(fields)
+            })
+            .collect();
         dropdown.set_rich_items(items, ctx_dropdown);
-        if let Some(name) = selected_name {
-            dropdown.set_selected_by_name(&name, ctx_dropdown);
+        if let Some(label) = &selected_label {
+            dropdown.set_selected_by_name(label, ctx_dropdown);
         }
     });
 }
@@ -460,84 +380,42 @@ pub fn create_environment_picker<A: OrchestrationControlAction, V: View>(
             move |app| render_new_environment_footer::<A>(footer_mouse_state.clone(), app),
             ctx_dropdown,
         );
-        let all_envs = CloudAmbientAgentEnvironment::get_all(ctx_dropdown);
-        let mut sorted_envs: Vec<(String, String)> = all_envs
-            .iter()
-            .map(|env| (env.id.uid(), env.model().string_model.name.clone()))
-            .collect();
-        sorted_envs.sort_by(|a, b| a.1.cmp(&b.1));
-
-        let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
-        let mut selected_name: Option<String> = None;
-        items.push(MenuItem::Item(
-            MenuItemFields::new(ORCHESTRATION_ENV_NONE_LABEL).with_on_select_action(
-                DropdownAction::select_action_and_close(A::environment_changed(String::new())),
-            ),
-        ));
-        if initial_env.is_empty() {
-            selected_name = Some(ORCHESTRATION_ENV_NONE_LABEL.to_string());
-        }
-        for (env_id, env_name) in &sorted_envs {
-            if env_id == &initial_env {
-                selected_name = Some(env_name.clone());
-            }
-            let env_id_for_item = env_id.clone();
-            items.push(MenuItem::Item(
-                MenuItemFields::new(env_name).with_on_select_action(
-                    DropdownAction::select_action_and_close(A::environment_changed(
-                        env_id_for_item,
-                    )),
-                ),
-            ));
-        }
-        dropdown.set_rich_items(items, ctx_dropdown);
-        if let Some(name) = selected_name {
-            dropdown.set_selected_by_name(&name, ctx_dropdown);
-        }
     });
+    populate_environment_picker(&dropdown_handle, &initial_env, ctx);
     dropdown_handle
 }
 
+/// Populates the environment picker from [`environment_snapshot`]
+/// ("Empty environment" plus existing environments sorted by name).
 pub fn populate_environment_picker<A: OrchestrationControlAction, V: View>(
     dropdown_handle: &ViewHandle<FilterableDropdown<A>>,
     initial_env_id: &str,
     ctx: &mut ViewContext<V>,
 ) {
-    let initial_env = initial_env_id.to_string();
+    let state = OrchestrationConfigState::from_run_agents_fields(
+        "",
+        "",
+        &RunAgentsExecutionMode::Remote {
+            environment_id: initial_env_id.to_string(),
+            worker_host: String::new(),
+            computer_use_enabled: false,
+        },
+    );
     dropdown_handle.update(ctx, |dropdown, ctx_dropdown| {
-        let all_envs = CloudAmbientAgentEnvironment::get_all(ctx_dropdown);
-        let mut sorted_envs: Vec<(String, String)> = all_envs
-            .iter()
-            .map(|env| (env.id.uid(), env.model().string_model.name.clone()))
+        let snapshot = environment_snapshot(&state, ctx_dropdown);
+        let selected_label = selected_row_label(&snapshot);
+        let items = snapshot
+            .rows
+            .into_iter()
+            .map(|row| {
+                MenuItem::Item(MenuItemFields::new(&row.label).with_on_select_action(
+                    DropdownAction::select_action_and_close(A::environment_changed(row.id)),
+                ))
+            })
             .collect();
-        sorted_envs.sort_by(|a, b| a.1.cmp(&b.1));
-
-        let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
-        let mut selected_name: Option<String> = None;
-        items.push(MenuItem::Item(
-            MenuItemFields::new(ORCHESTRATION_ENV_NONE_LABEL).with_on_select_action(
-                DropdownAction::select_action_and_close(A::environment_changed(String::new())),
-            ),
-        ));
-        if initial_env.is_empty() {
-            selected_name = Some(ORCHESTRATION_ENV_NONE_LABEL.to_string());
-        }
-        for (env_id, env_name) in &sorted_envs {
-            if env_id == &initial_env {
-                selected_name = Some(env_name.clone());
-            }
-            let env_id_for_item = env_id.clone();
-            items.push(MenuItem::Item(
-                MenuItemFields::new(env_name).with_on_select_action(
-                    DropdownAction::select_action_and_close(A::environment_changed(
-                        env_id_for_item,
-                    )),
-                ),
-            ));
-        }
         dropdown.set_rich_items(items, ctx_dropdown);
-        if let Some(name) = selected_name {
-            dropdown.set_selected_by_name(&name, ctx_dropdown);
+        if let Some(label) = &selected_label {
+            dropdown.set_selected_by_name(label, ctx_dropdown);
         }
     });
 }
@@ -591,37 +469,65 @@ fn render_new_environment_footer<A: OrchestrationControlAction>(
     .with_cursor(Cursor::PointingHand)
     .finish()
 }
-/// Repopulates the host picker with the workspace default (if any) and
-/// the user's last-selected custom host (if any), then sets the current
-/// selection to `initial_host`.
+/// Repopulates the host picker rows from [`host_snapshot`] (workspace
+/// default, connected workers, recent custom slug), then sets the
+/// current selection to `initial_host`.
 pub fn populate_host_picker<V: View>(
     picker: &ViewHandle<HostPicker>,
     initial_host: &str,
     ctx: &mut ViewContext<V>,
 ) {
-    let default_host = resolve_default_host_slug(ctx);
-    let recent_host = resolve_recent_host_slug(ctx);
-    let initial = if initial_host.trim().is_empty() {
-        ORCHESTRATION_WARP_WORKER_HOST.to_string()
-    } else {
-        initial_host.to_string()
-    };
-    let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
-        .worker_hosts_excluding(default_host.as_deref());
-    connected_hosts.sort();
-    connected_hosts.dedup();
+    let state = OrchestrationConfigState::from_run_agents_fields(
+        "",
+        "",
+        &RunAgentsExecutionMode::Remote {
+            environment_id: String::new(),
+            worker_host: initial_host.to_string(),
+            computer_use_enabled: false,
+        },
+    );
+    let snapshot = host_snapshot(&state, ctx);
+    let selected = snapshot
+        .selected_id
+        .unwrap_or_else(|| ORCHESTRATION_WARP_WORKER_HOST.to_string());
+    let mut default_host = None;
+    let mut recent_host = None;
+    let mut connected_hosts = Vec::new();
+    for row in snapshot.rows {
+        match row.badge {
+            Some(OptionBadge::Default) => default_host = Some(row.id),
+            Some(OptionBadge::Recent) => recent_host = Some(row.id),
+            Some(OptionBadge::Connected) => connected_hosts.push(row.id),
+            // The unbadged "warp" row is built into the HostPicker itself.
+            None => {}
+        }
+    }
     picker.update(ctx, |picker, picker_ctx| {
         picker.set_options(default_host, recent_host, connected_hosts, picker_ctx);
-        picker.set_selected(&initial, picker_ctx);
+        picker.set_selected(&selected, picker_ctx);
     });
 }
 
-// ── Auth secret helpers ────────────────────────────────────────────
+// ── Auth secret helpers ──────────────────────────────────
 
-/// Populates the auth secret picker: Inherit, loaded managed secrets, then
-/// a "+ New API key…" entry for harnesses with managed-secret types. Also
-/// kicks off a lazy fetch so subsequent paints replace "Loading…" with
-/// real entries.
+/// Trigger label for the auth-secret dropdown. `Unset` falls back to
+/// "+ New API key…" rather than auto-picking the first loaded key.
+fn auth_secret_trigger_label(selection: &AuthSecretSelection, supports_create_new: bool) -> String {
+    match selection {
+        AuthSecretSelection::Named(name) => name.clone(),
+        AuthSecretSelection::Inherit => AUTH_SECRET_INHERIT_LABEL.to_string(),
+        AuthSecretSelection::CreatingNew => AUTH_SECRET_CREATE_NEW_LABEL.to_string(),
+        AuthSecretSelection::Unset if supports_create_new => {
+            AUTH_SECRET_CREATE_NEW_LABEL.to_string()
+        }
+        AuthSecretSelection::Unset => AUTH_SECRET_INHERIT_LABEL.to_string(),
+    }
+}
+
+/// Populates the auth secret picker from [`api_key_snapshot`]: Inherit,
+/// loaded managed secrets, then a "+ New API key…" entry for harnesses
+/// with managed-secret types. Also kicks off a lazy fetch so subsequent
+/// paints replace "Loading…" with real entries.
 pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V: View>(
     dropdown: &ViewHandle<Dropdown<A>>,
     selection: &AuthSecretSelection,
@@ -639,51 +545,37 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
         model.ensure_auth_secrets_fetched(harness, ctx);
     });
 
-    let initial = match selection {
-        AuthSecretSelection::Named(name) => Some(name.clone()),
-        _ => None,
-    };
-    let supports_create_new = !auth_secret_types_for_harness(harness).is_empty();
-    let selection = selection.clone();
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
+        "",
+        harness_type,
+        &RunAgentsExecutionMode::Local,
+    );
+    state.auth_secret_selection = selection.clone();
     dropdown.update(ctx, |dropdown, ctx_dropdown| {
-        let availability = HarnessAvailabilityModel::as_ref(ctx_dropdown);
-        let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
-
-        items.push(MenuItem::Item(
-            MenuItemFields::new(AUTH_SECRET_INHERIT_LABEL).with_on_select_action(
-                DropdownAction::select_action_and_close(A::auth_secret_changed(None)),
-            ),
-        ));
-
-        let mut selected_display_name: Option<String> = None;
-        match availability.auth_secrets_for(harness) {
-            AuthSecretFetchState::Loaded(secrets) => {
-                for secret in secrets {
-                    let name = secret.name.clone();
-                    if Some(&name) == initial.as_ref() {
-                        selected_display_name = Some(name.clone());
-                    }
-                    items.push(MenuItem::Item(
-                        MenuItemFields::new(&name).with_on_select_action(
-                            DropdownAction::select_action_and_close(A::auth_secret_changed(Some(
-                                name.clone(),
-                            ))),
-                        ),
-                    ));
-                }
-            }
-            AuthSecretFetchState::NotFetched | AuthSecretFetchState::Loading => {
-                items.push(MenuItem::Item(
-                    MenuItemFields::new("Loading…").with_disabled(true),
-                ));
-            }
-            AuthSecretFetchState::Failed(_) => {
-                items.push(MenuItem::Item(
-                    MenuItemFields::new("Unable to load secrets").with_disabled(true),
-                ));
-            }
+        let snapshot = api_key_snapshot(&state, ctx_dropdown);
+        let supports_create_new =
+            matches!(snapshot.footer, Some(OptionFooter::CreateNewAuthSecret));
+        let mut items: Vec<MenuItem<DropdownAction>> = snapshot
+            .rows
+            .into_iter()
+            .map(|row| {
+                // An empty row id is the Inherit entry; others are named
+                // managed secrets.
+                let name = (!row.id.is_empty()).then_some(row.id);
+                MenuItem::Item(MenuItemFields::new(&row.label).with_on_select_action(
+                    DropdownAction::select_action_and_close(A::auth_secret_changed(name)),
+                ))
+            })
+            .collect();
+        match snapshot.status {
+            OptionSourceStatus::Loading => items.push(MenuItem::Item(
+                MenuItemFields::new("Loading…").with_disabled(true),
+            )),
+            OptionSourceStatus::Failed { message } => items.push(MenuItem::Item(
+                MenuItemFields::new(&message).with_disabled(true),
+            )),
+            OptionSourceStatus::Ready | OptionSourceStatus::Empty { .. } => {}
         }
-
         if supports_create_new {
             items.push(MenuItem::Separator);
             items.push(MenuItem::Item(
@@ -692,22 +584,8 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
                 ),
             ));
         }
-
-        // Trigger label derives directly from the selection. `Unset` falls
-        // back to "+ New API key…" rather than auto-picking the first
-        // loaded key.
-        let final_selection = match &selection {
-            AuthSecretSelection::Named(name) => name.clone(),
-            AuthSecretSelection::Inherit => AUTH_SECRET_INHERIT_LABEL.to_string(),
-            AuthSecretSelection::CreatingNew => AUTH_SECRET_CREATE_NEW_LABEL.to_string(),
-            AuthSecretSelection::Unset if supports_create_new => {
-                AUTH_SECRET_CREATE_NEW_LABEL.to_string()
-            }
-            AuthSecretSelection::Unset => AUTH_SECRET_INHERIT_LABEL.to_string(),
-        };
-        let _ = selected_display_name;
-        let _ = &availability;
-
+        let final_selection =
+            auth_secret_trigger_label(&state.auth_secret_selection, supports_create_new);
         dropdown.set_rich_items(items, ctx_dropdown);
         dropdown.set_selected_by_name(&final_selection, ctx_dropdown);
     });
@@ -871,36 +749,12 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
     ctx: &mut ViewContext<V>,
 ) {
     if let Some(model_picker) = handles.model_picker.clone() {
-        let target_model_id = state.model_id.clone();
-        let harness_type = state.harness_type.clone();
-        model_picker.update(ctx, |dropdown, ctx_dropdown| {
-            let harness = Harness::parse_orchestration_harness(&harness_type);
-            let display_name = match harness {
-                Some(Harness::Oz) | None => {
-                    let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
-                    llm_prefs
-                        .get_base_llm_choices_for_agent_mode(ctx_dropdown)
-                        .find(|llm| llm.id.to_string() == target_model_id)
-                        .map(|llm| llm.menu_display_name())
-                }
-                Some(harness) => {
-                    if target_model_id.is_empty() {
-                        Some(DEFAULT_MODEL_LABEL.to_string())
-                    } else {
-                        let availability = HarnessAvailabilityModel::as_ref(ctx_dropdown);
-                        availability.models_for(harness).and_then(|models| {
-                            models
-                                .iter()
-                                .find(|m| m.id == target_model_id)
-                                .map(|m| m.display_name.clone())
-                        })
-                    }
-                }
-            };
-            if let Some(name) = &display_name {
-                dropdown.set_selected_by_name(name, ctx_dropdown);
-            }
-        });
+        let snapshot = model_snapshot(state, ctx);
+        if let Some(label) = selected_row_label(&snapshot) {
+            model_picker.update(ctx, |dropdown, ctx_dropdown| {
+                dropdown.set_selected_by_name(&label, ctx_dropdown);
+            });
+        }
     }
     if let Some(harness_picker) = handles.harness_picker.clone() {
         let harness_type = state.harness_type.clone();
@@ -915,20 +769,12 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
         });
     }
     if let Some(environment_picker) = handles.environment_picker.clone() {
-        let env_id = match &state.execution_mode {
-            RunAgentsExecutionMode::Remote { environment_id, .. } => environment_id.clone(),
-            RunAgentsExecutionMode::Local => String::new(),
-        };
-        environment_picker.update(ctx, |dropdown, ctx_dropdown| {
-            if env_id.is_empty() {
-                dropdown.set_selected_by_name(ORCHESTRATION_ENV_NONE_LABEL, ctx_dropdown);
-                return;
-            }
-            let all_envs = CloudAmbientAgentEnvironment::get_all(ctx_dropdown);
-            if let Some(env) = all_envs.iter().find(|e| e.id.uid() == env_id) {
-                dropdown.set_selected_by_name(&env.model().string_model.name, ctx_dropdown);
-            }
-        });
+        let snapshot = environment_snapshot(state, ctx);
+        if let Some(label) = selected_row_label(&snapshot) {
+            environment_picker.update(ctx, |dropdown, ctx_dropdown| {
+                dropdown.set_selected_by_name(&label, ctx_dropdown);
+            });
+        }
     }
     if let Some(host_picker) = handles.host_picker.clone() {
         let worker_host = current_worker_host(state).to_string();
@@ -937,21 +783,12 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
         });
     }
     if let Some(auth_secret_picker) = handles.auth_secret_picker.clone() {
-        let selection = state.auth_secret_selection.clone();
-        let supports_create_new = Harness::parse_orchestration_harness(&state.harness_type)
-            .filter(|h| *h != Harness::Oz)
-            .map(|h| !auth_secret_types_for_harness(h).is_empty())
-            .unwrap_or(false);
+        let supports_create_new = matches!(
+            api_key_snapshot(state, ctx).footer,
+            Some(OptionFooter::CreateNewAuthSecret)
+        );
+        let label = auth_secret_trigger_label(&state.auth_secret_selection, supports_create_new);
         auth_secret_picker.update(ctx, |dropdown, ctx_dropdown| {
-            let label = match &selection {
-                AuthSecretSelection::Named(name) => name.clone(),
-                AuthSecretSelection::Inherit => AUTH_SECRET_INHERIT_LABEL.to_string(),
-                AuthSecretSelection::CreatingNew => AUTH_SECRET_CREATE_NEW_LABEL.to_string(),
-                AuthSecretSelection::Unset if supports_create_new => {
-                    AUTH_SECRET_CREATE_NEW_LABEL.to_string()
-                }
-                AuthSecretSelection::Unset => AUTH_SECRET_INHERIT_LABEL.to_string(),
-            };
             dropdown.set_selected_by_name(&label, ctx_dropdown);
         });
     }
