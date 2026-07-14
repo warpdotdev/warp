@@ -28,14 +28,14 @@
 # Code editor / LSP / notebooks / codebase context
 /app/src/code/ @kevinyang372 @harryalbert
 /app/src/editor/ @kevinyang372 @harryalbert
-/app/src/notebooks/ @kevinyang372 @bnavetta @harryalbert
-/app/src/ai/get_relevant_files/ @kevinyang372 @harryalbert
-/crates/ai/src/index/ @kevinyang372 @harryalbert
-/crates/ai/src/project_context/ @kevinyang372 @harryalbert
+/app/src/notebooks/ @kevinyang372 @bnavetta
+/app/src/ai/get_relevant_files/ @kevinyang372
+/crates/ai/src/index/ @kevinyang372
+/crates/ai/src/project_context/ @kevinyang372
 /crates/editor/ @kevinyang372 @bnavetta @harryalbert
-/crates/languages/ @kevinyang372 @bnavetta @harryalbert
-/crates/lsp/ @kevinyang372 @moirahuang @harryalbert
-/crates/repo_metadata/ @kevinyang372 @harryalbert
+/crates/languages/ @kevinyang372 @bnavetta
+/crates/lsp/ @kevinyang372 @moirahuang
+/crates/repo_metadata/ @kevinyang372
 
 # Input editor / window, tab, and pane management / grep tool call
 /app/src/terminal/input/ @vkodithala
