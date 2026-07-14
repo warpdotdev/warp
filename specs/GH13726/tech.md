@@ -1,9 +1,16 @@
 # TECH.md — Markdown viewer: raw-HTML `<table>` support
 
-Product spec: `specs/GH13652/tables/product.md`
-GitHub issue: https://github.com/warpdotdev/warp/issues/13652
-Preceding specs in the chain: `specs/GH13652/` (`<img>`, PR #13656),
-`specs/GH13652/details-summary/`.
+Product spec: `specs/GH13726/product.md`
+GitHub issue: https://github.com/warpdotdev/warp/issues/13726
+Split out of #13652 (bulk raw-HTML-subset request, closed in favor of per-feature
+issues). Preceding specs from that chain: `specs/GH13652/` (`<img>`, PR #13656),
+`specs/GH13652/details-summary/`. Related: `<br>`-handling has its own issue, #13732;
+this spec still owns `<br>`-in-cell (item 1 below) since it's core to the table's
+value proposition, but see #13732 for `<br>` outside of tables.
+
+This spec covers **raw HTML table markup only**. GFM pipe-syntax tables
+(`| a | b |`) already work today via `parse_table`, gated behind
+`FeatureFlag::MarkdownTables` (`buffer.rs:850`) — unaffected by this work.
 
 ## Context
 

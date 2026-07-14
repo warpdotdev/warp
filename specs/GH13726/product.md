@@ -1,8 +1,14 @@
 # PRODUCT.md — Markdown viewer: raw-HTML `<table>` support
 
-Issue: https://github.com/warpdotdev/warp/issues/13652
-Preceded by: `<img>` sizing (`specs/GH13652/`, PR #13656) and `<details>/<summary>`
-(`specs/GH13652/details-summary/`).
+Issue: https://github.com/warpdotdev/warp/issues/13726
+Split out of #13652 (bulk raw-HTML-subset request, closed in favor of per-feature
+issues). This spec previously targeted #13652 (as `specs/GH13652/tables/`) and has
+been retargeted to the focused #13726 without changing its scope.
+Related: `<br>`-in-cell now has its own dedicated issue, #13732
+(`specs/GH13732/` if/when authored) — this spec still implements `<br>`-in-cell
+directly (invariant 4) since it's part of what makes HTML tables worth having over
+GFM pipe tables, but #13732 is the place to look for any standalone `<br>` handling
+outside of tables (e.g. `<br>` in ordinary paragraph text).
 
 ## Summary
 
@@ -16,12 +22,18 @@ This spec covers teaching the Markdown viewer to render a block-level HTML
 `<table>` (`<thead>`/`<tbody>`/`<tr>`/`<th>`/`<td>`) by mapping it onto Warp's existing
 table model and render path, and to honor `<br>` inside cells. It scopes
 `colspan`/`rowspan` as an **explicit non-goal for this slice**, because those fight the
-existing flat rectangular-grid model at every layer and warrant their own effort.
+existing flat rectangular-grid model at every layer and warrant their own effort. It
+covers raw HTML table markup only — GFM pipe-syntax tables (`| a | b |`) already work
+today, gated behind `FeatureFlag::MarkdownTables`, and are out of scope here.
 
 A deliberate framing note for reviewers: a *simple* HTML table (no `<br>`, no spans) maps
 onto the existing `FormattedTable` and renders with zero editor changes — but it delivers
 little beyond GFM pipe tables. The value HTML tables add is `<br>`-in-cell and spans;
 this slice targets the first (`<br>`) and honestly defers the second (spans).
+
+The repo's own paste-path test, `test_unsupported_html_types`
+(`crates/markdown_parser/src/html_parser_tests.rs:191-222`, TODO-marked), documents
+today's non-support and should be updated as part of this work.
 
 Figma: none provided.
 
