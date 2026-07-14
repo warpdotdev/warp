@@ -184,8 +184,10 @@ as unaligned content, so no new content-injection surface is introduced beyond
   (heading stays `Heading`, not flattened to `Line`) (invariant 5).
 - Nested `<div align><p align></div>` → innermost governs its own content,
   no panic, no infinite recursion (design question 5).
-- Unterminated `<div align="center">` (no matching close) → falls back to
-  literal-text or unaligned rendering, rest of document unaffected
+- Unterminated `<div align="center">` (no matching close) → renders as
+  literal text, rest of document unaffected (invariant 7).
+- `align`/`text-align` on content the block detector can't safely group →
+  renders as the unaligned equivalent, normal Markdown semantics preserved
   (invariant 7).
 
 ### Round-trip (`crates/markdown_parser` + `crates/editor/src/content/text_tests.rs`)
@@ -204,8 +206,11 @@ as unaligned content, so no new content-injection surface is introduced beyond
 - A heading inside an aligned group still measures/wraps/paints as a heading
   (font size, weight) — alignment doesn't downgrade block semantics.
 - An aligned group containing unsupported content (e.g. `<img>` before #13721
-  lands, rendering as literal text) still positions that literal text per the
-  group's alignment — the two features are independently testable.
+  lands, rendering as literal text via `FormattedTextElement`
+  (`crates/warpui_core/src/elements/gui/formatted_text_element.rs`), the same
+  sink every other `FormattedTextLine` variant renders through) still
+  positions that literal text per the group's alignment — the two features
+  are independently testable.
 
 ### Integration / manual
 

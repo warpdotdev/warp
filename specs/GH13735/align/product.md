@@ -106,10 +106,15 @@ Out of scope (explicit non-goals for this slice):
    silently drop `align`/`text-align`. The tech spec defines the exact
    serialization.
 
-7. A malformed block — unterminated `<div>`/`<p>`, or an `align` value applied
-   to unsupported nested content the parser can't safely group — degrades to
-   rendering as literal text or as the unaligned equivalent, without
-   panicking or corrupting the rest of the document.
+7. Malformed input degrades deterministically, never to undefined behavior:
+   an unterminated `<div>`/`<p>` (no matching close tag found) renders as
+   literal text — the opening tag and everything after it up to the next
+   recognized block boundary is treated as unparsed source. An
+   `align`/`text-align` value the parser can't safely group (e.g. content
+   the block detector rejects as a groupable unit) renders as the unaligned
+   equivalent — the content still renders with normal Markdown semantics,
+   just without the alignment applied. Neither case ever panics or corrupts
+   the rest of the document.
 
 ## Test case (from the issue, used as the acceptance check)
 
