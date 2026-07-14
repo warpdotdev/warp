@@ -147,6 +147,36 @@ pub fn is_file_link_separator(c: char) -> bool {
     )
 }
 
+/// Returns true when `c` should terminate a clickable URL.
+///
+/// Beyond the explicit ASCII set in [`URL_SEPARATORS`] (per RFC 3986 invalid
+/// URL characters), any non-ASCII Unicode whitespace or punctuation also acts
+/// as a boundary. This prevents trailing fullwidth/CJK punctuation such as
+/// `，` (U+FF0C) or `。` (U+3002) common in CJK prose from being captured as
+/// part of a URL when no ASCII whitespace follows the link. Mirrors the
+/// boundary logic in [`is_file_link_separator`]. Connectors (`Pc`) and dashes
+/// (`Pd`) are excluded since they can appear in valid URLs (e.g. query
+/// parameters, IDN).
+pub fn is_url_separator(c: char) -> bool {
+    if URL_SEPARATORS.contains(&c) {
+        return true;
+    }
+    if c.is_ascii() {
+        return false;
+    }
+    if c.is_whitespace() {
+        return true;
+    }
+    matches!(
+        get_general_category(c),
+        GeneralCategory::OpenPunctuation
+            | GeneralCategory::ClosePunctuation
+            | GeneralCategory::InitialPunctuation
+            | GeneralCategory::FinalPunctuation
+            | GeneralCategory::OtherPunctuation
+    )
+}
+
 /// Represents a range of cells with information on their combined content and total
 /// cell width.
 #[derive(Debug, PartialEq, Eq)]
@@ -712,7 +742,7 @@ impl GridHandler {
             !cell
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                && URL_SEPARATORS.contains(&cell.c)
+                && is_url_separator(cell.c)
         };
         // If the point is on a separator, return directly because this can't be
         // part of a url.
@@ -779,6 +809,15 @@ impl GridHandler {
 
             if current_point >= original_point {
                 passed_point = true;
+            }
+
+            // Treat CJK/fullwidth punctuation and other URL separators as URL
+            // terminators before feeding the character to the locator, preventing
+            // trailing punctuation from being captured as part of the URL.
+            if !item.cell().flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                && is_url_separator(item.cell().c)
+            {
+                break;
             }
 
             let last_state = mem::replace(&mut state, locator.advance(item.cell().c));

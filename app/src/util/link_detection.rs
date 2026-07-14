@@ -12,7 +12,7 @@ use crate::ai::agent::{AIAgentActionType, AIAgentOutput, AIAgentTextSection, Rea
 use crate::ai::blocklist::block::view_impl::output::LinkActionConstructors;
 use crate::ai::blocklist::block::TextLocation;
 use crate::terminal::links::should_directly_open_link;
-use crate::terminal::model::grid::grid_handler::is_file_link_separator;
+use crate::terminal::model::grid::grid_handler::{is_file_link_separator, is_url_separator};
 use crate::terminal::ShellLaunchData;
 
 cfg_if::cfg_if! {
@@ -201,6 +201,19 @@ fn detect_urls(text: &str) -> Vec<Range<usize>> {
         // Reference to https://docs.rs/urlocator/latest/urlocator/#example-url-boundaries
         // We know we have fully parsed an url when the locator advances from the `UrlLocation::Url`
         // to the `UrlLocation::Reset` stage.
+        //
+        // Treat CJK/fullwidth punctuation and other URL-invalid characters as hard terminators
+        // before feeding the character to the locator, so trailing punctuation in CJK prose
+        // (e.g. `https://example.com，`) is not captured as part of the URL.
+        if is_url_separator(c) {
+            if let Some((start, end)) = start.zip(end) {
+                url_ranges.push(start..end);
+            }
+            locator = UrlLocator::new();
+            start = None;
+            end = None;
+            continue;
+        }
         match locator.advance(c) {
             UrlLocation::Url(length, end_offset) => {
                 end = Some(1 + i - end_offset as usize);
