@@ -140,6 +140,10 @@ pub use crate::terminal::{
 };
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
+pub use crate::tui::{
+    TuiMcpAction, TuiMcpConfigState, TuiMcpModel, TuiMcpModelEvent, TuiMcpServerId,
+    TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
+};
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;
 

@@ -35,6 +35,7 @@ fn slash_command_is_submitted_as_prompt_only_for_prompt_commands() {
         &commands::CONVERSATIONS
     ));
     assert!(!slash_command_is_submitted_as_prompt(&commands::QUEUE));
+    assert!(!slash_command_is_submitted_as_prompt(&commands::MCP));
 }
 
 #[test]
@@ -54,6 +55,7 @@ fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
             TuiSlashCommand::ExportToClipboard,
         ),
         (&*commands::EXPORT_TO_FILE, TuiSlashCommand::ExportToFile),
+        (&commands::MCP, TuiSlashCommand::Mcp),
     ] {
         assert_eq!(
             TuiSlashCommand::from_static_command(command),

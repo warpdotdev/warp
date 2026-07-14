@@ -155,4 +155,17 @@ pub struct McpOAuthProviderConfig {
     pub client_id: Cow<'static, str>,
     /// The OAuth client secret registered for this channel.
     pub client_secret: Cow<'static, str>,
+    /// A separately registered native/TUI client that permits loopback
+    /// redirects. This must never be inferred from the GUI client.
+    #[serde(default)]
+    pub tui_client: Option<McpOAuthTuiClientConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McpOAuthTuiClientConfig {
+    pub client_id: Cow<'static, str>,
+    /// Native OAuth clients should normally be public, but retain optional
+    /// secret support for providers that require one.
+    #[serde(default)]
+    pub client_secret: Option<Cow<'static, str>>,
 }

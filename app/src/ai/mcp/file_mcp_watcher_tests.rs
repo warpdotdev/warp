@@ -1,6 +1,10 @@
 use std::env;
 
-use super::substitute_env_vars;
+use super::{
+    parse_mcp_config_file, substitute_env_vars, FileMCPConfigDiagnosticKind,
+    FileMCPConfigParseOutcome,
+};
+use crate::ai::mcp::MCPProvider;
 
 fn cleanup_env_vars(vars: &[&str]) {
     for var in vars {
@@ -72,4 +76,49 @@ fn test_substitute_env_vars_missing_or_empty() {
 
     // Cleanup
     cleanup_env_vars(&["EMPTY_VAR"]);
+}
+
+#[tokio::test]
+async fn parse_outcomes_distinguish_missing_invalid_and_valid_configs() {
+    let directory = tempfile::tempdir().expect("temporary directory should be created");
+    let path = directory.path().join(".mcp.json");
+
+    assert!(matches!(
+        parse_mcp_config_file(&path, MCPProvider::Warp).await,
+        FileMCPConfigParseOutcome::Missing
+    ));
+
+    std::fs::write(&path, "{invalid").expect("invalid config should be written");
+    match parse_mcp_config_file(&path, MCPProvider::Warp).await {
+        FileMCPConfigParseOutcome::Error(diagnostic) => {
+            assert_eq!(diagnostic.kind, FileMCPConfigDiagnosticKind::Parse);
+        }
+        _ => panic!("invalid JSON should produce a parse diagnostic"),
+    }
+
+    std::env::remove_var("WARP_MCP_TEST_MISSING");
+    std::fs::write(
+        &path,
+        r#"{"mcpServers":{"test":{"command":"${WARP_MCP_TEST_MISSING}"}}}"#,
+    )
+    .expect("missing-env config should be written");
+    match parse_mcp_config_file(&path, MCPProvider::Warp).await {
+        FileMCPConfigParseOutcome::Error(diagnostic) => {
+            assert_eq!(
+                diagnostic.kind,
+                FileMCPConfigDiagnosticKind::MissingEnvironmentVariable
+            );
+        }
+        _ => panic!("missing env should produce a diagnostic"),
+    }
+
+    std::fs::write(
+        &path,
+        r#"{"mcpServers":{"test":{"command":"test-command"}}}"#,
+    )
+    .expect("valid config should be written");
+    match parse_mcp_config_file(&path, MCPProvider::Warp).await {
+        FileMCPConfigParseOutcome::Parsed(servers) => assert_eq!(servers.len(), 1),
+        _ => panic!("valid config should produce one server"),
+    }
 }

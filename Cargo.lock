@@ -8120,6 +8120,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "async-trait",
+ "axum",
  "cfg-if",
  "cloud_object_models",
  "futures",

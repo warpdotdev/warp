@@ -27,6 +27,7 @@ mod inline_menu;
 mod input_mode_policy;
 mod input_suggestions_mode;
 mod keybindings;
+mod mcp_menu;
 mod model_menu;
 mod resume;
 mod skills_menu;

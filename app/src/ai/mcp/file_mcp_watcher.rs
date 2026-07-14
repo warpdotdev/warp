@@ -13,6 +13,7 @@ use repo_metadata::repositories::{
 use repo_metadata::repository::{Repository, RepositorySubscriber, SubscriberId};
 use repo_metadata::watcher::{DirectoryWatcher, RepositoryUpdate};
 use strum::IntoEnumIterator;
+use warp_core::features::FeatureFlag;
 use warp_core::safe_warn;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::HomeDirectoryWatcherEvent;
@@ -121,6 +122,8 @@ impl RepositorySubscriber for FileMCPSubscriber {
 /// [`FileMCPWatcherEvent`]s.
 pub struct FileMCPWatcher {
     file_mcp_tx: Sender<FileMCPDetectionMessage>,
+    /// Latest parse generation for each config source. Older async parses are discarded.
+    parse_generations: HashMap<(PathBuf, MCPProvider), u64>,
     /// Watcher handles for home provider subdirectories (e.g. `~/.codex`), keyed by subdir path.
     /// Used to cleanup watchers when the subdir is deleted at runtime.
     home_provider_watchers: HashMap<PathBuf, (ModelHandle<Repository>, SubscriberId)>,
@@ -135,6 +138,7 @@ pub struct FileMCPWatcher {
 impl FileMCPWatcher {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let (file_mcp_tx, file_mcp_rx) = async_channel::unbounded::<FileMCPDetectionMessage>();
+        let is_tui = settings::settings_mode() == settings::SettingsMode::Tui;
 
         ctx.spawn_stream_local(
             file_mcp_rx,
@@ -144,34 +148,32 @@ impl FileMCPWatcher {
             |_, _| {},
         );
 
-        // Subscribe to changes to detected repositories.
-        ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), {
-            let file_mcp_tx = file_mcp_tx.clone();
-            move |me, _, event, ctx| {
-                let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
-                // Register MCP servers for repos the user actively navigated to, and for
-                // repos cloned during cloud agent environment preparation.
-                if matches!(
-                    source,
-                    RepoDetectionSource::TerminalNavigation
-                        | RepoDetectionSource::CloudEnvironmentPrep
-                ) {
-                    let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
-                    if matches!(source, RepoDetectionSource::CloudEnvironmentPrep) {
-                        // Track how many MCP config files remain to be parsed for the cloud environment repo.
-                        let count =
-                            providers_in_scope(repo_path.clone(), repo_path.clone()).count();
-                        me.cloud_env_pending.insert(repo_path.clone(), count);
+        if !is_tui {
+            // Project and third-party provider discovery remains a GUI/cloud
+            // concern until later TUI phases.
+            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), {
+                let file_mcp_tx = file_mcp_tx.clone();
+                move |me, _, event, ctx| {
+                    let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
+                    if matches!(
+                        source,
+                        RepoDetectionSource::TerminalNavigation
+                            | RepoDetectionSource::CloudEnvironmentPrep
+                    ) {
+                        let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
+                        if matches!(source, RepoDetectionSource::CloudEnvironmentPrep) {
+                            let count =
+                                providers_in_scope(repo_path.clone(), repo_path.clone()).count();
+                            me.cloud_env_pending.insert(repo_path.clone(), count);
+                        }
+                        me.register_repo_for_file_mcp_watching(repo_path, ctx, file_mcp_tx.clone());
                     }
-                    me.register_repo_for_file_mcp_watching(repo_path, ctx, file_mcp_tx.clone());
                 }
-            }
-        });
-
-        // Subscribe to changes to top-level files in the home directory.
-        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
-            me.handle_home_directory_watcher_event(event, ctx);
-        });
+            });
+            ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
+                me.handle_home_directory_watcher_event(event, ctx);
+            });
+        }
         ctx.subscribe_to_model(
             &WarpManagedPathsWatcher::handle(ctx),
             |me, _, event, ctx| {
@@ -180,42 +182,46 @@ impl FileMCPWatcher {
         );
 
         let mut home_provider_watchers = HashMap::new();
-        if let Some(mcp_config_path) = warp_managed_mcp_config_path() {
-            Self::spawn_config_parse(
-                mcp_config_path.config_path,
-                mcp_config_path.root_path,
-                MCPProvider::Warp,
-                ctx,
-            );
+        if !is_tui || FeatureFlag::TuiMcpServers.is_enabled() {
+            if let Some(mcp_config_path) = warp_managed_mcp_config_path() {
+                Self::spawn_config_parse(
+                    mcp_config_path.config_path,
+                    mcp_config_path.root_path,
+                    MCPProvider::Warp,
+                    ctx,
+                );
+            }
         }
 
-        if let Some(home_dir) = dirs::home_dir() {
-            for provider in MCPProvider::iter() {
-                if provider == MCPProvider::Warp {
-                    continue;
-                }
-                match home_subdir_to_watch(provider) {
-                    None => {
-                        // Initial scan of config files for providers whose config lives directly in
-                        // home (i.e. ~/.claude.json). HomeDirectoryWatcher handles incremental updates.
-                        let Some(config_path) = home_config_file_path(provider) else {
-                            continue;
-                        };
-                        Self::spawn_config_parse(config_path, home_dir.clone(), provider, ctx);
+        if !is_tui {
+            if let Some(home_dir) = dirs::home_dir() {
+                for provider in MCPProvider::iter() {
+                    if provider == MCPProvider::Warp {
+                        continue;
                     }
-                    Some(subdir) => {
-                        // For providers whose home config lives in a subdir (e.g. ~/.codex for Codex)
-                        // start watching the subdir for file-based MCP servers, if it exists.
-                        let subdir_path = home_dir.join(&subdir);
-                        // Note: this will fail if the subdir doesn't exist yet.
-                        // We register upon creation of the subdir via HomeDirectoryWatcher.
-                        Self::watch_home_provider_dir(
-                            &subdir_path,
-                            home_dir.clone(),
-                            file_mcp_tx.clone(),
-                            &mut home_provider_watchers,
-                            ctx,
-                        );
+                    match home_subdir_to_watch(provider) {
+                        None => {
+                            // Initial scan of config files for providers whose config lives directly in
+                            // home (i.e. ~/.claude.json). HomeDirectoryWatcher handles incremental updates.
+                            let Some(config_path) = home_config_file_path(provider) else {
+                                continue;
+                            };
+                            Self::spawn_config_parse(config_path, home_dir.clone(), provider, ctx);
+                        }
+                        Some(subdir) => {
+                            // For providers whose home config lives in a subdir (e.g. ~/.codex for Codex)
+                            // start watching the subdir for file-based MCP servers, if it exists.
+                            let subdir_path = home_dir.join(&subdir);
+                            // Note: this will fail if the subdir doesn't exist yet.
+                            // We register upon creation of the subdir via HomeDirectoryWatcher.
+                            Self::watch_home_provider_dir(
+                                &subdir_path,
+                                home_dir.clone(),
+                                file_mcp_tx.clone(),
+                                &mut home_provider_watchers,
+                                ctx,
+                            );
+                        }
                     }
                 }
             }
@@ -223,10 +229,23 @@ impl FileMCPWatcher {
 
         Self {
             file_mcp_tx,
+            parse_generations: HashMap::new(),
             home_provider_watchers,
             project_repo_watchers: HashSet::new(),
             cloud_env_pending: HashMap::new(),
         }
+    }
+
+    pub fn reload_global_config(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(config) = warp_managed_mcp_config_path() else {
+            return;
+        };
+        self.update_servers_from_config_file(
+            &config.config_path,
+            config.root_path,
+            MCPProvider::Warp,
+            ctx,
+        );
     }
 
     /// Register a project repo for file-based MCP watching via DirectoryWatcher.
@@ -364,7 +383,9 @@ impl FileMCPWatcher {
                     let was_deleted = fs_event.deleted.contains(&config_path)
                         || fs_event.moved.values().any(|v| v == &config_path);
                     if was_deleted {
+                        self.invalidate_config_parse(&config_path, provider);
                         ctx.emit(FileMCPWatcherEvent::ConfigRemoved {
+                            config_path: config_path.clone(),
                             root_path: home_dir.clone(),
                             provider,
                         });
@@ -408,7 +429,10 @@ impl FileMCPWatcher {
                         {
                             repo_handle.update(ctx, |repo, ctx| repo.stop_watching(id, ctx));
                         }
+                        let config_path = home_dir.join(provider.home_config_path());
+                        self.invalidate_config_parse(&config_path, provider);
                         ctx.emit(FileMCPWatcherEvent::ConfigRemoved {
+                            config_path,
                             root_path: home_dir.clone(),
                             provider,
                         });
@@ -528,8 +552,13 @@ impl FileMCPWatcher {
         was_added: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        if was_deleted {
+        // Atomic replacements can be reported as a delete and add in the same
+        // update. Parse the replacement without transiently removing the
+        // last-known-good servers.
+        if was_deleted && !was_added {
+            self.invalidate_config_parse(&config_path, provider);
             ctx.emit(FileMCPWatcherEvent::ConfigRemoved {
+                config_path: config_path.clone(),
                 root_path: root_path.clone(),
                 provider,
             });
@@ -539,21 +568,32 @@ impl FileMCPWatcher {
         }
     }
 
+    fn invalidate_config_parse(&mut self, config_path: &Path, provider: MCPProvider) {
+        self.parse_generations
+            .entry((config_path.to_path_buf(), provider))
+            .and_modify(|generation| *generation += 1)
+            .or_insert(1);
+    }
+
     fn spawn_config_parse(
         config_path: PathBuf,
         root_path: PathBuf,
         provider: MCPProvider,
         ctx: &mut ModelContext<Self>,
     ) {
+        let key = (config_path.clone(), provider);
         let root_path_for_callback = root_path.clone();
         let _ = ctx.spawn(
             async move { parse_mcp_config_file(&config_path, provider).await },
-            move |_me, parsed, ctx| {
-                ctx.emit(FileMCPWatcherEvent::ConfigParsed {
-                    root_path: root_path_for_callback,
-                    provider,
-                    servers: parsed,
-                });
+            move |me, outcome, ctx| {
+                if me
+                    .parse_generations
+                    .get(&key)
+                    .is_some_and(|generation| *generation > 0)
+                {
+                    return;
+                }
+                emit_parse_outcome(outcome, key.0, root_path_for_callback, provider, ctx);
             },
         );
     }
@@ -568,15 +608,21 @@ impl FileMCPWatcher {
         ctx: &mut ModelContext<Self>,
     ) {
         let config_file_path = config_file_path.to_path_buf();
+        let generation = self
+            .parse_generations
+            .entry((config_file_path.clone(), provider))
+            .and_modify(|generation| *generation += 1)
+            .or_insert(1)
+            .to_owned();
+        let key = (config_file_path.clone(), provider);
         let _ = ctx.spawn(
             async move { parse_mcp_config_file(&config_file_path, provider).await },
-            move |me, servers, ctx| {
+            move |me, outcome, ctx| {
+                if me.parse_generations.get(&key) != Some(&generation) {
+                    return;
+                }
                 let repo_path_for_countdown = root_path.clone();
-                ctx.emit(FileMCPWatcherEvent::ConfigParsed {
-                    root_path,
-                    provider,
-                    servers,
-                });
+                emit_parse_outcome(outcome, key.0.clone(), root_path, provider, ctx);
                 if let Some(count) = me.cloud_env_pending.get_mut(&repo_path_for_countdown) {
                     *count = count.saturating_sub(1);
                     if *count == 0 {
@@ -637,16 +683,64 @@ fn substitute_env_vars(json_content: &str) -> Result<String, anyhow::Error> {
     Ok(result)
 }
 
-/// Asynchronously reads and parses an MCP config file and returns parsed MCP servers.
-/// Dispatches to the appropriate parser based on `provider` rather than inferring from path.
-/// Returns an empty vec if the file doesn't exist or parsing fails.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileMCPConfigDiagnosticKind {
+    Read,
+    Parse,
+    MissingEnvironmentVariable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileMCPConfigDiagnostic {
+    pub config_path: PathBuf,
+    pub provider: MCPProvider,
+    pub kind: FileMCPConfigDiagnosticKind,
+    pub message: String,
+}
+
+enum FileMCPConfigParseOutcome {
+    Missing,
+    Parsed(Vec<ParsedTemplatableMCPServerResult>),
+    Error(FileMCPConfigDiagnostic),
+}
+
+fn emit_parse_outcome(
+    outcome: FileMCPConfigParseOutcome,
+    config_path: PathBuf,
+    root_path: PathBuf,
+    provider: MCPProvider,
+    ctx: &mut ModelContext<FileMCPWatcher>,
+) {
+    match outcome {
+        FileMCPConfigParseOutcome::Missing => ctx.emit(FileMCPWatcherEvent::ConfigRemoved {
+            config_path,
+            root_path,
+            provider,
+        }),
+        FileMCPConfigParseOutcome::Parsed(servers) => ctx.emit(FileMCPWatcherEvent::ConfigParsed {
+            config_path,
+            root_path,
+            provider,
+            servers,
+        }),
+        FileMCPConfigParseOutcome::Error(diagnostic) => {
+            let _ = root_path;
+            ctx.emit(FileMCPWatcherEvent::ConfigError { diagnostic })
+        }
+    }
+}
+
+/// Asynchronously reads and parses an MCP config file.
+///
+/// Missing files, valid snapshots, and invalid snapshots are distinct so
+/// consumers can preserve the last-known-good servers on transient errors.
 async fn parse_mcp_config_file(
     file_path: &Path,
     provider: MCPProvider,
-) -> Vec<ParsedTemplatableMCPServerResult> {
+) -> FileMCPConfigParseOutcome {
     let file_contents = match async_fs::read_to_string(file_path).await {
         Ok(contents) => contents,
-        Err(err) if err.kind() == ErrorKind::NotFound => return vec![],
+        Err(err) if err.kind() == ErrorKind::NotFound => return FileMCPConfigParseOutcome::Missing,
         Err(err) => {
             safe_warn!(
                 safe: (
@@ -659,7 +753,12 @@ async fn parse_mcp_config_file(
                     err
                 )
             );
-            return vec![];
+            return FileMCPConfigParseOutcome::Error(FileMCPConfigDiagnostic {
+                config_path: file_path.to_path_buf(),
+                provider,
+                kind: FileMCPConfigDiagnosticKind::Read,
+                message: format!("Failed to read MCP config: {err}"),
+            });
         }
     };
 
@@ -678,7 +777,12 @@ async fn parse_mcp_config_file(
                         err
                     )
                 );
-                return vec![];
+                return FileMCPConfigParseOutcome::Error(FileMCPConfigDiagnostic {
+                    config_path: file_path.to_path_buf(),
+                    provider,
+                    kind: FileMCPConfigDiagnosticKind::Parse,
+                    message: format!("Failed to parse MCP config: {err:#}"),
+                });
             }
         },
         MCPProvider::Claude | MCPProvider::Warp | MCPProvider::Agents => file_contents,
@@ -698,12 +802,17 @@ async fn parse_mcp_config_file(
                     err
                 )
             );
-            return vec![];
+            return FileMCPConfigParseOutcome::Error(FileMCPConfigDiagnostic {
+                config_path: file_path.to_path_buf(),
+                provider,
+                kind: FileMCPConfigDiagnosticKind::MissingEnvironmentVariable,
+                message: err.to_string(),
+            });
         }
     };
 
     match ParsedTemplatableMCPServerResult::from_config_file_json(&resolved_contents) {
-        Ok(parsed_servers) => parsed_servers,
+        Ok(parsed_servers) => FileMCPConfigParseOutcome::Parsed(parsed_servers),
         Err(err) => {
             safe_warn!(
                 safe: (
@@ -716,7 +825,12 @@ async fn parse_mcp_config_file(
                     err
                 )
             );
-            vec![]
+            FileMCPConfigParseOutcome::Error(FileMCPConfigDiagnostic {
+                config_path: file_path.to_path_buf(),
+                provider,
+                kind: FileMCPConfigDiagnosticKind::Parse,
+                message: format!("Failed to parse MCP servers: {err:#}"),
+            })
         }
     }
 }
@@ -725,15 +839,19 @@ async fn parse_mcp_config_file(
 pub enum FileMCPWatcherEvent {
     /// A config file was successfully parsed; delivers the full snapshot for `(root_path, provider)`.
     ConfigParsed {
+        config_path: PathBuf,
         root_path: PathBuf,
         provider: MCPProvider,
         servers: Vec<ParsedTemplatableMCPServerResult>,
     },
     /// A config file was deleted; all servers for `(root_path, provider)` should be removed.
     ConfigRemoved {
+        config_path: PathBuf,
         root_path: PathBuf,
         provider: MCPProvider,
     },
+    /// A config could not be read or parsed. Consumers should preserve the last-known-good state.
+    ConfigError { diagnostic: FileMCPConfigDiagnostic },
     /// All provider config files for a cloud environment repo have been parsed.
     CloudEnvMcpScanComplete { repo_path: PathBuf },
 }

@@ -10,8 +10,12 @@
 use std::path::PathBuf;
 
 use ai::project_context::model::ProjectContextModel;
-use warp::tui_export::{ChangelogModel, ChangelogState, SkillManager};
+use warp::tui_export::{
+    ChangelogModel, ChangelogState, SkillManager, TuiMcpConfigState, TuiMcpModel,
+    TuiMcpServerStatus,
+};
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
@@ -74,7 +78,82 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
     if let Some(cwd) = cwd {
         column = render_project_section(cwd, column, builder, app);
     }
+    if FeatureFlag::TuiMcpServers.is_enabled() {
+        column = render_mcp_section(column, builder, app);
+    }
     column
+}
+
+fn render_mcp_section(mut column: TuiFlex, builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
+    let snapshot = TuiMcpModel::as_ref(app).snapshot();
+    let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+    let muted = builder.muted_text_style();
+    column = column.child(blank_row()).child(
+        TuiText::new("MCP")
+            .with_style(header_style)
+            .truncate()
+            .finish(),
+    );
+    if matches!(snapshot.config_state, TuiMcpConfigState::Missing) {
+        column = column.child(
+            TuiText::new(abbreviate_home_prefix(
+                &snapshot.config_path.display().to_string(),
+            ))
+            .with_style(builder.dim_text_style())
+            .truncate()
+            .finish(),
+        );
+    }
+
+    let (label, is_error) = mcp_status_label(snapshot);
+    let style = if is_error {
+        builder.error_text_style()
+    } else {
+        muted
+    };
+    column.child(TuiText::new(label).with_style(style).truncate().finish())
+}
+
+fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, bool) {
+    match &snapshot.config_state {
+        TuiMcpConfigState::Invalid { .. } => ("Config error · run /mcp".to_string(), true),
+        TuiMcpConfigState::Missing => ("Not configured · /mcp".to_string(), false),
+        TuiMcpConfigState::Ready if snapshot.servers.is_empty() => {
+            ("No servers configured · run /mcp".to_string(), false)
+        }
+        TuiMcpConfigState::Ready => {
+            let running = snapshot
+                .servers
+                .iter()
+                .filter(|server| matches!(server.status, TuiMcpServerStatus::Running))
+                .count();
+            let authenticating = snapshot
+                .servers
+                .iter()
+                .filter(|server| matches!(server.status, TuiMcpServerStatus::Authenticating))
+                .count();
+            let failed = snapshot
+                .servers
+                .iter()
+                .filter(|server| matches!(server.status, TuiMcpServerStatus::Failed { .. }))
+                .count();
+            let offline = snapshot.servers.len() - running - authenticating - failed;
+            let mut parts = Vec::new();
+            if running > 0 {
+                parts.push(format!("{running} connected"));
+            }
+            if authenticating > 0 {
+                parts.push(format!("{authenticating} needs auth"));
+            }
+            if failed > 0 {
+                parts.push(format!("{failed} failed"));
+            }
+            if offline > 0 {
+                parts.push(format!("{offline} offline"));
+            }
+            (format!("{} · /mcp", parts.join(" · ")), false)
+        }
+    }
 }
 
 /// The version line: the release version (or "dev build"), with the
@@ -237,3 +316,7 @@ fn changelog_bullets(app: &AppContext) -> Vec<String> {
 fn blank_row() -> Box<dyn TuiElement> {
     TuiText::new(" ").truncate().finish()
 }
+
+#[cfg(test)]
+#[path = "zero_state_tests.rs"]
+mod tests;

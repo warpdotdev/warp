@@ -37,6 +37,15 @@ pub const ADD_MCP: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const MCP: StaticCommand = StaticCommand {
+    name: "/mcp",
+    description: "View and manage MCP servers",
+    icon_path: "bundled/svg/dataflow.svg",
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static CREATE_ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/create-environment",
     description: "Create an Oz environment (Docker image + repos) via guided setup",
@@ -639,6 +648,9 @@ fn all_commands() -> Vec<StaticCommand> {
 
     if FeatureFlag::LocalDockerSandbox.is_enabled() {
         commands.push(CREATE_DOCKER_SANDBOX);
+    }
+    if FeatureFlag::TuiMcpServers.is_enabled() {
+        commands.push(MCP);
     }
 
     if FeatureFlag::CreatingSharedSessions.is_enabled()

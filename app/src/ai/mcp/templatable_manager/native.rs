@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_compat::CompatExt as _;
 use mcp::oauth::{
     self, load_credentials_from_secure_storage, write_to_secure_storage, AuthContext,
-    CallbackResult, FileBasedPersistedCredentialsMap, PersistedCredentials,
+    CallbackResult, FileBasedPersistedCredentialsMap, OAuthCallbackMode, PersistedCredentials,
     PersistedCredentialsMap, FILE_BASED_MCP_CREDENTIALS_KEY, TEMPLATABLE_MCP_CREDENTIALS_KEY,
 };
 use mcp::runtime::{error_to_user_message, spawn_server};
@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use simple_logger::manager::LogManager;
 use url::Url;
 use uuid::Uuid;
+use warp_core::channel::ChannelState;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
@@ -166,7 +167,7 @@ impl TemplatableMCPServerManager {
 
     fn save_credentials_to_secure_storage(
         &mut self,
-        app: &mut warpui::AppContext,
+        app: &mut ModelContext<Self>,
         installation_uuid: Uuid,
         credentials: PersistedCredentials,
     ) {
@@ -177,6 +178,9 @@ impl TemplatableMCPServerManager {
                 FILE_BASED_MCP_CREDENTIALS_KEY,
                 &self.file_based_server_credentials,
             );
+            app.emit(TemplatableMCPServerManagerEvent::CredentialsChanged {
+                uuid: installation_uuid,
+            });
             return;
         }
 
@@ -187,6 +191,9 @@ impl TemplatableMCPServerManager {
                 TEMPLATABLE_MCP_CREDENTIALS_KEY,
                 &self.server_credentials,
             );
+            app.emit(TemplatableMCPServerManagerEvent::CredentialsChanged {
+                uuid: installation_uuid,
+            });
         } else {
             report_error!(
                 "Corresponding file or cloud-based server not found for installation UUID",
@@ -198,8 +205,20 @@ impl TemplatableMCPServerManager {
     pub fn delete_credentials_from_secure_storage(
         &mut self,
         installation_uuid: Uuid,
-        app: &mut warpui::AppContext,
+        app: &mut ModelContext<Self>,
     ) {
+        if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {
+            self.file_based_server_credentials.remove(&hash);
+            write_to_secure_storage(
+                app,
+                FILE_BASED_MCP_CREDENTIALS_KEY,
+                &self.file_based_server_credentials,
+            );
+            app.emit(TemplatableMCPServerManagerEvent::CredentialsChanged {
+                uuid: installation_uuid,
+            });
+            return;
+        }
         if let Some(template_uuid) = self.get_template_uuid(installation_uuid) {
             self.server_credentials.remove(&template_uuid);
             write_to_secure_storage(
@@ -207,6 +226,9 @@ impl TemplatableMCPServerManager {
                 TEMPLATABLE_MCP_CREDENTIALS_KEY,
                 &self.server_credentials,
             );
+            app.emit(TemplatableMCPServerManagerEvent::CredentialsChanged {
+                uuid: installation_uuid,
+            });
         } else {
             report_error!(
                 "No template UUID found for installation UUID",
@@ -237,7 +259,9 @@ impl TemplatableMCPServerManager {
                 me.purge_file_based_server_credentials(installation_hashes, ctx);
             }
             // Notification for cloud-environment readiness; handled by the AgentDriver.
-            FileBasedMCPManagerEvent::CloudEnvMcpScanComplete { .. } => {}
+            FileBasedMCPManagerEvent::CloudEnvMcpScanComplete { .. }
+            | FileBasedMCPManagerEvent::ServersChanged
+            | FileBasedMCPManagerEvent::ConfigDiagnosticChanged => {}
         });
 
         // TemplatableMCPServerManager is the source of truth for templatable MCP servers stored on the cloud
@@ -347,6 +371,7 @@ impl TemplatableMCPServerManager {
             spawner: Some(ctx.spawner()),
             pending_reconnections: Default::default(),
             pending_oauth_csrf: Default::default(),
+            authorization_urls: Default::default(),
             cli_spawned_server_uuids: Default::default(),
         };
 
@@ -784,8 +809,10 @@ impl TemplatableMCPServerManager {
         // If we're executing a CLI MCP server, ensure that the environment variables includes
         // PATH.
         if let TransportType::CLIServer(cli_server) = &mut server.transport_type {
-            let Some(execution_path) = AISettings::as_ref(ctx).mcp_execution_path.value().clone()
-            else {
+            let execution_path = AISettings::as_ref(ctx).mcp_execution_path.value().clone();
+            let can_inherit_process_path = settings::settings_mode() == settings::SettingsMode::Tui
+                && FeatureFlag::TuiMcpServers.is_enabled();
+            if execution_path.is_none() && !can_inherit_process_path {
                 // This can only happen if the user is trying to launch an MCP server
                 // without ever having had a successfully bootstrapped session, which
                 // should basically never happen.
@@ -813,17 +840,21 @@ impl TemplatableMCPServerManager {
                     );
                 }
                 return;
-            };
+            }
 
             // Prepend our PATH to the static env vars, in case the user has
-            // specified a custom PATH in the MCP server settings.
-            cli_server.static_env_vars.insert(
-                0,
-                StaticEnvVar {
-                    name: "PATH".to_string(),
-                    value: execution_path,
-                },
-            );
+            // specified a custom PATH in the MCP server settings. TUI processes
+            // instead inherit their launching environment without converting
+            // an OsString PATH into a persisted GUI setting.
+            if let Some(execution_path) = execution_path {
+                cli_server.static_env_vars.insert(
+                    0,
+                    StaticEnvVar {
+                        name: "PATH".to_string(),
+                        value: execution_path,
+                    },
+                );
+            }
 
             // For file-based MCP installations without an explicit `working_directory`,
             // default the spawn cwd to the directory the config was discovered in
@@ -866,6 +897,8 @@ impl TemplatableMCPServerManager {
         let (oauth_result_tx, oauth_result_rx) = async_channel::unbounded();
 
         let is_headless = AppExecutionMode::as_ref(ctx).is_autonomous();
+        let use_tui_loopback = settings::settings_mode() == settings::SettingsMode::Tui
+            && FeatureFlag::TuiMcpServers.is_enabled();
 
         let mut persisted_credentials = self.server_credentials.get(&template_uuid).cloned();
         if persisted_credentials.is_none() && FeatureFlag::FileBasedMcp.is_enabled() {
@@ -885,9 +918,20 @@ impl TemplatableMCPServerManager {
             let persist_spawner = ctx.spawner();
             let requires_authentication_spawner = ctx.spawner();
             let authenticated_spawner = ctx.spawner();
+            let callback_mode = if use_tui_loopback {
+                OAuthCallbackMode::Loopback
+            } else {
+                OAuthCallbackMode::CustomScheme {
+                    redirect_uri: format!(
+                        "{}://mcp/oauth2callback",
+                        ChannelState::url_scheme()
+                    ),
+                    result_rx: oauth_result_rx,
+                }
+            };
 
             AuthContext {
-                oauth_result_rx,
+                callback_mode,
                 uuid: installation_uuid,
                 persisted_credentials,
                 is_headless,
@@ -917,9 +961,15 @@ impl TemplatableMCPServerManager {
                     Box::pin(async move {
                         spawner
                             .spawn(move |manager, ctx| {
-                                if !csrf_state.is_empty() {
+                                if !use_tui_loopback && !csrf_state.is_empty() {
                                     manager.pending_oauth_csrf.insert(csrf_state, uuid);
                                 }
+                                manager.authorization_urls.insert(uuid, auth_url.clone());
+                                ctx.emit(
+                                    TemplatableMCPServerManagerEvent::AuthenticationRequired {
+                                        uuid,
+                                    },
+                                );
                                 ctx.open_url(&auth_url);
                                 manager.change_server_state(uuid, MCPServerState::Authenticating, ctx);
                             })
@@ -980,6 +1030,7 @@ impl TemplatableMCPServerManager {
             move |me, server_info: Result<_, rmcp::RmcpError>, ctx| {
                 me.spawned_servers.remove(&installation_uuid);
                 me.pending_oauth_csrf.retain(|_, v| *v != installation_uuid);
+                me.authorization_urls.remove(&installation_uuid);
 
                 let error = match server_info {
                     Ok(info) => {
@@ -1074,6 +1125,7 @@ impl TemplatableMCPServerManager {
         }
         self.pending_oauth_csrf
             .retain(|_, v| *v != installation_uuid);
+        self.authorization_urls.remove(&installation_uuid);
         if let Some(server_info) = self.active_servers.remove(&installation_uuid) {
             self.change_server_state(installation_uuid, MCPServerState::ShuttingDown, ctx);
             // Cancel the server, and emit NotRunning state once it has stopped.
