@@ -2440,6 +2440,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "build_cache"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tracing",
+ "tracing-futures",
+ "warp_errors",
+]
+
+[[package]]
 name = "built"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15106,6 +15122,7 @@ dependencies = [
  "block",
  "blocking",
  "bounded-vec-deque",
+ "build_cache",
  "byte-unit",
  "bytecount",
  "bytemuck",

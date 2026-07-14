@@ -162,6 +162,10 @@ impl SetupClientEventReporter {
     }
 }
 
+#[cfg(test)]
+#[path = "setup_observability_tests.rs"]
+mod tests;
+
 #[derive(Clone, Copy)]
 pub(crate) enum OzRunTimelineEvent {
     AgentStarted,
@@ -193,6 +197,7 @@ pub(crate) enum SetupStep {
     GlobalSkillResolution,
     GlobalSkillRepoClone,
     EnvironmentRepoClone,
+    CacheSetup,
     EnvironmentSetupCommands,
     EnvironmentCodebaseIndexing,
     FileBasedMcpDiscovery,
@@ -260,6 +265,9 @@ impl SetupStep {
             }
             Self::EnvironmentRepoClone => {
                 span_and_name!("setup_environment_repo_clone")
+            }
+            Self::CacheSetup => {
+                span_and_name!("setup_caches")
             }
             Self::EnvironmentSetupCommands => {
                 span_and_name!("setup_environment_setup_commands")

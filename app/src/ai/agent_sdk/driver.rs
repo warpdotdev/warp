@@ -97,6 +97,8 @@ use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 
 pub(crate) mod attachments;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod cache_setup;
 pub(crate) mod cloud_provider;
 pub(crate) mod environment;
 mod error_classification;
