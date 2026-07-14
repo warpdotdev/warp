@@ -2156,6 +2156,9 @@ en:
         deleted: "Deleted"
         updated: "Updated"
       summary_label: "Edited {N} files"
+      file_label:
+        one: "file"
+        other: "files"
       preparing: "Preparing edits…"
       cancelled: "File edits cancelled"
       failed: "File edits failed"
@@ -2163,6 +2166,7 @@ en:
     agent_block:
       thinking_finished: "Thought for {duration}"
       thinking_running: "Thinking..."
+      summarized: "Conversation summarized"
     inline_menu:
       loading: "Loading slash commands…"
       empty: "No slash commands found"
@@ -2205,6 +2209,10 @@ en:
         pending_restart: "update installed, restart to apply"
       project:
         discovering: "Discovering project context…"
+        rule_loaded: "{file} loaded"
+        skills_discovered:
+          one: "1 skill discovered"
+          other: "{N} skills discovered"
     login:
       title: "Sign in to continue"
       open_in_browser: "Open {uri} in your browser"

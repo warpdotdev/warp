@@ -2157,13 +2157,17 @@ ru:
         deleted: "Удалён"
         updated: "Изменён"
       summary_label: "Изменено файлов: {N}"
+      file_label:
+        one: "файл"
+        other: "файлов"
       preparing: "Подготовка изменений…"
       cancelled: "Изменения файлов отменены"
       failed: "Не удалось изменить файлы"
-      success: "Изменено файлов: {N} (+{added} −{removed})"
+      success: "Изменено: {N} {file_label} (+{added} −{removed})"
     agent_block:
       thinking_finished: "Думал {duration}"
       thinking_running: "Думаю..."
+      summarized: "Разговор сведён"
     inline_menu:
       loading: "Загрузка slash-команд…"
       empty: "Slash-команды не найдены"
@@ -2206,6 +2210,10 @@ ru:
         pending_restart: "обновление установлено, перезапустите для применения"
       project:
         discovering: "Поиск контекста проекта…"
+        rule_loaded: "{file} загружен"
+        skills_discovered:
+          one: "1 навык обнаружен"
+          other: "{N} навыков обнаружено"
     login:
       title: "Войдите, чтобы продолжить"
       open_in_browser: "Откройте {uri} в браузере"

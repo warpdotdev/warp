@@ -181,7 +181,7 @@ pub(crate) fn render_summarization_section(
     render_collapsible_message_section(
         states,
         message_id,
-        "Conversation summarized".to_owned(),
+        menu_label("tui.agent_block.summarized", "Conversation summarized").to_owned(),
         finished,
         body,
         TuiUiBuilder::from_app(app).primary_text_style(),

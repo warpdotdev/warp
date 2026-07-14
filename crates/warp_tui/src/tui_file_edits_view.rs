@@ -288,7 +288,11 @@ impl TuiFileEditsView {
                     .chain(deleted_files.iter().map(String::as_str))
                     .unique()
                     .count();
-                let files_label = if files == 1 { "file" } else { "files" };
+                let files_label = if files == 1 {
+                    menu_label("tui.file_edits.file_label.one", "file")
+                } else {
+                    menu_label("tui.file_edits.file_label.other", "files")
+                };
                 menu_label(
                     "tui.file_edits.success",
                     "Edited {N} {file_label} (+{added} −{removed})",
@@ -298,16 +302,12 @@ impl TuiFileEditsView {
                 .replace("{added}", &lines_added.to_string())
                 .replace("{removed}", &lines_removed.to_string())
             }
-            Some(RequestFileEditsResult::Cancelled) => menu_label(
-                "tui.file_edits.cancelled",
-                "File edits cancelled",
-            )
-            .to_owned(),
-            Some(RequestFileEditsResult::DiffApplicationFailed { .. }) => menu_label(
-                "tui.file_edits.failed",
-                "File edits failed",
-            )
-            .to_owned(),
+            Some(RequestFileEditsResult::Cancelled) => {
+                menu_label("tui.file_edits.cancelled", "File edits cancelled").to_owned()
+            }
+            Some(RequestFileEditsResult::DiffApplicationFailed { .. }) => {
+                menu_label("tui.file_edits.failed", "File edits failed").to_owned()
+            }
             None => menu_label("tui.file_edits.preparing", "Preparing edits…").to_owned(),
         }
     }

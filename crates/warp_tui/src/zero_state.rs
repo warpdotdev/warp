@@ -204,14 +204,32 @@ fn render_project_section(
         )
     };
     for file in rule_files {
-        column = status_row(column, format!("{file} loaded"));
-    }
-    if project_skill_count > 0 {
-        let plural = if project_skill_count == 1 { "" } else { "s" };
         column = status_row(
             column,
-            format!("{project_skill_count} skill{plural} discovered"),
+            menu_label("tui.zero_state.project.rule_loaded", "{file} loaded")
+                .replace("{file}", file.as_str()),
         );
+    }
+    if project_skill_count > 0 {
+        if project_skill_count == 1 {
+            column = status_row(
+                column,
+                menu_label(
+                    "tui.zero_state.project.skills_discovered.one",
+                    "1 skill discovered",
+                )
+                .to_owned(),
+            );
+        } else {
+            column = status_row(
+                column,
+                menu_label(
+                    "tui.zero_state.project.skills_discovered.other",
+                    "{N} skills discovered",
+                )
+                .replace("{N}", &project_skill_count.to_string()),
+            );
+        }
     }
     column
 }
