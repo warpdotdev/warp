@@ -22,8 +22,8 @@ use parking_lot::FairMutex;
 use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel};
 use warp_terminal::model::grid::Dimensions as _;
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiRect, TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize,
 };
 use warpui_core::AppContext;
 
@@ -35,11 +35,18 @@ use crate::terminal_session_view::TuiTerminalSessionAction;
 pub(crate) struct AltScreenElement {
     model: Arc<FairMutex<TerminalModel>>,
     resize_tx: Sender<TuiSize>,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl AltScreenElement {
     pub(crate) fn new(model: Arc<FairMutex<TerminalModel>>, resize_tx: Sender<TuiSize>) -> Self {
-        Self { model, resize_tx }
+        Self {
+            model,
+            resize_tx,
+            size: None,
+            origin: None,
+        }
     }
 }
 
@@ -53,40 +60,58 @@ impl TuiElement for AltScreenElement {
         // The alt-screen app owns the whole pane.
         let size = constraint.max;
         let _ = self.resize_tx.try_send(size);
+        self.size = Some(size);
         size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
         let model = self.model.lock();
         let colors = model.colors();
-        render_grid_handler(model.alt_screen().grid_handler(), area, buffer, &colors);
+        let alt = model.alt_screen();
+        render_grid_handler(alt.grid_handler(), origin, size, surface, &colors);
+
+        // Submit the hardware cursor if the alt-screen app is showing it. The
+        // alt screen has no scrollback, but subtract history defensively so the
+        // cursor maps to a visible (screen-relative) row.
+        let cursor = if alt.is_mode_set(TermMode::SHOW_CURSOR) {
+            let grid = alt.grid_handler();
+            let point = grid.cursor_render_point();
+            point.row.checked_sub(grid.history_size()).and_then(|row| {
+                let col = u16::try_from(point.col).ok()?;
+                let row = u16::try_from(row).ok()?;
+                (col < size.width && row < size.height).then_some((col, row))
+            })
+        } else {
+            None
+        };
+        drop(model);
+        if let Some((col, row)) = cursor {
+            let cursor_point = ctx.scene_point(origin.offset(i32::from(col), i32::from(row)));
+            ctx.set_terminal_cursor(cursor_point);
+        }
     }
 
-    fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        let model = self.model.lock();
-        let alt = model.alt_screen();
-        if !alt.is_mode_set(TermMode::SHOW_CURSOR) {
-            return None;
-        }
-        let grid = alt.grid_handler();
-        let point = grid.cursor_render_point();
-        // The alt screen has no scrollback, but subtract history defensively so
-        // the cursor maps to a visible (screen-relative) row.
-        let row = point.row.checked_sub(grid.history_size())?;
-        let col = u16::try_from(point.col).ok()?;
-        let row = u16::try_from(row).ok()?;
-        if col >= area.width || row >= area.height {
-            return None;
-        }
-        Some((area.x.saturating_add(col), area.y.saturating_add(row)))
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        _area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        _ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         _app: &AppContext,
     ) -> bool {
         let TuiEvent::KeyDown {
@@ -102,9 +127,9 @@ impl TuiElement for AltScreenElement {
         if *is_composing {
             return false;
         }
-        // Forward the key to the app. `to_pty_bytes` layers the fallbacks a
-        // single-`KeyDown` frontend needs — `Ctrl+<letter>` → C0, printable
-        // `chars`, and named control keys — on top of the shared
+        // Forward the key to the app. `key_event_to_pty_bytes` layers the
+        // fallbacks a single-`KeyDown` frontend needs — `Ctrl+<letter>` → C0,
+        // printable `chars`, and named control keys — on top of the shared
         // `to_escape_sequence` encoder in `warp_terminal`. (ctrl-c never reaches
         // here: the session view's interrupt handler forwards it to the app.)
         let bytes = {
@@ -114,7 +139,7 @@ impl TuiElement for AltScreenElement {
                 key_without_modifiers: details.key_without_modifiers.as_deref(),
                 chars: Some(chars.as_str()),
             }
-            .to_pty_bytes(model.deref())
+            .key_event_to_pty_bytes(model.deref())
         };
         let Some(bytes) = bytes else {
             return false;
