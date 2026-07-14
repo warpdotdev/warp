@@ -1,7 +1,8 @@
 # TECH.md — Markdown viewer: honor raw-HTML `<img>` sizing (width/height/align)
 
-Product spec: `specs/GH13652/product.md`
-GitHub issue: https://github.com/warpdotdev/warp/issues/13652
+Product spec: `specs/GH13721/product.md`
+GitHub issue: https://github.com/warpdotdev/warp/issues/13721
+Split out of: https://github.com/warpdotdev/warp/issues/13652
 
 ## Context
 
@@ -351,12 +352,14 @@ exercisable there.
 
 ## Risks and follow-ups
 
-- **Scope discipline:** this PR is deliberately only `<img>` sizing. The remaining tags
-  in the issue (`<a>`, tables, `<details>`/`<summary>`, `<br>`, `<kbd>`, `<sub>`/`<sup>`,
-  `<p/div align>`, `<picture>`) are follow-ups under the same issue. Landing this slice
-  first delivers the motivating use case (sizing embedded SVG dashboards) and
-  establishes the `FormattedImage`-field-threading + `<img>`-block-parser plumbing that
-  later tags can reuse.
+- **Scope discipline:** this PR is deliberately only `<img>` sizing. The other tags
+  split out of the original bulk request #13652 (`<a>`, tables, `<details>`/`<summary>`,
+  `<br>`, `<kbd>`, `<sub>`/`<sup>`, `<p/div align>`, `<picture>`/`<source>`) are tracked
+  as their own focused issues. Landing this slice first delivers the motivating use case
+  (sizing embedded SVG dashboards) and establishes the `FormattedImage`-field-threading +
+  `<img>`-block-parser plumbing that later tags can reuse — notably #13736
+  (`<picture>`/`<source>`), which is explicitly blocked on this issue for its fallback
+  `<img>` path to mean anything.
 - **Aspect ratio at layout time:** the editor lays out before the image is decoded, so
   it cannot know intrinsic dimensions; single-dimension sizing relies on the primitive's
   `contain()` scaling. If a future change wants exact intrinsic-ratio sizing at layout

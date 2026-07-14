@@ -1,6 +1,6 @@
 # PRODUCT.md — Markdown viewer: honor raw-HTML `<img>` sizing (width/height/align)
 
-Issue: https://github.com/warpdotdev/warp/issues/13652
+Issue: https://github.com/warpdotdev/warp/issues/13721
 
 ## Summary
 
@@ -12,11 +12,13 @@ control the rendered size, because the Markdown-image renderer draws every image
 fixed default size that ignores the image's intrinsic dimensions, and the HTML `width`
 attribute — the only author-controllable sizing signal — is dropped entirely.
 
-This spec covers a narrow, self-contained slice of the broader issue: teach the
-Markdown viewer to recognize a block-level `<img>` HTML tag and honor its `width`,
-`height`, and `align` attributes. It intentionally does **not** attempt the full
-raw-HTML subset (tables, `<details>`, anchors, `<kbd>`, `<picture>`, etc.); those
-remain follow-ups tracked by the same issue.
+This spec covers a narrow, self-contained slice split out of the original bulk
+raw-HTML-subset request (#13652): teach the Markdown viewer to recognize a
+block-level `<img>` HTML tag and honor its `width`, `height`, and `align`
+attributes. It intentionally does **not** attempt the other tags from that
+original request (tables, `<details>`, anchors, `<kbd>`, `<picture>`, etc.); those
+are tracked as their own focused follow-up issues, several of which (e.g. #13736,
+`<picture>`/`<source>`) are blocked on this one landing first.
 
 Figma: none provided.
 
