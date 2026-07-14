@@ -16,7 +16,7 @@ use warpui::fonts::Weight;
 use warpui::platform::Cursor;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::chip::Chip;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
@@ -447,12 +447,6 @@ impl ServerCardView {
                 Chip::new(
                     tool.to_string(),
                     UiComponentStyles {
-                        margin: Some(Coords {
-                            top: 0.,
-                            bottom: 0.,
-                            left: 0.,
-                            right: 6.,
-                        }),
                         font_family_id: Some(appearance.ui_font_family()),
                         font_size: Some(style::TOOL_CHIP_TEXT_SIZE),
                         font_color: Some(blended_colors::text_main(
@@ -1049,6 +1043,7 @@ impl View for ServerCardView {
                 if let Some(tools) = &self.tools {
                     let tool_chips = ServerCardView::render_tool_chips(tools, appearance);
                     let tool_chips_row = Wrap::row()
+                        .with_spacing(6.)
                         .with_run_spacing(6.)
                         .with_children(tool_chips)
                         .finish();
