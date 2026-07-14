@@ -2022,6 +2022,13 @@ ru:
     executor: "Исполнитель"
     creator_unknown: "Неизвестно"
     copied_branch_name: "Название ветки скопировано"
+    status_bar:
+      missing_github_auth: "Не выполнен вход в GitHub."
+      authenticate_github: "Авторизоваться в GitHub"
+      cloud_agent_run_cancelled: "Запуск облачного агента отменён"
+      setting_up_environment: "Настройка окружения"
+      exit_button_label: "Закрыть"
+      exit_agent_input_tooltip: "Закрыть ввод агента"
   # ── Agent Message Bar ──
     orchestration:
       env_none_label: Пустое окружение

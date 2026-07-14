@@ -2021,6 +2021,13 @@ en:
     executor: "Executor"
     creator_unknown: "Unknown"
     copied_branch_name: "Copied branch name"
+    status_bar:
+      missing_github_auth: "Missing GitHub authentication."
+      authenticate_github: "Authenticate GitHub"
+      cloud_agent_run_cancelled: "Cloud agent run cancelled"
+      setting_up_environment: "Setting up environment"
+      exit_button_label: "Exit"
+      exit_agent_input_tooltip: "Exit agent input"
   # ── Agent Message Bar ──
     orchestration:
       env_none_label: Empty environment

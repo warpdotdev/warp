@@ -946,16 +946,26 @@ impl BlocklistAIStatusBar {
         let error_color = theme.ansi_fg_red();
 
         if let Some(auth_url) = ambient_agent_model.github_auth_url() {
-            let error_message = ambient_agent_model
-                .github_auth_error_message()
-                .unwrap_or("Missing GitHub authentication.");
+            let error_message =
+                ambient_agent_model
+                    .github_auth_error_message()
+                    .unwrap_or(crate::menu_label(
+                        "agent.status_bar.missing_github_auth",
+                        "Missing GitHub authentication.",
+                    ));
             return Some(render_wrapping_standard_message_bar(
                 CoreIcon::Triangle,
                 error_color,
                 error_color,
                 vec![
                     FormattedTextFragment::plain_text(format!("{error_message} ")),
-                    FormattedTextFragment::hyperlink("Authenticate GitHub", auth_url.to_owned()),
+                    FormattedTextFragment::hyperlink(
+                        crate::menu_label(
+                            "agent.status_bar.authenticate_github",
+                            "Authenticate GitHub",
+                        ),
+                        auth_url.to_owned(),
+                    ),
                 ],
                 app,
             ));
@@ -968,7 +978,11 @@ impl BlocklistAIStatusBar {
                 color,
                 color,
                 vec![FormattedTextFragment::plain_text(
-                    "Cloud agent run cancelled",
+                    crate::menu_label(
+                        "agent.status_bar.cloud_agent_run_cancelled",
+                        "Cloud agent run cancelled",
+                    )
+                    .to_string(),
                 )],
                 app,
             ));
@@ -1031,7 +1045,10 @@ fn render_agent_tip(tip: &AgentTip, app: &AppContext) -> Box<dyn Element> {
         fragments.push(FormattedTextFragment::hyperlink_action(text, action));
     } else if let Some(link_target) = tip.link.clone() {
         fragments.push(FormattedTextFragment::plain_text(" "));
-        fragments.push(FormattedTextFragment::hyperlink("Learn more", link_target));
+        fragments.push(FormattedTextFragment::hyperlink(
+            crate::menu_label("terminal.learn_more", "Learn more"),
+            link_target,
+        ));
     }
 
     let formatted_text =
@@ -1185,7 +1202,11 @@ impl View for BlocklistAIStatusBar {
                     WarpingIndicatorProps {
                         icon: None,
                         warping_indicator_text: MaybeShimmeringText::Shimmering {
-                            text: "Setting up environment".into(),
+                            text: crate::menu_label(
+                                "agent.status_bar.setting_up_environment",
+                                "Setting up environment",
+                            )
+                            .into(),
                             shimmering_text_handle: self.shimmering_text_handle.clone(),
                         },
                         non_shimmering_text: None,
@@ -1217,8 +1238,11 @@ impl View for BlocklistAIStatusBar {
                         non_shimmering_text: None,
                         non_shimmering_suffix: None,
                         buttons: Some(render_switch_control_to_user_button(
-                            "Exit",
-                            "Exit agent input",
+                            crate::menu_label("agent.status_bar.exit_button_label", "Exit"),
+                            crate::menu_label(
+                                "agent.status_bar.exit_agent_input_tooltip",
+                                "Exit agent input",
+                            ),
                             ButtonProps {
                                 button_handle: &self.state_handles.take_over_button,
                                 keystroke: self.set_terminal_input_keystroke.as_ref(),
