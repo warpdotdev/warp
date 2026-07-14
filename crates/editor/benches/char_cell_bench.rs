@@ -74,9 +74,9 @@ fn measure_allocations<T>(f: impl FnOnce() -> T) -> (T, AllocationStats) {
     ALLOCATIONS.store(0, Ordering::Relaxed);
     LIVE_BYTES.store(0, Ordering::Relaxed);
     PEAK_BYTES.store(0, Ordering::Relaxed);
-    COUNT_ALLOCATIONS.store(true, Ordering::SeqCst);
+    COUNT_ALLOCATIONS.store(true, Ordering::Relaxed);
     let value = f();
-    COUNT_ALLOCATIONS.store(false, Ordering::SeqCst);
+    COUNT_ALLOCATIONS.store(false, Ordering::Relaxed);
     (
         value,
         AllocationStats {
