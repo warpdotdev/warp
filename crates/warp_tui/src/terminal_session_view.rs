@@ -23,9 +23,9 @@ use warp::tui_export::{
     ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
     ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
     ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
-    GitStatusMetadata, LLMPreferences, LLMPreferencesEvent, ModelEvent, ParsedSlashCommandInput,
-    PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
-    ServerConversationToken, ShellCommandExecutorEvent, SkillReference,
+    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
+    ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
+    RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SkillReference,
     SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
     TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
     TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
@@ -56,6 +56,7 @@ use crate::inline_menu::{TuiInlineMenu, MAX_INLINE_MENU_ROWS};
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
+use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::resume::TuiExitSummaryHandle;
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
@@ -106,6 +107,7 @@ const SWITCH_CONVERSATION_RUNNING_HINT: &str =
 const SWITCH_LOADING_HINT: &str = "Another conversation is already loading.";
 const SWITCH_UNAVAILABLE_HINT: &str = "That conversation is no longer available.";
 const LOADING_CONVERSATION_HINT: &str = "Loading conversation…";
+const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model.";
 
 /// Footer hint shown while the input is in `!` shell mode.
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
@@ -196,6 +198,7 @@ pub(crate) struct TuiTerminalSessionView {
     input_view: ViewHandle<TuiInputView>,
     inline_menus: Vec<TuiInlineMenu>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
+    model_menu: ModelHandle<TuiModelMenuModel>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
@@ -397,6 +400,11 @@ impl TuiTerminalSessionView {
                 );
             }
         });
+        let model_menu =
+            ctx.add_model(|ctx| TuiModelMenuModel::new(input_editor_model.clone(), ctx));
+        ctx.subscribe_to_model(&model_menu, |_, _, _: &TuiModelMenuEvent, ctx| {
+            ctx.notify();
+        });
         // Typing after a ctrl-c press disarms the pending exit confirmation.
         // The ctrl-c buffer clear leaves the buffer empty, so the window it
         // arms survives its own clear.
@@ -438,6 +446,7 @@ impl TuiTerminalSessionView {
         let inline_menus = vec![
             TuiInlineMenu::new(slash_commands.clone()),
             TuiInlineMenu::new(conversation_menu.clone()),
+            TuiInlineMenu::new(model_menu.clone()),
         ];
         let inline_menus_for_input = inline_menus.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
@@ -470,6 +479,9 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedConversation(entry_id) => {
                 view.handle_accepted_conversation(*entry_id, ctx);
+            }
+            TuiInputViewEvent::AcceptedModel(id) => {
+                view.handle_accepted_model(id, ctx);
             }
         });
         // The input box border color and the footer's shell-mode hint depend
@@ -654,6 +666,7 @@ impl TuiTerminalSessionView {
             input_view,
             inline_menus,
             conversation_menu,
+            model_menu,
             slash_commands_source,
             conversation_selection,
             ai_action_model: action_model,
@@ -1466,6 +1479,18 @@ impl TuiTerminalSessionView {
         self.restore_conversation(target, TuiConversationRestoreOrigin::ConversationList, ctx);
     }
 
+    fn handle_accepted_model(&mut self, id: &LLMId, ctx: &mut ViewContext<Self>) {
+        let result = AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings.agent_model.set_value(id.as_str().to_owned(), ctx)
+        });
+        if let Err(error) = result {
+            report_error!(error.context("Failed to persist the TUI agent model"));
+            self.show_transient_hint(MODEL_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
+            return;
+        }
+        self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
+    }
+
     fn select_tui_slash_command(&mut self, command: &StaticCommand, ctx: &mut ViewContext<Self>) {
         match slash_command_selection_behavior(command) {
             SlashCommandSelectionBehavior::InsertCommandText(text) => {
@@ -1524,6 +1549,11 @@ impl TuiTerminalSessionView {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.conversation_menu
                     .update(ctx, |menu, ctx| menu.open(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            TuiSlashCommand::Model => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             TuiSlashCommand::CreateNewProject => {

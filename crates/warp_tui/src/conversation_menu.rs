@@ -13,11 +13,10 @@ use warp::tui_export::{
     HarnessFilter,
 };
 use warp_editor::model::CoreEditorModel;
-use warp_search_core::inline_menu::InlineMenuSelection;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
 use crate::inline_menu::{
-    keep_selected_visible, result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuRow,
+    result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
     TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
 };
 
@@ -34,10 +33,7 @@ enum TuiConversationMenuState {
     #[default]
     Closed,
     Open {
-        rows: Vec<TuiConversationMenuRow>,
-        selection: InlineMenuSelection,
-        scroll_offset: usize,
-        is_loading: bool,
+        list: TuiInlineMenuListState<TuiConversationMenuRow>,
     },
 }
 
@@ -97,12 +93,9 @@ impl TuiConversationMenuModel {
         if self.is_open() {
             return;
         }
-        self.state = TuiConversationMenuState::Open {
-            rows: Vec::new(),
-            selection: InlineMenuSelection::default(),
-            scroll_offset: 0,
-            is_loading: true,
-        };
+        let mut list = TuiInlineMenuListState::default();
+        list.set_loading(true);
+        self.state = TuiConversationMenuState::Open { list };
         self.cloud_warning_shown = false;
         let window_id = self.window_id;
         let model_id = ctx.model_id();
@@ -124,35 +117,19 @@ impl TuiConversationMenuModel {
 
     /// Moves selection to the previous row and keeps it visible.
     pub(crate) fn select_previous(&mut self, ctx: &mut ModelContext<Self>) {
-        let TuiConversationMenuState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            ..
-        } = &mut self.state
-        else {
+        let TuiConversationMenuState::Open { list } = &mut self.state else {
             return;
         };
-        if let Some(index) = selection.select_previous(rows.len(), |_| true) {
-            keep_selected_visible(rows.len(), index, MAX_VISIBLE_ROWS, scroll_offset);
-        }
+        list.select_previous(MAX_VISIBLE_ROWS, |_| true);
         ctx.emit(TuiConversationMenuEvent::Updated);
     }
 
     /// Moves selection to the next row and keeps it visible.
     pub(crate) fn select_next(&mut self, ctx: &mut ModelContext<Self>) {
-        let TuiConversationMenuState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            ..
-        } = &mut self.state
-        else {
+        let TuiConversationMenuState::Open { list } = &mut self.state else {
             return;
         };
-        if let Some(index) = selection.select_next(rows.len(), |_| true) {
-            keep_selected_visible(rows.len(), index, MAX_VISIBLE_ROWS, scroll_offset);
-        }
+        list.select_next(MAX_VISIBLE_ROWS, |_| true);
         ctx.emit(TuiConversationMenuEvent::Updated);
     }
 
@@ -162,12 +139,7 @@ impl TuiConversationMenuModel {
         _ctx: &mut ModelContext<Self>,
     ) -> Option<AgentConversationEntryId> {
         let selected_id = match &self.state {
-            TuiConversationMenuState::Open {
-                rows, selection, ..
-            } => selection
-                .selected_index()
-                .and_then(|index| rows.get(index))
-                .map(|row| row.id),
+            TuiConversationMenuState::Open { list } => list.selected_row().map(|row| row.id),
             TuiConversationMenuState::Closed => None,
         };
         selected_id
@@ -175,17 +147,11 @@ impl TuiConversationMenuModel {
 
     /// Returns the render snapshot for the open menu.
     pub(crate) fn snapshot(&self) -> Option<TuiInlineMenuSnapshot> {
-        let TuiConversationMenuState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            is_loading,
-        } = &self.state
-        else {
+        let TuiConversationMenuState::Open { list } = &self.state else {
             return None;
         };
-        let status = if rows.is_empty() {
-            Some(if *is_loading {
+        let status = if list.rows().is_empty() {
+            Some(if list.is_loading() {
                 TuiInlineMenuStatus::Loading("Loading conversations…".to_owned())
             } else {
                 TuiInlineMenuStatus::Empty("No conversations found".to_owned())
@@ -198,7 +164,8 @@ impl TuiConversationMenuModel {
                 title: Some("Conversations".to_owned()),
                 tabs: Vec::new(),
             }),
-            rows: rows
+            rows: list
+                .rows()
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
@@ -207,8 +174,8 @@ impl TuiConversationMenuModel {
                     style: TuiInlineMenuRowStyle::Default,
                 })
                 .collect(),
-            selected_index: selection.selected_index(),
-            scroll_offset: *scroll_offset,
+            selected_index: list.selected_index(),
+            scroll_offset: list.scroll_offset(),
             max_visible_rows: MAX_VISIBLE_ROWS,
             status,
         })
@@ -227,18 +194,11 @@ impl TuiConversationMenuModel {
 
     /// Rebuilds rows from the current query while preserving stable selection.
     fn refresh_rows(&mut self, ctx: &mut ModelContext<Self>) {
-        let previous_id = match &self.state {
-            TuiConversationMenuState::Open {
-                rows, selection, ..
-            } => selection
-                .selected_index()
-                .and_then(|index| rows.get(index))
-                .map(|row| row.id),
+        let (previous_id, previous_index) = match &self.state {
+            TuiConversationMenuState::Open { list } => {
+                (list.selected_row().map(|row| row.id), list.selected_index())
+            }
             TuiConversationMenuState::Closed => return,
-        };
-        let previous_index = match &self.state {
-            TuiConversationMenuState::Open { selection, .. } => selection.selected_index(),
-            TuiConversationMenuState::Closed => None,
         };
         let conversations_model = AgentConversationsModel::as_ref(ctx);
         let is_loading = conversations_model.is_loading();
@@ -267,17 +227,13 @@ impl TuiConversationMenuModel {
                 .collect()
         };
 
-        let selection = reconcile_selection(&rows, previous_id, previous_index);
-        let mut scroll_offset = 0;
-        if let Some(index) = selection.selected_index() {
-            keep_selected_visible(rows.len(), index, MAX_VISIBLE_ROWS, &mut scroll_offset);
-        }
-        self.state = TuiConversationMenuState::Open {
-            rows,
-            selection,
-            scroll_offset,
-            is_loading,
+        let preferred_index = reconciled_selection_index(&rows, previous_id, previous_index);
+        let TuiConversationMenuState::Open { list } = &mut self.state else {
+            return;
         };
+        list.replace_rows(rows, is_loading, preferred_index, MAX_VISIBLE_ROWS, |_| {
+            true
+        });
         if cloud_metadata_load_failed && !self.cloud_warning_shown {
             self.cloud_warning_shown = true;
             ctx.emit(TuiConversationMenuEvent::CloudMetadataUnavailable);
@@ -287,13 +243,12 @@ impl TuiConversationMenuModel {
 }
 
 /// Preserves selection by ID, falling back to the nearest valid index.
-fn reconcile_selection(
+fn reconciled_selection_index(
     rows: &[TuiConversationMenuRow],
     previous_id: Option<AgentConversationEntryId>,
     previous_index: Option<usize>,
-) -> InlineMenuSelection {
-    let mut selection = InlineMenuSelection::default();
-    let index = previous_id
+) -> Option<usize> {
+    previous_id
         .and_then(|id| rows.iter().position(|row| row.id == id))
         .or_else(|| {
             (!rows.is_empty()).then(|| {
@@ -301,11 +256,7 @@ fn reconcile_selection(
                     .unwrap_or(rows.len().saturating_sub(1))
                     .min(rows.len().saturating_sub(1))
             })
-        });
-    if let Some(index) = index {
-        selection.select(index, rows.len(), |_| true);
-    }
-    selection
+        })
 }
 
 impl Entity for TuiConversationMenuModel {

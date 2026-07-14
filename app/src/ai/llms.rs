@@ -817,11 +817,24 @@ impl LLMPreferences {
         app: &AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &LLMInfo {
+        self.get_preferred_base_model_for_settings_mode(
+            settings::settings_mode(),
+            app,
+            terminal_view_id,
+        )
+    }
+
+    fn get_preferred_base_model_for_settings_mode(
+        &self,
+        settings_mode: settings::SettingsMode,
+        app: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> &LLMInfo {
         // In the TUI, the file-backed `agents.model` setting is the source of
         // truth for the base model: it overrides both per-surface overrides
         // and the cloud-synced execution profile, keeping the TUI's TOML file
         // the single place the model is configured.
-        if settings::settings_mode() == settings::SettingsMode::Tui {
+        if settings_mode == settings::SettingsMode::Tui {
             return self.tui_agent_model_info(AISettings::as_ref(app).agent_model.value(), app);
         }
 

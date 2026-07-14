@@ -4,8 +4,8 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::App;
 
 use super::{
-    render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuRow, TuiInlineMenuRowStyle,
-    TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab,
+    render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
+    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -323,4 +323,42 @@ fn narrow_slash_command_rows_use_the_full_width_for_titles() {
     );
 
     assert_eq!(lines[1], "│/123456789012345...│");
+}
+
+#[test]
+fn shared_list_navigation_wraps_skips_disabled_rows_and_scrolls() {
+    let mut list = TuiInlineMenuListState::default();
+    list.replace_rows(vec![true, false, true, true], false, Some(0), 2, |row| *row);
+
+    list.select_next(2, |row| *row);
+    assert_eq!(list.selected_index(), Some(2));
+    assert_eq!(list.scroll_offset(), 1);
+
+    list.select_next(2, |row| *row);
+    assert_eq!(list.selected_index(), Some(3));
+    assert_eq!(list.scroll_offset(), 2);
+
+    list.select_next(2, |row| *row);
+    assert_eq!(list.selected_index(), Some(0));
+    assert_eq!(list.scroll_offset(), 0);
+
+    list.select_previous(2, |row| *row);
+    assert_eq!(list.selected_index(), Some(3));
+    assert_eq!(list.scroll_offset(), 2);
+}
+
+#[test]
+fn shared_list_preserves_ready_rows_while_a_mixer_query_loads() {
+    let mut list = TuiInlineMenuListState::default();
+    list.replace_rows(vec!["ready"], false, Some(0), 2, |_| true);
+
+    let update = list.reconcile_mixer_rows(vec!["pending"], true, 2, |_| true);
+
+    assert_eq!(
+        update,
+        warp_search_core::inline_menu::InlineMenuResultsUpdate::Loading
+    );
+    assert_eq!(list.rows(), &["ready"]);
+    assert_eq!(list.selected_index(), Some(0));
+    assert!(list.is_loading());
 }

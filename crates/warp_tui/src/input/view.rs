@@ -26,7 +26,7 @@ use std::ops::Range;
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputTypeAutoDetectionSource,
+    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputTypeAutoDetectionSource, LLMId,
 };
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::selection::TextUnit;
@@ -467,6 +467,8 @@ pub enum TuiInputViewEvent {
     AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
     /// The user selected a conversation menu item.
     AcceptedConversation(warp::tui_export::AgentConversationEntryId),
+    /// The user selected a model menu item.
+    AcceptedModel(LLMId),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1124,6 +1126,9 @@ impl TuiInputView {
                         }
                         TuiInlineMenuAccepted::Conversation(entry_id) => {
                             ctx.emit(TuiInputViewEvent::AcceptedConversation(entry_id));
+                        }
+                        TuiInlineMenuAccepted::Model(id) => {
+                            ctx.emit(TuiInputViewEvent::AcceptedModel(id));
                         }
                     }
                 }

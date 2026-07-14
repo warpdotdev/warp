@@ -10,7 +10,8 @@ use string_offset::CharOffset;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, SlashCommandId, SlashCommandMixer,
+    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, LLMId, SlashCommandId,
+    SlashCommandMixer,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
@@ -32,6 +33,7 @@ use super::{
 use crate::editor_element::TuiEditorElement;
 use crate::inline_menu::TuiInlineMenu;
 use crate::input_mode_policy::TuiInputModePolicy;
+use crate::model_menu::TuiModelMenuModel;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
 use crate::test_fixtures::add_test_semantic_selection;
 use crate::tui_builder::TuiUiBuilder;
@@ -168,6 +170,33 @@ fn build_view_with_inline_menu(
     (view, menu_model, ids)
 }
 
+fn build_view_with_model_menu(
+    ctx: &mut AppContext,
+) -> (
+    ViewHandle<TuiInputView>,
+    ModelHandle<TuiModelMenuModel>,
+    LLMId,
+) {
+    ctx.add_singleton_model(|_| Appearance::mock());
+    add_test_semantic_selection(ctx);
+    let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let id = LLMId::from("gpt-5");
+    let id_for_model = id.clone();
+    let menu_model = ctx.add_model(|_| {
+        TuiModelMenuModel::new_for_test(input_model.clone(), vec![(id_for_model, true)], 0)
+    });
+    let inline_menu = TuiInlineMenu::new(menu_model.clone());
+    let (_window_id, view) = ctx.add_tui_window(
+        AddWindowOptions {
+            window_style: WindowStyle::NotStealFocus,
+            ..Default::default()
+        },
+        move |ctx| TuiInputView::new(input_model, input_mode, vec![inline_menu], ctx),
+    );
+    (view, menu_model, id)
+}
+
 fn selected_slash_command_id(
     menu_model: &ModelHandle<TuiSlashCommandModel>,
     ctx: &AppContext,
@@ -221,6 +250,29 @@ fn inline_menu_accept_dismisses_before_emitting_unchanged_payload() {
         app.read(|ctx| {
             assert_eq!(accepted.borrow().as_slice(), &[(ids[0], true)]);
             assert!(!menu_model.as_ref(ctx).is_open());
+        });
+    });
+}
+
+#[test]
+fn model_menu_accept_emits_selected_id_and_stays_open_for_persistence() {
+    App::test((), |mut app| async move {
+        let (view, menu_model, id, accepted) = app.update(|ctx| {
+            let (view, menu_model, id) = build_view_with_model_menu(ctx);
+            let accepted = Rc::new(RefCell::new(Vec::new()));
+            let accepted_for_subscription = accepted.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiInputViewEvent::AcceptedModel(id) = event {
+                    accepted_for_subscription.borrow_mut().push(id.clone());
+                }
+            });
+            (view, menu_model, id, accepted)
+        });
+
+        app.update(|ctx| dispatch(&view, ctx, &[TuiInputAction::Submit]));
+        app.read(|ctx| {
+            assert_eq!(accepted.borrow().as_slice(), &[id]);
+            assert!(menu_model.as_ref(ctx).is_open());
         });
     });
 }

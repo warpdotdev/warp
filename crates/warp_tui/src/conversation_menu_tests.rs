@@ -19,10 +19,10 @@ fn selection_reconciliation_preserves_id_then_uses_nearest_index() {
         },
     ];
 
-    let preserved = reconcile_selection(&rows, Some(rows[1].id), Some(0));
-    assert_eq!(preserved.selected_index(), Some(1));
+    let preserved = reconciled_selection_index(&rows, Some(rows[1].id), Some(0));
+    assert_eq!(preserved, Some(1));
 
     let missing = AgentConversationEntryId::Conversation(AIConversationId::new());
-    let nearest = reconcile_selection(&rows[..2], Some(missing), Some(2));
-    assert_eq!(nearest.selected_index(), Some(1));
+    let nearest = reconciled_selection_index(&rows[..2], Some(missing), Some(2));
+    assert_eq!(nearest, Some(1));
 }
