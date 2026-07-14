@@ -15,6 +15,7 @@ use warpui_core::{AppContext, ModelHandle};
 
 use crate::conversation_menu::TuiConversationMenuModel;
 use crate::model_menu::TuiModelMenuModel;
+use crate::skills_menu::TuiSkillMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_column_layout::{
@@ -33,7 +34,7 @@ const SLASH_COMMAND_COLUMN_CONSTRAINTS: TuiTwoColumnConstraints = TuiTwoColumnCo
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TuiInlineMenuRowStyle {
     Default,
-    SlashCommand,
+    InlineMenuItem,
 }
 
 pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
@@ -381,6 +382,46 @@ impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
     }
 }
 
+impl TuiInlineMenuHandle for ModelHandle<TuiSkillMenuModel> {
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open()
+    }
+
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.update(ctx, |model, ctx| model.accept_selected(ctx))
+            .map(|skill| {
+                TuiInlineMenuAccepted::SlashCommand(AcceptSlashCommandOrSavedPrompt::Skill {
+                    reference: skill.skill_reference,
+                    name: skill.skill_name,
+                })
+            })
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot()
+    }
+}
+
 pub(crate) fn render_inline_menu(
     snapshot: &TuiInlineMenuSnapshot,
     builder: &TuiUiBuilder,
@@ -489,7 +530,7 @@ fn build_inline_menu(
     let slash_command_columns = tui_two_column_layout(
         usize::from(allocated_width.saturating_sub(2)),
         snapshot.rows.iter().filter_map(|row| {
-            if row.style != TuiInlineMenuRowStyle::SlashCommand {
+            if row.style != TuiInlineMenuRowStyle::InlineMenuItem {
                 return None;
             }
             Some((row.title.as_str(), row.description.as_deref()?))
@@ -603,16 +644,16 @@ fn menu_result_row(
         builder.slash_command_selection_text_style()
     } else {
         match (row.is_selectable, row.style) {
-            (true, TuiInlineMenuRowStyle::SlashCommand) => builder.slash_command_text_style(),
+            (true, TuiInlineMenuRowStyle::InlineMenuItem) => builder.slash_command_text_style(),
             (true, TuiInlineMenuRowStyle::Default) => builder.primary_text_style(),
-            (false, TuiInlineMenuRowStyle::Default | TuiInlineMenuRowStyle::SlashCommand) => {
+            (false, TuiInlineMenuRowStyle::Default | TuiInlineMenuRowStyle::InlineMenuItem) => {
                 builder.dim_text_style()
             }
         }
     };
     let show_description = match row.style {
         TuiInlineMenuRowStyle::Default => row.description.is_some(),
-        TuiInlineMenuRowStyle::SlashCommand => {
+        TuiInlineMenuRowStyle::InlineMenuItem => {
             slash_command_columns.show_second && row.description.is_some()
         }
     };
@@ -623,7 +664,7 @@ fn menu_result_row(
     };
     let title = match row.style {
         TuiInlineMenuRowStyle::Default => row.title.clone(),
-        TuiInlineMenuRowStyle::SlashCommand => format_tui_first_column(
+        TuiInlineMenuRowStyle::InlineMenuItem => format_tui_first_column(
             &row.title,
             slash_command_columns.with_second_visible(show_description),
         ),
@@ -637,7 +678,7 @@ fn menu_result_row(
     } else {
         match row.style {
             TuiInlineMenuRowStyle::Default => builder.muted_text_style(),
-            TuiInlineMenuRowStyle::SlashCommand => builder.primary_text_style(),
+            TuiInlineMenuRowStyle::InlineMenuItem => builder.primary_text_style(),
         }
     };
 
@@ -645,7 +686,7 @@ fn menu_result_row(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .child(match row.style {
             TuiInlineMenuRowStyle::Default => title,
-            TuiInlineMenuRowStyle::SlashCommand => TuiConstrainedBox::new(title)
+            TuiInlineMenuRowStyle::InlineMenuItem => TuiConstrainedBox::new(title)
                 .with_max_cols(
                     u16::try_from(title_columns)
                         .expect("title columns come from the u16 width constraint"),
@@ -655,7 +696,7 @@ fn menu_result_row(
     if let Some(description) = row.description.as_ref().filter(|_| show_description) {
         let description = match row.style {
             TuiInlineMenuRowStyle::Default => format!("  {description}"),
-            TuiInlineMenuRowStyle::SlashCommand => description.clone(),
+            TuiInlineMenuRowStyle::InlineMenuItem => description.clone(),
         };
         content = content.child(
             TuiText::new(description)

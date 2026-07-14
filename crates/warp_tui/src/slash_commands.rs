@@ -246,7 +246,7 @@ impl TuiSlashCommandModel {
                     title: row.title.clone(),
                     description: row.description.clone(),
                     is_selectable: true,
-                    style: TuiInlineMenuRowStyle::SlashCommand,
+                    style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })
                 .collect(),
             selected_index: list.selected_index(),

@@ -655,8 +655,9 @@ impl TuiInputView {
         let builder = TuiUiBuilder::from_app(ctx);
         let mut styles = TuiEditorStyles::default();
         if let Some(range) = self
-            .active_inline_menu(ctx)
-            .and_then(|inline_menu| inline_menu.input_highlight_range(ctx))
+            .inline_menus
+            .iter()
+            .find_map(|inline_menu| inline_menu.input_highlight_range(ctx))
         {
             styles
                 .text_overrides

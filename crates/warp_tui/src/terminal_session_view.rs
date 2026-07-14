@@ -31,6 +31,7 @@ use warp::tui_export::{
     TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
     COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
 };
+use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
@@ -58,6 +59,7 @@ use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::resume::TuiExitSummaryHandle;
+use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
@@ -199,6 +201,7 @@ pub(crate) struct TuiTerminalSessionView {
     inline_menus: Vec<TuiInlineMenu>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
     model_menu: ModelHandle<TuiModelMenuModel>,
+    skills_menu: ModelHandle<TuiSkillMenuModel>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
@@ -405,6 +408,17 @@ impl TuiTerminalSessionView {
         ctx.subscribe_to_model(&model_menu, |_, _, _: &TuiModelMenuEvent, ctx| {
             ctx.notify();
         });
+        let skills_menu = ctx.add_model(|ctx| {
+            TuiSkillMenuModel::new(
+                input_editor_model.clone(),
+                active_session.clone(),
+                terminal_surface_id,
+                ctx,
+            )
+        });
+        ctx.subscribe_to_model(&skills_menu, |_, _, _: &TuiSkillMenuEvent, ctx| {
+            ctx.notify();
+        });
         // Typing after a ctrl-c press disarms the pending exit confirmation.
         // The ctrl-c buffer clear leaves the buffer empty, so the window it
         // arms survives its own clear.
@@ -447,6 +461,7 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(slash_commands.clone()),
             TuiInlineMenu::new(conversation_menu.clone()),
             TuiInlineMenu::new(model_menu.clone()),
+            TuiInlineMenu::new(skills_menu.clone()),
         ];
         let inline_menus_for_input = inline_menus.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
@@ -667,6 +682,7 @@ impl TuiTerminalSessionView {
             inline_menus,
             conversation_menu,
             model_menu,
+            skills_menu,
             slash_commands_source,
             conversation_selection,
             ai_action_model: action_model,
@@ -1554,6 +1570,14 @@ impl TuiTerminalSessionView {
             TuiSlashCommand::Model => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            TuiSlashCommand::Skills => {
+                if !FeatureFlag::ListSkills.is_enabled() {
+                    return;
+                }
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                self.skills_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             TuiSlashCommand::CreateNewProject => {
