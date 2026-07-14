@@ -29,7 +29,7 @@ use warp::tui_export::{
     SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
     TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
     TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
-    COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
+    COMMAND_REGISTRY, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
@@ -367,6 +367,7 @@ impl TuiTerminalSessionView {
                     active_session: active_session.clone(),
                     cli_subagent_controller,
                     terminal_view_id: terminal_surface_id,
+                    terminal_model: model.clone(),
                 },
                 ctx,
             )
@@ -412,6 +413,7 @@ impl TuiTerminalSessionView {
             TuiSkillMenuModel::new(
                 input_editor_model.clone(),
                 active_session.clone(),
+                slash_commands_source.clone(),
                 terminal_surface_id,
                 ctx,
             )
@@ -1389,6 +1391,14 @@ impl TuiTerminalSessionView {
         user_query: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self
+            .slash_commands_source
+            .as_ref(ctx)
+            .local_skills_available(ctx)
+        {
+            self.show_transient_hint(LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE.to_owned(), ctx);
+            return;
+        }
         let result = self.ai_controller.update(ctx, |controller, ctx| {
             controller.send_invoke_skill_request(reference, user_query, ctx)
         });

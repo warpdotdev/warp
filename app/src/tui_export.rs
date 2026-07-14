@@ -83,7 +83,10 @@ pub use crate::terminal::conversation_restoration::{
 };
 pub use crate::terminal::event::AfterBlockCompletedEvent;
 pub use crate::terminal::input::models::{query_model_picker_choices, ModelPickerChoice};
-pub use crate::terminal::input::skills::{query_selectable_skills, AcceptSkill, SelectableSkill};
+pub use crate::terminal::input::skills::{
+    query_selectable_skills, AcceptSkill, SelectableSkill,
+    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+};
 pub use crate::terminal::input::slash_command_model::{
     slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,
     ParsedSlashCommandInput,
