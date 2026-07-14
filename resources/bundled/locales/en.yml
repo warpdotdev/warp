@@ -475,6 +475,12 @@ en:
     auto_mode_description: Auto will select the best model for the task. Cost-efficiency optimizes for cost, Responsiveness optimizes for response speed.
     reasoning_level: Reasoning level
     reasoning_level_description: Increased reasoning levels consume more credits and have higher latency, but higher performance for complicated tasks.
+  root_view:
+    mac_hide_all_windows: "Hide All Windows"
+    mac_show_dedicated_hotkey_window: "Show Dedicated Hotkey Window"
+    mac_hide_dedicated_hotkey_window: "Hide Dedicated Hotkey Window"
+    toggle_fullscreen: "Toggle fullscreen"
+    create_environment_pane_title: "Create Environment"
   settings:
     execution_profile:
       apply_code_diffs: "Apply code diffs:"

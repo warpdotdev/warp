@@ -475,6 +475,12 @@ ru:
     auto_mode_description: Авто выберет лучшую модель для задачи. Экономичность оптимизирует стоимость, отзывчивость — скорость ответа.
     reasoning_level: Уровень рассуждения
     reasoning_level_description: Повышенные уровни рассуждения потребляют больше кредитов и имеют большую задержку, но лучше справляются со сложными задачами.
+  root_view:
+    mac_hide_all_windows: "Скрыть все окна"
+    mac_show_dedicated_hotkey_window: "Показать окно горячей клавиши"
+    mac_hide_dedicated_hotkey_window: "Скрыть окно горячей клавиши"
+    toggle_fullscreen: "Переключить полноэкранный режим"
+    create_environment_pane_title: "Создать окружение"
   settings:
     execution_profile:
       apply_code_diffs: "Применять изменения кода:"

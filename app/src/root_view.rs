@@ -437,19 +437,25 @@ pub fn init(app: &mut AppContext) {
 
     app.register_fixed_bindings([
         FixedBinding::empty(
-            "Hide All Windows",
+            crate::menu_label("root_view.mac_hide_all_windows", "Hide All Windows"),
             RootViewAction::ShowOrHideNonQuakeModeWindows,
             id!("RootView") & id!(flags::ACTIVATION_HOTKEY_FLAG),
         ),
         FixedBinding::empty(
-            "Show Dedicated Hotkey Window",
+            crate::menu_label(
+                "root_view.mac_show_dedicated_hotkey_window",
+                "Show Dedicated Hotkey Window",
+            ),
             RootViewAction::ToggleQuakeModeWindow,
             id!("RootView")
                 & id!(flags::QUAKE_MODE_ENABLED_CONTEXT_FLAG)
                 & !id!(flags::QUAKE_WINDOW_OPEN_FLAG),
         ),
         FixedBinding::empty(
-            "Hide Dedicated Hotkey Window",
+            crate::menu_label(
+                "root_view.mac_hide_dedicated_hotkey_window",
+                "Hide Dedicated Hotkey Window",
+            ),
             RootViewAction::ToggleQuakeModeWindow,
             id!("RootView")
                 & id!(flags::QUAKE_MODE_ENABLED_CONTEXT_FLAG)
@@ -461,7 +467,7 @@ pub fn init(app: &mut AppContext) {
         // Register a binding to toggle fullscreen on Linux and Windows.
         EditableBinding::new(
             "root_view:toggle_fullscreen",
-            "Toggle fullscreen",
+            crate::menu_label("root_view.toggle_fullscreen", "Toggle fullscreen"),
             RootViewAction::ToggleFullscreen,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
@@ -910,7 +916,13 @@ fn create_environment(arg: &CreateEnvironmentArg, ctx: &mut AppContext) {
                 workspace
                     .active_tab_pane_group()
                     .update(ctx, |pane_group, ctx| {
-                        pane_group.set_title("Create Environment", ctx);
+                        pane_group.set_title(
+                            crate::menu_label(
+                                "root_view.create_environment_pane_title",
+                                "Create Environment",
+                            ),
+                            ctx,
+                        );
 
                         if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                             terminal_view.update(ctx, |_, ctx| {
@@ -943,7 +955,13 @@ fn create_environment_and_run(arg: &CreateEnvironmentArg, ctx: &mut AppContext) 
                 workspace
                     .active_tab_pane_group()
                     .update(ctx, |pane_group, ctx| {
-                        pane_group.set_title("Create Environment", ctx);
+                        pane_group.set_title(
+                            crate::menu_label(
+                                "root_view.create_environment_pane_title",
+                                "Create Environment",
+                            ),
+                            ctx,
+                        );
 
                         if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                             terminal_view.update(ctx, |_, ctx| {
@@ -1096,7 +1114,10 @@ fn open_warp_drive_object(arg: &OpenWarpDriveObjectArgs, ctx: &mut AppContext) {
 
 fn display_object_missing_error_in_window(window_id: WindowId, ctx: &mut AppContext) {
     crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-        let toast = DismissibleToast::error(String::from("Resource not found or access denied"));
+        let toast = DismissibleToast::error(String::from(crate::menu_label(
+            "workspace.resource_not_found",
+            "Resource not found or access denied",
+        )));
         toast_stack.add_ephemeral_toast(toast, window_id, ctx);
     });
 }
@@ -2379,9 +2400,9 @@ impl RootView {
                 let is_editing = existing.is_some();
                 let editing_index = is_editing.then_some(0);
                 let title = if is_editing {
-                    "Edit custom endpoint"
+                    crate::menu_label("settings.ai.edit_custom_endpoint", "Edit custom endpoint")
                 } else {
-                    "Add custom endpoint"
+                    crate::menu_label("settings.ai.add_custom_endpoint", "Add custom endpoint")
                 }
                 .to_string();
                 let body = ctx.add_typed_action_view(move |ctx| {
@@ -2858,7 +2879,13 @@ impl RootView {
                 workspace
                     .active_tab_pane_group()
                     .update(ctx, |pane_group, ctx| {
-                        pane_group.set_title("Create Environment", ctx);
+                        pane_group.set_title(
+                            crate::menu_label(
+                                "root_view.create_environment_pane_title",
+                                "Create Environment",
+                            ),
+                            ctx,
+                        );
 
                         if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                             terminal_view.update(ctx, |_, ctx| {
@@ -2903,7 +2930,13 @@ impl RootView {
             workspace
                 .active_tab_pane_group()
                 .update(ctx, |pane_group, ctx| {
-                    pane_group.set_title("Create Environment", ctx);
+                    pane_group.set_title(
+                        crate::menu_label(
+                            "root_view.create_environment_pane_title",
+                            "Create Environment",
+                        ),
+                        ctx,
+                    );
 
                     if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                         terminal_view.update(ctx, |_, ctx| {
