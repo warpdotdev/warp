@@ -5,40 +5,43 @@ use ordered_float::OrderedFloat;
 use warpui::{AppContext, Entity, ModelHandle, SingletonEntity};
 
 use crate::ai::agent_conversations_model::{
-    AgentConversationEntry, AgentConversationEntryId, AgentManagementFilters,
+    AgentConversationEntry, AgentConversationListEntryState, AgentManagementFilters,
 };
-use crate::ai::blocklist::agent_view::AgentViewController;
+use crate::ai::blocklist::conversation_selection::ConversationSelectionHandle;
 use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::SyncDataSource;
 use crate::terminal::input::conversations::search_item::ConversationSearchItem;
 use crate::terminal::input::conversations::AcceptConversation;
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::workspace::RestoreConversationLayout;
 use crate::AgentConversationsModel;
 
 pub struct ConversationMenuDataSource {
-    agent_view_controller: ModelHandle<AgentViewController>,
+    conversation_selection: ConversationSelectionHandle,
     active_session: ModelHandle<ActiveSession>,
 }
 
 impl ConversationMenuDataSource {
     pub fn new(
-        agent_view_controller: ModelHandle<AgentViewController>,
+        conversation_selection: ConversationSelectionHandle,
         active_session: ModelHandle<ActiveSession>,
     ) -> Self {
         Self {
-            agent_view_controller,
+            conversation_selection,
             active_session,
         }
     }
 
-    fn entries(&self, app: &AppContext) -> Vec<AgentConversationEntry> {
+    fn entries(&self, app: &AppContext) -> Vec<(AgentConversationEntry, bool)> {
+        let policy = self.conversation_selection.as_ref(app);
         AgentConversationsModel::as_ref(app)
             .get_entries(&AgentManagementFilters::default(), app)
             .into_iter()
-            .filter(|entry: &AgentConversationEntry| {
-                entry.has_open_action(Some(RestoreConversationLayout::ActivePane), app)
+            .filter_map(|entry| match policy.classify_entry(&entry, app) {
+                AgentConversationListEntryState::Available => Some((entry, false)),
+                AgentConversationListEntryState::OpenElsewhere => Some((entry, true)),
+                AgentConversationListEntryState::Selected
+                | AgentConversationListEntryState::Unavailable => None,
             })
             .collect()
     }
@@ -54,12 +57,6 @@ impl SyncDataSource for ConversationMenuDataSource {
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let conversation_entries = self.entries(app);
         let query_text = query.text.trim().to_lowercase();
-        let active_item_id = self
-            .agent_view_controller
-            .as_ref(app)
-            .agent_view_state()
-            .active_conversation_id()
-            .map(AgentConversationEntryId::Conversation);
 
         let filter_by_cwd = query
             .filters
@@ -102,24 +99,18 @@ impl SyncDataSource for ConversationMenuDataSource {
             // Within each segment, sort to reverse chronological order.
             Ok(conversation_entries
                 .into_iter()
-                // Don't show the currently open conversation, that's redundant.
-                .filter(|entry| Some(entry.id) != active_item_id)
-                .filter(|entry| matches_directory(entry))
-                .sorted_by(|a, b| b.display.last_updated.cmp(&a.display.last_updated))
+                .filter(|(entry, _)| matches_directory(entry))
+                .sorted_by(|(a, _), (b, _)| b.display.last_updated.cmp(&a.display.last_updated))
                 .take(DEFAULT_RESULT_COUNT)
-                .map(|conversation_entry| {
-                    QueryResult::from(ConversationSearchItem::new(conversation_entry))
+                .map(|(entry, is_open_elsewhere)| {
+                    QueryResult::from(ConversationSearchItem::new(entry, is_open_elsewhere))
                 })
                 .rev()
                 .collect())
         } else {
             let mut search_results = conversation_entries
                 .into_iter()
-                .filter_map(|entry| {
-                    if Some(entry.id) == active_item_id {
-                        // Don't show the currently open conversation, that's redundant.
-                        return None;
-                    }
+                .filter_map(|(entry, is_open_elsewhere)| {
                     if !matches_directory(&entry) {
                         return None;
                     }
@@ -134,7 +125,7 @@ impl SyncDataSource for ConversationMenuDataSource {
                     }
 
                     Some(QueryResult::from(
-                        ConversationSearchItem::new(entry)
+                        ConversationSearchItem::new(entry, is_open_elsewhere)
                             .with_name_match_result(Some(match_result.clone()))
                             .with_score(OrderedFloat(match_result.score as f64)),
                     ))

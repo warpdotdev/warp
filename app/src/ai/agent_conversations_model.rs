@@ -283,6 +283,25 @@ pub struct AgentManagementFilters {
     pub harness: HarnessFilter,
 }
 
+/// Frontend-specific classification of a normalized conversation-list entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentConversationListEntryState {
+    Selected,
+    OpenElsewhere,
+    Available,
+    Unavailable,
+}
+
+/// Per-frontend policy for classifying normalized conversation-list entries.
+pub trait AgentConversationListPolicy: 'static {
+    /// Classifies `entry` as selected, open elsewhere, available, or unavailable.
+    fn classify_entry(
+        &self,
+        entry: &AgentConversationEntry,
+        app: &AppContext,
+    ) -> AgentConversationListEntryState;
+}
+
 impl AgentManagementFilters {
     pub fn reset_all_but_owner(&mut self) {
         self.status = StatusFilter::default();

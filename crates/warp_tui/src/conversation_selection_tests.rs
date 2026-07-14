@@ -2,13 +2,69 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIConversationId, AgentViewEntryOrigin, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    ConversationSelection, ConversationSelectionHandle, TerminalModel, TranscriptScope,
+    AIConversationId, AgentConversationListEntryState, AgentRunDisplayStatus, AgentViewEntryOrigin,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationSelection,
+    ConversationSelectionHandle, Harness, TerminalModel, TranscriptScope,
 };
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, EntityId, ModelHandle};
 
-use super::TuiConversationSelection;
+use super::{classify_conversation_list_entry, TuiConversationSelection};
+
+#[test]
+fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
+    let selected_id = AIConversationId::new();
+    assert_eq!(
+        classify_conversation_list_entry(
+            Some(selected_id),
+            Some(selected_id),
+            true,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::ConversationSucceeded,
+        ),
+        AgentConversationListEntryState::Selected
+    );
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            Some(AIConversationId::new()),
+            false,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::ConversationCancelled,
+        ),
+        AgentConversationListEntryState::Available
+    );
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            None,
+            true,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::TaskInProgress,
+        ),
+        AgentConversationListEntryState::Unavailable
+    );
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            None,
+            true,
+            Some(Harness::Claude),
+            &AgentRunDisplayStatus::TaskSucceeded,
+        ),
+        AgentConversationListEntryState::Unavailable
+    );
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            None,
+            false,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::TaskSucceeded,
+        ),
+        AgentConversationListEntryState::Unavailable
+    );
+}
 
 /// Creates a terminal model configured for the TUI's unfiltered transcript.
 fn tui_terminal_model() -> Arc<FairMutex<TerminalModel>> {
