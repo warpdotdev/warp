@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use super::*;
 
@@ -217,6 +217,26 @@ fn state_components_use_expected_icons() {
         failed.user_facing_components().2,
         Icon::AlertTriangle
     ));
+}
+
+#[test]
+fn loaded_state_shows_scheduled_refresh_instead_of_expiry() {
+    let loaded_at = SystemTime::now();
+    let expires_at = loaded_at + Duration::from_secs(60 * 60);
+    let loaded = GeapCredentialsState::Loaded {
+        credentials: GeapCredentials::new("token".to_string(), Some(expires_at)),
+        loaded_at,
+        minted_for: binding(),
+    };
+
+    let (_, description, _) = loaded.user_facing_components();
+    assert!(description.starts_with("Loaded at "));
+    assert!(description.contains(" · Refresh scheduled for "));
+    assert!(!description.contains("expires"));
+    assert_eq!(
+        refresh_scheduled_at(expires_at),
+        expires_at - GEAP_REFRESH_LEAD_TIME
+    );
 }
 
 #[test]

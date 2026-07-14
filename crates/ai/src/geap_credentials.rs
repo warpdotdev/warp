@@ -124,10 +124,11 @@ impl LoadGeapCredentialsError {
                 GeapRecoveryAction::Retry,
             ),
             Self::ExchangeToken { status, .. } if is_admin_config_status(*status) => (
-                "Gemini Enterprise isn't configured correctly".to_string(),
-                "Google rejected Warp's identity token. Ask your workspace admin to verify the \
-                 Workload Identity Federation pool and provider (audience) configured for \
-                 Gemini Enterprise."
+                "Gemini Enterprise is misconfigured".to_string(),
+                "Google rejected Warp's identity token. Ask your workspace admin to verify \
+                that the Workload Identity Federation audience exactly matches the provider's full resource \
+                name, the provider trusts Warp's OIDC issuer, and its attribute condition allows this workspace.
+                "
                     .to_string(),
                 GeapRecoveryAction::ContactAdmin,
             ),
@@ -140,10 +141,10 @@ impl LoadGeapCredentialsError {
             ),
             Self::ImpersonateServiceAccount { status, .. } if is_admin_config_status(*status) => (
                 "Gemini Enterprise service account access is misconfigured".to_string(),
-                "Warp's identity isn't allowed to impersonate the configured service account. \
-                 Ask your workspace admin to grant the Workload Identity User role \
-                 (roles/iam.workloadIdentityUser) and confirm the IAM Service Account \
-                 Credentials API is enabled."
+                "Warp couldn’t obtain credentials for the service account configured by your \
+                 workspace admin. Ask them to verify the service account email, confirm the Warp \
+                 workload identity has the Workload Identity User role on that service account, \
+                 and ensure the IAM Service Account Credentials API is enabled."
                     .to_string(),
                 GeapRecoveryAction::ContactAdmin,
             ),
@@ -170,6 +171,11 @@ fn format_status_timestamp(time: SystemTime) -> String {
         datetime.format("%b %-d at %-I:%M %p").to_string()
     }
 }
+fn refresh_scheduled_at(expires_at: SystemTime) -> SystemTime {
+    expires_at
+        .checked_sub(GEAP_REFRESH_LEAD_TIME)
+        .unwrap_or(expires_at)
+}
 
 impl GeapCredentialsState {
     pub fn user_facing_components(&self) -> (String, String, Icon) {
@@ -188,8 +194,8 @@ impl GeapCredentialsState {
             ),
             Self::Unconfigured => (
                 "Gemini Enterprise setup incomplete".to_string(),
-                "Your workspace admin still needs to finish configuring Gemini Enterprise before \
-                 Warp can load credentials."
+                "Your workspace admin needs to configure the Workload Identity Federation audience \
+                before Warp can load credentials."
                     .to_string(),
                 Icon::AlertTriangle,
             ),
@@ -206,9 +212,9 @@ impl GeapCredentialsState {
                 "Credentials loaded".to_string(),
                 match credentials.expires_at() {
                     Some(expires_at) => format!(
-                        "Loaded at {}, expires {}",
+                        "Loaded at {} · Refresh scheduled for {}",
                         format_status_timestamp(*loaded_at),
-                        format_status_timestamp(expires_at)
+                        format_status_timestamp(refresh_scheduled_at(expires_at))
                     ),
                     None => format!("Loaded at {}", format_status_timestamp(*loaded_at)),
                 },
