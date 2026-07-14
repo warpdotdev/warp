@@ -11,27 +11,27 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown,
-    prepare_conversation_block_restoration, record_saved_prompt_accepted,
-    record_static_slash_command_accepted, saved_prompt_text_for_id,
-    slash_command_selection_behavior, throttle, AIAgentActionId, AIAgentPtyWriteMode,
-    AIConversation, AIConversationId, AcceptSlashCommandOrSavedPrompt, ActiveSession,
-    ActiveSessionEvent, AgentConversationEntryId, AgentConversationListEntryState,
+    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
+    export_conversation_markdown, prepare_conversation_block_restoration,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    slash_command_selection_behavior, throttle, AIAgentActionId, AIAgentContext,
+    AIAgentPtyWriteMode, AIConversation, AIConversationId, AcceptSlashCommandOrSavedPrompt,
+    ActiveSession, ActiveSessionEvent, AgentConversationEntryId, AgentConversationListEntryState,
     AgentConversationsModel, AgentInteractionMetadata, AgentViewEntryOrigin, BlockId,
     BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
     CLISubagentEvent, CLISubagentTarget, CancellationReason, ChangelogModel, ChangelogModelEvent,
     ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
-    ConversationSelection, ConversationSelectionHandle, ConversationStatus,
-    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
-    GitRepoStatusModel, GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
-    LongRunningCommandControlState, ModelEvent, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent,
-    RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
-    ShellCommandExecutorEvent, SkillReference, SlashCommandDataSource as _,
-    SlashCommandSelectionBehavior, StaticCommand, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TranscriptScope, TuiSlashCommand, TuiSlashCommandDataSource,
-    TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, UserTakeOverReason, COMMAND_REGISTRY,
-    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, WAKEUP_THROTTLE_PERIOD,
+    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
+    ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
+    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, LongRunningCommandControlState,
+    ModelEvent, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
+    RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SkillReference,
+    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
+    TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
+    UserTakeOverReason, COMMAND_REGISTRY, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+    WAKEUP_THROTTLE_PERIOD,
 };
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
@@ -67,7 +67,9 @@ use crate::slash_commands::TuiSlashCommandModel;
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
 use crate::transient_hint::{TransientHint, TransientHintTone};
 use crate::tui_builder::TuiUiBuilder;
-use crate::tui_cli_subagent_view::TuiCLISubagentView;
+use crate::tui_cli_subagent_view::{
+    TuiCLISubagentView, HAND_BACK_KEY_BINDING, TAKE_CONTROL_KEY_BINDING,
+};
 use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
 use crate::warping_indicator::{render_response_summary, render_warping_indicator};
@@ -76,6 +78,7 @@ use crate::zero_state::render_zero_state;
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
+const TERMINAL_USE_DISPATCH_DELAY: Duration = Duration::from_millis(1);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
@@ -188,7 +191,6 @@ fn export_file_success_message(export: &ConversationFileExport) -> String {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TerminalUseInterruptAction {
     TakeControl,
-    CancelAndInterrupt,
     InterruptCommand,
 }
 
@@ -197,17 +199,26 @@ fn terminal_use_interrupt_action(
 ) -> TerminalUseInterruptAction {
     match control_state {
         LongRunningCommandControlState::Agent { .. } => TerminalUseInterruptAction::TakeControl,
-        LongRunningCommandControlState::User {
-            reason: UserTakeOverReason::Stop { .. },
-        } => TerminalUseInterruptAction::CancelAndInterrupt,
-        LongRunningCommandControlState::User {
-            reason: UserTakeOverReason::Manual | UserTakeOverReason::TransferFromAgent { .. },
-        } => TerminalUseInterruptAction::InterruptCommand,
+        LongRunningCommandControlState::User { .. } => TerminalUseInterruptAction::InterruptCommand,
     }
 }
 
 fn routes_submission_to_terminal_use(control_state: &LongRunningCommandControlState) -> bool {
     control_state.is_agent_in_control()
+}
+fn terminal_use_conversation_to_resume(
+    terminal_model: &TerminalModel,
+    block_id: &BlockId,
+) -> Option<AIConversationId> {
+    let metadata = terminal_model
+        .block_list()
+        .block_with_id(block_id)?
+        .agent_interaction_metadata()?;
+    (metadata.requested_command_action_id().is_some()
+        && metadata
+            .long_running_control_state()
+            .is_some_and(LongRunningCommandControlState::should_auto_resume))
+    .then_some(*metadata.conversation_id())
 }
 
 fn user_controlled_line_bytes(input: &str) -> Vec<u8> {
@@ -228,6 +239,8 @@ pub(crate) enum TuiTerminalSessionAction {
     Interrupt,
     /// Cancel an in-flight conversation restore.
     CancelRestore,
+    /// Return a user-controlled terminal-use command to the agent.
+    HandBackTerminalUseControl,
     /// Click on the footer's usage entry: flips the persisted credits⇄cost
     /// display-mode setting.
     ToggleUsageDisplay,
@@ -279,7 +292,7 @@ pub(crate) struct TuiTerminalSessionView {
 pub(crate) fn init(app: &mut AppContext) {
     app.register_fixed_bindings([
         FixedBinding::new(
-            "ctrl-c",
+            TAKE_CONTROL_KEY_BINDING,
             TuiTerminalSessionAction::Interrupt,
             id!(TuiTerminalSessionView::ui_name()),
         )
@@ -290,10 +303,59 @@ pub(crate) fn init(app: &mut AppContext) {
             id!(TuiTerminalSessionView::ui_name()),
         )
         .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
+            HAND_BACK_KEY_BINDING,
+            TuiTerminalSessionAction::HandBackTerminalUseControl,
+            id!(TuiTerminalSessionView::ui_name()),
+        )
+        .with_group(TUI_BINDING_GROUP),
     ]);
 }
 
 impl TuiTerminalSessionView {
+    fn resume_after_user_controlled_command(
+        &mut self,
+        block_id: &BlockId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let conversation_id = {
+            let terminal_model = self.terminal_model.lock();
+            terminal_use_conversation_to_resume(&terminal_model, block_id)
+        };
+        let Some(conversation_id) = conversation_id else {
+            return;
+        };
+        let resume_context = {
+            let terminal_model = self.terminal_model.lock();
+            block_context_from_terminal_model(&terminal_model, block_id, false)
+                .map(Box::new)
+                .map(AIAgentContext::Block)
+                .into_iter()
+                .collect()
+        };
+        self.ai_controller.update(ctx, |controller, ctx| {
+            controller.resume_conversation(
+                conversation_id,
+                /*can_attempt_resume_on_error*/ true,
+                /*is_auto_resume_after_error*/ false,
+                resume_context,
+                ctx,
+            );
+        });
+    }
+    fn detach_cli_subagent_view(
+        &mut self,
+        block_id: &BlockId,
+        initial_requested_command_action_id: Option<&AIAgentActionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(view) = self.cli_subagent_views.remove(block_id) {
+            self.transcript.update(ctx, |transcript, ctx| {
+                transcript.detach_cli_subagent(initial_requested_command_action_id, view.id(), ctx);
+            });
+        }
+        ctx.focus(&self.input_view);
+    }
     fn handle_cli_subagent_event(&mut self, event: &CLISubagentEvent, ctx: &mut ViewContext<Self>) {
         match event {
             CLISubagentEvent::SpawnedSubagent {
@@ -340,16 +402,11 @@ impl TuiTerminalSessionView {
                 initial_requested_command_action_id,
                 ..
             } => {
-                if let Some(view) = self.cli_subagent_views.remove(block_id) {
-                    self.transcript.update(ctx, |transcript, ctx| {
-                        transcript.detach_cli_subagent(
-                            initial_requested_command_action_id.as_ref(),
-                            view.id(),
-                            ctx,
-                        );
-                    });
-                }
-                ctx.focus(&self.input_view);
+                self.detach_cli_subagent_view(
+                    block_id,
+                    initial_requested_command_action_id.as_ref(),
+                    ctx,
+                );
             }
             CLISubagentEvent::UpdatedControl { .. }
             | CLISubagentEvent::UpdatedInstruction { .. }
@@ -381,43 +438,20 @@ impl TuiTerminalSessionView {
                 });
                 true
             }
-            TerminalUseInterruptAction::CancelAndInterrupt => {
-                let had_active_stream = self
-                    .ai_controller
-                    .as_ref(ctx)
-                    .has_active_stream_for_conversation(target.conversation_id, ctx);
-                self.ai_controller.update(ctx, |controller, ctx| {
-                    controller.cancel_conversation_progress(
-                        target.conversation_id,
-                        CancellationReason::ManuallyCancelled,
-                        ctx,
-                    );
-                });
-                {
-                    let mut terminal_model = self.terminal_model.lock();
-                    terminal_model
-                        .block_list_mut()
-                        .active_block_mut()
-                        .set_user_control_for_teardown();
-                }
-                if !had_active_stream {
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                        history.update_conversation_status(
-                            self.terminal_surface_id,
-                            target.conversation_id,
-                            ConversationStatus::Cancelled,
-                            ctx,
-                        );
-                    });
-                }
-                ctx.emit(TuiTerminalSessionEvent::InterruptPty);
-                true
-            }
             TerminalUseInterruptAction::InterruptCommand => {
                 ctx.emit(TuiTerminalSessionEvent::InterruptPty);
                 true
             }
         }
+    }
+
+    fn hand_back_terminal_use_control(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.active_user_controlled_target(ctx).is_none() {
+            return;
+        }
+        self.cli_subagent_controller.update(ctx, |controller, ctx| {
+            controller.handoff_active_command_control_to_agent(ctx);
+        });
     }
 
     fn active_agent_controlled_target(&self, ctx: &AppContext) -> Option<CLISubagentTarget> {
@@ -441,21 +475,38 @@ impl TuiTerminalSessionView {
         let Some(target) = self.active_agent_controlled_target(ctx) else {
             return false;
         };
-        let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
-            controller.send_user_query_in_conversation(
-                prompt.to_owned(),
-                target.conversation_id,
-                None,
-                ctx,
-            )
-        });
-        if !dispatched {
-            return false;
-        }
-        self.cli_subagent_controller.update(ctx, |controller, ctx| {
-            controller.set_latest_instruction(target.block_id, prompt.to_owned(), ctx);
+        let prompt = prompt.to_owned();
+        let block_id = target.block_id;
+        let conversation_id = target.conversation_id;
+        let previous_instruction = self.cli_subagent_controller.update(ctx, |controller, ctx| {
+            controller.set_latest_instruction(block_id.clone(), prompt.clone(), ctx)
         });
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+        ctx.notify();
+
+        ctx.spawn(
+            Timer::after(TERMINAL_USE_DISPATCH_DELAY),
+            move |view, _, ctx| {
+                let dispatched = view.ai_controller.update(ctx, |controller, ctx| {
+                    controller.send_user_query_in_conversation(
+                        prompt.clone(),
+                        conversation_id,
+                        None,
+                        ctx,
+                    )
+                });
+                if !dispatched {
+                    view.cli_subagent_controller.update(ctx, |controller, ctx| {
+                        controller.restore_latest_instruction(block_id, previous_instruction, ctx);
+                    });
+                    if view.input_view.as_ref(ctx).is_empty(ctx) {
+                        view.input_view.update(ctx, |input, ctx| {
+                            input.set_text(&prompt, ctx);
+                        });
+                    }
+                }
+            },
+        );
         true
     }
 
@@ -772,8 +823,11 @@ impl TuiTerminalSessionView {
 
         // These events update block metadata or grids the transcript reads.
         // PTY output redraws are driven by `wakeups_rx` below.
-        ctx.subscribe_to_model(&model_events, |_, _, event, ctx| match event {
-            ModelEvent::BlockCompleted(_) => ctx.notify(),
+        ctx.subscribe_to_model(&model_events, |view, _, event, ctx| match event {
+            ModelEvent::BlockCompleted(completed) => {
+                view.resume_after_user_controlled_command(&completed.block_id, ctx);
+                ctx.notify();
+            }
             ModelEvent::AfterBlockStarted { .. }
             | ModelEvent::BlockMetadataReceived(_)
             | ModelEvent::BlockWorkingDirectoryUpdated(_)
@@ -2161,6 +2215,9 @@ impl TypedActionView for TuiTerminalSessionView {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
             TuiTerminalSessionAction::CancelRestore => {
                 self.cancel_conversation_restore(ctx);
+            }
+            TuiTerminalSessionAction::HandBackTerminalUseControl => {
+                self.hand_back_terminal_use_control(ctx)
             }
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
         }

@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use warp::tui_export::{LongRunningCommandControlState, UserTakeOverReason};
 
-use super::{format_next_check_remaining, remaining_for_fixed_delay, terminal_use_status_text};
+use super::{
+    format_next_check_remaining, remaining_for_fixed_delay, resolve_latest_instruction,
+    terminal_use_status_text,
+};
 
 #[test]
 fn terminal_use_status_covers_control_and_lifecycle_states() {
@@ -12,11 +15,11 @@ fn terminal_use_status_covers_control_and_lifecycle_states() {
     };
     assert_eq!(
         terminal_use_status_text(&agent, false, true),
-        "Agent is monitoring command"
+        "Agent is monitoring command · ctrl-c to take control"
     );
     assert_eq!(
         terminal_use_status_text(&agent, false, false),
-        "Agent waiting for instructions"
+        "Agent waiting for instructions · ctrl-c to take control"
     );
     assert_eq!(
         terminal_use_status_text(&agent, true, true),
@@ -29,7 +32,7 @@ fn terminal_use_status_covers_control_and_lifecycle_states() {
     };
     assert_eq!(
         terminal_use_status_text(&blocked, false, true),
-        "Agent needs your input"
+        "Agent needs your input · ctrl-c to take control"
     );
 
     let manual = LongRunningCommandControlState::User {
@@ -37,7 +40,7 @@ fn terminal_use_status_covers_control_and_lifecycle_states() {
     };
     assert_eq!(
         terminal_use_status_text(&manual, false, false),
-        "User is in control"
+        "User is in control · ctrl-g to hand back"
     );
 
     let stopped = LongRunningCommandControlState::User {
@@ -47,7 +50,7 @@ fn terminal_use_status_covers_control_and_lifecycle_states() {
     };
     assert_eq!(
         terminal_use_status_text(&stopped, false, false),
-        "Agent paused · user is in control"
+        "Agent paused · user is in control · ctrl-g to hand back"
     );
 
     let transferred = LongRunningCommandControlState::User {
@@ -57,7 +60,18 @@ fn terminal_use_status_covers_control_and_lifecycle_states() {
     };
     assert_eq!(
         terminal_use_status_text(&transferred, false, false),
-        "Agent handed control to you"
+        "Agent handed control to you · ctrl-g to hand back"
+    );
+}
+
+#[test]
+fn controller_instruction_precedes_stale_exchange_input() {
+    assert_eq!(
+        resolve_latest_instruction(
+            Some("new instruction".to_owned()),
+            Some("old instruction".to_owned())
+        ),
+        Some("new instruction".to_owned())
     );
 }
 

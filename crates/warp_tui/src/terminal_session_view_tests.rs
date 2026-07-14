@@ -6,7 +6,7 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     export_conversation_markdown, AIAgentActionId, AIConversationId, AgentInteractionMetadata,
-    BlockId, LongRunningCommandControlState, PtyIntent, PtyIntentEvent, TerminalModel,
+    BlockId, LongRunningCommandControlState, PtyIntent, PtyIntentEvent, TaskId, TerminalModel,
     TranscriptScope, UserTakeOverReason,
 };
 use warpui::EntityIdMap;
@@ -15,8 +15,9 @@ use warpui_core::App;
 
 use super::{
     export_file_success_message, hide_agent_requested_command_from_top_level,
-    raw_prompt_if_not_blank, routes_submission_to_terminal_use, terminal_use_interrupt_action,
-    user_controlled_line_bytes, TerminalUseInterruptAction, TuiTerminalSessionEvent,
+    raw_prompt_if_not_blank, routes_submission_to_terminal_use,
+    terminal_use_conversation_to_resume, terminal_use_interrupt_action, user_controlled_line_bytes,
+    TerminalUseInterruptAction, TuiTerminalSessionEvent,
 };
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
@@ -238,7 +239,7 @@ fn only_agent_control_routes_submissions_to_terminal_use() {
 }
 
 #[test]
-fn terminal_use_interrupt_follows_takeover_then_cancel_policy() {
+fn terminal_use_interrupt_follows_takeover_then_process_interrupt_policy() {
     let agent = LongRunningCommandControlState::Agent {
         is_blocked: false,
         should_hide_responses: false,
@@ -255,7 +256,7 @@ fn terminal_use_interrupt_follows_takeover_then_cancel_policy() {
     };
     assert_eq!(
         terminal_use_interrupt_action(&stopped),
-        TerminalUseInterruptAction::CancelAndInterrupt
+        TerminalUseInterruptAction::InterruptCommand
     );
 
     let manual = LongRunningCommandControlState::User {
@@ -275,4 +276,40 @@ fn terminal_use_interrupt_follows_takeover_then_cancel_policy() {
         terminal_use_interrupt_action(&transferred),
         TerminalUseInterruptAction::InterruptCommand
     );
+}
+
+#[test]
+fn completed_user_controlled_requested_command_resumes_unless_tearing_down() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("cargo build", "Compiling");
+    let conversation_id = AIConversationId::new();
+    let task_id = TaskId::new("terminal-use-task".to_owned());
+    let block_id = {
+        let block = model.block_list_mut().active_block_mut();
+        block.set_agent_interaction_mode_for_requested_command(
+            AIAgentActionId::from("requested-command".to_owned()),
+            Some(task_id.clone()),
+            conversation_id,
+        );
+        block
+            .set_agent_interaction_mode_for_agent_monitored_command(&task_id, conversation_id)
+            .expect("command should become agent monitored");
+        block
+            .take_over_control_for_user(UserTakeOverReason::Stop {
+                should_auto_resume: true,
+            })
+            .expect("user takeover should succeed");
+        block.id().clone()
+    };
+
+    assert_eq!(
+        terminal_use_conversation_to_resume(&model, &block_id),
+        Some(conversation_id)
+    );
+
+    model
+        .block_list_mut()
+        .active_block_mut()
+        .set_user_control_for_teardown();
+    assert_eq!(terminal_use_conversation_to_resume(&model, &block_id), None);
 }

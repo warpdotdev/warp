@@ -25,28 +25,59 @@ use warpui_core::{
 
 use crate::tui_builder::TuiUiBuilder;
 
+pub(super) const TAKE_CONTROL_KEY_BINDING: &str = "ctrl-c";
+pub(super) const HAND_BACK_KEY_BINDING: &str = "ctrl-g";
+
 fn terminal_use_status_text(
     control_state: &LongRunningCommandControlState,
     command_finished: bool,
     output_streaming: bool,
-) -> &'static str {
+) -> String {
     if command_finished {
-        return "Command finished";
+        return "Command finished".to_owned();
     }
-    match control_state {
+    let (status, key_binding, action) = match control_state {
         LongRunningCommandControlState::Agent {
             is_blocked: true, ..
-        } => "Agent needs your input",
-        LongRunningCommandControlState::Agent { .. } if output_streaming => {
-            "Agent is monitoring command"
-        }
-        LongRunningCommandControlState::Agent { .. } => "Agent waiting for instructions",
+        } => (
+            "Agent needs your input",
+            TAKE_CONTROL_KEY_BINDING,
+            "to take control",
+        ),
+        LongRunningCommandControlState::Agent { .. } if output_streaming => (
+            "Agent is monitoring command",
+            TAKE_CONTROL_KEY_BINDING,
+            "to take control",
+        ),
+        LongRunningCommandControlState::Agent { .. } => (
+            "Agent waiting for instructions",
+            TAKE_CONTROL_KEY_BINDING,
+            "to take control",
+        ),
         LongRunningCommandControlState::User { reason } => match reason {
-            UserTakeOverReason::Manual => "User is in control",
-            UserTakeOverReason::Stop { .. } => "Agent paused · user is in control",
-            UserTakeOverReason::TransferFromAgent { .. } => "Agent handed control to you",
+            UserTakeOverReason::Manual => {
+                ("User is in control", HAND_BACK_KEY_BINDING, "to hand back")
+            }
+            UserTakeOverReason::Stop { .. } => (
+                "Agent paused · user is in control",
+                HAND_BACK_KEY_BINDING,
+                "to hand back",
+            ),
+            UserTakeOverReason::TransferFromAgent { .. } => (
+                "Agent handed control to you",
+                HAND_BACK_KEY_BINDING,
+                "to hand back",
+            ),
         },
-    }
+    };
+    format!("{status} · {key_binding} {action}")
+}
+
+fn resolve_latest_instruction(
+    controller_instruction: Option<String>,
+    exchange_instruction: Option<String>,
+) -> Option<String> {
+    controller_instruction.or(exchange_instruction)
 }
 
 fn remaining_for_fixed_delay(delay: Duration, elapsed: Duration) -> Option<Duration> {
@@ -73,7 +104,6 @@ pub(super) enum TuiCLISubagentViewEvent {
 #[derive(Clone, Debug)]
 pub(super) enum TuiCLISubagentViewAction {
     Allow,
-    HandBack,
 }
 
 /// Compact terminal-use state rendered alongside one command block.
@@ -87,7 +117,6 @@ pub(super) struct TuiCLISubagentView {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     last_measured_width: Cell<Option<u16>>,
     allow_mouse_state: MouseStateHandle,
-    hand_back_mouse_state: MouseStateHandle,
 }
 
 impl TuiCLISubagentView {
@@ -160,7 +189,6 @@ impl TuiCLISubagentView {
             terminal_model,
             last_measured_width: Cell::new(None),
             allow_mouse_state: MouseStateHandle::default(),
-            hand_back_mouse_state: MouseStateHandle::default(),
         };
         view.start_countdown_refresh(ctx);
         view
@@ -195,7 +223,7 @@ impl TuiCLISubagentView {
             .is_none_or(|block| block.finished())
     }
 
-    fn status_text(&self, target: &CLISubagentTarget, app: &AppContext) -> &'static str {
+    fn status_text(&self, target: &CLISubagentTarget, app: &AppContext) -> String {
         terminal_use_status_text(
             &target.control_state,
             self.command_finished(),
@@ -206,16 +234,14 @@ impl TuiCLISubagentView {
     }
 
     fn latest_instruction(&self, target: &CLISubagentTarget, app: &AppContext) -> Option<String> {
-        self.model
-            .as_ref()
-            .and_then(|model| {
-                model
-                    .inputs_to_render(app)
-                    .iter()
-                    .rev()
-                    .find_map(AIAgentInput::display_query)
-            })
-            .or_else(|| target.latest_instruction.clone())
+        let exchange_instruction = self.model.as_ref().and_then(|model| {
+            model
+                .inputs_to_render(app)
+                .iter()
+                .rev()
+                .find_map(AIAgentInput::display_query)
+        });
+        resolve_latest_instruction(target.latest_instruction.clone(), exchange_instruction)
     }
 
     fn next_check_remaining(
@@ -310,16 +336,6 @@ impl TuiCLISubagentView {
                 ))
                 .finish(),
             );
-        } else if target.control_state.is_user_in_control() && !self.command_finished() {
-            content.add_child(
-                TuiContainer::new(Self::render_action(
-                    "Hand back",
-                    &self.hand_back_mouse_state,
-                    TuiCLISubagentViewAction::HandBack,
-                    app,
-                ))
-                .finish(),
-            );
         }
         content.finish()
     }
@@ -389,11 +405,6 @@ impl TypedActionView for TuiCLISubagentView {
             TuiCLISubagentViewAction::Allow => {
                 self.action_model.update(ctx, |action_model, ctx| {
                     action_model.execute_next_action_for_user(self.conversation_id, ctx);
-                });
-            }
-            TuiCLISubagentViewAction::HandBack => {
-                self.subagent_controller.update(ctx, |controller, ctx| {
-                    controller.handoff_active_command_control_to_agent(ctx);
                 });
             }
         }

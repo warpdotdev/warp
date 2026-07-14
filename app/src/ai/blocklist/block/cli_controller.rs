@@ -383,12 +383,27 @@ impl CLISubagentController {
         block_id: BlockId,
         instruction: String,
         ctx: &mut ModelContext<Self>,
-    ) {
-        self.active_subagents_by_block
+    ) -> Option<String> {
+        let previous = self
+            .active_subagents_by_block
             .entry(block_id.clone())
             .or_default()
-            .latest_instruction = Some(instruction);
+            .latest_instruction
+            .replace(instruction);
         ctx.emit(CLISubagentEvent::UpdatedInstruction { block_id });
+        previous
+    }
+
+    pub fn restore_latest_instruction(
+        &mut self,
+        block_id: BlockId,
+        instruction: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(state) = self.active_subagents_by_block.get_mut(&block_id) {
+            state.latest_instruction = instruction;
+            ctx.emit(CLISubagentEvent::UpdatedInstruction { block_id });
+        }
     }
     /// Returns the CLI subagent associated with the active command block.
     pub fn active_target(&self) -> Option<CLISubagentTarget> {
