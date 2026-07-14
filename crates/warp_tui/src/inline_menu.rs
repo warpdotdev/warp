@@ -14,6 +14,7 @@ use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::{AppContext, ModelHandle};
 
 use crate::conversation_menu::TuiConversationMenuModel;
+use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::model_menu::TuiModelMenuModel;
 use crate::skills_menu::TuiSkillMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
@@ -35,6 +36,16 @@ const SLASH_COMMAND_COLUMN_CONSTRAINTS: TuiTwoColumnConstraints = TuiTwoColumnCo
 pub(crate) enum TuiInlineMenuRowStyle {
     Default,
     InlineMenuItem,
+}
+pub(crate) fn active_inline_menu(
+    inline_menus: &[TuiInlineMenu],
+    mode: TuiInputSuggestionsMode,
+    ctx: &AppContext,
+) -> Option<TuiInlineMenu> {
+    inline_menus
+        .iter()
+        .find(|menu| menu.mode() == mode && menu.is_open(ctx))
+        .cloned()
 }
 
 pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
@@ -213,6 +224,8 @@ pub(crate) enum TuiInlineMenuAccepted {
 
 /// Type-erased operations shared by TUI inline-menu model handles.
 pub(crate) trait TuiInlineMenuHandle {
+    /// Returns the input-suggestions mode represented by this menu.
+    fn mode(&self) -> TuiInputSuggestionsMode;
     /// Returns whether this menu is open.
     fn is_open(&self, ctx: &AppContext) -> bool;
     /// Returns the input range highlighted by this menu.
@@ -242,6 +255,10 @@ impl TuiInlineMenu {
     }
     pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
         self.0.is_open(ctx)
+    }
+
+    pub(crate) fn mode(&self) -> TuiInputSuggestionsMode {
+        self.0.mode()
     }
 
     pub(crate) fn render(&self, ctx: &AppContext) -> Option<Box<dyn TuiElement>> {
@@ -278,8 +295,11 @@ impl TuiInlineMenu {
 }
 
 impl TuiInlineMenuHandle for ModelHandle<TuiSlashCommandModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::SlashCommands
+    }
     fn is_open(&self, ctx: &AppContext) -> bool {
-        self.as_ref(ctx).is_open()
+        self.as_ref(ctx).is_open(ctx)
     }
     fn input_highlight_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
         self.as_ref(ctx).highlighted_prefix_range()
@@ -307,13 +327,16 @@ impl TuiInlineMenuHandle for ModelHandle<TuiSlashCommandModel> {
     }
 
     fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
-        self.as_ref(ctx).snapshot()
+        self.as_ref(ctx).snapshot(ctx)
     }
 }
 
 impl TuiInlineMenuHandle for ModelHandle<TuiConversationMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::ConversationMenu
+    }
     fn is_open(&self, ctx: &AppContext) -> bool {
-        self.as_ref(ctx).is_open()
+        self.as_ref(ctx).is_open(ctx)
     }
 
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
@@ -342,13 +365,16 @@ impl TuiInlineMenuHandle for ModelHandle<TuiConversationMenuModel> {
     }
 
     fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
-        self.as_ref(ctx).snapshot()
+        self.as_ref(ctx).snapshot(ctx)
     }
 }
 
 impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::ModelSelector
+    }
     fn is_open(&self, ctx: &AppContext) -> bool {
-        self.as_ref(ctx).is_open()
+        self.as_ref(ctx).is_open(ctx)
     }
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
         None
@@ -368,7 +394,7 @@ impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
 
     fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
         self.as_ref(ctx)
-            .accept_selected()
+            .accept_selected(ctx)
             .map(TuiInlineMenuAccepted::Model)
     }
 
@@ -377,13 +403,16 @@ impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
     }
 
     fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
-        self.as_ref(ctx).snapshot()
+        self.as_ref(ctx).snapshot(ctx)
     }
 }
 
 impl TuiInlineMenuHandle for ModelHandle<TuiSkillMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::SkillMenu
+    }
     fn is_open(&self, ctx: &AppContext) -> bool {
-        self.as_ref(ctx).is_open()
+        self.as_ref(ctx).is_open(ctx)
     }
 
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
@@ -417,7 +446,7 @@ impl TuiInlineMenuHandle for ModelHandle<TuiSkillMenuModel> {
     }
 
     fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
-        self.as_ref(ctx).snapshot()
+        self.as_ref(ctx).snapshot(ctx)
     }
 }
 

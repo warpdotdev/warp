@@ -34,6 +34,7 @@ use super::{
 use crate::editor_element::TuiEditorElement;
 use crate::inline_menu::TuiInlineMenu;
 use crate::input_mode_policy::TuiInputModePolicy;
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::model_menu::TuiModelMenuModel;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
 use crate::test_fixtures::add_test_semantic_selection;
@@ -52,6 +53,15 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
 }
 
+fn add_suggestions_mode(
+    ctx: &mut AppContext,
+    initial_mode: TuiInputSuggestionsMode,
+) -> ModelHandle<TuiInputSuggestionsModeModel> {
+    let mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
+    mode.update(ctx, |mode, ctx| mode.set_mode(initial_mode, ctx));
+    mode
+}
+
 #[test]
 fn slash_command_argument_hint_renders_after_menu_closes() {
     App::test((), |mut app| async move {
@@ -64,7 +74,7 @@ fn slash_command_argument_hint_renders_after_menu_closes() {
             });
             menu_model.update(ctx, |model, ctx| {
                 model.accept_selected(ctx);
-                assert!(!model.is_open());
+                assert!(!model.is_open(ctx));
             });
 
             let buffer = render_input_buffer(&view, ctx);
@@ -117,7 +127,7 @@ fn recognized_slash_command_prefix_matches_menu_color_after_menu_closes() {
             });
             menu_model.update(ctx, |model, ctx| {
                 model.accept_selected(ctx);
-                assert!(!model.is_open());
+                assert!(!model.is_open(ctx));
             });
 
             let buffer = render_input_buffer(&view, ctx);
@@ -138,6 +148,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
     ctx.add_singleton_model(|_| Appearance::mock());
     add_test_semantic_selection(ctx);
     let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::Closed);
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,
@@ -145,7 +156,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         },
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            TuiInputView::new(model, input_mode, Vec::new(), ctx)
+            TuiInputView::new(model, input_mode, suggestions_mode, Vec::new(), ctx)
         },
     );
     view
@@ -162,6 +173,7 @@ fn build_view_with_inline_menu(
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
     let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::SlashCommands);
     let mixer = ctx.add_model(|_| SlashCommandMixer::new());
     let ids = [SlashCommandId::new(), SlashCommandId::new()];
     let rows = ids
@@ -173,15 +185,30 @@ fn build_view_with_inline_menu(
             action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: *id },
         })
         .collect();
-    let menu_model =
-        ctx.add_model(|_| TuiSlashCommandModel::new_for_test(input_model.clone(), mixer, rows, 0));
+    let menu_model = ctx.add_model(|_| {
+        TuiSlashCommandModel::new_for_test(
+            input_model.clone(),
+            suggestions_mode.clone(),
+            mixer,
+            rows,
+            0,
+        )
+    });
     let inline_menu = TuiInlineMenu::new(menu_model.clone());
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,
             ..Default::default()
         },
-        move |ctx| TuiInputView::new(input_model, input_mode, vec![inline_menu], ctx),
+        move |ctx| {
+            TuiInputView::new(
+                input_model,
+                input_mode,
+                suggestions_mode,
+                vec![inline_menu],
+                ctx,
+            )
+        },
     );
     (view, menu_model, ids)
 }
@@ -197,10 +224,16 @@ fn build_view_with_model_menu(
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
     let input_mode = BlocklistAIInputModel::mock(Rc::new(TuiInputModePolicy), ctx);
+    let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::ModelSelector);
     let id = LLMId::from("gpt-5");
     let id_for_model = id.clone();
     let menu_model = ctx.add_model(|_| {
-        TuiModelMenuModel::new_for_test(input_model.clone(), vec![(id_for_model, true)], 0)
+        TuiModelMenuModel::new_for_test(
+            input_model.clone(),
+            suggestions_mode.clone(),
+            vec![(id_for_model, true)],
+            0,
+        )
     });
     let inline_menu = TuiInlineMenu::new(menu_model.clone());
     let (_window_id, view) = ctx.add_tui_window(
@@ -208,7 +241,15 @@ fn build_view_with_model_menu(
             window_style: WindowStyle::NotStealFocus,
             ..Default::default()
         },
-        move |ctx| TuiInputView::new(input_model, input_mode, vec![inline_menu], ctx),
+        move |ctx| {
+            TuiInputView::new(
+                input_model,
+                input_mode,
+                suggestions_mode,
+                vec![inline_menu],
+                ctx,
+            )
+        },
     );
     (view, menu_model, id)
 }
@@ -255,7 +296,7 @@ fn inline_menu_accept_dismisses_before_emitting_unchanged_payload() {
                 {
                     accepted_for_subscription
                         .borrow_mut()
-                        .push((*id, !menu_for_subscription.as_ref(ctx).is_open()));
+                        .push((*id, !menu_for_subscription.as_ref(ctx).is_open(ctx)));
                 }
             });
             (view, menu_model, ids, accepted)
@@ -265,7 +306,7 @@ fn inline_menu_accept_dismisses_before_emitting_unchanged_payload() {
         });
         app.read(|ctx| {
             assert_eq!(accepted.borrow().as_slice(), &[(ids[0], true)]);
-            assert!(!menu_model.as_ref(ctx).is_open());
+            assert!(!menu_model.as_ref(ctx).is_open(ctx));
         });
     });
 }
@@ -288,7 +329,7 @@ fn model_menu_accept_emits_selected_id_and_stays_open_for_persistence() {
         app.update(|ctx| dispatch(&view, ctx, &[TuiInputAction::Submit]));
         app.read(|ctx| {
             assert_eq!(accepted.borrow().as_slice(), &[id]);
-            assert!(menu_model.as_ref(ctx).is_open());
+            assert!(menu_model.as_ref(ctx).is_open(ctx));
         });
     });
 }
@@ -317,7 +358,7 @@ fn escape_dismisses_menu_and_closed_menu_submit_falls_through() {
         });
 
         app.update(|ctx| {
-            assert!(!menu_model.as_ref(ctx).is_open());
+            assert!(!menu_model.as_ref(ctx).is_open(ctx));
             assert!(view
                 .as_ref(ctx)
                 .keymap_context(ctx)

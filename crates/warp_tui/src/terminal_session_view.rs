@@ -53,9 +53,10 @@ use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
-use crate::inline_menu::{TuiInlineMenu, MAX_INLINE_MENU_ROWS};
+use crate::inline_menu::{active_inline_menu, TuiInlineMenu, MAX_INLINE_MENU_ROWS};
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
+use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::resume::TuiExitSummaryHandle;
@@ -199,6 +200,7 @@ pub(crate) struct TuiTerminalSessionView {
     transcript: ViewHandle<TuiTranscriptView>,
     input_view: ViewHandle<TuiInputView>,
     inline_menus: Vec<TuiInlineMenu>,
+    suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
     model_menu: ModelHandle<TuiModelMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
@@ -361,6 +363,7 @@ impl TuiTerminalSessionView {
         });
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
+        let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
         let slash_commands_source = ctx.add_model(|ctx| {
             TuiSlashCommandDataSource::new(
                 TuiSlashCommandDataSourceArgs {
@@ -379,6 +382,7 @@ impl TuiTerminalSessionView {
         let slash_commands = ctx.add_model(|ctx| {
             TuiSlashCommandModel::new(
                 input_editor_model.clone(),
+                suggestions_mode.clone(),
                 slash_commands_source.clone(),
                 slash_commands_mixer,
                 ctx,
@@ -389,6 +393,7 @@ impl TuiTerminalSessionView {
         let conversation_menu = ctx.add_model(|ctx| {
             TuiConversationMenuModel::new(
                 input_editor_model.clone(),
+                suggestions_mode.clone(),
                 conversation_selection.clone(),
                 window_id,
                 ctx,
@@ -404,14 +409,16 @@ impl TuiTerminalSessionView {
                 );
             }
         });
-        let model_menu =
-            ctx.add_model(|ctx| TuiModelMenuModel::new(input_editor_model.clone(), ctx));
+        let model_menu = ctx.add_model(|ctx| {
+            TuiModelMenuModel::new(input_editor_model.clone(), suggestions_mode.clone(), ctx)
+        });
         ctx.subscribe_to_model(&model_menu, |_, _, _: &TuiModelMenuEvent, ctx| {
             ctx.notify();
         });
         let skills_menu = ctx.add_model(|ctx| {
             TuiSkillMenuModel::new(
                 input_editor_model.clone(),
+                suggestions_mode.clone(),
                 active_session.clone(),
                 slash_commands_source.clone(),
                 terminal_surface_id,
@@ -466,10 +473,12 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(skills_menu.clone()),
         ];
         let inline_menus_for_input = inline_menus.clone();
+        let suggestions_mode_for_input = suggestions_mode.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
             TuiInputView::new(
                 input_editor_model,
                 input_mode_for_input_view,
+                suggestions_mode_for_input,
                 inline_menus_for_input,
                 ctx,
             )
@@ -504,6 +513,7 @@ impl TuiTerminalSessionView {
         // The input box border color and the footer's shell-mode hint depend
         // on the input mode.
         ctx.subscribe_to_model(&ai_input_model, |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
         // The warping indicator between the transcript and the input box
         // tracks the selected conversation: re-render when its status changes
         // or an exchange starts (the elapsed counter's anchor) on this
@@ -682,6 +692,7 @@ impl TuiTerminalSessionView {
             transcript,
             input_view,
             inline_menus,
+            suggestions_mode,
             conversation_menu,
             model_menu,
             skills_menu,
@@ -1572,13 +1583,11 @@ impl TuiTerminalSessionView {
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             TuiSlashCommand::Conversations => {
-                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.conversation_menu
                     .update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             TuiSlashCommand::Model => {
-                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
@@ -1586,7 +1595,6 @@ impl TuiTerminalSessionView {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return;
                 }
-                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.skills_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
@@ -1774,7 +1782,12 @@ impl TuiView for TuiTerminalSessionView {
             }
             ConversationRestoreState::Idle => {}
         }
-        let inline_menu = self.inline_menus.iter().find_map(|menu| menu.render(ctx));
+        let inline_menu = active_inline_menu(
+            &self.inline_menus,
+            self.suggestions_mode.as_ref(ctx).mode(),
+            ctx,
+        )
+        .and_then(|menu| menu.render(ctx));
         // The border takes the shell-mode accent while in shell mode.
         let builder = TuiUiBuilder::from_app(ctx);
         let border_style = if self.is_shell_mode(ctx) {

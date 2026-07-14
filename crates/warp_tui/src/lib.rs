@@ -24,6 +24,7 @@ mod editor_element;
 mod exit_confirmation;
 mod inline_menu;
 mod input_mode_policy;
+mod input_suggestions_mode;
 mod keybindings;
 mod model_menu;
 mod resume;

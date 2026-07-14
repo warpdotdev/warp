@@ -39,8 +39,9 @@ use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, Vie
 
 use super::kill_buffer::KillBuffer;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
-use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted};
+use crate::inline_menu::{active_inline_menu, TuiInlineMenu, TuiInlineMenuAccepted};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
+use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::tui_builder::TuiUiBuilder;
 
@@ -570,6 +571,8 @@ pub struct TuiInputView {
     model: ModelHandle<CodeEditorModel>,
     /// Shared input-mode state driving `!` shell-mode handling.
     input_mode: ModelHandle<BlocklistAIInputModel>,
+    /// Single authoritative menu mode, mirroring the GUI input's suggestions mode.
+    suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     /// Generalized inline menus used to route prioritized menu actions.
     inline_menus: Vec<TuiInlineMenu>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
@@ -602,6 +605,7 @@ impl TuiInputView {
     pub(crate) fn new(
         model: ModelHandle<CodeEditorModel>,
         input_mode: ModelHandle<BlocklistAIInputModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -613,9 +617,11 @@ impl TuiInputView {
         // The model only emits on real config changes, and rendering branches
         // on the config (shell-mode gutter/border), so every event re-renders.
         ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
         Self {
             model,
             input_mode,
+            suggestions_mode,
             inline_menus,
             kill_buffer: KillBuffer::default(),
             max_visible_rows: 6,
@@ -1160,10 +1166,11 @@ impl TuiInputView {
     }
 
     fn active_inline_menu(&self, ctx: &AppContext) -> Option<TuiInlineMenu> {
-        self.inline_menus
-            .iter()
-            .find(|menu| menu.is_open(ctx))
-            .cloned()
+        active_inline_menu(
+            &self.inline_menus,
+            self.suggestions_mode.as_ref(ctx).mode(),
+            ctx,
+        )
     }
 
     // ── Kill / yank ───────────────────────────────────────────────────────────
