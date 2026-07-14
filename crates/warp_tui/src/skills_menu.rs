@@ -12,6 +12,7 @@ use crate::inline_menu::{
     result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
     TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
 };
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, true, false);
 
@@ -36,6 +37,7 @@ pub(crate) struct TuiSkillMenuEvent;
 
 pub(crate) struct TuiSkillMenuModel {
     input_editor: ModelHandle<CodeEditorModel>,
+    suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     active_session: ModelHandle<ActiveSession>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     terminal_view_id: EntityId,
@@ -45,18 +47,19 @@ pub(crate) struct TuiSkillMenuModel {
 impl TuiSkillMenuModel {
     pub(crate) fn new(
         input_editor: ModelHandle<CodeEditorModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         active_session: ModelHandle<ActiveSession>,
         slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&input_editor, |model, _, event, ctx| {
-            if model.is_open() && matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
+            if model.is_open(ctx) && matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 model.refresh_rows(ctx);
             }
         });
         ctx.subscribe_to_model(&active_session, |model, _, event, ctx| {
-            if model.is_open()
+            if model.is_open(ctx)
                 && matches!(
                     event,
                     ActiveSessionEvent::UpdatedPwd | ActiveSessionEvent::Bootstrapped
@@ -67,6 +70,7 @@ impl TuiSkillMenuModel {
         });
         Self {
             input_editor,
+            suggestions_mode,
             active_session,
             slash_commands_source,
             terminal_view_id,
@@ -74,14 +78,26 @@ impl TuiSkillMenuModel {
         }
     }
 
-    pub(crate) fn is_open(&self) -> bool {
+    fn has_open_state(&self) -> bool {
         matches!(self.state, TuiSkillMenuState::Open { .. })
+    }
+    pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
+        self.has_open_state()
+            && self.suggestions_mode.as_ref(ctx).mode() == TuiInputSuggestionsMode::SkillMenu
     }
 
     pub(crate) fn open(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.is_open() {
+        if self.has_open_state() {
             return;
         }
+        let did_open = self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.try_open(TuiInputSuggestionsMode::SkillMenu, ctx)
+        });
+        if !did_open {
+            return;
+        }
+        self.input_editor
+            .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
         self.state = TuiSkillMenuState::Open {
             list: TuiInlineMenuListState::default(),
         };
@@ -89,10 +105,13 @@ impl TuiSkillMenuModel {
     }
 
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.is_open() {
+        if !self.is_open(ctx) {
             return;
         }
         self.state = TuiSkillMenuState::Closed;
+        self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.close_if_active(TuiInputSuggestionsMode::SkillMenu, ctx);
+        });
         self.input_editor
             .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
         ctx.emit(TuiSkillMenuEvent);
@@ -115,11 +134,17 @@ impl TuiSkillMenuModel {
     }
 
     pub(crate) fn accept_selected(&mut self, ctx: &mut ModelContext<Self>) -> Option<AcceptSkill> {
+        if !self.is_open(ctx) {
+            return None;
+        }
         let TuiSkillMenuState::Open { list } = &self.state else {
             return None;
         };
         let row = list.selected_row()?.clone();
         self.state = TuiSkillMenuState::Closed;
+        self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.close_if_active(TuiInputSuggestionsMode::SkillMenu, ctx);
+        });
         ctx.emit(TuiSkillMenuEvent);
         Some(AcceptSkill {
             skill_name: row.name,
@@ -127,7 +152,10 @@ impl TuiSkillMenuModel {
         })
     }
 
-    pub(crate) fn snapshot(&self) -> Option<TuiInlineMenuSnapshot> {
+    pub(crate) fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        if !self.is_open(ctx) {
+            return None;
+        }
         let TuiSkillMenuState::Open { list } = &self.state else {
             return None;
         };
@@ -157,6 +185,9 @@ impl TuiSkillMenuModel {
     }
 
     fn refresh_rows(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.is_open(ctx) {
+            return;
+        }
         let TuiSkillMenuState::Open { list } = &self.state else {
             return;
         };

@@ -229,8 +229,13 @@ fn assert_explicit_menu_blocks_slash_commands(explicit_mode: TuiInputSuggestions
             mode.set_mode(explicit_mode, ctx);
         });
         model.update(&mut app, |model, ctx| {
+            model.set_highlighted_prefix_len_for_test(Some(6));
+            model.set_argument_hint_text_for_test(Some("<argument>"));
+            model.update_from_input(false, ctx);
             model.run_query("model".to_owned(), false, ctx);
             assert!(!model.is_open(ctx));
+            assert_eq!(model.highlighted_prefix_range(), None);
+            assert_eq!(model.argument_hint_text(), None);
             assert_eq!(model.suggestions_mode.as_ref(ctx).mode(), explicit_mode);
         });
     });
@@ -244,6 +249,10 @@ fn conversation_menu_blocks_slash_command_activation() {
 #[test]
 fn model_menu_blocks_slash_command_activation() {
     assert_explicit_menu_blocks_slash_commands(TuiInputSuggestionsMode::ModelSelector);
+}
+#[test]
+fn skill_menu_blocks_slash_command_activation() {
+    assert_explicit_menu_blocks_slash_commands(TuiInputSuggestionsMode::SkillMenu);
 }
 
 #[test]

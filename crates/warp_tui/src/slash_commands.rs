@@ -274,7 +274,9 @@ impl TuiSlashCommandModel {
         let input = input_text(&self.input_editor, ctx);
         if matches!(
             self.suggestions_mode.as_ref(ctx).mode(),
-            TuiInputSuggestionsMode::ConversationMenu | TuiInputSuggestionsMode::ModelSelector
+            TuiInputSuggestionsMode::ConversationMenu
+                | TuiInputSuggestionsMode::ModelSelector
+                | TuiInputSuggestionsMode::SkillMenu
         ) {
             self.set_highlighted_prefix_len(None, ctx);
             self.set_argument_hint_text(None, ctx);

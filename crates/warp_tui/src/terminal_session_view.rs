@@ -418,6 +418,7 @@ impl TuiTerminalSessionView {
         let skills_menu = ctx.add_model(|ctx| {
             TuiSkillMenuModel::new(
                 input_editor_model.clone(),
+                suggestions_mode.clone(),
                 active_session.clone(),
                 slash_commands_source.clone(),
                 terminal_surface_id,
@@ -1594,7 +1595,6 @@ impl TuiTerminalSessionView {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return;
                 }
-                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.skills_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
