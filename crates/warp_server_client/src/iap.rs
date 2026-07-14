@@ -38,7 +38,7 @@ const WIF_MINT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// bootstrap its first IAP mint without calling the IAP-gated identity-token
 /// endpoint. This is NOT the IAP bearer token — it is the subject token for the
 /// STS exchange.
-const INJECTED_OIDC_JWT_ENV_VAR: &str = "WARP_STAGING_IAP_BOOTSTRAP_JWT";
+const STAGING_IAP_BOOTSTRAP_TOKEN_ENV_VAR: &str = "WARP_STAGING_IAP_BOOTSTRAP_JWT";
 
 pub type PathResolver = Box<dyn Fn(&mut AppContext) -> BoxFuture<'static, Option<String>>>;
 
@@ -463,11 +463,11 @@ async fn fetch_iap_token_via_wif(
     // JWT, so we read it straight off that token instead of carrying it as
     // separate client config. The env var persists for the process lifetime, so
     // its `aud` stays readable even once the token itself has expired.
-    let injected_jwt = std::env::var(INJECTED_OIDC_JWT_ENV_VAR)
+    let injected_jwt = std::env::var(STAGING_IAP_BOOTSTRAP_TOKEN_ENV_VAR)
         .ok()
         .filter(|jwt| !jwt.is_empty())
         .ok_or_else(|| {
-            anyhow::anyhow!("{INJECTED_OIDC_JWT_ENV_VAR} is unset; cannot mint an IAP token via WIF")
+            anyhow::anyhow!("{STAGING_IAP_BOOTSTRAP_TOKEN_ENV_VAR} is unset; cannot mint an IAP token via WIF")
         })?;
     let federation_audience = parse_aud_from_jwt(&injected_jwt)
         .ok_or_else(|| anyhow::anyhow!("injected OIDC JWT has no readable `aud` claim"))?;
