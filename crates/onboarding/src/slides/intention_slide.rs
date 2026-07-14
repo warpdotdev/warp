@@ -24,7 +24,7 @@ use super::OnboardingSlide;
 use crate::model::{NoAiConfirmationSource, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::visuals::{intention_terminal_visual, intention_visual};
-use crate::{OnboardingIntention, AI_FEATURES};
+use crate::{ai_features, OnboardingIntention};
 
 #[derive(Debug, Clone)]
 pub enum IntentionSlideAction {
@@ -257,7 +257,7 @@ impl IntentionSlide {
         .finish();
 
         let checklist = {
-            let items = AI_FEATURES;
+            let items = ai_features();
             // When the agent card is selected, use the theme's green to match the
             // "Blended ANSI/green_fg" token in the design.
             let check_fill = if is_selected {

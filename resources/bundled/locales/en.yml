@@ -1256,6 +1256,24 @@ en:
       no_ai_dialog_body: "Without AI, you'll still get Warp's terminal experience, but you'll miss our agentic features like automatic fixes for terminal errors."
       give_me_ai_features: "Give me AI features"
       plan_activated_toast: "Plan successfully activated!"
+      features:
+        frontier_models: "Use frontier and open-weight models with Warp Agent"
+        cloud_agents: "Hand off agent work to cloud agents"
+        auto_fixes: "Automatically diagnose and fix terminal errors"
+        agentic_control: "Agentic control of long-running commands and TUIs"
+        code_review: "Review code diffs and send comments directly to agents"
+        remote_control: "Remote control for Claude Code, Codex, and other agents"
+
+    warp_drive_features:
+      session_sharing: "Session Sharing"
+    skip_dialog:
+      warp_drive:
+        title: "Are you sure you want to disable Warp Drive?"
+        body: "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:"
+        enable: "Enable Warp Drive"
+      agent:
+        title: "Continue without signing in?"
+        body: "Without an account, you won't have access to Warp's AI features. Sign in anytime to unlock agents and other AI features."
 
   # ── AI Settings ──
     callout:
@@ -1271,6 +1289,10 @@ en:
       skip_initialization: "Skip initialization"
       talk_to_agent_text: "You can type in natural language to engage the agent. Submit the query below to start: What tests exist in this repo, how are they structured, and what do they cover?"
       talk_to_agent_title: "Talk to the agent"
+      prompt:
+        run_command: "Run a command..."
+        build_request: "Tell the agent what to build..."
+        talk_to_agent: "What tests exist in this repo, how are they structured, and what do they cover?"
       terminal_mode_text: "Run commands here, just like a regular terminal. If you type a question or task using natural language, Warp can suggest opening it in agent mode. You can always override using {toggle_input_mode}."
       welcome_terminal_title: "Welcome to terminal mode"
     customize:

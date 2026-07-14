@@ -159,7 +159,7 @@ fn get_agent_modality_callout_options(
                 Some(CalloutOptions {
                     title: crate::menu_label(
                         "onboarding.callout.in_terminal_title",
-                        "You’re in terminal mode",
+                        "You're in terminal mode",
                     ),
                     text: crate::menu_label(
                         "onboarding.callout.terminal_mode_text",

@@ -4,7 +4,7 @@ use onboarding::components::feature_optout_dialog::{
     render_feature_optout_dialog, FeatureOptOutDialog,
 };
 use onboarding::slides::{layout, slide_content};
-use onboarding::{OnboardingIntention, WARP_DRIVE_FEATURES};
+use onboarding::{warp_drive_features, OnboardingIntention};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
@@ -958,16 +958,16 @@ impl LoginSlideView {
             &'static str,
         ) = match self.login_purpose() {
             LoginPurpose::WarpDrive => (
-                "Are you sure you want to disable Warp Drive?",
-                "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:",
-                WARP_DRIVE_FEATURES,
-                "Enable Warp Drive",
+                menu_label("onboarding.skip_dialog.warp_drive.title", "Are you sure you want to disable Warp Drive?"),
+                menu_label("onboarding.skip_dialog.warp_drive.body", "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:"),
+                warp_drive_features(),
+                menu_label("onboarding.skip_dialog.warp_drive.enable", "Enable Warp Drive"),
             ),
 LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => (
-                "Continue without signing in?",
-                "Without an account, you won't have access to Warp's AI features. Sign in anytime to unlock agents and other AI features.",
+                menu_label("onboarding.skip_dialog.agent.title", "Continue without signing in?"),
+                menu_label("onboarding.skip_dialog.agent.body", "Without an account, you won't have access to Warp's AI features. Sign in anytime to unlock agents and other AI features."),
                 &[],
-                "Sign in",
+                menu_label("workspace.sign_in", "Sign in"),
             ),
         };
 
