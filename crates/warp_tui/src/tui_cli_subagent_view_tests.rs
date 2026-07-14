@@ -1,11 +1,36 @@
 use std::time::Duration;
 
-use warp::tui_export::{LongRunningCommandControlState, UserTakeOverReason};
+use warp::tui_export::{
+    AIAgentActionId, AIConversationId, LongRunningCommandControlState, UserTakeOverReason,
+};
 
 use super::{
     format_next_check_remaining, remaining_for_fixed_delay, resolve_latest_instruction,
-    terminal_use_status_text,
+    terminal_use_status_text, PendingTuiCLISubagentViews,
 };
+
+#[test]
+fn pending_subagent_view_waits_for_matching_conversation_and_action() {
+    let pending = PendingTuiCLISubagentViews::default();
+    let conversation_id = AIConversationId::new();
+    let other_conversation_id = AIConversationId::new();
+    let action_id = AIAgentActionId::from("requested-command".to_owned());
+
+    pending.insert(conversation_id, action_id.clone(), "subagent-view");
+    assert_eq!(pending.take(other_conversation_id, &action_id), None);
+    assert_eq!(
+        pending.take(conversation_id, &action_id),
+        Some("subagent-view")
+    );
+
+    pending.insert(conversation_id, action_id.clone(), "detached-view");
+    pending.remove(conversation_id, &action_id);
+    assert_eq!(pending.take(conversation_id, &action_id), None);
+
+    pending.insert(conversation_id, action_id.clone(), "removed-conversation");
+    pending.remove_conversation(conversation_id);
+    assert_eq!(pending.take(conversation_id, &action_id), None);
+}
 
 #[test]
 fn terminal_use_status_covers_control_and_lifecycle_states() {

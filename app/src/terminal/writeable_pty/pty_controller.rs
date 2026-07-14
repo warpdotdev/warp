@@ -589,6 +589,7 @@ impl<T: EventLoopSender> PtyController<T> {
     }
 
     /// Interrupts the foreground PTY process.
+    #[cfg(not(target_family = "wasm"))]
     pub fn write_interrupt(&mut self, ctx: &mut ModelContext<Self>) {
         self.write_bytes(&[escape_sequences::C0::ETX][..], ctx);
     }

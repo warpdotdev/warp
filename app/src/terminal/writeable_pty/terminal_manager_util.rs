@@ -57,6 +57,7 @@ pub fn wire_up_pty_controller_with_surface<T: EventLoopSender, S: TerminalSurfac
                     controller.write_end_of_transmission_char(ctx);
                 });
             }
+            #[cfg(not(target_family = "wasm"))]
             PtyIntent::Interrupt => {
                 controller.update(ctx, |controller, ctx| {
                     controller.write_interrupt(ctx);

@@ -350,8 +350,14 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(view) = self.cli_subagent_views.remove(block_id) {
+            let conversation_id = view.as_ref(ctx).conversation_id();
             self.transcript.update(ctx, |transcript, ctx| {
-                transcript.detach_cli_subagent(initial_requested_command_action_id, view.id(), ctx);
+                transcript.detach_cli_subagent(
+                    conversation_id,
+                    initial_requested_command_action_id,
+                    view.id(),
+                    ctx,
+                );
             });
         }
         ctx.focus(&self.input_view);
@@ -388,7 +394,6 @@ impl TuiTerminalSessionView {
                     });
                     self.transcript.update(ctx, |transcript, ctx| {
                         transcript.attach_cli_subagent(
-                            block_id.clone(),
                             initial_requested_command_action_id.as_ref(),
                             view.clone(),
                             ctx,

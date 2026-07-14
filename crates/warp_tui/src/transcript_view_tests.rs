@@ -500,8 +500,7 @@ fn insert_test_agent_block(
         let terminal_model = view.model.clone();
         let agent_block = ctx.add_typed_action_tui_view(|ctx| {
             TuiAIBlock::new(
-                conversation_id,
-                exchange_id,
+                (conversation_id, exchange_id),
                 Rc::new(FakeAgentBlockModel {
                     inputs,
                     status: AIBlockOutputStatus::Pending,
@@ -509,6 +508,7 @@ fn insert_test_agent_block(
                 action_model,
                 &model_events,
                 terminal_model,
+                Default::default(),
                 ctx,
             )
         });
@@ -618,8 +618,7 @@ fn append_test_agent_block(
     let terminal_model = view.model.clone();
     let agent_block = ctx.add_tui_view(|ctx| {
         TuiAIBlock::new(
-            conversation_id,
-            exchange_id,
+            (conversation_id, exchange_id),
             Rc::new(FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status,
@@ -627,6 +626,7 @@ fn append_test_agent_block(
             action_model,
             &model_events,
             terminal_model,
+            Default::default(),
             ctx,
         )
     });

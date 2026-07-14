@@ -601,12 +601,12 @@ fn add_agent_block_with(
         );
         ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiAIBlock::new(
-                AIConversationId::new(),
-                AIAgentExchangeId::new(),
+                (AIConversationId::new(), AIAgentExchangeId::new()),
                 Rc::new(QueryAgentBlockModel { inputs, status }),
                 action_model,
                 &model_events,
                 terminal_model,
+                Default::default(),
                 ctx,
             )
         })

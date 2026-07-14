@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     should_show_task_in_blocklist, AIAgentActionId, AIAgentExchangeId, AIBlockModelImpl,
-    AIConversationId, BlockId, BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel,
+    AIConversationId, BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationBlockRestorationPlan,
     ModelEventDispatcher, RichContentItem, RichContentType, TerminalModel,
 };
@@ -27,7 +27,9 @@ use super::terminal_block::should_render_terminal_block;
 use super::tui_block_list_viewport_source::{
     AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
 };
-use super::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
+use super::tui_cli_subagent_view::{
+    PendingTuiCLISubagentViews, TuiCLISubagentView, TuiCLISubagentViewEvent,
+};
 
 /// Rows of blank space above every transcript block. Terminal blocks get it
 /// via [`TRANSCRIPT_BLOCK_SPACING`]'s `padding_top`; agent blocks apply the
@@ -74,6 +76,7 @@ pub(super) struct TuiTranscriptView {
     model_events: ModelHandle<ModelEventDispatcher>,
     agent_blocks: AgentBlockRegistry,
     cli_subagent_blocks: CLISubagentBlockRegistry,
+    pending_cli_subagent_views: PendingTuiCLISubagentViews<ViewHandle<TuiCLISubagentView>>,
     viewport: TuiViewportedListState,
     selection: TuiSelectionHandle,
 }
@@ -99,6 +102,7 @@ impl TuiTranscriptView {
             model_events: model_events.clone(),
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             cli_subagent_blocks: Rc::new(RefCell::new(HashMap::new())),
+            pending_cli_subagent_views: PendingTuiCLISubagentViews::default(),
             viewport: TuiViewportedListState::new_at_end(),
             selection: TuiSelectionHandle::default(),
         }
@@ -114,13 +118,18 @@ impl TuiTranscriptView {
 
     pub(super) fn attach_cli_subagent(
         &mut self,
-        block_id: BlockId,
         action_id: Option<&AIAgentActionId>,
         view: ViewHandle<TuiCLISubagentView>,
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(action_id) = action_id {
+            let conversation_id = view.as_ref(ctx).conversation_id();
+            self.pending_cli_subagent_views
+                .remove(conversation_id, action_id);
             for agent_block in self.agent_blocks.borrow().values() {
+                if agent_block.as_ref(ctx).conversation_id() != conversation_id {
+                    continue;
+                }
                 let attached = agent_block.update(ctx, |agent_block, ctx| {
                     agent_block.set_cli_subagent_view(action_id, Some(view.clone()), ctx)
                 });
@@ -128,9 +137,8 @@ impl TuiTranscriptView {
                     return;
                 }
             }
-            log::warn!(
-                "Unable to attach TUI CLI subagent for block {block_id:?} to action {action_id:?}"
-            );
+            self.pending_cli_subagent_views
+                .insert(conversation_id, action_id.clone(), view);
             return;
         }
 
@@ -150,12 +158,18 @@ impl TuiTranscriptView {
 
     pub(super) fn detach_cli_subagent(
         &mut self,
+        conversation_id: AIConversationId,
         action_id: Option<&AIAgentActionId>,
         view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(action_id) = action_id {
+            self.pending_cli_subagent_views
+                .remove(conversation_id, action_id);
             for agent_block in self.agent_blocks.borrow().values() {
+                if agent_block.as_ref(ctx).conversation_id() != conversation_id {
+                    continue;
+                }
                 let detached = agent_block.update(ctx, |agent_block, ctx| {
                     agent_block.set_cli_subagent_view(action_id, None, ctx)
                 });
@@ -339,12 +353,12 @@ impl TuiTranscriptView {
         let terminal_model = self.model.clone();
         let view = ctx.add_typed_action_tui_view(|ctx| {
             TuiAIBlock::new(
-                conversation_id,
-                exchange_id,
+                (conversation_id, exchange_id),
                 block_model,
                 action_model,
                 &model_events,
                 terminal_model,
+                self.pending_cli_subagent_views.clone(),
                 ctx,
             )
         });
@@ -487,6 +501,8 @@ impl TuiTranscriptView {
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.pending_cli_subagent_views
+            .remove_conversation(conversation_id);
         let mut view_ids = self
             .agent_blocks
             .borrow()
@@ -541,6 +557,7 @@ impl TuiTranscriptView {
         view_ids.extend(self.cli_subagent_blocks.borrow().keys().copied());
         self.agent_blocks.borrow_mut().clear();
         self.cli_subagent_blocks.borrow_mut().clear();
+        self.pending_cli_subagent_views.clear();
         self.selection.clear();
         let mut model = self.model.lock();
         for view_id in view_ids {

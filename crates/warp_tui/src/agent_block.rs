@@ -37,7 +37,7 @@ use crate::agent_block_sections::{
     render_todo_list_section,
 };
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
-use crate::tui_cli_subagent_view::TuiCLISubagentView;
+use crate::tui_cli_subagent_view::{PendingTuiCLISubagentViews, TuiCLISubagentView};
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -192,6 +192,11 @@ pub(super) struct TuiAIBlock {
     /// Populated by [`Self::sync_action_views`]; stateless tool calls never
     /// get entries here.
     action_views: HashMap<AIAgentActionId, TuiToolCallView>,
+    /// CLI-subagent views whose spawn event arrived before this block created
+    /// the corresponding requested-command child view. The normal live path
+    /// creates the child first because subagent registration is delayed; this
+    /// defensively avoids coupling separate model subscriptions to that timing.
+    pending_cli_subagent_views: PendingTuiCLISubagentViews<ViewHandle<TuiCLISubagentView>>,
     /// Whether the exchange's output contains any todo-operation message,
     /// maintained by [`Self::sync_action_views`]. Lets the transcript scope
     /// conversation-wide todo/status invalidations to the blocks whose
@@ -207,14 +212,15 @@ impl TuiAIBlock {
     /// child views for tool calls already present, then re-syncs whenever the
     /// exchange's output updates (via `on_updated_output`).
     pub(super) fn new(
-        conversation_id: AIConversationId,
-        exchange_id: AIAgentExchangeId,
+        identity: (AIConversationId, AIAgentExchangeId),
         block_model: Rc<dyn AIBlockModel<View = Self>>,
         action_model: ModelHandle<BlocklistAIActionModel>,
         model_events: &ModelHandle<ModelEventDispatcher>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
+        pending_cli_subagent_views: PendingTuiCLISubagentViews<ViewHandle<TuiCLISubagentView>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        let (conversation_id, exchange_id) = identity;
         let mut block = Self {
             conversation_id,
             exchange_id,
@@ -224,6 +230,7 @@ impl TuiAIBlock {
             collapsible_states: Default::default(),
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
+            pending_cli_subagent_views,
             renders_todos: false,
             last_measured_width: Cell::new(None),
         };
@@ -337,6 +344,14 @@ impl TuiAIBlock {
             ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
                 TuiShellCommandViewEvent::LayoutChanged => me.invalidate_layout(ctx),
             });
+            if let Some(cli_subagent_view) = self
+                .pending_cli_subagent_views
+                .take(self.conversation_id, &action_id)
+            {
+                view.update(ctx, |view, ctx| {
+                    view.set_cli_subagent_view(Some(cli_subagent_view), ctx);
+                });
+            }
             self.action_views
                 .insert(action_id, TuiToolCallView::ShellCommand(view));
             ctx.notify();

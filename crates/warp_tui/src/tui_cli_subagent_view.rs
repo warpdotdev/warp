@@ -1,16 +1,18 @@
 //! TUI presentation for an agent monitoring a long-running terminal command.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentActionType, AIAgentInput, AIBlockModel, AIBlockModelImpl, AIConversationId, BlockId,
-    BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    CLISubagentController, CLISubagentTarget, LongRunningCommandControlState, ShellCommandDelay,
-    ShellCommandExecutor, TaskId, TerminalModel, UserTakeOverReason,
+    AIAgentActionId, AIAgentActionType, AIAgentInput, AIBlockModel, AIBlockModelImpl,
+    AIConversationId, BlockId, BlocklistAIActionModel, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, CLISubagentController, CLISubagentTarget,
+    LongRunningCommandControlState, ShellCommandDelay, ShellCommandExecutor, TaskId, TerminalModel,
+    UserTakeOverReason,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -27,6 +29,68 @@ use crate::tui_builder::TuiUiBuilder;
 
 pub(super) const TAKE_CONTROL_KEY_BINDING: &str = "ctrl-c";
 pub(super) const HAND_BACK_KEY_BINDING: &str = "ctrl-g";
+/// CLI-subagent views waiting for their requested-command action view.
+///
+/// Action IDs are only unique within a conversation, so both IDs participate
+/// in the key.
+pub(super) struct PendingTuiCLISubagentViews<V> {
+    views: Rc<RefCell<HashMap<(AIConversationId, AIAgentActionId), V>>>,
+}
+
+impl<V> Clone for PendingTuiCLISubagentViews<V> {
+    fn clone(&self) -> Self {
+        Self {
+            views: self.views.clone(),
+        }
+    }
+}
+
+impl<V> Default for PendingTuiCLISubagentViews<V> {
+    fn default() -> Self {
+        Self {
+            views: Rc::new(RefCell::new(HashMap::new())),
+        }
+    }
+}
+
+impl<V> PendingTuiCLISubagentViews<V> {
+    pub(super) fn insert(
+        &self,
+        conversation_id: AIConversationId,
+        action_id: AIAgentActionId,
+        view: V,
+    ) {
+        self.views
+            .borrow_mut()
+            .insert((conversation_id, action_id), view);
+    }
+
+    pub(super) fn take(
+        &self,
+        conversation_id: AIConversationId,
+        action_id: &AIAgentActionId,
+    ) -> Option<V> {
+        self.views
+            .borrow_mut()
+            .remove(&(conversation_id, action_id.clone()))
+    }
+
+    pub(super) fn remove(&self, conversation_id: AIConversationId, action_id: &AIAgentActionId) {
+        self.views
+            .borrow_mut()
+            .remove(&(conversation_id, action_id.clone()));
+    }
+
+    pub(super) fn remove_conversation(&self, conversation_id: AIConversationId) {
+        self.views
+            .borrow_mut()
+            .retain(|(candidate, _), _| *candidate != conversation_id);
+    }
+
+    pub(super) fn clear(&self) {
+        self.views.borrow_mut().clear();
+    }
+}
 
 fn terminal_use_status_text(
     control_state: &LongRunningCommandControlState,
