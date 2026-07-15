@@ -193,11 +193,15 @@ impl Command {
             replacement.env_clear();
         }
         for (key, value) in self.inner.get_envs() {
-            if crate::wsl_windows::is_path_env_key(key) {
-                continue;
-            }
             match value {
                 Some(value) => {
+                    // An explicitly-set `PATH` rides through the argument
+                    // vector instead (see `translate_for_wsl_unc_cwd`); an
+                    // explicit removal below must still be replayed so the
+                    // replacement does not inherit the parent's `PATH`.
+                    if crate::wsl_windows::is_path_env_key(key) {
+                        continue;
+                    }
                     replacement.env(key, value);
                 }
                 None => {
@@ -541,3 +545,7 @@ impl Command {
         self.inner.output()
     }
 }
+
+#[cfg(test)]
+#[path = "async_tests.rs"]
+mod tests;
