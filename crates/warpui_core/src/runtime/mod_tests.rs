@@ -248,6 +248,53 @@ fn keymap_binding_dispatches_typed_action_to_tui_view() {
     });
 }
 
+/// End-to-end regression for the Shift+Enter fix: a Shift+Enter key event —
+/// the distinct event a terminal only sends once the Kitty keyboard protocol
+/// is enabled (see `terminal_screen_lifecycle_toggles_keyboard_enhancement`) —
+/// must flow through crossterm decoding, `crossterm_event_to_tui_event`, and
+/// the keymap responder chain to dispatch its bound action. This is the exact
+/// path the TUI input's `shift-enter` -> insert-newline binding relies on; the
+/// bug was that, without the protocol, Shift+Enter arrived indistinguishable
+/// from Enter and this event never occurred.
+#[test]
+fn shift_enter_key_event_dispatches_bound_action() {
+    App::test((), |mut app| async move {
+        let (window_id, root) = app.update(|ctx| {
+            ctx.register_fixed_bindings([FixedBinding::new(
+                "shift-enter",
+                Bump,
+                id!("BumpParentView"),
+            )]);
+            ctx.add_tui_window(window_options(), |view_ctx| {
+                let child = view_ctx.add_tui_view(|_| BumpChildView);
+                BumpParentView { child, bumps: 0 }
+            })
+        });
+
+        let mut terminal = TestTerminal::new(TuiSize::new(20, 3));
+        terminal.events.push_back(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::SHIFT,
+        )));
+        let root_for_runtime = root.clone();
+        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root_for_runtime, terminal);
+
+        let mut iterations = 0;
+        runtime
+            .run_until(&mut app, |_| {
+                iterations += 1;
+                iterations > 1
+            })
+            .unwrap();
+
+        assert_eq!(
+            root.read(&app, |view, _| view.bumps),
+            1,
+            "a Shift+Enter key event should dispatch the bound shift-enter action"
+        );
+    });
+}
+
 /// A binding with a permissive (always-true) context predicate whose action
 /// type has no handler on any view in the TUI responder chain must not swallow
 /// the keystroke: the keymap pass reports it unhandled and the element pass
