@@ -12,7 +12,7 @@ use warp_core::ui::color::Opacity;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    tui_collapsible, Color, Modifier, TuiElement, TuiEventContext, TuiStyle,
+    tui_collapsible, Color, Modifier, TuiElement, TuiEventContext, TuiStyle, TuiText,
 };
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::AppContext;
@@ -60,6 +60,31 @@ impl TuiUiBuilder {
     pub(crate) fn muted_text_style(&self) -> TuiStyle {
         TuiStyle::default()
             .fg(self.foreground_text_color(self.warp_theme.details().sub_text_opacity))
+    }
+
+    /// Bright-blue key labels used by footer navigation hints.
+    pub(crate) fn key_hint_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().bright.blue,
+        )))
+    }
+
+    /// Navigation hint shown in the footer after a completed exchange:
+    /// `↑ to edit  Esc to stop  ← for conversations`.
+    /// Keys use [`key_hint_style`][Self::key_hint_style]; action labels use
+    /// [`muted_text_style`][Self::muted_text_style].
+    pub(crate) fn render_idle_navigation_hint(&self) -> TuiText {
+        let key = self.key_hint_style();
+        let action = self.muted_text_style();
+        TuiText::from_spans([
+            ("↑".to_owned(), key),
+            (" to edit  ".to_owned(), action),
+            ("Esc".to_owned(), key),
+            (" to stop  ".to_owned(), action),
+            ("←".to_owned(), key),
+            (" for conversations".to_owned(), action),
+        ])
+        .truncate()
     }
 
     /// Muted and dimmed: de-emphasized status rows (e.g. tool-call stubs).
