@@ -416,6 +416,7 @@ impl ClaudeHarnessRunner {
             cli_agent_session_status(&self.terminal_driver, foreground).await,
             Some(crate::terminal::cli_agent_sessions::CLIAgentSessionStatus::Blocked { .. })
                 | Some(crate::terminal::cli_agent_sessions::CLIAgentSessionStatus::InProgress)
+                | Some(crate::terminal::cli_agent_sessions::CLIAgentSessionStatus::Failed { .. })
         )
     }
 

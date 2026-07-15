@@ -177,6 +177,28 @@ impl AgentNotificationsModel {
                         ctx,
                     );
                 }
+                CLIAgentSessionStatus::Failed { message } => {
+                    let title = session_context
+                        .display_title()
+                        .unwrap_or_else(|| format!("{} failed", agent.display_name()));
+                    let metadata = TerminalViewMetadata::lookup(*terminal_view_id, ctx);
+                    self.add_notification(
+                        title,
+                        message
+                            .clone()
+                            .unwrap_or_else(|| "The agent encountered an error.".to_owned()),
+                        NotificationCategory::Error,
+                        NotificationSourceAgent::CLI {
+                            agent: *agent,
+                            is_ambient: metadata.is_ambient,
+                        },
+                        NotificationOrigin::CLISession(*terminal_view_id),
+                        *terminal_view_id,
+                        vec![],
+                        metadata.branch,
+                        ctx,
+                    );
+                }
                 CLIAgentSessionStatus::Blocked { message } => {
                     let title = session_context
                         .display_title()

@@ -18,6 +18,7 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
         "prompt_submit" => CLIAgentEventType::PromptSubmit,
         "tool_complete" => CLIAgentEventType::ToolComplete,
         "stop" => CLIAgentEventType::Stop,
+        "stop_failure" => CLIAgentEventType::StopFailure,
         "permission_request" => CLIAgentEventType::PermissionRequest,
         "permission_replied" => CLIAgentEventType::PermissionReplied,
         "question_asked" => CLIAgentEventType::QuestionAsked,
