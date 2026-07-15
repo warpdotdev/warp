@@ -63,6 +63,30 @@ fn wraps_nested_lists_with_a_hanging_indent() {
 }
 
 #[test]
+fn continues_ordered_list_numbering_at_each_indent_level() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let formatted = parse_markdown(
+                "5. first\n6. second\n  2. nested\n  3. nested continuation\n7. parent continuation",
+            )
+            .expect("Markdown should parse");
+            let (lines, _) = render(&formatted, 40, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "5. first",
+                    "6. second",
+                    "  2. nested",
+                    "  3. nested continuation",
+                    "7. parent continuation",
+                ]
+            );
+        });
+    });
+}
+
+#[test]
 fn tables_switch_from_columns_to_header_keyed_records() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -115,6 +139,27 @@ fn renders_structural_and_specialized_fallbacks() {
                     "└──────────────────────┘",
                     "[Unsupported embedded",
                     "content]",
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn image_fallback_uses_title_then_source_when_alt_text_is_missing() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let formatted =
+                parse_markdown("![](diagram.png \"System diagram\")\n\n![](fallback.png)")
+                    .expect("Markdown should parse");
+            let (lines, _) = render(&formatted, 80, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "Image: System diagram (diagram.png)",
+                    "",
+                    "Image: fallback.png",
                 ]
             );
         });
