@@ -23,6 +23,7 @@ use crate::inline_menu::{
     result_row_capacity, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
     TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
 };
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, false, false);
 
@@ -77,6 +78,7 @@ pub(crate) struct TuiSlashCommandModelEvent;
 
 pub(crate) struct TuiSlashCommandModel {
     input_editor: ModelHandle<CodeEditorModel>,
+    suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     slash_commands_source: Option<ModelHandle<TuiSlashCommandDataSource>>,
     mixer: ModelHandle<SlashCommandMixer>,
     state: TuiSlashCommandState,
@@ -88,6 +90,7 @@ pub(crate) struct TuiSlashCommandModel {
 impl TuiSlashCommandModel {
     pub(crate) fn new(
         input_editor: ModelHandle<CodeEditorModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
         mixer: ModelHandle<SlashCommandMixer>,
         ctx: &mut ModelContext<Self>,
@@ -111,6 +114,7 @@ impl TuiSlashCommandModel {
 
         let mut model = Self {
             input_editor,
+            suggestions_mode,
             slash_commands_source: Some(slash_commands_source),
             mixer,
             state: TuiSlashCommandState::Closed,
@@ -125,6 +129,7 @@ impl TuiSlashCommandModel {
     #[cfg(test)]
     pub(crate) fn new_for_test(
         input_editor: ModelHandle<CodeEditorModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         mixer: ModelHandle<SlashCommandMixer>,
         rows: Vec<TuiSlashCommandRow>,
         selected_index: usize,
@@ -135,6 +140,7 @@ impl TuiSlashCommandModel {
         });
         Self {
             input_editor,
+            suggestions_mode,
             slash_commands_source: None,
             mixer,
             state: TuiSlashCommandState::Open {
@@ -157,8 +163,13 @@ impl TuiSlashCommandModel {
         self.argument_hint_text = text;
     }
 
-    pub(crate) fn is_open(&self) -> bool {
+    fn has_open_state(&self) -> bool {
         matches!(self.state, TuiSlashCommandState::Open { .. })
+    }
+
+    pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
+        self.has_open_state()
+            && self.suggestions_mode.as_ref(ctx).mode() == TuiInputSuggestionsMode::SlashCommands
     }
     pub(crate) fn highlighted_prefix_range(&self) -> Option<Range<CharOffset>> {
         self.highlighted_prefix_len
@@ -205,7 +216,7 @@ impl TuiSlashCommandModel {
     }
 
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.is_open() {
+        if !self.is_open(ctx) {
             return;
         }
         let input_is_empty = input_text(&self.input_editor, ctx).is_empty();
@@ -222,7 +233,10 @@ impl TuiSlashCommandModel {
         action
     }
 
-    pub(crate) fn snapshot(&self) -> Option<TuiInlineMenuSnapshot> {
+    pub(crate) fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        if !self.is_open(ctx) {
+            return None;
+        }
         let TuiSlashCommandState::Open { list, .. } = &self.state else {
             return None;
         };
@@ -248,7 +262,7 @@ impl TuiSlashCommandModel {
                     title: row.title.clone(),
                     description: row.description.clone(),
                     is_selectable: true,
-                    style: TuiInlineMenuRowStyle::SlashCommand,
+                    style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })
                 .collect(),
             selected_index: list.selected_index(),
@@ -260,6 +274,17 @@ impl TuiSlashCommandModel {
 
     fn update_from_input(&mut self, force_query: bool, ctx: &mut ModelContext<Self>) {
         let input = input_text(&self.input_editor, ctx);
+        if matches!(
+            self.suggestions_mode.as_ref(ctx).mode(),
+            TuiInputSuggestionsMode::ConversationMenu
+                | TuiInputSuggestionsMode::ModelSelector
+                | TuiInputSuggestionsMode::SkillMenu
+        ) {
+            self.set_highlighted_prefix_len(None, ctx);
+            self.set_argument_hint_text(None, ctx);
+            self.close(ctx);
+            return;
+        }
         if !self
             .lifecycle
             .input_changed(input.is_empty(), input.starts_with('/'))
@@ -282,7 +307,7 @@ impl TuiSlashCommandModel {
             argument_hint_text_for_parsed_input(&parsed_input, &input),
             ctx,
         );
-        let menu_was_open = self.is_open();
+        let menu_was_open = self.is_open(ctx);
         let result_count = self.mixer.as_ref(ctx).results().len();
         let Some(query) = menu_query_for_parsed_input(&parsed_input, menu_was_open, result_count)
         else {
@@ -305,6 +330,12 @@ impl TuiSlashCommandModel {
     }
 
     fn run_query(&mut self, query: String, force: bool, ctx: &mut ModelContext<Self>) {
+        let did_open = self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.try_open(TuiInputSuggestionsMode::SlashCommands, ctx)
+        });
+        if !did_open {
+            return;
+        }
         match &mut self.state {
             TuiSlashCommandState::Closed => {
                 let mut list = TuiInlineMenuListState::default();
@@ -357,14 +388,16 @@ impl TuiSlashCommandModel {
     }
 
     fn close(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.is_open() {
-            return;
+        if self.has_open_state() {
+            self.state = TuiSlashCommandState::Closed;
+            self.mixer.update(ctx, |mixer, ctx| {
+                mixer.reset_results(ctx);
+            });
+            ctx.emit(TuiSlashCommandModelEvent);
         }
-        self.state = TuiSlashCommandState::Closed;
-        self.mixer.update(ctx, |mixer, ctx| {
-            mixer.reset_results(ctx);
+        self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.close_if_active(TuiInputSuggestionsMode::SlashCommands, ctx);
         });
-        ctx.emit(TuiSlashCommandModelEvent);
     }
 }
 

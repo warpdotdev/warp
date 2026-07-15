@@ -14,13 +14,13 @@ pub use crate::ai::agent::task::TaskId;
 pub use crate::ai::agent::todos::AIAgentTodoList;
 pub use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
-    AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText, AIAgentTextSection, AIAgentTodo,
-    AIAgentTodoId, AskUserQuestionResult, CancellationReason, FileGlobV2Result, GrepResult,
-    MessageId, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
-    StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UserQueryMode,
+    AIAgentActionType, AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutput,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText,
+    AIAgentTextSection, AIAgentTodo, AIAgentTodoId, AskUserQuestionResult, CancellationReason,
+    FileGlobV2Result, GrepResult, MessageId, RequestCommandOutputResult, RunAgentsAgentOutcomeKind,
+    RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
+    ShellCommandDelay, StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType,
+    TodoOperation, UserQueryMode,
 };
 pub use crate::ai::agent_conversations_model::{
     query_conversation_entries, AgentConversationEntry, AgentConversationEntryId,
@@ -32,7 +32,10 @@ pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
 };
-pub use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
+pub use crate::ai::blocklist::block::cli_controller::{
+    CLISubagentController, CLISubagentEvent, CLISubagentTarget, LongRunningCommandControlState,
+    UserTakeOverReason,
+};
 pub use crate::ai::blocklist::block::model::{
     AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
 };
@@ -51,10 +54,10 @@ pub use crate::ai::blocklist::history_model::{
 };
 pub use crate::ai::blocklist::view_util::format_credits;
 pub use crate::ai::blocklist::{
-    AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIInputModel, InputConfig, InputModePolicy,
-    InputModePolicyHandle, InputType, InputTypeAutoDetectionSource, PolicyConfigUpdate,
-    RequestFileEditsExecutor, ShellCommandExecutor, ShellCommandExecutorEvent,
+    block_context_from_terminal_model, AIActionStatus, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
+    InputConfig, InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
+    PolicyConfigUpdate, RequestFileEditsExecutor, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 #[cfg(feature = "local_fs")]
 pub use crate::ai::conversation_export::{
@@ -84,6 +87,10 @@ pub use crate::terminal::conversation_restoration::{
 };
 pub use crate::terminal::event::AfterBlockCompletedEvent;
 pub use crate::terminal::input::models::{query_model_picker_choices, ModelPickerChoice};
+pub use crate::terminal::input::skills::{
+    query_selectable_skills, AcceptSkill, SelectableSkill,
+    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+};
 pub use crate::terminal::input::slash_command_model::{
     slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,
     ParsedSlashCommandInput,

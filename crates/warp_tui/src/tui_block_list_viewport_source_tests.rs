@@ -36,7 +36,7 @@ fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
         .blocks()
         .iter()
         .filter(|block| should_render_terminal_block(block, model.block_list()))
-        .map(|block| TuiBlockListViewportItemId::TerminalBlock(block.id().clone()))
+        .map(|block| TuiBlockListViewportItemId::Terminal(block.id().clone()))
         .collect::<Vec<_>>();
     let source = TuiBlockListViewportSource::new(
         Arc::new(FairMutex::new(model)),

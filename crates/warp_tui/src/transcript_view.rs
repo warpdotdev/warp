@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
-    BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, ConversationBlockRestorationPlan, ModelEventDispatcher,
-    RichContentItem, RichContentType, TerminalModel,
+    should_show_task_in_blocklist, AIAgentActionId, AIAgentExchangeId, AIBlockModelImpl,
+    AIConversationId, BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationBlockRestorationPlan,
+    ModelEventDispatcher, RichContentItem, RichContentType, TerminalModel,
 };
 use warp_core::semantic_selection::SemanticSelection;
 use warpui_core::elements::tui::{
@@ -19,12 +19,15 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TuiView, TypedActionView,
-    ViewContext,
+    ViewContext, ViewHandle,
 };
 
 use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
 use super::terminal_block::should_render_terminal_block;
-use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
+use super::tui_block_list_viewport_source::{
+    AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
+};
+use super::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
 
 /// Rows of blank space above every transcript block. Terminal blocks get it
 /// via [`TRANSCRIPT_BLOCK_SPACING`]'s `padding_top`; agent blocks apply the
@@ -70,6 +73,7 @@ pub(super) struct TuiTranscriptView {
     action_model: ModelHandle<BlocklistAIActionModel>,
     model_events: ModelHandle<ModelEventDispatcher>,
     agent_blocks: AgentBlockRegistry,
+    cli_subagent_blocks: CLISubagentBlockRegistry,
     viewport: TuiViewportedListState,
     selection: TuiSelectionHandle,
 }
@@ -94,6 +98,7 @@ impl TuiTranscriptView {
             action_model,
             model_events: model_events.clone(),
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
+            cli_subagent_blocks: Rc::new(RefCell::new(HashMap::new())),
             viewport: TuiViewportedListState::new_at_end(),
             selection: TuiSelectionHandle::default(),
         }
@@ -104,6 +109,81 @@ impl TuiTranscriptView {
             .lock()
             .block_list_mut()
             .mark_rich_content_dirty(view_id);
+        ctx.notify();
+    }
+
+    pub(super) fn attach_cli_subagent(
+        &mut self,
+        action_id: Option<&AIAgentActionId>,
+        view: ViewHandle<TuiCLISubagentView>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(action_id) = action_id {
+            let conversation_id = view.as_ref(ctx).conversation_id();
+            for agent_block in self.agent_blocks.borrow().values() {
+                if agent_block.as_ref(ctx).conversation_id() != conversation_id {
+                    continue;
+                }
+                let attached = agent_block.update(ctx, |agent_block, ctx| {
+                    agent_block.set_cli_subagent_view(action_id, Some(view.clone()), ctx)
+                });
+                if attached {
+                    return;
+                }
+            }
+            log::warn!(
+                "Unable to attach TUI CLI subagent for conversation {conversation_id:?} to action {action_id:?}"
+            );
+            return;
+        }
+
+        let view_id = view.id();
+        ctx.subscribe_to_view(&view, move |transcript, _, event, ctx| match event {
+            TuiCLISubagentViewEvent::LayoutChanged => {
+                transcript.mark_agent_block_dirty(view_id, ctx);
+            }
+        });
+        self.cli_subagent_blocks.borrow_mut().insert(view_id, view);
+        self.model.lock().block_list_mut().append_rich_content(
+            RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+            true,
+        );
+        ctx.notify();
+    }
+
+    pub(super) fn detach_cli_subagent(
+        &mut self,
+        action_id: Option<&AIAgentActionId>,
+        view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(action_id) = action_id {
+            for agent_block in self.agent_blocks.borrow().values() {
+                let detached = agent_block.update(ctx, |agent_block, ctx| {
+                    agent_block.set_cli_subagent_view(action_id, None, ctx)
+                });
+                if detached {
+                    return;
+                }
+            }
+            return;
+        }
+
+        let rows = {
+            let model = self.model.lock();
+            model.block_list().rich_content_row_range(view_id)
+        };
+        if let Some(rows) = rows {
+            self.selection.rebase_for_row_resize(TuiRowResize {
+                old_rows: rows,
+                new_height: 0,
+            });
+        }
+        self.cli_subagent_blocks.borrow_mut().remove(&view_id);
+        self.model
+            .lock()
+            .block_list_mut()
+            .remove_rich_content(view_id);
         ctx.notify();
     }
 
@@ -211,7 +291,7 @@ impl TuiTranscriptView {
     /// session view fills the transcript slot with the zero state exactly
     /// while this holds.
     pub(super) fn is_empty(&self) -> bool {
-        if !self.agent_blocks.borrow().is_empty() {
+        if !self.agent_blocks.borrow().is_empty() || !self.cli_subagent_blocks.borrow().is_empty() {
             return false;
         }
         let model = self.model.lock();
@@ -410,7 +490,7 @@ impl TuiTranscriptView {
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
-        let view_ids = self
+        let mut view_ids = self
             .agent_blocks
             .borrow()
             .iter()
@@ -418,6 +498,14 @@ impl TuiTranscriptView {
                 (view.as_ref(ctx).conversation_id() == conversation_id).then_some(*view_id)
             })
             .collect::<Vec<_>>();
+        view_ids.extend(
+            self.cli_subagent_blocks
+                .borrow()
+                .iter()
+                .filter_map(|(view_id, view)| {
+                    (view.as_ref(ctx).conversation_id() == conversation_id).then_some(*view_id)
+                }),
+        );
         for view_id in view_ids {
             let rows = {
                 let model = self.model.lock();
@@ -430,6 +518,7 @@ impl TuiTranscriptView {
                 });
             }
             self.agent_blocks.borrow_mut().remove(&view_id);
+            self.cli_subagent_blocks.borrow_mut().remove(&view_id);
             self.model
                 .lock()
                 .block_list_mut()
@@ -446,13 +535,15 @@ impl TuiTranscriptView {
     }
 
     fn clear_agent_blocks(&mut self, ctx: &mut ViewContext<Self>) {
-        let view_ids = self
+        let mut view_ids = self
             .agent_blocks
             .borrow()
             .keys()
             .copied()
             .collect::<Vec<_>>();
+        view_ids.extend(self.cli_subagent_blocks.borrow().keys().copied());
         self.agent_blocks.borrow_mut().clear();
+        self.cli_subagent_blocks.borrow_mut().clear();
         self.selection.clear();
         let mut model = self.model.lock();
         for view_id in view_ids {
@@ -472,11 +563,22 @@ impl TuiView for TuiTranscriptView {
     }
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
-        self.agent_blocks.borrow().keys().copied().collect()
+        let mut ids = self
+            .agent_blocks
+            .borrow()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        ids.extend(self.cli_subagent_blocks.borrow().keys().copied());
+        ids
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        let source = TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone());
+        let source = TuiBlockListViewportSource::new_with_cli_subagents(
+            self.model.clone(),
+            self.agent_blocks.clone(),
+            self.cli_subagent_blocks.clone(),
+        );
         let viewport = TuiViewportedList::new(self.viewport.clone(), source)
             .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
         let semantic_selection = SemanticSelection::as_ref(app);

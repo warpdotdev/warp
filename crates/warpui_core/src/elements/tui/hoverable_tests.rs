@@ -28,11 +28,11 @@ fn left_mouse_up(x: u16, y: u16) -> TuiEvent {
     }
 }
 
-fn mouse_moved(x: u16, y: u16) -> TuiEvent {
+fn mouse_moved(x: u16, y: u16, is_synthetic: bool) -> TuiEvent {
     TuiEvent::MouseMoved {
         position: TuiPoint::new(x, y),
         modifiers: ModifiersState::default(),
-        is_synthetic: false,
+        is_synthetic,
     }
 }
 
@@ -64,19 +64,19 @@ fn mouse_moves_toggle_hover_state_and_notify_without_consuming_the_event() {
             );
 
             assert_eq!(
-                dispatch_presented_event(&mut presenter, &mouse_moved(2, 0), app_ctx),
+                dispatch_presented_event(&mut presenter, &mouse_moved(2, 0, false), app_ctx),
                 (false, 1)
             );
             assert!(handle.lock().unwrap().is_hovered());
 
             assert_eq!(
-                dispatch_presented_event(&mut presenter, &mouse_moved(4, 0), app_ctx),
+                dispatch_presented_event(&mut presenter, &mouse_moved(4, 0, false), app_ctx),
                 (false, 0)
             );
             assert!(handle.lock().unwrap().is_hovered());
 
             assert_eq!(
-                dispatch_presented_event(&mut presenter, &mouse_moved(4, 3), app_ctx),
+                dispatch_presented_event(&mut presenter, &mouse_moved(4, 3, false), app_ctx),
                 (false, 1)
             );
             assert!(!handle.lock().unwrap().is_hovered());
@@ -155,13 +155,13 @@ fn hit_testing_is_bounded_to_the_child_laid_out_size() {
                 app_ctx,
             );
 
-            dispatch_presented_event(&mut presenter, &mouse_moved(2, 0), app_ctx);
+            dispatch_presented_event(&mut presenter, &mouse_moved(2, 0, false), app_ctx);
             assert!(handle.lock().unwrap().is_hovered());
             assert!(dispatch_presented_event(&mut presenter, &left_mouse_down(2, 0), app_ctx).0);
             assert!(dispatch_presented_event(&mut presenter, &left_mouse_up(2, 0), app_ctx).0);
             assert_eq!(hits.get(), 1);
 
-            dispatch_presented_event(&mut presenter, &mouse_moved(7, 0), app_ctx);
+            dispatch_presented_event(&mut presenter, &mouse_moved(7, 0, false), app_ctx);
             assert!(!handle.lock().unwrap().is_hovered());
             assert!(!dispatch_presented_event(&mut presenter, &left_mouse_down(7, 0), app_ctx).0);
             assert_eq!(hits.get(), 1);
@@ -211,6 +211,35 @@ impl TuiElement for AlwaysHandles {
     ) -> bool {
         true
     }
+}
+
+#[test]
+fn consecutive_synthetic_hover_flips_are_suppressed() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let handle = MouseStateHandle::default();
+            let hoverable = TuiHoverable::new(handle.clone(), TuiText::new("hello").finish());
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(
+                hoverable.finish(),
+                crate::elements::tui::TuiRect::new(0, 0, 10, 1),
+                app_ctx,
+            );
+
+            // A synthetic flip in is allowed: the previous flip was not synthetic.
+            dispatch_presented_event(&mut presenter, &mouse_moved(2, 0, true), app_ctx);
+            assert!(handle.lock().unwrap().is_hovered());
+
+            // A second consecutive synthetic flip (out) is suppressed to break
+            // potential layout<->hover feedback loops.
+            dispatch_presented_event(&mut presenter, &mouse_moved(9, 0, true), app_ctx);
+            assert!(handle.lock().unwrap().is_hovered());
+
+            // A real move out flips immediately.
+            dispatch_presented_event(&mut presenter, &mouse_moved(9, 0, false), app_ctx);
+            assert!(!handle.lock().unwrap().is_hovered());
+        });
+    });
 }
 
 #[test]

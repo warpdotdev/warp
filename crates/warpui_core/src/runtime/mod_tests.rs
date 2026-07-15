@@ -8,9 +8,11 @@ use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyM
 
 use super::*;
 use crate::elements::tui::{
-    TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiText,
+    TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiFlex, TuiHoverable,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiScreenPoint,
+    TuiScreenPosition, TuiText,
 };
+use crate::elements::MouseStateHandle;
 use crate::keymap::macros::*;
 use crate::keymap::FixedBinding;
 use crate::platform::WindowStyle;
@@ -324,6 +326,99 @@ fn typed_action_from_embedded_child_reaches_parent_through_runtime_dispatch() {
         // to the parent's handler. (The legacy origin-only dispatch could not
         // do this.)
         assert_eq!(root.read(&app, |view, _| view.bumps), 1);
+    });
+}
+
+/// The typed action that shifts [`ShiftingHoverView`]'s hover target down a row.
+#[derive(Debug)]
+struct Shift;
+
+/// A root view whose hover target moves down one row after [`Shift`], used to
+/// verify the post-draw synthetic mouse move refreshes hover state.
+struct ShiftingHoverView {
+    hover: MouseStateHandle,
+    shifted: bool,
+}
+
+impl Entity for ShiftingHoverView {
+    type Event = ();
+}
+
+impl TuiView for ShiftingHoverView {
+    fn ui_name() -> &'static str {
+        "ShiftingHoverView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        let mut column = TuiFlex::column();
+        if self.shifted {
+            column = column.child(TuiText::new("pad").finish());
+        }
+        let target = TuiHoverable::new(self.hover.clone(), TuiText::new("target").finish());
+        column = column.child(target.finish());
+        Box::new(
+            TuiEventHandler::new(column.finish())
+                .on_key("s", |_, ctx, _| ctx.dispatch_typed_action(Shift)),
+        )
+    }
+}
+
+impl TypedActionView for ShiftingHoverView {
+    type Action = Shift;
+
+    fn handle_action(&mut self, _action: &Shift, ctx: &mut ViewContext<Self>) {
+        self.shifted = true;
+        ctx.notify();
+    }
+}
+
+/// After a redraw, the runtime replays the last pointer position as a
+/// synthetic move, so a hover target that shifts out from under a stationary
+/// mouse unhoveres without any real mouse movement.
+#[test]
+fn synthetic_mouse_move_after_redraw_updates_hover() {
+    App::test((), |mut app| async move {
+        let hover = MouseStateHandle::default();
+        let hover_for_view = hover.clone();
+        let (window_id, root) = app.update(move |ctx| {
+            ctx.add_tui_window(window_options(), move |_| ShiftingHoverView {
+                hover: hover_for_view,
+                shifted: false,
+            })
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 5));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        let mouse_moved = TuiEvent::MouseMoved {
+            position: TuiPoint::new(2, 0),
+            modifiers: ModifiersState::default(),
+            is_synthetic: false,
+        };
+        app.update(|ctx| screen.dispatch_event(ctx, &mouse_moved));
+        assert!(hover.lock().unwrap().is_hovered());
+
+        root.update(&mut app, |view, ctx| {
+            view.shifted = true;
+            ctx.notify();
+        });
+        screen.terminal.output.clear();
+
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        assert!(
+            !hover.lock().unwrap().is_hovered(),
+            "the post-draw synthetic move should unhover the shifted target"
+        );
+        assert_eq!(
+            screen
+                .terminal
+                .output_string()
+                .matches("\u{1b}[?2026h")
+                .count(),
+            1,
+            "multi-pass hover reconciliation should flush one terminal frame"
+        );
     });
 }
 

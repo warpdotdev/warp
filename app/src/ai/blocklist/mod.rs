@@ -59,10 +59,13 @@ pub use action_model::{
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};
 pub use block::{keyboard_navigable_buttons, toggleable_items};
+#[cfg(not(feature = "tui"))]
+pub(crate) use context_model::block_context_from_terminal_model;
+#[cfg(feature = "tui")]
+pub use context_model::block_context_from_terminal_model;
 pub use context_model::BlocklistAIContextModel;
 pub(crate) use context_model::{
-    block_context_from_terminal_model, AttachmentType, BlocklistAIContextEvent, PendingAttachment,
-    PendingFile,
+    AttachmentType, BlocklistAIContextEvent, PendingAttachment, PendingFile,
 };
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,

@@ -26,13 +26,13 @@
 /app/src/uri/ @seemeroland
 
 # Code editor / LSP / notebooks / codebase context
-/app/src/code/ @kevinyang372
-/app/src/editor/ @kevinyang372
+/app/src/code/ @kevinyang372 @harryalbert
+/app/src/editor/ @kevinyang372 @harryalbert
 /app/src/notebooks/ @kevinyang372 @bnavetta
 /app/src/ai/get_relevant_files/ @kevinyang372
 /crates/ai/src/index/ @kevinyang372
 /crates/ai/src/project_context/ @kevinyang372
-/crates/editor/ @kevinyang372 @bnavetta
+/crates/editor/ @kevinyang372 @bnavetta @harryalbert
 /crates/languages/ @kevinyang372 @bnavetta
 /crates/lsp/ @kevinyang372 @moirahuang
 /crates/repo_metadata/ @kevinyang372
