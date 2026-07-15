@@ -188,6 +188,14 @@ pub enum AIApiError {
         "Grok subscription token could not be refreshed. Please try reconnecting your subscription."
     )]
     GrokSubscriptionTokenRefreshFailed,
+
+    /// Synthesized client-side when a request that uses the connected Codex
+    /// subscription can't be sent because its expired OAuth token failed to
+    /// refresh.
+    #[error(
+        "Codex subscription token could not be refreshed. Please try reconnecting your subscription."
+    )]
+    CodexSubscriptionTokenRefreshFailed,
 }
 
 impl From<http_client::ResponseError> for AIApiError {
@@ -329,9 +337,10 @@ impl AIApiError {
                 }
                 true
             }
-            // A failed Grok token refresh is a credential problem the user must
-            // fix by reconnecting, so retrying or resuming won't help.
-            AIApiError::GrokSubscriptionTokenRefreshFailed => false,
+            // A failed subscription token refresh is a credential problem the
+            // user must fix by reconnecting, so retrying or resuming won't help.
+            AIApiError::GrokSubscriptionTokenRefreshFailed
+            | AIApiError::CodexSubscriptionTokenRefreshFailed => false,
             // By default, attempt recovery on error.
             _ => true,
         }
@@ -350,7 +359,8 @@ impl ErrorExt for AIApiError {
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
             | AIApiError::NoContextFound
-            | AIApiError::GrokSubscriptionTokenRefreshFailed => false,
+            | AIApiError::GrokSubscriptionTokenRefreshFailed
+            | AIApiError::CodexSubscriptionTokenRefreshFailed => false,
         }
     }
 }

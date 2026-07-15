@@ -1,4 +1,10 @@
-use super::{recovery_action, RecoveryAction};
+use std::time::{Duration, SystemTime};
+
+use ::ai::api_keys::CodexTokens;
+use warp_multi_agent_api::request::settings::api_keys::CodexOauthCredentials;
+use warp_multi_agent_api::request::settings::ApiKeys;
+
+use super::{recovery_action, replace_codex_oauth_credentials, RecoveryAction};
 
 // Argument order: has_received_client_actions, is_recoverable, has_retry_budget,
 // can_attempt_resume_on_error, is_online.
@@ -80,5 +86,35 @@ fn non_recoverable_post_action_failure_is_terminal() {
     assert_eq!(
         recovery_action(true, false, true, true, true),
         RecoveryAction::Fail
+    );
+}
+
+#[test]
+fn codex_refresh_replaces_only_nested_credentials() {
+    let mut keys = ApiKeys {
+        openai: "ordinary-openai-key".into(),
+        codex_oauth_credentials: Some(CodexOauthCredentials {
+            access_token: "expired-access".into(),
+            chatgpt_account_id: "old-account".into(),
+        }),
+        ..Default::default()
+    };
+    let tokens = CodexTokens {
+        access_token: "fresh-access".into(),
+        refresh_token: Some("fresh-refresh".into()),
+        id_token: None,
+        chatgpt_account_id: "fresh-account".into(),
+        expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+        connected_at: Some(SystemTime::now()),
+    };
+
+    assert!(replace_codex_oauth_credentials(&mut keys, &tokens));
+    assert_eq!(keys.openai, "ordinary-openai-key");
+    assert_eq!(
+        keys.codex_oauth_credentials,
+        Some(CodexOauthCredentials {
+            access_token: "fresh-access".into(),
+            chatgpt_account_id: "fresh-account".into(),
+        })
     );
 }
