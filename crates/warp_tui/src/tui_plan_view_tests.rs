@@ -135,6 +135,34 @@ fn plan_body_has_left_padding_without_right_padding() {
 }
 
 #[test]
+fn finalized_single_create_keeps_plan_name_in_header() {
+    App::test((), |mut app| async move {
+        let action = create_action("create-1", [("pomodoro-app-spec.md", "streamed content")]);
+        let (view, action_model) = test_plan_view(&mut app, action.clone(), true);
+        action_model.update(&mut app, |model, ctx| {
+            model.apply_finished_action_result(
+                AIConversationId::new(),
+                action_result(
+                    &action,
+                    AIAgentActionResultType::CreateDocuments(CreateDocumentsResult::Success {
+                        created_documents: vec![document_context(
+                            AIDocumentId::new(),
+                            "final content",
+                        )],
+                    }),
+                ),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let (lines, _) = render(view.as_ref(ctx), 60, ctx);
+            assert_eq!(lines[0], "✓ Created pomodoro-app-spec.md ▾");
+        });
+    });
+}
+
+#[test]
 fn finalized_create_replaces_streamed_payload_and_keeps_action_order() {
     App::test((), |mut app| async move {
         let action = create_action(
@@ -172,7 +200,7 @@ fn finalized_create_replaces_streamed_payload_and_keeps_action_order() {
                 vec![("First", "final first"), ("Second", "final second")]
             );
             let (lines, _) = render(view, 60, ctx);
-            assert_eq!(lines[0], "✓ Created plan ▾");
+            assert_eq!(lines[0], "✓ Created 2 documents ▾");
             let positions = ["First", "final first", "Second", "final second"].map(|needle| {
                 lines
                     .iter()

@@ -209,7 +209,7 @@ impl TuiPlanView {
                 ToolCallDisplayState::Pending | ToolCallDisplayState::AwaitingApproval => {
                     ("Create plan", None)
                 }
-                ToolCallDisplayState::Succeeded => ("Created plan", None),
+                ToolCallDisplayState::Succeeded => ("Created ", Some(self.document_subject())),
                 ToolCallDisplayState::Failed => ("Failed to create plan", None),
                 ToolCallDisplayState::Cancelled => ("Create plan cancelled", None),
             }
