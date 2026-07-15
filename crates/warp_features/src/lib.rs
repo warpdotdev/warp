@@ -907,6 +907,9 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
+
+    /// Test feature flag.
+    MaggsTest,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
