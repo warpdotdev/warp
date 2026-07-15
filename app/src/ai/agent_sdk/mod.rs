@@ -39,6 +39,7 @@ use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
 use warp_managed_secrets::ManagedSecretManager;
+use warp_server_client::iap::{IapManager, IapManagerEvent};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelSpawner, SingletonEntity};
 
@@ -1577,6 +1578,52 @@ fn launch_command(
         ));
     }
 
+    // On staging the warp-server is fronted by IAP, so establish an IAP token
+    // before *any* warp-server request.
+    let iap = IapManager::handle(ctx);
+    if !iap.as_ref(ctx).is_enabled() || iap.as_ref(ctx).has_valid_token() {
+        refresh_auth_and_dispatch(ctx, command, global_options);
+        return Ok(());
+    }
+
+    let mut handled = false;
+    ctx.subscribe_to_model(&iap, move |_, event, ctx| {
+        if handled {
+            return;
+        }
+        match event {
+            IapManagerEvent::StateChanged
+                if IapManager::handle(ctx).as_ref(ctx).has_valid_token() =>
+            {
+                handled = true;
+                refresh_auth_and_dispatch(ctx, command.clone(), global_options.clone());
+            }
+            IapManagerEvent::AccessUnavailable => {
+                handled = true;
+                report_fatal_error(
+                    anyhow::anyhow!("Timed out establishing IAP access to warp-server."),
+                    ctx,
+                );
+            }
+            _ => {}
+        }
+    });
+
+    iap.update(ctx, |manager, ctx| manager.ensure_access(ctx));
+
+    Ok(())
+}
+
+/// Subscribes to auth events, triggers a user refresh, and dispatches the
+/// command once auth completes. Assumes IAP access (if applicable) is already
+/// established, since the auth refresh is itself an IAP-gated warp-server request.
+fn refresh_auth_and_dispatch(
+    ctx: &mut AppContext,
+    command: CliCommand,
+    global_options: GlobalOptions,
+) {
+    let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
+
     // User is logged in — subscribe to auth events, trigger a refresh, and wait
     // for the result before running the command.
     let mut dispatched = false;
@@ -1613,8 +1660,6 @@ fn launch_command(
     AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
         auth_manager.refresh_user(ctx);
     });
-
-    Ok(())
 }
 
 /// Check if we're running within Warp (for example, if this is an invocation of the Warp CLI

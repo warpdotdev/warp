@@ -22,6 +22,12 @@ const MAX_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 /// bad credentials) doesn't loop forever.
 const MAX_FAILURE_RETRIES: u32 = 5;
 
+/// Upper bound on establishing IAP access for a blocking caller (e.g. a one-shot
+/// CLI command) before giving up, rather than hanging or firing a doomed (401)
+/// warp-server request. Generous enough to cover a couple of STS/IAM round trips
+/// plus a retry.
+const IAP_ACCESS_TIMEOUT: Duration = Duration::from_secs(60);
+
 // Endpoints and constants for the runner-context Workload Identity Federation
 // mint (GCP STS token exchange + IAM Credentials `generateIdToken`).
 const STS_TOKEN_URL: &str = "https://sts.googleapis.com/v1/token";
@@ -194,6 +200,9 @@ pub struct IapManager {
 
 pub enum IapManagerEvent {
     StateChanged,
+    /// Emitted when IAP access could not be established within the gate timeout,
+    /// so a blocking caller can fail closed instead of hanging.
+    AccessUnavailable,
     RefreshFailed {
         /// A human-readable error message describing why the refresh failed.
         message: String,
@@ -235,6 +244,32 @@ impl IapManager {
     /// a `ModelContext` without reaching through `ServerApi`.
     pub fn iap_state(&self) -> Option<Arc<IapState>> {
         self.state.clone()
+    }
+
+    /// Returns `true` when a currently-valid (unexpired) IAP token is available.
+    /// Used to gate warp-server requests until IAP access is established.
+    pub fn has_valid_token(&self) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|s| s.get_cached().is_some())
+    }
+
+    /// Establishes IAP access for a blocking caller: triggers a refresh
+    // and if no valid token lands within [`IAP_ACCESS_TIMEOUT`], emits
+    // [`IapManagerEvent::AccessUnavailable`] so the caller can fail closed.
+    pub fn ensure_access(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.state.is_none() {
+            return;
+        }
+        self.start_refresh(ctx);
+        ctx.spawn(
+            async { Timer::after(IAP_ACCESS_TIMEOUT).await },
+            |manager, _, ctx| {
+                if !manager.has_valid_token() {
+                    ctx.emit(IapManagerEvent::AccessUnavailable);
+                }
+            },
+        );
     }
 
     pub fn handle_challenge(&mut self, ctx: &mut ModelContext<Self>) {
@@ -310,6 +345,18 @@ impl IapManager {
         mint: ManagedIapMint,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Fast path: reuse a fresh IAP token cache. This is actually required by
+        // child processes when the main process spawns a child oz sub-process...
+        // i.e. GCP SDK calling `oz federate issue-token --audience warp-cloud-agent-otel`
+        if let Some(cached) = cache::read() {
+            let expires_at = cached.expires_at;
+            state.set_loaded(cached);
+            ctx.emit(IapManagerEvent::StateChanged);
+            ctx.notify();
+            self.schedule_next_refresh(expires_at, ctx);
+            return;
+        }
+
         state.set_refreshing();
         ctx.emit(IapManagerEvent::StateChanged);
         ctx.notify();
@@ -336,7 +383,11 @@ impl IapManager {
                     injected_jwt,
                     iap_audience,
                     service_account_email,
-                    &WifEndpoints::production(),
+                    &WifEndpoints {
+                        sts_token_url: STS_TOKEN_URL.to_string(),
+                        iam_generate_id_token_url_template: IAM_GENERATE_ID_TOKEN_URL
+                            .to_string(),
+                    },
                 )
                 .await
             },
@@ -352,6 +403,12 @@ impl IapManager {
         match result {
             Ok(cached) => {
                 let expires_at = cached.expires_at;
+                // Publish for short-lived child `oz` processes to reuse
+                // i.e. `oz federate issue-token --audience warp-cloud-agent-otel`
+                // needs to transit IAP to get the token from warp-server
+                if self.managed_mint.is_some() {
+                    cache::write(&cached.token);
+                }
                 state.set_loaded(cached);
                 self.consecutive_failures = 0;
                 log::info!("Warp Staging IAP token refreshed");
@@ -470,22 +527,13 @@ struct GenerateIdTokenResponse {
     token: String,
 }
 
-/// GCP endpoints for the WIF mint. `production()` targets the real Google
-/// endpoints; tests override them to point at a mock server.
+/// GCP endpoints for the WIF mint. The production call site passes the real
+/// Google endpoint consts; tests override them to point at a mock server.
 struct WifEndpoints {
     sts_token_url: String,
     /// `generateIdToken` URL carrying a `{sa_email}` placeholder for the
     /// impersonated service account.
     iam_generate_id_token_url_template: String,
-}
-
-impl WifEndpoints {
-    fn production() -> Self {
-        Self {
-            sts_token_url: STS_TOKEN_URL.to_string(),
-            iam_generate_id_token_url_template: IAM_GENERATE_ID_TOKEN_URL.to_string(),
-        }
-    }
 }
 
 /// Leg 1 of the WIF mint: pick the OIDC subject token for the STS exchange.
@@ -703,6 +751,96 @@ fn parse_aud_from_jwt(token: &str) -> Option<String> {
         serde_json::Value::Array(auds) => auds.iter().find_map(|v| v.as_str().map(str::to_string)),
         _ => None,
     }
+}
+
+/// On-disk cache of the current IAP token, written by the long-lived parent
+/// process (which keeps it fresh) so short-lived child `oz` processes can reuse
+/// it instead of each doing their own STS/IAM mint. The file stores the raw IAP
+/// JWT; validity is derived from its own `exp` claim on read.
+///
+/// This is a plain owner-only file rather than OS secure storage: it only exists
+/// in the staging Oz runner (headless Linux), where no keyring is available and
+/// the container already holds the bootstrap JWT / API key / GitHub token.
+#[cfg(not(target_family = "wasm"))]
+mod cache {
+    use std::time::Duration;
+
+    use instant::Instant;
+
+    use super::{CachedToken, get_expires_at};
+
+    /// Discard a cached token with less than this remaining, so we never hand back
+    /// a near-dead credential the mint path should refresh instead.
+    const CACHE_SKEW: Duration = Duration::from_secs(30);
+
+    fn cache_path() -> std::path::PathBuf {
+        warp_core::paths::state_dir()
+            .join("staging")
+            .join("iap_cache.jwt")
+    }
+
+    pub(super) fn read() -> Option<CachedToken> {
+        let token = std::fs::read_to_string(cache_path()).ok()?;
+        let token = token.trim().to_owned();
+        if token.is_empty() {
+            return None;
+        }
+        let expires_at = get_expires_at(&token).ok()?;
+        if expires_at <= Instant::now() + CACHE_SKEW {
+            return None;
+        }
+        Some(CachedToken { token, expires_at })
+    }
+
+    pub(super) fn write(token: &str) {
+        if let Err(err) = write_atomic(token) {
+            log::warn!("Failed to write IAP token cache: {err}");
+        }
+    }
+
+    fn write_atomic(token: &str) -> std::io::Result<()> {
+        let path = cache_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // Write to a sibling temp file then rename so a reader never observes a
+        // partially-written token.
+        let tmp = path.with_extension("tmp");
+        write_owner_only(&tmp, token.as_bytes())?;
+        std::fs::rename(&tmp, &path)
+    }
+
+    #[cfg(unix)]
+    fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)
+    }
+
+    #[cfg(not(unix))]
+    fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+        std::fs::write(path, bytes)
+    }
+}
+
+/// On wasm there is no filesystem, and IAP self-minting never runs, so the cache
+/// is a no-op.
+#[cfg(target_family = "wasm")]
+mod cache {
+    use super::CachedToken;
+
+    pub(super) fn read() -> Option<CachedToken> {
+        None
+    }
+
+    pub(super) fn write(_token: &str) {}
 }
 
 #[cfg(test)]
