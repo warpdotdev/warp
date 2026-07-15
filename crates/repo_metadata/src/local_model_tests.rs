@@ -676,6 +676,213 @@ fn test_index_directory_path_upgrades_lazy_loaded_non_git_path() {
     });
 }
 
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_index_lazy_loaded_repo_root_tags_gitignored_entries() {
+    VirtualFS::test(
+        "lazy_loaded_repo_root_gitignore_tagging",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.git/objects")
+                .mkdir("repo/src")
+                .mkdir("repo/target")
+                .with_files(vec![
+                    Stub::FileWithContent("repo/.git/HEAD", "ref: refs/heads/main"),
+                    Stub::FileWithContent("repo/.gitignore", "*.log\n/target/"),
+                    Stub::FileWithContent("repo/debug.log", "log"),
+                    Stub::FileWithContent("repo/README.md", "# Project"),
+                    Stub::FileWithContent("repo/src/main.rs", "fn main() {}"),
+                    Stub::FileWithContent("repo/target/binary", "binary"),
+                ]);
+
+            let repo = dirs.tests().join("repo");
+            App::test((), |mut app| async move {
+                let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+                let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+
+                model_handle.update(&mut app, |model, ctx| {
+                    model.index_lazy_loaded_repo_root(&repo_path, ctx).unwrap();
+                });
+
+                model_handle.read(&app, |model, _ctx| {
+                    assert!(model.is_lazy_loaded_path(&repo_path));
+                    let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&repo_path)
+                    else {
+                        panic!("expected indexed lazy-loaded repo root");
+                    };
+                    // The repo's root gitignores are retained for later loads and
+                    // watcher updates.
+                    assert!(!state.gitignores.is_empty());
+
+                    // First-level entries are tagged against the root .gitignore.
+                    let target = StandardizedPath::try_from_local(&repo.join("target")).unwrap();
+                    assert!(matches!(
+                        state.entry.get(&target),
+                        Some(FileTreeEntryState::Directory(dir)) if dir.ignored && !dir.loaded
+                    ));
+                    let log = StandardizedPath::try_from_local(&repo.join("debug.log")).unwrap();
+                    assert!(matches!(
+                        state.entry.get(&log),
+                        Some(FileTreeEntryState::File(file)) if file.ignored
+                    ));
+
+                    // Non-ignored entries stay untagged; directories stay unloaded.
+                    let src = StandardizedPath::try_from_local(&repo.join("src")).unwrap();
+                    assert!(matches!(
+                        state.entry.get(&src),
+                        Some(FileTreeEntryState::Directory(dir)) if !dir.ignored && !dir.loaded
+                    ));
+                    let readme = StandardizedPath::try_from_local(&repo.join("README.md")).unwrap();
+                    assert!(matches!(
+                        state.entry.get(&readme),
+                        Some(FileTreeEntryState::File(file)) if !file.ignored
+                    ));
+                    // Only the first level is materialized.
+                    let deep = StandardizedPath::try_from_local(&repo.join("src/main.rs")).unwrap();
+                    assert!(!state.entry.contains(&deep));
+                });
+            });
+        },
+    );
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_lazy_loaded_repo_root_load_directory_respects_root_gitignore() {
+    VirtualFS::test("lazy_loaded_repo_root_load_directory", |dirs, mut vfs| {
+        vfs.mkdir("repo/.git/objects")
+            .mkdir("repo/src/generated")
+            .with_files(vec![
+                Stub::FileWithContent("repo/.git/HEAD", "ref: refs/heads/main"),
+                Stub::FileWithContent("repo/.gitignore", "src/generated/"),
+                Stub::FileWithContent("repo/src/main.rs", "fn main() {}"),
+                Stub::FileWithContent("repo/src/generated/gen.rs", ""),
+            ]);
+
+        let repo = dirs.tests().join("repo");
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+            let src = StandardizedPath::try_from_local(&repo.join("src")).unwrap();
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.index_lazy_loaded_repo_root(&repo_path, ctx).unwrap();
+                model.load_directory(&repo_path, &src, ctx).unwrap();
+            });
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&repo_path)
+                else {
+                    panic!("expected indexed lazy-loaded repo root");
+                };
+                let main_rs = StandardizedPath::try_from_local(&repo.join("src/main.rs")).unwrap();
+                assert!(matches!(
+                    state.entry.get(&main_rs),
+                    Some(FileTreeEntryState::File(file)) if !file.ignored
+                ));
+                // The expanded directory's gitignored child is tagged using the
+                // ROOT .gitignore retained at index time, and stays unloaded.
+                let generated =
+                    StandardizedPath::try_from_local(&repo.join("src/generated")).unwrap();
+                assert!(matches!(
+                    state.entry.get(&generated),
+                    Some(FileTreeEntryState::Directory(dir)) if dir.ignored && !dir.loaded
+                ));
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_watcher_event_updates_lazy_loaded_repo_root_within_materialized_dirs() {
+    VirtualFS::test("lazy_loaded_repo_root_watcher_updates", |dirs, mut vfs| {
+        vfs.mkdir("repo/.git/objects")
+            .mkdir("repo/src/nested")
+            .with_files(vec![
+                Stub::FileWithContent("repo/.git/HEAD", "ref: refs/heads/main"),
+                Stub::FileWithContent("repo/.gitignore", "*.log"),
+                Stub::FileWithContent("repo/src/main.rs", "fn main() {}"),
+            ]);
+
+        let repo = dirs.tests().join("repo");
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.index_lazy_loaded_repo_root(&repo_path, ctx).unwrap();
+            });
+
+            // Wait for the async mutation pipeline to apply the update.
+            let (tx, rx) = oneshot::channel();
+            let applied = Rc::new(RefCell::new(Some(tx)));
+            let applied_for_event = applied.clone();
+            let repo_path_for_event = repo_path.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if matches!(
+                        event,
+                        RepositoryMetadataEvent::FileTreeEntryUpdated { path, .. }
+                            if path == &repo_path_for_event
+                    ) {
+                        if let Some(tx) = applied_for_event.borrow_mut().take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                });
+            });
+
+            // New files at the (materialized) root: a plain file and a
+            // gitignored one, plus a file inside an unmaterialized subdir.
+            let note = repo.join("note.txt");
+            let log = repo.join("debug.log");
+            let nested = repo.join("src/nested/other.rs");
+            std::fs::write(&note, "note").unwrap();
+            std::fs::write(&log, "log").unwrap();
+            std::fs::write(&nested, "").unwrap();
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        added: std::collections::HashSet::from([
+                            note.clone(),
+                            log.clone(),
+                            nested.clone(),
+                        ]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            rx.with_timeout(Duration::from_secs(5))
+                .await
+                .expect("timed out waiting for file tree update")
+                .expect("file tree update sender dropped");
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&repo_path)
+                else {
+                    panic!("expected indexed lazy-loaded repo root");
+                };
+                let note = StandardizedPath::try_from_local(&note).unwrap();
+                assert!(matches!(
+                    state.entry.get(&note),
+                    Some(FileTreeEntryState::File(file)) if !file.ignored
+                ));
+                // The retained root gitignores tag new ignored files.
+                let log = StandardizedPath::try_from_local(&log).unwrap();
+                assert!(matches!(
+                    state.entry.get(&log),
+                    Some(FileTreeEntryState::File(file)) if file.ignored
+                ));
+                // Additions inside unmaterialized directories are skipped,
+                // matching the lazy tree model.
+                let nested = StandardizedPath::try_from_local(&nested).unwrap();
+                assert!(!state.entry.contains(&nested));
+            });
+        });
+    });
+}
+
 #[test]
 fn test_get_repo_contents_include_ignored() {
     VirtualFS::test("repo_contents_include_ignored_test", |dirs, mut vfs| {

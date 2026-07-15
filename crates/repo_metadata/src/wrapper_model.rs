@@ -340,6 +340,21 @@ impl RepoMetadataModel {
             .update(ctx, |local, ctx| local.index_lazy_loaded_path(&path, ctx))
     }
 
+    /// Lazily indexes a local git repository root with only the first level of
+    /// children, keeping the repo's gitignores so ignore-tagging and on-demand
+    /// loads match the eagerly-indexed tree.
+    #[cfg(feature = "local_fs")]
+    pub fn index_lazy_loaded_repo_root(
+        &self,
+        path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), RepoMetadataError> {
+        let path = path.clone();
+        self.local.update(ctx, |local, ctx| {
+            local.index_lazy_loaded_repo_root(&path, ctx)
+        })
+    }
+
     /// Loads a specific directory inside an already-tracked local tree.
     #[cfg(feature = "local_fs")]
     pub fn load_directory(

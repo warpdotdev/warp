@@ -8,6 +8,7 @@ use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
 use settings::Setting;
 use virtual_fs::{Stub, VirtualFS};
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{App, ModelHandle, SingletonEntity};
@@ -613,6 +614,369 @@ fn failed_lazy_loaded_path_registration_is_retried() {
                     .unwrap(),
                     ctx
                 ));
+            });
+        });
+    });
+}
+
+// ── Lazy file tree indexing (FeatureFlag::LazyFileTreeIndexing) ──────────
+
+/// Creates a VFS git repo used by the lazy-file-tree-indexing tests:
+/// a detected repo root with a first-level `src/` dir, a gitignored
+/// `target/` dir, and a nested source file.
+fn make_lazy_indexing_repo(vfs: &mut VirtualFS) {
+    vfs.mkdir("repo/.git/objects")
+        .mkdir("repo/src/nested")
+        .mkdir("repo/target")
+        .with_files(vec![
+            Stub::FileWithContent("repo/.git/HEAD", "ref: refs/heads/main"),
+            Stub::FileWithContent("repo/.git/config", "[core]\n\trepositoryformatversion = 0"),
+            Stub::FileWithContent("repo/.gitignore", "/target/"),
+            Stub::FileWithContent("repo/src/main.rs", "fn main() {}\n"),
+            Stub::FileWithContent("repo/src/nested/other.rs", ""),
+            Stub::FileWithContent("repo/target/binary", "binary"),
+        ]);
+}
+
+#[test]
+fn lazy_file_tree_indexing_registers_detected_repo_root() {
+    let _flag = FeatureFlag::LazyFileTreeIndexing.override_enabled(true);
+    VirtualFS::test("file_tree_lazy_indexing_repo_root", |dirs, mut vfs| {
+        make_lazy_indexing_repo(&mut vfs);
+        let repo_root = dirs.tests().join("repo");
+        let canonical_repo_root =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo_root)
+                .unwrap();
+        // Mirror production: displayed cwds arrive canonicalized.
+        let displayed_root = canonical_repo_root.to_local_path_lossy();
+
+        App::test((), |mut app| async move {
+            let (detected_repositories, repository_metadata_model) = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            detected_repositories.update(&mut app, |repositories, _ctx| {
+                repositories.insert_test_repo_root(canonical_repo_root.clone());
+            });
+
+            // The eager index never runs — opening the pane must index the repo
+            // root itself through the lazy path.
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![displayed_root.clone()], ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                assert!(view
+                    .registered_lazy_loaded_paths
+                    .contains(&canonical_repo_root));
+                // The entry is rooted at the repo root, matching the eager tree.
+                assert_eq!(
+                    view.root_for_path(&std_path(&displayed_root)),
+                    Some(canonical_repo_root.clone())
+                );
+                // First-level children are materialized and displayed.
+                let paths = flattened_paths(view, &displayed_root);
+                assert!(paths.contains(&std_path(&displayed_root.join("src"))));
+                // Deeper levels stay unloaded until expanded.
+                assert!(!paths.contains(&std_path(&displayed_root.join("src/main.rs"))));
+            });
+            repository_metadata_model.read(&app, |model, ctx| {
+                assert!(model.is_lazy_loaded_path(&canonical_repo_root, ctx));
+            });
+        });
+    });
+}
+
+#[test]
+fn lazy_file_tree_indexing_materializes_chain_to_displayed_subdir() {
+    let _flag = FeatureFlag::LazyFileTreeIndexing.override_enabled(true);
+    VirtualFS::test("file_tree_lazy_indexing_subdir_chain", |dirs, mut vfs| {
+        make_lazy_indexing_repo(&mut vfs);
+        let repo_root = dirs.tests().join("repo");
+        let canonical_repo_root =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo_root)
+                .unwrap();
+        let canonical_repo_local = canonical_repo_root.to_local_path_lossy();
+        // The user's cwd is a subdirectory of the repo.
+        let displayed_root = canonical_repo_local.join("src/nested");
+
+        App::test((), |mut app| async move {
+            let (detected_repositories, repository_metadata_model) = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            detected_repositories.update(&mut app, |repositories, _ctx| {
+                repositories.insert_test_repo_root(canonical_repo_root.clone());
+            });
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![displayed_root.clone()], ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                // The lazy registration targets the repo root, not the cwd.
+                assert!(view
+                    .registered_lazy_loaded_paths
+                    .contains(&canonical_repo_root));
+                assert!(!view
+                    .registered_lazy_loaded_paths
+                    .contains(&std_path(&displayed_root)));
+                assert_eq!(
+                    view.root_for_path(&std_path(&displayed_root)),
+                    Some(canonical_repo_root.clone())
+                );
+                // The chain down to the cwd is materialized so its children
+                // are displayed.
+                let paths = flattened_paths(view, &displayed_root);
+                assert!(paths.contains(&std_path(&displayed_root)));
+                assert!(paths.contains(&std_path(&displayed_root.join("other.rs"))));
+            });
+            repository_metadata_model.read(&app, |model, ctx| {
+                assert!(model.is_lazy_loaded_path(&canonical_repo_root, ctx));
+            });
+
+            // A cwd change within the repo keeps the repo-root registration
+            // alive (a displayed root still lives under it).
+            let repo_display = canonical_repo_local.clone();
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_root_directories(vec![repo_display.clone()], ctx);
+            });
+            file_tree_view.read(&app, |view, _ctx| {
+                assert!(view
+                    .registered_lazy_loaded_paths
+                    .contains(&canonical_repo_root));
+            });
+        });
+    });
+}
+
+#[test]
+fn lazy_file_tree_indexing_expansion_loads_children() {
+    let _flag = FeatureFlag::LazyFileTreeIndexing.override_enabled(true);
+    VirtualFS::test("file_tree_lazy_indexing_expansion", |dirs, mut vfs| {
+        make_lazy_indexing_repo(&mut vfs);
+        let repo_root = dirs.tests().join("repo");
+        let canonical_repo_root =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo_root)
+                .unwrap();
+        let displayed_root = canonical_repo_root.to_local_path_lossy();
+
+        App::test((), |mut app| async move {
+            let (detected_repositories, _) = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            detected_repositories.update(&mut app, |repositories, _ctx| {
+                repositories.insert_test_repo_root(canonical_repo_root.clone());
+            });
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![displayed_root.clone()], ctx);
+            });
+
+            // Expanding an unloaded directory loads its children on demand
+            // through the model.
+            let src = displayed_root.join("src");
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.toggle_folder_expansion(&std_path(&displayed_root), &std_path(&src), ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let paths = flattened_paths(view, &displayed_root);
+                assert!(paths.contains(&std_path(&src.join("main.rs"))));
+            });
+        });
+    });
+}
+
+#[test]
+fn lazy_file_tree_indexing_prefers_eager_index() {
+    let _flag = FeatureFlag::LazyFileTreeIndexing.override_enabled(true);
+    VirtualFS::test("file_tree_lazy_indexing_prefers_eager", |dirs, mut vfs| {
+        make_lazy_indexing_repo(&mut vfs);
+        let repo_root = dirs.tests().join("repo");
+        let canonical_repo_root =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo_root)
+                .unwrap();
+        let displayed_root = canonical_repo_root.to_local_path_lossy();
+
+        App::test((), |mut app| async move {
+            let (detected_repositories, repository_metadata_model) = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            detected_repositories.update(&mut app, |repositories, _ctx| {
+                repositories.insert_test_repo_root(canonical_repo_root.clone());
+            });
+            // The eager index already has the repo before the pane opens.
+            repository_metadata_model.update(&mut app, |model, ctx| {
+                model.insert_test_state(
+                    canonical_repo_root.clone(),
+                    build_repo_state(&displayed_root),
+                    ctx,
+                );
+            });
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![displayed_root.clone()], ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                // No lazy registration — the eager entry is reused as-is,
+                // including its fully-materialized deep subtree.
+                assert!(view.registered_lazy_loaded_paths.is_empty());
+                let root_dir = view
+                    .root_directories
+                    .get(&std_path(&displayed_root))
+                    .expect("root directory is tracked");
+                assert!(root_dir
+                    .entry
+                    .contains(&std_path(&displayed_root.join("packages/app/src/main.rs"))));
+            });
+            repository_metadata_model.read(&app, |model, ctx| {
+                assert!(!model.is_lazy_loaded_path(&canonical_repo_root, ctx));
+            });
+        });
+    });
+}
+
+#[test]
+fn lazy_file_tree_indexing_flag_off_keeps_existing_behavior() {
+    let _flag = FeatureFlag::LazyFileTreeIndexing.override_enabled(false);
+    VirtualFS::test("file_tree_lazy_indexing_flag_off", |dirs, mut vfs| {
+        make_lazy_indexing_repo(&mut vfs);
+        let repo_root = dirs.tests().join("repo");
+        let canonical_repo_root =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo_root)
+                .unwrap();
+        let canonical_repo_local = canonical_repo_root.to_local_path_lossy();
+        let displayed_root = canonical_repo_local.join("src");
+
+        App::test((), |mut app| async move {
+            let (detected_repositories, repository_metadata_model) = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            detected_repositories.update(&mut app, |repositories, _ctx| {
+                repositories.insert_test_repo_root(canonical_repo_root.clone());
+            });
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![displayed_root.clone()], ctx);
+            });
+
+            // Flag off: the displayed root itself is registered as a
+            // standalone lazy-loaded path (existing behavior); the repo root
+            // is never lazily indexed.
+            file_tree_view.read(&app, |view, _ctx| {
+                assert!(view
+                    .registered_lazy_loaded_paths
+                    .contains(&std_path(&displayed_root)));
+                assert!(!view
+                    .registered_lazy_loaded_paths
+                    .contains(&canonical_repo_root));
+                assert_eq!(
+                    view.root_for_path(&std_path(&displayed_root)),
+                    Some(std_path(&displayed_root))
+                );
+            });
+            repository_metadata_model.read(&app, |model, ctx| {
+                assert!(!model.is_lazy_loaded_path(&canonical_repo_root, ctx));
+                assert!(model.is_lazy_loaded_path(&std_path(&displayed_root), ctx));
+            });
+        });
+    });
+}
+
+#[test]
+fn lazy_file_tree_indexing_upgrades_to_eager_index() {
+    let _flag = FeatureFlag::LazyFileTreeIndexing.override_enabled(true);
+    VirtualFS::test("file_tree_lazy_indexing_eager_upgrade", |dirs, mut vfs| {
+        make_lazy_indexing_repo(&mut vfs);
+        let repo_root = dirs.tests().join("repo");
+        let canonical_repo_root =
+            warp_util::standardized_path::StandardizedPath::from_local_canonicalized(&repo_root)
+                .unwrap();
+        let displayed_root = canonical_repo_root.to_local_path_lossy();
+
+        App::test((), |mut app| async move {
+            use std::cell::RefCell;
+            use std::rc::Rc;
+            use std::time::Duration;
+
+            use warpui::r#async::FutureExt as _;
+
+            let (detected_repositories, repository_metadata_model) = initialize_app(&mut app);
+            let directory_watcher = app.add_singleton_model(DirectoryWatcher::new);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            detected_repositories.update(&mut app, |repositories, _ctx| {
+                repositories.insert_test_repo_root(canonical_repo_root.clone());
+            });
+
+            // Pane opens before the eager index has the repo: lazy path used.
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![displayed_root.clone()], ctx);
+            });
+            file_tree_view.read(&app, |view, _ctx| {
+                assert!(view
+                    .registered_lazy_loaded_paths
+                    .contains(&canonical_repo_root));
+            });
+
+            // The eager index catches up (as it does on cd during stage 2):
+            // it upgrades the lazy entry to a fully-indexed repository.
+            let (tx, rx) = futures::channel::oneshot::channel();
+            let indexed = Rc::new(RefCell::new(Some(tx)));
+            let indexed_for_event = indexed.clone();
+            let repo_for_event = canonical_repo_root.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&repository_metadata_model, move |_, event, _ctx| {
+                    if matches!(
+                        event,
+                        repo_metadata::RepoMetadataEvent::RepositoryUpdated {
+                            id: repo_metadata::RepositoryIdentifier::Local(path),
+                        } if path == &repo_for_event
+                    ) {
+                        if let Some(tx) = indexed_for_event.borrow_mut().take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                });
+            });
+            let repository_handle = directory_watcher.update(&mut app, |watcher, ctx| {
+                watcher
+                    .add_directory(canonical_repo_root.clone(), ctx)
+                    .unwrap()
+            });
+            repository_metadata_model.update(&mut app, |model, ctx| {
+                model.index_directory(repository_handle, ctx).unwrap();
+            });
+            rx.with_timeout(Duration::from_secs(5))
+                .await
+                .expect("timed out waiting for eager index")
+                .expect("eager index completion sender dropped");
+
+            // The eager entry takes over and the lazy registration is dropped.
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_root_directories(vec![displayed_root.clone()], ctx);
+            });
+            file_tree_view.read(&app, |view, _ctx| {
+                assert!(!view
+                    .registered_lazy_loaded_paths
+                    .contains(&canonical_repo_root));
+                let root_dir = view
+                    .root_directories
+                    .get(&std_path(&displayed_root))
+                    .expect("root directory is tracked");
+                // The eager tree is fully materialized without any expansion.
+                assert!(root_dir
+                    .entry
+                    .contains(&std_path(&displayed_root.join("src/nested/other.rs"))));
+            });
+            repository_metadata_model.read(&app, |model, ctx| {
+                assert!(!model.is_lazy_loaded_path(&canonical_repo_root, ctx));
             });
         });
     });

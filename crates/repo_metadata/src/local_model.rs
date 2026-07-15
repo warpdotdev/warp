@@ -886,6 +886,43 @@ impl LocalRepoMetadataModel {
         path: &StandardizedPath,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), RepoMetadataError> {
+        self.index_lazy_loaded_path_internal(path, /* seed_repo_gitignores */ false, ctx)
+    }
+
+    /// Lazily indexes a git repository root with only the first level of
+    /// children, expanding on demand via [`Self::load_directory`].
+    ///
+    /// Unlike [`Self::index_lazy_loaded_path`], the repository's root (plus
+    /// global) gitignores are collected and stored in the resulting
+    /// [`FileTreeState`], so ignore-tagging during the initial build,
+    /// on-demand directory loads, and watcher-driven tree updates all honor
+    /// the repo's gitignore rules — matching the eagerly-indexed tree.
+    ///
+    /// Used by the file tree pane (behind `FeatureFlag::LazyFileTreeIndexing`)
+    /// so it can index a detected repo itself instead of depending on the
+    /// eager full-repo index.
+    #[cfg(feature = "local_fs")]
+    pub fn index_lazy_loaded_repo_root(
+        &mut self,
+        path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), RepoMetadataError> {
+        self.index_lazy_loaded_path_internal(path, /* seed_repo_gitignores */ true, ctx)
+    }
+
+    /// Shared implementation for lazily indexing a standalone path or a git
+    /// repository root. When `seed_repo_gitignores` is set, the directory's
+    /// root + global gitignores are used while building the first level and
+    /// retained in the stored [`FileTreeState`]; otherwise the build starts
+    /// with no gitignores and stores none (preserving the standalone-path
+    /// behavior).
+    #[cfg(feature = "local_fs")]
+    fn index_lazy_loaded_path_internal(
+        &mut self,
+        path: &StandardizedPath,
+        seed_repo_gitignores: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), RepoMetadataError> {
         // Already tracked as a lazy-loaded path — increase the refcount and keep the
         // existing watcher/model entry alive.
         if let Some(refcount) = self.lazy_loaded_paths.get_mut(path) {
@@ -915,13 +952,18 @@ impl LocalRepoMetadataModel {
 
         // Build first-level-only tree while collecting standing results across
         // descendants that are not materialized in the lazy file tree.
+        let mut gitignores = if seed_repo_gitignores {
+            gitignores_for_directory(&local_path)
+        } else {
+            Vec::new()
+        };
         let mut files = Vec::new();
         let mut file_limit = MAX_FILES_PER_REPO;
         let mut standing_results = StandingQueryResults::default();
         let root_entry = Entry::build_tree_with_standing_queries(
             &local_path,
             &mut files,
-            &mut vec![],
+            &mut gitignores,
             Some(&mut file_limit),
             BuildTreeOptions {
                 max_depth: 1, // Only first level.
@@ -936,7 +978,11 @@ impl LocalRepoMetadataModel {
         )
         .map_err(RepoMetadataError::BuildTree)?;
 
-        let state = FileTreeState::new_lazy_loaded(root_entry);
+        let state = if seed_repo_gitignores {
+            FileTreeState::new(root_entry, gitignores, None)
+        } else {
+            FileTreeState::new_lazy_loaded(root_entry)
+        };
         self.standing_results.insert(path.clone(), standing_results);
         // On Linux, watch lazy (non-git) roots non-recursively to avoid
         // registering an inotify watch for every directory in the subtree.

@@ -907,6 +907,12 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
+
+    /// Makes the file tree pane trigger its own lazy (first-level,
+    /// expand-on-demand) indexing of detected git repos instead of depending
+    /// on the eager full-repo index. Part of the on-the-fly repo metadata
+    /// migration (stage 2).
+    LazyFileTreeIndexing,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -982,6 +988,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
+    FeatureFlag::LazyFileTreeIndexing,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

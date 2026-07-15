@@ -1050,10 +1050,20 @@ impl FileTreeView {
         // (includes absorbed descendants that were standalone-registered).
         #[cfg(feature = "local_fs")]
         {
+            let lazy_repo_roots_enabled = FeatureFlag::LazyFileTreeIndexing.is_enabled();
             let removed_lazy_loaded_paths: Vec<StandardizedPath> = self
                 .registered_lazy_loaded_paths
                 .iter()
-                .filter(|p| !new_displayed.contains(p))
+                .filter(|p| {
+                    if lazy_repo_roots_enabled {
+                        // A lazily-indexed repo root may be registered on behalf
+                        // of a displayed descendant (the cwd inside the repo),
+                        // so keep it while any displayed root lives under it.
+                        !new_displayed.iter().any(|d| d.starts_with(p))
+                    } else {
+                        !new_displayed.contains(p)
+                    }
+                })
                 .cloned()
                 .collect();
             for path in removed_lazy_loaded_paths {
@@ -1316,9 +1326,17 @@ impl FileTreeView {
                     else {
                         continue;
                     };
+                    // With lazy file tree indexing, the repo root may be tracked
+                    // as a lazy-loaded path registered by this view; that state
+                    // must not be mistaken for the eager index (it is refreshed
+                    // through the lazy branch below instead).
+                    let repo_root_is_lazily_indexed = FeatureFlag::LazyFileTreeIndexing
+                        .is_enabled()
+                        && StandardizedPath::try_from_local(&repo_root)
+                            .is_ok_and(|p| repo_metadata.is_lazy_loaded_path(&p, ctx));
                     match repo_metadata.repository_state(&id, ctx) {
                         Some(IndexedRepoState::Indexed(state))
-                            if state.entry.contains(root_path) =>
+                            if state.entry.contains(root_path) && !repo_root_is_lazily_indexed =>
                         {
                             Some(state.entry.clone())
                         }
@@ -1337,8 +1355,32 @@ impl FileTreeView {
                     // path. Once the git repo finishes indexing, drop that standalone
                     // registration so the repo-backed entry becomes the single source of truth.
                     self.remove_lazy_loaded_entry(root_path, ctx);
+                    if FeatureFlag::LazyFileTreeIndexing.is_enabled() {
+                        // The repo root itself may also have been lazily indexed
+                        // on behalf of this displayed root; drop that registration
+                        // too now that the eager index owns the repo.
+                        if let Ok(repo_root_std) = StandardizedPath::try_from_local(&repo_root) {
+                            self.remove_lazy_loaded_entry(&repo_root_std, ctx);
+                        }
+                    }
                     if let Some(root_dir) = self.root_directories.get_mut(root_path) {
                         root_dir.entry = repo_entry;
+                    }
+                } else if FeatureFlag::LazyFileTreeIndexing.is_enabled() {
+                    // The eager index does not have this repo (not started or
+                    // failed): index the repo root lazily so the pane does not
+                    // depend on the eager `DetectedGitRepo` indexing trigger.
+                    match StandardizedPath::try_from_local(&repo_root) {
+                        Ok(repo_root_std) => {
+                            self.register_and_refresh_lazy_loaded_repo_root(
+                                &repo_root_std,
+                                root_path,
+                                ctx,
+                            );
+                        }
+                        Err(_) => {
+                            self.register_and_refresh_lazy_loaded_directory(root_path, ctx);
+                        }
                     }
                 } else {
                     self.register_and_refresh_lazy_loaded_directory(root_path, ctx);
@@ -1593,6 +1635,118 @@ impl FileTreeView {
                 Some(IndexedRepoState::Failed(_)) | None => {
                     root_dir.entry = Self::create_empty_entry(path);
                 }
+            }
+        }
+    }
+
+    /// Lazily indexes a detected git repository root through the model while
+    /// the file tree is active, then refreshes this displayed root's entry
+    /// from the model.
+    ///
+    /// Only used behind `FeatureFlag::LazyFileTreeIndexing`, when the eager
+    /// index does not have the repo. The lazy tree is rooted at the repository
+    /// root (matching the eagerly-indexed tree) and materialized down to
+    /// `root_path` so the displayed subtree is available; anything deeper
+    /// stays unloaded and loads on expansion via `load_directory`.
+    #[cfg(feature = "local_fs")]
+    fn register_and_refresh_lazy_loaded_repo_root(
+        &mut self,
+        repo_root: &StandardizedPath,
+        root_path: &StandardizedPath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Ensure the displayed root directory entry exists.
+        self.root_directories
+            .entry(root_path.clone())
+            .or_insert_with(|| RootDirectory {
+                entry: Self::create_empty_entry(root_path),
+                expanded_folders: HashSet::new(),
+                items: Vec::new(),
+                item_states: HashMap::new(),
+                remote_host_id: None,
+            });
+        // When the file tree is active, index the repo root through the model
+        // so that a file watcher is started.
+        if self.is_active && !self.registered_lazy_loaded_paths.contains(repo_root) {
+            let index_result =
+                self.repository_metadata_model
+                    .update(ctx, |model: &mut RepoMetadataModel, ctx| {
+                        model.index_lazy_loaded_repo_root(repo_root, ctx)
+                    });
+            if let Err(error) = &index_result {
+                log::warn!("Failed to lazily index repo root {repo_root}: {error}");
+            }
+            if RepoMetadataModel::as_ref(ctx).is_lazy_loaded_path(repo_root, ctx) {
+                self.registered_lazy_loaded_paths.insert(repo_root.clone());
+            }
+        }
+
+        // Materialize the chain from the repo root down to the displayed root
+        // so the displayed subtree is available.
+        self.load_chain_from_repo_root(repo_root, root_path, ctx);
+
+        let id = repo_metadata::RepositoryIdentifier::local(repo_root.clone());
+        let repo_state = RepoMetadataModel::as_ref(ctx).repository_state(&id, ctx);
+        if let Some(root_dir) = self.root_directories.get_mut(root_path) {
+            match repo_state {
+                Some(IndexedRepoState::Indexed(state)) => {
+                    root_dir.entry = state.entry.clone();
+                }
+                Some(IndexedRepoState::Pending(_)) => {
+                    // Repo is being (re-)indexed. Keep whatever entry we already
+                    // have so the tree doesn't flash back to a loading state
+                    // during the Pending → Indexed transition.
+                }
+                Some(IndexedRepoState::Failed(_)) | None => {
+                    root_dir.entry = Self::create_empty_entry(root_path);
+                }
+            }
+        }
+    }
+
+    /// Loads each unloaded directory on the chain from `repo_root` (exclusive)
+    /// down to `root_path` (inclusive) so the displayed root and its children
+    /// are materialized in a lazily-indexed repo tree.
+    #[cfg(feature = "local_fs")]
+    fn load_chain_from_repo_root(
+        &mut self,
+        repo_root: &StandardizedPath,
+        root_path: &StandardizedPath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if root_path == repo_root || !root_path.starts_with(repo_root) {
+            return;
+        }
+        // Ancestors from the repo root (exclusive) down to the displayed root
+        // (inclusive), ordered top-down so parents load before children.
+        let chain: Vec<StandardizedPath> = root_path
+            .ancestors()
+            .take_while(|p| p != repo_root)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let id = repo_metadata::RepositoryIdentifier::local(repo_root.clone());
+        for dir_path in chain {
+            let needs_load = RepoMetadataModel::as_ref(ctx)
+                .get_repository(&id, ctx)
+                .is_some_and(|state| {
+                    state
+                        .entry
+                        .get(&dir_path)
+                        .is_none_or(|entry| !entry.loaded())
+                });
+            if !needs_load {
+                continue;
+            }
+            let load_result =
+                self.repository_metadata_model
+                    .update(ctx, |model: &mut RepoMetadataModel, ctx| {
+                        model.load_directory(repo_root, &dir_path, ctx)
+                    });
+            if let Err(error) = load_result {
+                log::warn!("Failed to load directory {dir_path}: {error}");
+                return;
             }
         }
     }

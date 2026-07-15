@@ -450,6 +450,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_file_tree_keyboard_navigation);
     register_test!(test_file_tree_non_openable_files);
     register_test!(test_file_tree_nested_file_opening);
+    register_test!(test_file_tree_lazy_indexing);
+    register_test!(test_file_tree_eager_indexing);
 
     // Copy current path command-palette action
     register_test!(test_copy_current_path_copies_terminal_pwd);
