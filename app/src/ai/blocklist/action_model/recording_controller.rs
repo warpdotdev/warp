@@ -60,9 +60,6 @@ enum RecordingState {
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) enum FinalizationClaim {
     Claimed {
-        // Boxed because `ActiveRecording` embeds the (comparatively large)
-        // `RecordingHandle`, which would otherwise make this variant dominate the
-        // enum's size (clippy::large_enum_variant).
         recording: Box<ActiveRecording>,
         result_receiver: oneshot::Receiver<StopRecordingResult>,
     },

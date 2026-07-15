@@ -8,7 +8,8 @@
 //! - `Target::Window`: the target window is raised if needed, verified as foreground-visible at
 //!   representative points, and captured via ffmpeg `x11grab -window_id`.
 
-use std::path::Path;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -108,30 +109,75 @@ async fn start_screen(config: RecordingConfig) -> Result<RecordingHandle, Record
         });
     }
 
+    let (path, log_path, log_file) = new_recording_path()?;
+    let command = new_ffmpeg_capture_command(&config, &display, width, height, None);
+    launch_recording(command, path, log_path, log_file, width, height).await
+}
+
+/// Starts a single-window recording via ffmpeg `x11grab -window_id`.
+///
+/// This is a foreground-visible capture path: the target is raised if representative points are
+/// not already visible, then ffmpeg records that window directly.
+async fn start_window(
+    config: RecordingConfig,
+    window: xproto::Window,
+) -> Result<RecordingHandle, RecordingError> {
+    let (display, width, height) = prepare_window_capture(window).await?;
+
+    let (path, log_path, log_file) = new_recording_path()?;
+    let command = new_ffmpeg_capture_command(&config, &display, width, height, Some(window));
+    launch_recording(command, path, log_path, log_file, width, height).await
+}
+
+fn new_recording_path() -> Result<(PathBuf, PathBuf, File), RecordingError> {
     let path = std::env::temp_dir().join(format!("warp-recording-{}.mp4", uuid::Uuid::new_v4()));
+    let log_path = path.with_extension("log");
     // ffmpeg's progress log goes to a file so its stderr pipe can never fill
     // and stall capture over a long recording.
-    let log_path = path.with_extension("log");
-    let log_file = std::fs::File::create(&log_path).map_err(|e| RecordingError::Start {
+    let log_file = File::create(&log_path).map_err(|e| RecordingError::Start {
         reason: format!("failed to create the recording log file: {e}"),
     })?;
+    Ok((path, log_path, log_file))
+}
 
+fn new_ffmpeg_capture_command(
+    config: &RecordingConfig,
+    display: &str,
+    width: u32,
+    height: u32,
+    window_id: Option<xproto::Window>,
+) -> Command {
     let mut command = Command::new("ffmpeg");
     command
         .arg("-y")
         .args(["-f", "x11grab"])
         .args(["-framerate", &config.frame_rate.to_string()])
-        .args(["-video_size", &format!("{width}x{height}")])
-        .args(["-i", &display])
+        .args(["-video_size", &format!("{width}x{height}")]);
+    if let Some(window) = window_id {
+        command.args(["-window_id", &format!("0x{window:x}")]);
+    }
+    // Enforce capture limits in ffmpeg so abandoned recordings remain bounded.
+    command
+        .args(["-i", display])
         .args(["-c:v", "libx264"])
         .args(["-preset", "ultrafast"])
         .args(["-pix_fmt", "yuv420p"])
-        .args(["-movflags", "+faststart"]);
-    // Enforce capture limits in ffmpeg so abandoned recordings remain bounded.
-    command
+        .args(["-movflags", "+faststart"])
         .arg("-t")
-        .arg(format!("{:.3}", config.max_duration.as_secs_f64()));
-    command.arg("-fs").arg(config.max_size_bytes.to_string());
+        .arg(format!("{:.3}", config.max_duration.as_secs_f64()))
+        .arg("-fs")
+        .arg(config.max_size_bytes.to_string());
+    command
+}
+
+async fn launch_recording(
+    mut command: Command,
+    path: PathBuf,
+    log_path: PathBuf,
+    log_file: File,
+    width: u32,
+    height: u32,
+) -> Result<RecordingHandle, RecordingError> {
     command
         .arg(&path)
         .stdin(Stdio::null())
@@ -167,71 +213,6 @@ async fn start_screen(config: RecordingConfig) -> Result<RecordingHandle, Record
     })
 }
 
-/// Starts a single-window recording via ffmpeg `x11grab -window_id`.
-///
-/// This is a foreground-visible capture path: the target is raised if representative points are
-/// not already visible, then ffmpeg records that window directly.
-async fn start_window(
-    config: RecordingConfig,
-    window: xproto::Window,
-) -> Result<RecordingHandle, RecordingError> {
-    let (display, width, height) = prepare_window_capture(window).await?;
-
-    let path = std::env::temp_dir().join(format!("warp-recording-{}.mp4", uuid::Uuid::new_v4()));
-    let log_path = path.with_extension("log");
-    let log_file = std::fs::File::create(&log_path).map_err(|e| RecordingError::Start {
-        reason: format!("failed to create the recording log file: {e}"),
-    })?;
-
-    let mut command = Command::new("ffmpeg");
-    command
-        .arg("-y")
-        .args(["-f", "x11grab"])
-        .args(["-framerate", &config.frame_rate.to_string()])
-        .args(["-video_size", &format!("{width}x{height}")])
-        .args(["-window_id", &format!("0x{window:x}")])
-        .args(["-i", &display])
-        .args(["-c:v", "libx264"])
-        .args(["-preset", "ultrafast"])
-        .args(["-pix_fmt", "yuv420p"])
-        .args(["-movflags", "+faststart"]);
-    command
-        .arg("-t")
-        .arg(format!("{:.3}", config.max_duration.as_secs_f64()));
-    command.arg("-fs").arg(config.max_size_bytes.to_string());
-    command
-        .arg(&path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::from(log_file))
-        .kill_on_drop(true);
-
-    let mut process = command.spawn().map_err(|e| RecordingError::Environment {
-        reason: format!("failed to spawn ffmpeg: {e}"),
-    })?;
-
-    // Resolve once capture is confirmed live (the output file has grown).
-    if let Err(e) = wait_for_first_output(&path, &mut process).await {
-        let _ = process.start_kill();
-        let detail = ffmpeg_error_tail(&std::fs::read_to_string(&log_path).unwrap_or_default());
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(&log_path);
-        return Err(RecordingError::Start {
-            reason: format!("{e}{detail}"),
-        });
-    }
-    let _ = std::fs::remove_file(&log_path);
-
-    Ok(RecordingHandle {
-        width,
-        height,
-        exit_state: Arc::new(Mutex::new(None)),
-        path,
-        started_at: Instant::now(),
-        process: Some(process),
-        cleanup_on_drop: true,
-    })
-}
 async fn prepare_window_capture(
     window: xproto::Window,
 ) -> Result<(String, u32, u32), RecordingError> {
