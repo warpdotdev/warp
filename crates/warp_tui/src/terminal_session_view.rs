@@ -1667,7 +1667,14 @@ impl TuiTerminalSessionView {
             .as_ref(ctx)
             .local_skills_available(ctx)
         {
-            self.show_transient_hint(LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "terminal.skills.remote_execution_error",
+                    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         let result = self.ai_controller.update(ctx, |controller, ctx| {

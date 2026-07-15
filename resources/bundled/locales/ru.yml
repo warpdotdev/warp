@@ -179,6 +179,11 @@ ru:
       ai_unknown_error: Произошла неизвестная ошибка
     ai:
       default_ask_suggestion: Что здесь произошло?
+    skills:
+      empty: "Навыки не найдены"
+      project_badge: "Навык проекта"
+      remote_execution_error: "Локальные навыки не могут выполняться на удалённой машине. Попробуйте ответвить разговор локально и запустить навык."
+      to_dismiss: " чтобы закрыть"
   workspace:
     settings: "Настройки"
     agent: "Агент"
@@ -2213,6 +2218,19 @@ ru:
     inline_menu:
       loading: "Загрузка slash-команд…"
       empty: "Slash-команды не найдены"
+    skills_menu:
+      title: "Навыки"
+    cli_subagent:
+      allow: "Разрешить"
+      agent_needs_input: "Агент ждёт вашего ввода"
+      agent_paused: "Агент на паузе · управление у вас"
+      command_finished: "Команда завершена"
+      handed_control: "Агент передал управление вам"
+      monitoring: "Агент следит за командой"
+      to_hand_back: "чтобы вернуть"
+      to_take_control: "чтобы взять управление"
+      user_in_control: "Управление у вас"
+      waiting_instructions: "Агент ждёт инструкций"
     warping:
       label: "Обработка..."
       summarizing: "Формирование сводки разговора..."

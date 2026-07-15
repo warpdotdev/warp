@@ -179,6 +179,11 @@ en:
       ai_unknown_error: "An unknown error occurred"
     ai:
       default_ask_suggestion: "What happened here?"
+    skills:
+      empty: "No skills found"
+      project_badge: "Project Skill"
+      remote_execution_error: "Local skills cannot run on a remote machine. Try forking the conversation locally and running the skill."
+      to_dismiss: " to dismiss"
   workspace:
     settings: "Settings"
     agent: "Agent"
@@ -2212,6 +2217,19 @@ en:
     inline_menu:
       loading: "Loading slash commands…"
       empty: "No slash commands found"
+    skills_menu:
+      title: "Skills"
+    cli_subagent:
+      allow: "Allow"
+      agent_needs_input: "Agent needs your input"
+      agent_paused: "Agent paused · user is in control"
+      command_finished: "Command finished"
+      handed_control: "Agent handed control to you"
+      monitoring: "Agent is monitoring command"
+      to_hand_back: "to hand back"
+      to_take_control: "to take control"
+      user_in_control: "User is in control"
+      waiting_instructions: "Agent waiting for instructions"
     warping:
       label: "Warping..."
       summarizing: "Summarizing conversation..."

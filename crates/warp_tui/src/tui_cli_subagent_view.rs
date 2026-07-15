@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentActionType, AIAgentInput, AIBlockModel, AIBlockModelImpl, AIConversationId, BlockId,
-    BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    menu_label, AIAgentActionType, AIAgentInput, AIBlockModel, AIBlockModelImpl, AIConversationId,
+    BlockId, BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
     CLISubagentController, CLISubagentTarget, LongRunningCommandControlState, ShellCommandDelay,
     ShellCommandExecutor, TaskId, TerminalModel, UserTakeOverReason,
 };
@@ -34,39 +34,53 @@ fn terminal_use_status_text(
     output_streaming: bool,
 ) -> String {
     if command_finished {
-        return "Command finished".to_owned();
+        return menu_label("tui.cli_subagent.command_finished", "Command finished").to_owned();
     }
     let (status, key_binding, action) = match control_state {
         LongRunningCommandControlState::Agent {
             is_blocked: true, ..
         } => (
-            "Agent needs your input",
+            menu_label(
+                "tui.cli_subagent.agent_needs_input",
+                "Agent needs your input",
+            ),
             TAKE_CONTROL_KEY_BINDING,
-            "to take control",
+            menu_label("tui.cli_subagent.to_take_control", "to take control"),
         ),
         LongRunningCommandControlState::Agent { .. } if output_streaming => (
-            "Agent is monitoring command",
+            menu_label("tui.cli_subagent.monitoring", "Agent is monitoring command"),
             TAKE_CONTROL_KEY_BINDING,
-            "to take control",
+            menu_label("tui.cli_subagent.to_take_control", "to take control"),
         ),
         LongRunningCommandControlState::Agent { .. } => (
-            "Agent waiting for instructions",
+            menu_label(
+                "tui.cli_subagent.waiting_instructions",
+                "Agent waiting for instructions",
+            ),
             TAKE_CONTROL_KEY_BINDING,
-            "to take control",
+            menu_label("tui.cli_subagent.to_take_control", "to take control"),
         ),
         LongRunningCommandControlState::User { reason } => match reason {
-            UserTakeOverReason::Manual => {
-                ("User is in control", HAND_BACK_KEY_BINDING, "to hand back")
-            }
-            UserTakeOverReason::Stop { .. } => (
-                "Agent paused · user is in control",
+            UserTakeOverReason::Manual => (
+                menu_label("tui.cli_subagent.user_in_control", "User is in control"),
                 HAND_BACK_KEY_BINDING,
-                "to hand back",
+                menu_label("tui.cli_subagent.to_hand_back", "to hand back"),
+            ),
+            UserTakeOverReason::Stop { .. } => (
+                menu_label(
+                    "tui.cli_subagent.agent_paused",
+                    "Agent paused · user is in control",
+                ),
+                HAND_BACK_KEY_BINDING,
+                menu_label("tui.cli_subagent.to_hand_back", "to hand back"),
             ),
             UserTakeOverReason::TransferFromAgent { .. } => (
-                "Agent handed control to you",
+                menu_label(
+                    "tui.cli_subagent.handed_control",
+                    "Agent handed control to you",
+                ),
                 HAND_BACK_KEY_BINDING,
-                "to hand back",
+                menu_label("tui.cli_subagent.to_hand_back", "to hand back"),
             ),
         },
     };
@@ -329,7 +343,7 @@ impl TuiCLISubagentView {
         if target.control_state.is_agent_blocked() {
             content.add_child(
                 TuiContainer::new(Self::render_action(
-                    "Allow",
+                    menu_label("tui.cli_subagent.allow", "Allow"),
                     &self.allow_mouse_state,
                     TuiCLISubagentViewAction::Allow,
                     app,

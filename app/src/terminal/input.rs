@@ -5809,7 +5809,11 @@ impl Input {
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::default(
-                        LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE.to_owned(),
+                        crate::menu_label(
+                            "terminal.skills.remote_execution_error",
+                            LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+                        )
+                        .to_owned(),
                     ),
                     window_id,
                     ctx,
