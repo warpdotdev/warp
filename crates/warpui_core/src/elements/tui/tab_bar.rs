@@ -95,6 +95,7 @@ pub struct TuiTabBarConfig<K> {
     pub selected_key: Option<K>,
     pub focused: bool,
     pub page_anchor: Option<K>,
+    pub reveal_selected: bool,
     pub maximum_label_columns: Option<u16>,
     pub tab_padding_columns: u16,
     pub secondary_gap_columns: u16,
@@ -118,6 +119,7 @@ impl<K> TuiTabBarConfig<K> {
             selected_key: None,
             focused: false,
             page_anchor: None,
+            reveal_selected: false,
             maximum_label_columns: None,
             tab_padding_columns: 1,
             secondary_gap_columns: 1,
@@ -478,6 +480,19 @@ where
         .and_then(|anchor| config.tabs.iter().position(|tab| &tab.key == anchor))
         .unwrap_or_default();
     let mut page = page_layout(config, start, secondary_columns);
+    if config.reveal_selected {
+        if let Some(selected_index) = config
+            .selected_key
+            .as_ref()
+            .and_then(|selected| config.tabs.iter().position(|tab| &tab.key == selected))
+        {
+            if selected_index < page.start || selected_index >= page.end {
+                let stable_anchor =
+                    stable_page_anchor_for_index(config, selected_index, secondary_columns);
+                page = page_layout(config, stable_anchor, secondary_columns);
+            }
+        }
+    }
     page.previous_anchor = previous_page_anchor(config, page.start, secondary_columns)
         .and_then(|index| config.tabs.get(index).map(|tab| tab.key.clone()));
     if page.start > 0 {
@@ -616,6 +631,34 @@ where
         }
         anchor = next;
     }
+}
+
+/// Finds the deterministic page anchor whose range contains `target`.
+fn stable_page_anchor_for_index<K>(
+    config: &TuiTabBarConfig<K>,
+    target: usize,
+    available_columns: u16,
+) -> usize
+where
+    K: Clone,
+{
+    let mut anchor = 0usize;
+    while anchor < target {
+        let page = page_layout(config, anchor, available_columns);
+        if target < page.end {
+            return anchor;
+        }
+        let next = if page.end > anchor {
+            page.end
+        } else {
+            anchor.saturating_add(1)
+        };
+        if next <= anchor || next >= config.tabs.len() {
+            break;
+        }
+        anchor = next;
+    }
+    anchor.min(target)
 }
 
 /// Truncates one tab to its configured or width-derived total column budget.

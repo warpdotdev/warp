@@ -118,6 +118,62 @@ fn invalid_page_anchor_clamps_to_first_page() {
 }
 
 #[test]
+fn selected_tab_reveal_preserves_page_until_selection_crosses_boundary() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut config = config(
+        vec![
+            tab(1, "alpha"),
+            tab(2, "bravo"),
+            tab(3, "charlie"),
+            tab(4, "delta"),
+        ],
+        &events,
+    );
+    config.reveal_selected = true;
+    config.selected_key = Some(1);
+    let first_page = tab_bar_layout(&config, 20);
+    assert!(first_page.visible_secondary_keys.len() >= 2);
+
+    config.selected_key = Some(2);
+    let same_page = tab_bar_layout(&config, 20);
+    assert_eq!(
+        same_page.visible_secondary_keys, first_page.visible_secondary_keys,
+        "selection within a page must not re-anchor the list"
+    );
+
+    let first_hidden_index = page_layout(&config, 0, 20).end;
+    let first_hidden_key = config.tabs[first_hidden_index].key;
+    config.selected_key = Some(first_hidden_key);
+    let next_page = tab_bar_layout(&config, 20);
+    assert_eq!(
+        next_page.visible_secondary_keys.first(),
+        Some(&first_hidden_key),
+        "crossing the boundary reveals the stable next page"
+    );
+}
+
+#[test]
+fn explicit_page_can_keep_the_selected_tab_off_page() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut config = config(
+        vec![
+            tab(1, "alpha"),
+            tab(2, "bravo"),
+            tab(3, "charlie"),
+            tab(4, "delta"),
+        ],
+        &events,
+    );
+    config.page_anchor = Some(3);
+    config.selected_key = Some(1);
+    config.reveal_selected = false;
+
+    let layout = tab_bar_layout(&config, 20);
+    assert!(!layout.visible_secondary_keys.contains(&1));
+    assert_eq!(layout.visible_secondary_keys.first(), Some(&3));
+}
+
+#[test]
 fn navigation_wraps_when_selected_tab_is_visible() {
     App::test((), |app| async move {
         app.read(|app_ctx| {

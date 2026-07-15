@@ -20,7 +20,7 @@ Add `crates/warpui_core/src/elements/tui/tab_bar.rs` and export the component's 
 Use a stable generic tab key (`K: Clone + Eq + Hash + 'static`) rather than indices so dynamic reordering cannot retarget callbacks. The public data surface contains:
 - `TuiTab<K>`: key, label, and optional leading glyph/style.
 - `TuiTabBarStyles`: caller-supplied bar, normal-tab, focused-selected, and unfocused-selected styles.
-- `TuiTabBarConfig<K>`: optional main tab, ordered secondary tabs, selected key, focus presentation, page anchor, optional maximum label cells, caller-styled fixed/overflow text, and semantic pointer callbacks.
+- `TuiTabBarConfig<K>`: optional main tab, ordered secondary tabs, selected key, focus presentation, page anchor, selected-tab reveal policy, optional maximum label cells, caller-styled fixed/overflow text, and semantic pointer callbacks.
 - `TuiTabBarNavigationDirection`: `Previous` or `Next`.
 - `TuiTabBar<K>`: the reusable component retained by the caller and updated/rendered from config.
 
@@ -52,6 +52,7 @@ The algorithm:
 5. Pack secondary tabs from the anchor while reserving a next overflow control whenever later tabs remain.
 6. If the final otherwise-visible tab does not fit in full, shrink its label to the remaining display cells while preserving its leading glyph and required next control.
 7. Omit a secondary tab rather than produce invalid or negative-width geometry when the row is too narrow.
+8. If selected-tab reveal is enabled and the selected secondary tab is outside the settled page, walk the same deterministic page boundaries from the beginning and render the page containing it.
 
 Use terminal display-cell width and grapheme-safe truncation. Keep the ellipsis inside the requested width. The component paints from the returned layout rather than independently remeasuring, so rendering, hit testing, overflow callbacks, and navigation share one result.
 
@@ -74,9 +75,9 @@ Add `crates/warpui_core/src/elements/tui/tab_bar_tests.rs` using the element ren
 - Private mouse-state reuse and pruning across config changes — PRODUCT (6-11).
 - Focused/unfocused selected treatments and missing selection — PRODUCT (12-15).
 - ASCII, wide Unicode, and combining-character measurement; configured and final-tab truncation — PRODUCT (16-22).
-- Initial, middle, and final pages; anchor clamping; resize; previous/next control visibility — PRODUCT (23-31).
-- Tab clicks, overflow clicks, hit bounds, cancelled press/release, and focus independence — PRODUCT (32-34, 37-38).
-- Visible and off-page previous/next navigation, including complete-order wraparound — PRODUCT (35-36).
+- Initial, middle, and final pages; anchor clamping; resize; previous/next control visibility; stable selected-tab reveal — PRODUCT (23-32).
+- Tab clicks, overflow clicks, hit bounds, cancelled press/release, and focus independence — PRODUCT (33-35, 38-39).
+- Visible and off-page previous/next navigation, including complete-order wraparound — PRODUCT (36-37).
 
 Run:
 - `cargo nextest run -p warpui_core --features tui tab_bar`

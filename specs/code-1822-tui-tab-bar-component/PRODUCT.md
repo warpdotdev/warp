@@ -30,6 +30,7 @@ The orchestration designs establish the component states; the component itself r
    - An optional leading glyph and glyph style for every tab.
    - The selected tab key, if any.
    - Whether the bar is focused.
+   - Whether an off-page selected secondary tab should be revealed.
    - Focused, unfocused, selected, background, divider, and overflow styles.
    - An optional maximum label width in terminal display cells.
    - The current secondary-page anchor.
@@ -79,14 +80,15 @@ The orchestration designs establish the component states; the component itself r
 29. Paging does not change focus.
 30. When the caller supplies a new page anchor, the next layout settles the visible range from that anchor and clamps an unavailable anchor to a valid page.
 31. Resizing recomputes visible tabs and page boundaries from the same supplied order and anchor.
+32. When selected-tab reveal is enabled and the selected secondary tab is off-page, the component shows the deterministic page containing it. Selection changes within the current page do not shift that page.
 
 ### Navigation and pointer behavior
-32. Activating a visible tab emits `SelectTab` for that tab's stable key.
-33. A tab remains clickable regardless of the bar's focused presentation.
-34. Activating a tab never changes focus by itself.
-35. The component can resolve previous and next navigation from its private settled layout:
+33. Activating a visible tab emits `SelectTab` for that tab's stable key.
+34. A tab remains clickable regardless of the bar's focused presentation.
+35. Activating a tab never changes focus by itself.
+36. The component can resolve previous and next navigation from its private settled layout:
    - When the selected tab is visible, navigation uses the complete supplied order and wraps at both ends.
    - When the selected tab is off-page, previous resolves to the last visible secondary tab and next resolves to the first visible secondary tab.
-36. Resolved navigation returns only the target key; the caller decides what selecting that key means.
-37. Hit targets include only the painted tab or overflow-control footprint, not unused trailing row space.
-38. Pointer press/release outside a target does not invoke its callback.
+37. Resolved navigation returns only the target key; the caller decides what selecting that key means.
+38. Hit targets include only the painted tab or overflow-control footprint, not unused trailing row space.
+39. Pointer press/release outside a target does not invoke its callback.
