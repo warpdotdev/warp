@@ -2,6 +2,7 @@
 
 pub use repo_metadata::repositories::RepoDetectionSource;
 pub use warp_cli::agent::Harness;
+use warp_completer::signatures::CommandRegistry;
 use warpui::SingletonEntity as _;
 
 pub use crate::ai::agent::api::ServerConversationToken;
@@ -85,6 +86,7 @@ pub use crate::code::DiffResult;
 pub use crate::code_review::git_repo_model::{
     GitRepoModels, GitRepoStatusModel, GitStatusMetadata,
 };
+pub use crate::completer::SessionContext;
 pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
 };
@@ -97,6 +99,7 @@ pub use crate::terminal::conversation_restoration::{
     RestoredConversationExchange,
 };
 pub use crate::terminal::event::AfterBlockCompletedEvent;
+pub use crate::terminal::input::decorations::parse_current_commands_and_tokens;
 pub use crate::terminal::input::models::{query_model_picker_choices, ModelPickerChoice};
 pub use crate::terminal::input::skills::{
     query_selectable_skills, AcceptSkill, SelectableSkill,
@@ -150,6 +153,23 @@ pub use crate::tui::{
 };
 pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;
+
+/// Builds the live-shell completion context used to parse TUI input for NLD.
+pub fn tui_completion_session_context(
+    active_session: &ActiveSession,
+    current_working_directory: String,
+    app: &warpui::AppContext,
+) -> Option<SessionContext> {
+    let session = active_session.session(app)?;
+    let current_working_directory =
+        session.convert_directory_to_typed_path_buf(current_working_directory);
+    Some(SessionContext::new(
+        session,
+        CommandRegistry::global_instance(),
+        current_working_directory,
+        app,
+    ))
+}
 
 /// Returns whether cloud conversation metadata failed to load.
 pub fn agent_conversations_cloud_metadata_load_failed(app: &warpui::AppContext) -> bool {

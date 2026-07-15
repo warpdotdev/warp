@@ -13,19 +13,20 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
     block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
-    export_conversation_markdown, prepare_conversation_block_restoration,
-    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
-    slash_command_selection_behavior, throttle, AIAgentActionId, AIAgentContext,
-    AIAgentPtyWriteMode, AIConversation, AIConversationId, AcceptSlashCommandOrSavedPrompt,
-    ActiveSession, ActiveSessionEvent, AgentConversationEntryId, AgentConversationListEntryState,
-    AgentConversationsModel, AgentInteractionMetadata, AgentViewEntryOrigin, BlockId,
-    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
-    CLISubagentEvent, CLISubagentTarget, CancellationReason, ChangelogModel, ChangelogModelEvent,
-    ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
-    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
-    ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
-    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
+    export_conversation_markdown, parse_current_commands_and_tokens,
+    prepare_conversation_block_restoration, record_saved_prompt_accepted,
+    record_static_slash_command_accepted, saved_prompt_text_for_id,
+    slash_command_selection_behavior, throttle, tui_completion_session_context, AIAgentActionId,
+    AIAgentContext, AIAgentPtyWriteMode, AIConversation, AIConversationId,
+    AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AgentConversationEntryId,
+    AgentConversationListEntryState, AgentConversationsModel, AgentInteractionMetadata,
+    AgentViewEntryOrigin, BlockId, BlocklistAIActionModel, BlocklistAIContextModel,
+    BlocklistAIController, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel,
+    CLISubagentController, CLISubagentEvent, CLISubagentTarget, CancellationReason, ChangelogModel,
+    ChangelogModelEvent, ChangelogRequestType, CloudConversationData, CommandExecutionSource,
+    ConversationFileExport, ConversationSelection, ConversationSelectionHandle,
+    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
+    GitRepoStatusModel, GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
     ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
     RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate,
     SkillReference, SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand,
@@ -86,6 +87,7 @@ use crate::zero_state::render_zero_state;
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
+const INPUT_AUTODETECTION_DEBOUNCE: Duration = Duration::from_millis(10);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
@@ -161,6 +163,13 @@ fn render_left_footer_hint(
     }
 }
 
+fn should_apply_input_detection(
+    parsed_buffer_text: &str,
+    current_buffer_text: &str,
+    has_active_inline_menu: bool,
+) -> bool {
+    parsed_buffer_text == current_buffer_text && !has_active_inline_menu
+}
 /// Entry point that requested conversation restoration.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum TuiConversationRestoreOrigin {
@@ -254,6 +263,7 @@ pub(crate) struct TuiTerminalSessionView {
     usage_toggle: UsageToggle,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
+    input_detection_future: Option<SpawnedFutureHandle>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Last dimensions applied to the terminal model and PTY.
     size_info: SizeInfo,
@@ -689,9 +699,9 @@ impl TuiTerminalSessionView {
         // window it arms survives its own clear.
         let editor_for_footer = input_editor_model.clone();
         ctx.subscribe_to_model(&input_editor_model, move |view, _, event, ctx| {
-            if !matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
+            let CodeEditorModelEvent::ContentChanged { origin } = event else {
                 return;
-            }
+            };
             let is_empty = editor_for_footer
                 .as_ref(ctx)
                 .content()
@@ -700,6 +710,7 @@ impl TuiTerminalSessionView {
             if !is_empty {
                 view.exit_confirmation.disarm();
             }
+            view.handle_input_content_changed(origin.from_user(), ctx);
             ctx.notify();
         });
 
@@ -854,13 +865,16 @@ impl TuiTerminalSessionView {
         // change (click or settings-file hot reload), when model display
         // names arrive from the server post-login, or when the session's
         // working directory changes.
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |view, _, event, ctx| {
             if matches!(
                 event,
                 AISettingsChangedEvent::TuiAgentModel { .. }
                     | AISettingsChangedEvent::TuiUsageDisplayMode { .. }
             ) {
                 ctx.notify();
+            }
+            if matches!(event, AISettingsChangedEvent::AIAutoDetectionEnabled { .. }) {
+                view.schedule_input_detection(ctx);
             }
         });
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |_, _, event, ctx| {
@@ -984,6 +998,7 @@ impl TuiTerminalSessionView {
             usage_toggle: UsageToggle::default(),
             ai_context_model: context_model,
             ai_input_model,
+            input_detection_future: None,
             terminal_model: model,
             size_info,
             terminal_resize_tx,
@@ -992,6 +1007,93 @@ impl TuiTerminalSessionView {
             next_restore_request_id: 0,
             exit_summary,
         }
+    }
+
+    fn handle_input_content_changed(&mut self, is_user_edit: bool, ctx: &mut ViewContext<Self>) {
+        self.abort_input_detection(ctx);
+        if is_user_edit {
+            self.schedule_input_detection(ctx);
+        }
+    }
+
+    fn abort_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(future) = self.input_detection_future.take() {
+            future.abort();
+        }
+        self.ai_input_model.update(ctx, |input_mode, _| {
+            input_mode.abort_in_progress_detection();
+        });
+    }
+
+    fn schedule_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
+        self.abort_input_detection(ctx);
+        if !self
+            .ai_input_model
+            .as_ref(ctx)
+            .should_run_input_autodetection(ctx)
+        {
+            return;
+        }
+
+        let editor = self.input_view.as_ref(ctx).model().as_ref(ctx);
+        let buffer = editor.content().as_ref(ctx);
+        if buffer.is_empty() {
+            return;
+        }
+        let buffer_text = buffer.text().into_string();
+        let Some(current_working_directory) = self.current_working_directory(ctx) else {
+            return;
+        };
+        let Some(completion_context) = tui_completion_session_context(
+            self.active_session.as_ref(ctx),
+            current_working_directory,
+            ctx,
+        ) else {
+            return;
+        };
+        let completion_session = completion_context.session.clone();
+
+        self.input_detection_future = Some(ctx.spawn_abortable(
+            async move {
+                Timer::after(INPUT_AUTODETECTION_DEBOUNCE).await;
+                let parsed =
+                    parse_current_commands_and_tokens(buffer_text.clone(), &completion_context)
+                        .await;
+                (buffer_text, parsed, completion_context)
+            },
+            move |view, (parsed_buffer_text, parsed, completion_context), ctx| {
+                view.input_detection_future = None;
+                let current_buffer_text = {
+                    let editor = view.input_view.as_ref(ctx).model().as_ref(ctx);
+                    editor.content().as_ref(ctx).text().into_string()
+                };
+                let has_active_inline_menu = active_inline_menu(
+                    &view.inline_menus,
+                    view.suggestions_mode.as_ref(ctx).mode(),
+                    ctx,
+                )
+                .is_some();
+                if !should_apply_input_detection(
+                    &parsed_buffer_text,
+                    &current_buffer_text,
+                    has_active_inline_menu,
+                ) {
+                    return;
+                }
+                let session_id = completion_context.session.id();
+                view.ai_input_model.update(ctx, |input_mode, ctx| {
+                    input_mode.detect_and_set_input_type(
+                        parsed,
+                        completion_context,
+                        Some(session_id),
+                        ctx,
+                    );
+                });
+            },
+            move |_, _| {
+                completion_session.cancel_active_commands();
+            },
+        ));
     }
 
     /// Restores an Oz conversation into the TUI's sole conversation surface.
@@ -1584,7 +1686,7 @@ impl TuiTerminalSessionView {
             })
     }
 
-    /// Whether the input is in `!` shell mode (locked shell input).
+    /// Whether the input is in detected or explicitly locked shell mode.
     fn is_shell_mode(&self, ctx: &AppContext) -> bool {
         input_mode_policy::is_shell_mode(self.ai_input_model.as_ref(ctx))
     }
@@ -1675,11 +1777,10 @@ impl TuiTerminalSessionView {
             },
         )));
 
-        // The submission was accepted: clear the input and return to agent mode.
-        self.input_view.update(ctx, |input_view, ctx| {
-            input_view.clear(ctx);
-            input_view.exit_shell_mode(ctx);
-        });
+        // The submission was accepted: clear the input and return to the
+        // setting-derived agent default.
+        self.input_view
+            .update(ctx, |input_view, ctx| input_view.clear(ctx));
     }
 
     /// Sends a prompt to the TUI session's eagerly selected conversation.

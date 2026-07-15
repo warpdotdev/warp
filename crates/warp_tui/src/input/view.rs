@@ -26,8 +26,8 @@ use std::ops::Range;
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputTypeAutoDetectionSource, LLMId,
-    TuiMcpAction,
+    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
+    InputTypeAutoDetectionSource, LLMId, TuiMcpAction,
 };
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::selection::TextUnit;
@@ -575,7 +575,7 @@ pub struct TuiInputView {
     /// editor session state the input drives: viewport scroll (char-cell
     /// render state) and drag-selection state (selection model).
     model: ModelHandle<CodeEditorModel>,
-    /// Shared input-mode state driving `!` shell-mode handling.
+    /// Shared input-mode state driving NLD and explicit shell-mode handling.
     input_mode: ModelHandle<BlocklistAIInputModel>,
     /// Single authoritative menu mode, mirroring the GUI input's suggestions mode.
     suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
@@ -607,7 +607,7 @@ impl TuiInputView {
     /// The model carries the terminal width (set via
     /// [`CodeEditorModel::new_tui`]); the view does not keep its own copy.
     ///
-    /// `input_mode` is the shared input-mode model backing `!` shell-mode
+    /// `input_mode` is the shared input-mode model backing detected and explicit shell-mode
     /// handling; the view re-renders whenever the mode changes.
     ///
     /// Subscribes to [`CodeEditorModelEvent::ContentChanged`] to trigger re-renders
@@ -640,7 +640,7 @@ impl TuiInputView {
         }
     }
 
-    /// Whether the input is in `!` shell mode (locked shell input).
+    /// Whether the input is in detected or explicitly locked shell mode.
     pub(crate) fn is_shell_mode(&self, ctx: &AppContext) -> bool {
         input_mode_policy::is_shell_mode(self.input_mode.as_ref(ctx))
     }
@@ -655,9 +655,11 @@ impl TuiInputView {
         self.model.as_ref(ctx).content().as_ref(ctx).is_empty()
     }
 
-    /// Clears the input buffer and resets the viewport scroll.
+    /// Clears the input buffer, resets to the setting-derived agent mode, and
+    /// resets the viewport scroll.
     pub fn clear(&mut self, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |m, ctx| m.clear_buffer(ctx));
+        self.reset_to_default_agent_mode(ctx);
         // The cursor is back at the buffer start, so following it scrolls the
         // viewport back to the top.
         self.follow_cursor(ctx);
@@ -714,7 +716,7 @@ impl TuiInputView {
 
     /// The editor element for this frame, boxed for the render tree.
     fn render_input(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        Box::new(self.render_element(ctx))
+        self.render_element(ctx).finish()
     }
     pub(crate) fn set_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |m, ctx| {
@@ -1132,13 +1134,27 @@ impl TuiInputView {
         });
     }
 
-    /// Restores the TUI's default agent input mode; any typed text is
-    /// preserved. Also called by the session view after an accepted shell
-    /// submission clears the input.
+    /// Explicitly forces agent mode for the current buffer; any typed text is
+    /// preserved. Clearing or submitting the buffer resumes setting-derived
+    /// autodetection.
     pub(crate) fn exit_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
         self.input_mode.clone().update(ctx, |input_mode, ctx| {
             input_mode.set_input_config(AI_LOCKED_CONFIG, is_input_buffer_empty, None, ctx);
+        });
+    }
+
+    fn reset_to_default_agent_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_autodetection_enabled = self
+            .input_mode
+            .as_ref(ctx)
+            .is_autodetection_enabled_for_current_context(ctx);
+        self.input_mode.clone().update(ctx, |input_mode, ctx| {
+            if is_autodetection_enabled {
+                input_mode.enable_autodetection(InputType::AI, ctx);
+            } else {
+                input_mode.set_input_config(AI_LOCKED_CONFIG, true, None, ctx);
+            }
         });
     }
 

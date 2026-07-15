@@ -851,7 +851,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "agents.warp_agent.input.ai_auto_detection_enabled",
         description: "Controls whether AI automatically detects natural language input.",
