@@ -51,7 +51,11 @@ fn assert_operation_motion(
     match &event.event_type {
         VimEventType::Operation {
             operator,
-            operand: VimOperand::Motion { motion, motion_type },
+            operand:
+                VimOperand::Motion {
+                    motion,
+                    motion_type,
+                },
             register_name: _,
             replacement_text: _,
         } => {
@@ -237,7 +241,11 @@ fn test_operator_pending_d4G_deletes_to_specific_line() {
 fn test_visual_linewise_mode_gg_selects_to_first_line() {
     let mut fsa = enter_visual_mode(MotionType::Linewise);
     let events = type_chars(&mut fsa, "gg");
-    assert_eq!(events.len(), 1, "gg in visual linewise should produce exactly one event");
+    assert_eq!(
+        events.len(),
+        1,
+        "gg in visual linewise should produce exactly one event"
+    );
     assert_navigate_jump_to_first_line(&events[0]);
 }
 
@@ -245,7 +253,11 @@ fn test_visual_linewise_mode_gg_selects_to_first_line() {
 fn test_visual_linewise_mode_5gg_selects_to_specific_line() {
     let mut fsa = enter_visual_mode(MotionType::Linewise);
     let events = type_chars(&mut fsa, "5gg");
-    assert_eq!(events.len(), 1, "5gg in visual linewise should produce exactly one event");
+    assert_eq!(
+        events.len(),
+        1,
+        "5gg in visual linewise should produce exactly one event"
+    );
     assert_navigate_jump_to_line(&events[0], 5);
 }
 
@@ -253,7 +265,11 @@ fn test_visual_linewise_mode_5gg_selects_to_specific_line() {
 fn test_visual_charwise_mode_gg_selects_to_first_line() {
     let mut fsa = enter_visual_mode(MotionType::Charwise);
     let events = type_chars(&mut fsa, "gg");
-    assert_eq!(events.len(), 1, "gg in visual charwise should produce exactly one event");
+    assert_eq!(
+        events.len(),
+        1,
+        "gg in visual charwise should produce exactly one event"
+    );
     assert_navigate_jump_to_first_line(&events[0]);
 }
 
@@ -261,7 +277,11 @@ fn test_visual_charwise_mode_gg_selects_to_first_line() {
 fn test_visual_charwise_mode_10gg_selects_to_specific_line() {
     let mut fsa = enter_visual_mode(MotionType::Charwise);
     let events = type_chars(&mut fsa, "10gg");
-    assert_eq!(events.len(), 1, "10gg in visual charwise should produce exactly one event");
+    assert_eq!(
+        events.len(),
+        1,
+        "10gg in visual charwise should produce exactly one event"
+    );
     assert_navigate_jump_to_line(&events[0], 10);
 }
 
@@ -269,7 +289,11 @@ fn test_visual_charwise_mode_10gg_selects_to_specific_line() {
 fn test_visual_linewise_mode_G_selects_to_last_line() {
     let mut fsa = enter_visual_mode(MotionType::Linewise);
     let events = type_chars(&mut fsa, "G");
-    assert_eq!(events.len(), 1, "G in visual linewise should produce exactly one event");
+    assert_eq!(
+        events.len(),
+        1,
+        "G in visual linewise should produce exactly one event"
+    );
     assert_navigate_jump_to_last_line(&events[0]);
 }
 
@@ -277,7 +301,11 @@ fn test_visual_linewise_mode_G_selects_to_last_line() {
 fn test_visual_linewise_mode_3G_selects_to_specific_line() {
     let mut fsa = enter_visual_mode(MotionType::Linewise);
     let events = type_chars(&mut fsa, "3G");
-    assert_eq!(events.len(), 1, "3G in visual linewise should produce exactly one event");
+    assert_eq!(
+        events.len(),
+        1,
+        "3G in visual linewise should produce exactly one event"
+    );
     assert_navigate_jump_to_line(&events[0], 3);
 }
 
