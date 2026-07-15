@@ -596,7 +596,7 @@ fn set_run_agents_permission(app: &mut App, permission: RunAgentsPermission) {
 }
 
 #[test]
-fn should_not_autoexecute_without_approved_plan_or_always_allow_profile() {
+fn should_autoexecute_with_default_profile() {
     App::test((), |mut app| async move {
         let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
         let action = remote_run_agents_action("oz");
@@ -611,7 +611,7 @@ fn should_not_autoexecute_without_approved_plan_or_always_allow_profile() {
             )
         });
 
-        assert!(!should_autoexecute);
+        assert!(should_autoexecute);
     });
 }
 

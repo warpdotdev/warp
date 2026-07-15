@@ -122,8 +122,8 @@ impl ComputerUsePermission {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunAgentsPermission {
     NeverAllow,
-    AlwaysAllow,
     #[default]
+    AlwaysAllow,
     AlwaysAsk,
 
     // This is intended to catch deserialization errors whenever we add new variants to this enum.
@@ -378,6 +378,7 @@ pub struct AIExecutionProfile {
     pub computer_use: ComputerUsePermission,
 
     pub base_model: Option<LLMId>,
+    pub orchestration_model: Option<LLMId>,
     pub coding_model: Option<LLMId>,
     pub cli_agent_model: Option<LLMId>,
     pub computer_use_model: Option<LLMId>,
@@ -402,7 +403,7 @@ impl Default for AIExecutionProfile {
             write_to_pty: WriteToPtyPermission::AlwaysAsk,
             mcp_permissions: ActionPermission::AgentDecides,
             ask_user_question: AskUserQuestionPermission::AlwaysAsk,
-            run_agents: RunAgentsPermission::AlwaysAsk,
+            run_agents: RunAgentsPermission::AlwaysAllow,
             command_denylist: DEFAULT_COMMAND_EXECUTION_DENYLIST.clone(),
             command_allowlist: Vec::new(),
             directory_allowlist: Vec::new(),
@@ -410,6 +411,7 @@ impl Default for AIExecutionProfile {
             mcp_denylist: Vec::new(),
             computer_use: ComputerUsePermission::Never,
             base_model: None,
+            orchestration_model: None,
             coding_model: None,
             cli_agent_model: None,
             computer_use_model: None,
@@ -440,6 +442,7 @@ impl AIExecutionProfile {
             mcp_denylist: Vec::new(),
             computer_use: ComputerUsePermission::Never,
             base_model: None,
+            orchestration_model: None,
             coding_model: None,
             cli_agent_model: None,
             computer_use_model: None,
@@ -496,6 +499,7 @@ impl AIExecutionProfile {
             mcp_denylist: Vec::new(),
             computer_use: computer_use_permission,
             base_model: None,
+            orchestration_model: None,
             coding_model: None,
             cli_agent_model: None,
             computer_use_model: None,
@@ -517,3 +521,7 @@ pub type CloudAIExecutionProfile =
 pub type CloudAIExecutionProfileModel = GenericStringModel<AIExecutionProfile, JsonSerializer>;
 pub type ServerAIExecutionProfile =
     GenericServerObject<GenericStringObjectId, CloudAIExecutionProfileModel>;
+
+#[cfg(test)]
+#[path = "ai_execution_profile_tests.rs"]
+mod tests;

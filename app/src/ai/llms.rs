@@ -810,6 +810,23 @@ impl LLMPreferences {
     ) -> &'a LLMInfo {
         self.get_preferred_base_model(app, terminal_view_id)
     }
+    /// Returns the effective execution-profile default for orchestrated Oz children.
+    pub fn get_active_orchestration_model<'a>(
+        &'a self,
+        app: &'a AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> Option<&'a LLMInfo> {
+        let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
+
+        profile
+            .data()
+            .orchestration_model
+            .as_ref()
+            .and_then(|id| {
+                self.usable_model_info_for_id(&self.models_by_feature.agent_mode, id, app)
+            })
+            .or_else(|| self.get_default_orchestration_model(app))
+    }
 
     /// Returns `LLMInfo` for the currently selected LLM to be used for Agent Mode.
     fn get_preferred_base_model(
@@ -888,6 +905,22 @@ impl LLMPreferences {
         app: &AppContext,
     ) -> Option<&'a LLMInfo> {
         Self::server_info_for_id_router_gated(available, id)
+            .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
+            .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
+    }
+
+    fn usable_model_info_for_id<'a>(
+        &'a self,
+        available: &'a AvailableLLMs,
+        id: &LLMId,
+        app: &AppContext,
+    ) -> Option<&'a LLMInfo> {
+        available
+            .usable_info_for_id(id, app)
+            .filter(|info| {
+                FeatureFlag::CustomModelRouters.is_enabled()
+                    || !custom_model_routers::is_cloud_custom_router_id(info.id.as_str())
+            })
             .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
     }
@@ -975,6 +1008,14 @@ impl LLMPreferences {
             })
             .chain(self.custom_llm_choices(app))
             .chain(self.custom_router_choices())
+    }
+
+    /// Returns Agent Mode's model and router catalog for orchestration defaults.
+    pub fn get_orchestration_llm_choices(
+        &self,
+        app: &AppContext,
+    ) -> impl Iterator<Item = &LLMInfo> {
+        self.get_base_llm_choices_for_agent_mode(app)
     }
 
     /// Returns the set of LLMs available for coding.
@@ -1294,6 +1335,7 @@ impl LLMPreferences {
             .collect();
 
         let mut updated_agent_mode = false;
+        let mut updated_orchestration = false;
         let mut updated_coding = false;
 
         self.base_llm_for_terminal_view.retain(|_, id| {
@@ -1318,6 +1360,15 @@ impl LLMPreferences {
                     profiles.set_context_window_limit(profile_id, None, ctx);
                     updated_agent_mode = true;
                 }
+                let orchestration_stale =
+                    profile_data.orchestration_model.as_ref().is_some_and(|id| {
+                        custom_model_routers::is_local_custom_router_id(id.as_str())
+                            && !valid_local.contains(id)
+                    });
+                if orchestration_stale {
+                    profiles.set_orchestration_model(profile_id, None, ctx);
+                    updated_orchestration = true;
+                }
                 let coding_stale = profile_data.coding_model.as_ref().is_some_and(|id| {
                     custom_model_routers::is_local_custom_router_id(id.as_str())
                         && !valid_local.contains(id)
@@ -1332,6 +1383,9 @@ impl LLMPreferences {
         if updated_agent_mode {
             self.trigger_snapshot_save(ctx);
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+        }
+        if updated_orchestration {
+            ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
         }
         if updated_coding {
             ctx.emit(LLMPreferencesEvent::UpdatedActiveCodingLLM);
@@ -1356,6 +1410,7 @@ impl LLMPreferences {
             .map(|info| info.id.clone())
             .collect();
         let mut updated_agent_mode = false;
+        let mut updated_orchestration = false;
         let mut updated_coding = false;
         let mut updated_other = false;
 
@@ -1380,6 +1435,14 @@ impl LLMPreferences {
                     profiles.set_base_model(profile_id, None, ctx);
                     profiles.set_context_window_limit(profile_id, None, ctx);
                     updated_agent_mode = true;
+                }
+                if profile_data
+                    .orchestration_model
+                    .as_ref()
+                    .is_some_and(|id| custom_ids.contains(id))
+                {
+                    profiles.set_orchestration_model(profile_id, None, ctx);
+                    updated_orchestration = true;
                 }
                 if profile_data
                     .coding_model
@@ -1415,7 +1478,7 @@ impl LLMPreferences {
         if updated_coding {
             ctx.emit(LLMPreferencesEvent::UpdatedActiveCodingLLM);
         }
-        if updated_other {
+        if updated_orchestration || updated_other {
             ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
         }
     }
@@ -1424,6 +1487,19 @@ impl LLMPreferences {
     /// (disable-aware, see [`Self::fallback_llm_info`]).
     pub fn get_default_base_model(&self, app: &AppContext) -> &LLMInfo {
         self.fallback_llm_info(&self.models_by_feature.agent_mode, app)
+    }
+
+    /// Returns built-in `auto` when usable, then Agent Mode's disable-aware fallback.
+    pub fn get_default_orchestration_model(&self, app: &AppContext) -> Option<&LLMInfo> {
+        let auto_id = LLMId::from("auto");
+        self.models_by_feature
+            .agent_mode
+            .usable_info_for_id(&auto_id, app)
+            .or_else(|| {
+                self.models_by_feature
+                    .agent_mode
+                    .usable_default_llm_info(app)
+            })
     }
 
     /// Returns the effective default coding model as a fallback
@@ -1768,6 +1844,18 @@ impl LLMPreferences {
                         && (effective_base_model_unusable || !effective_base_model_is_configurable)
                     {
                         profiles.set_context_window_limit(profile_id, None, ctx);
+                    }
+                    if let Some(preferred_llm_id) = &profile.data().orchestration_model {
+                        if self
+                            .usable_model_info_for_id(
+                                &self.models_by_feature.agent_mode,
+                                preferred_llm_id,
+                                ctx,
+                            )
+                            .is_none()
+                        {
+                            profiles.set_orchestration_model(profile_id, None, ctx);
+                        }
                     }
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
                         // Same guard: only clear recognized IDs.

@@ -238,6 +238,7 @@ pub struct RunAgentsCardView {
     /// stream. Used at decision time to diff the run-wide config
     /// fields the user changed before accepting.
     original_tool_call_request: RunAgentsRequest,
+    terminal_view_id: warpui::EntityId,
     /// Guards `OrchestrationEntered` against double-fires on re-renders.
     entered_event_emitted: bool,
     /// Guards the terminal decision event against double-fires.
@@ -252,23 +253,9 @@ pub struct RunAgentsCardView {
 /// for the picker display and should NOT run before auto-launch
 /// matching.
 ///
-/// 1. Defaults the Oz model to the conversation's base model.
-/// 2. Defaults Remote worker_host to "warp".
-/// 3. Defaults a Remote environment from settings / recency.
-fn resolve_interactive_defaults(
-    state: &mut RunAgentsEditState,
-    block_model: &dyn AIBlockModel<View = AIBlock>,
-    ctx: &AppContext,
-) {
-    if state.orch.model_id.is_empty() {
-        let harness =
-            warp_cli::agent::Harness::parse_orchestration_harness(&state.orch.harness_type);
-        if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
-            if let Some(base) = block_model.base_model(ctx).map(|id| id.to_string()) {
-                state.orch.model_id = base;
-            }
-        }
-    }
+/// 1. Defaults Remote worker_host to "warp".
+/// 2. Defaults a Remote environment from settings / recency.
+fn resolve_interactive_defaults(state: &mut RunAgentsEditState, ctx: &AppContext) {
     if let RunAgentsExecutionMode::Remote {
         environment_id,
         worker_host,
@@ -303,7 +290,19 @@ impl RunAgentsCardView {
         block_model: Rc<dyn AIBlockModel<View = AIBlock>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let state = RunAgentsEditState::from_request(request);
+        let terminal_view_id = action_model.as_ref(ctx).terminal_view_id();
+        let mut state = RunAgentsEditState::from_request(request);
+        let approved_config = active_config
+            .as_ref()
+            .and_then(|(config, status)| status.is_approved().then_some(config));
+        let profile_model_id = LLMPreferences::as_ref(ctx)
+            .get_active_orchestration_model(ctx, Some(terminal_view_id))
+            .map(|model| model.id.clone());
+        oc::normalize_orchestration_model(
+            &mut state.orch,
+            approved_config,
+            profile_model_id.as_ref(),
+        );
         // Snapshot the raw incoming request so we can diff against the
         // edited state at Accept time.
         let original_tool_call_request = request.clone();
@@ -384,7 +383,7 @@ impl RunAgentsCardView {
                 // ready for user confirmation. Re-render so the card
                 // transitions from the "Configuring agents..." placeholder
                 // to the full confirmation UI.
-                resolve_interactive_defaults(&mut me.state, &*me.block_model, ctx);
+                resolve_interactive_defaults(&mut me.state, ctx);
                 oc::repopulate_all_pickers(&mut me.state.orch, &me.handles.pickers, ctx);
                 me.refresh_accept_button_state(ctx);
                 me.maybe_auto_open_create_modal(ctx);
@@ -491,6 +490,7 @@ impl RunAgentsCardView {
             saved_model_per_harness: HashMap::new(),
             create_environment_modal,
             original_tool_call_request,
+            terminal_view_id,
             entered_event_emitted: false,
             decision_event_emitted: false,
             has_auto_opened_create_modal: false,
@@ -514,21 +514,18 @@ impl RunAgentsCardView {
         // streamed chunk.
         self.original_tool_call_request = request.clone();
         let mut new_state = RunAgentsEditState::from_request(request);
-        // Resolve empty fields from the active config (same as in new()).
-        if let Some((config, status)) = &self.active_config {
-            if status.is_approved() {
-                new_state.orch.resolve_from_config(config);
-            }
-        }
-        if new_state.orch.model_id.is_empty() {
-            let harness =
-                warp_cli::agent::Harness::parse_orchestration_harness(&new_state.orch.harness_type);
-            if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
-                if let Some(base) = self.block_model.base_model(ctx).map(|id| id.to_string()) {
-                    new_state.orch.model_id = base;
-                }
-            }
-        }
+        let approved_config = self
+            .active_config
+            .as_ref()
+            .and_then(|(config, status)| status.is_approved().then_some(config));
+        let profile_model_id = LLMPreferences::as_ref(ctx)
+            .get_active_orchestration_model(ctx, Some(self.terminal_view_id))
+            .map(|model| model.id.clone());
+        oc::normalize_orchestration_model(
+            &mut new_state.orch,
+            approved_config,
+            profile_model_id.as_ref(),
+        );
         // Re-seed an Unset selection from persisted per-harness settings,
         // honoring an explicit `Inherit` choice for this harness.
         if matches!(
@@ -639,6 +636,7 @@ impl RunAgentsCardView {
                     execution_mode: OrchestrationExecutionModeKind::from_run_agents(
                         &self.state.orch.execution_mode,
                     ),
+                    model_id: self.state.orch.model_id.clone(),
                     modified_fields_from_tool_call,
                     modified_fields_from_active_config,
                     had_active_config,
@@ -720,10 +718,9 @@ impl RunAgentsCardView {
         let appearance = Appearance::as_ref(ctx);
         let (styles, colors) = oc::picker_styles(appearance);
 
-        let initial_model_id_default = self
-            .block_model
-            .base_model(ctx)
-            .map(|id| id.to_string())
+        let initial_model_id_default = LLMPreferences::as_ref(ctx)
+            .get_active_orchestration_model(ctx, Some(self.terminal_view_id))
+            .map(|model| model.id.to_string())
             .unwrap_or_default();
         let state = &self.state;
 
@@ -1061,12 +1058,16 @@ impl TypedActionView for RunAgentsCardView {
                 ctx.emit(RunAgentsCardViewEvent::RejectRequested);
             }
             RunAgentsCardViewAction::ExecutionModeToggled { is_remote } => {
-                let block_model = self.block_model.clone();
+                let terminal_view_id = self.terminal_view_id;
                 oc::apply_execution_mode_change(
                     &mut self.state.orch,
                     &self.handles.pickers,
                     *is_remote,
-                    |ctx| block_model.base_model(ctx).map(|id| id.to_string()),
+                    |ctx| {
+                        LLMPreferences::as_ref(ctx)
+                            .get_active_orchestration_model(ctx, Some(terminal_view_id))
+                            .map(|model| model.id.to_string())
+                    },
                     ctx,
                 );
                 // Mode change can newly reveal the auth picker (Local
@@ -1082,13 +1083,17 @@ impl TypedActionView for RunAgentsCardView {
                 ctx.notify();
             }
             RunAgentsCardViewAction::HarnessChanged { harness_type } => {
-                let block_model = self.block_model.clone();
+                let terminal_view_id = self.terminal_view_id;
                 oc::apply_harness_change(
                     &mut self.state.orch,
                     &mut self.saved_model_per_harness,
                     &self.handles.pickers,
                     harness_type,
-                    |ctx| block_model.base_model(ctx).map(|id| id.to_string()),
+                    |ctx| {
+                        LLMPreferences::as_ref(ctx)
+                            .get_active_orchestration_model(ctx, Some(terminal_view_id))
+                            .map(|model| model.id.to_string())
+                    },
                     ctx,
                 );
                 // Harness change resets per-harness selection state, so

@@ -274,6 +274,12 @@ pub fn render_models_section(
     if let Some(row) = render_context_window_row(appearance, view, app) {
         column.add_child(row);
     }
+    column = column.with_child(render_filterable_dropdown_row(
+        appearance,
+        "Orchestration model",
+        "The default model or routing strategy used for child agents when neither the agent nor an approved plan specifies one.",
+        &view.orchestration_model_dropdown,
+    ));
 
     column = column.with_child(render_filterable_dropdown_row(
         appearance,
