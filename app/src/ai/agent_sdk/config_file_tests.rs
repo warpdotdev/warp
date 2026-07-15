@@ -155,6 +155,51 @@ fn mcp_servers_map_converts_to_runtime_specs() {
 }
 
 #[test]
+fn well_known_warp_id_converts_to_well_known_spec() {
+    let contents = json!({
+        "mcp_servers": {
+            "linear": { "warp_id": "linear" }
+        }
+    })
+    .to_string();
+
+    let file = write_temp(".json", &contents);
+    let loaded = super::load_config_file(file.path()).unwrap();
+
+    let map = loaded.file.mcp_servers.as_ref().unwrap();
+    let specs = super::mcp_specs_from_mcp_servers(map).unwrap();
+
+    assert_eq!(specs.len(), 1);
+    assert!(
+        matches!(&specs[0], MCPSpec::WellKnown(id) if id == "linear"),
+        "well-known warp_id must become MCPSpec::WellKnown, got {specs:?}"
+    );
+}
+
+#[test]
+fn any_non_uuid_warp_id_becomes_well_known_spec() {
+    // The server owns the set of recognized ids: the client forwards any
+    // non-UUID warp_id for resolution instead of rejecting it, so new ids can
+    // be introduced server-side without a client change.
+    let map = serde_json::Map::from_iter([(
+        "future".to_string(),
+        json!({ "warp_id": "some-future-integration" }),
+    )]);
+
+    let specs = super::mcp_specs_from_mcp_servers(&map).unwrap();
+    assert_eq!(specs.len(), 1);
+    assert!(matches!(&specs[0], MCPSpec::WellKnown(id) if id == "some-future-integration"));
+}
+
+#[test]
+fn empty_warp_id_is_rejected() {
+    let map = serde_json::Map::from_iter([("bogus".to_string(), json!({ "warp_id": "" }))]);
+
+    let err = super::mcp_specs_from_mcp_servers(&map).unwrap_err();
+    assert!(format!("{err:#}").contains("must be non-empty"));
+}
+
+#[test]
 fn loads_computer_use_enabled_from_json() {
     let contents = json!({
         "computer_use_enabled": true
