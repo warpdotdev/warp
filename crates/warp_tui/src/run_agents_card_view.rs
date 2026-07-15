@@ -28,6 +28,7 @@ use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Modifier, TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiText,
 };
+use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, FixedBinding};
 use warpui_core::{
@@ -1007,7 +1008,10 @@ impl TuiView for TuiRunAgentsCardView {
             .with_padding_x(3)
             .with_padding_y(1)
             .finish();
+        // Stretch so the tinted header and body fill the full row width
+        // rather than sizing to their text content.
         TuiFlex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .child(header)
             .child(body)
             .child(
