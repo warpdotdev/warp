@@ -34,6 +34,7 @@ mod slash_commands;
 mod terminal_background;
 mod terminal_block;
 mod terminal_session_view;
+mod terminal_size_element;
 mod terminal_use;
 #[cfg(test)]
 mod test_fixtures;

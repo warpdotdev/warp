@@ -7,9 +7,10 @@
 //! keystrokes straight to the PTY as escape sequences — mirroring the GUI's
 //! `AltScreenElement` (`app/src/terminal/alt_screen/alt_screen_element.rs`).
 //!
-//! Covers rendering, the cursor, keyboard forwarding, and propagating the
-//! laid-out cell dimensions to the terminal model and PTY. Mouse forwarding is
-//! tracked as a follow-up.
+//! Covers rendering, the cursor, and keyboard forwarding. PTY sizing is
+//! handled by the session view's `TuiTerminalSizeElement` wrapper, which
+//! publishes this element's laid-out dimensions after every layout. Mouse
+//! forwarding is tracked as a follow-up.
 //!
 //! [`TuiTerminalSessionView`]: crate::terminal_session_view::TuiTerminalSessionView
 //! [`TerminalModel::is_alt_screen_active`]: warp::tui_export::TerminalModel
@@ -17,7 +18,6 @@
 use std::ops::Deref as _;
 use std::sync::Arc;
 
-use async_channel::Sender;
 use parking_lot::FairMutex;
 use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel};
 use warp_terminal::model::grid::Dimensions as _;
@@ -30,20 +30,18 @@ use warpui_core::AppContext;
 use crate::terminal_block::render_grid_handler;
 use crate::terminal_session_view::TuiTerminalSessionAction;
 
-/// Renders the terminal's alt-screen grid full-area and forwards keystrokes to
-/// the PTY while a full-screen app is active.
+/// Renders the terminal's alt-screen grid full-area and forwards input to the
+/// PTY while a full-screen app is active.
 pub(crate) struct AltScreenElement {
     model: Arc<FairMutex<TerminalModel>>,
-    resize_tx: Sender<TuiSize>,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
 
 impl AltScreenElement {
-    pub(crate) fn new(model: Arc<FairMutex<TerminalModel>>, resize_tx: Sender<TuiSize>) -> Self {
+    pub(crate) fn new(model: Arc<FairMutex<TerminalModel>>) -> Self {
         Self {
             model,
-            resize_tx,
             size: None,
             origin: None,
         }
@@ -57,23 +55,10 @@ impl TuiElement for AltScreenElement {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        // The alt-screen app owns the whole pane. `layout` only measures; the
-        // PTY resize is committed in `after_layout` (below), once the size is
-        // final — not from here, which can run more than once per frame.
+        // The alt-screen app owns the whole pane.
         let size = constraint.max;
         self.size = Some(size);
         size
-    }
-
-    fn after_layout(&mut self, _ctx: &mut TuiLayoutContext, _app: &AppContext) {
-        // Commit the laid-out pane size to the PTY once layout has settled,
-        // mirroring the GUI's `TerminalSizeElement::after_layout`. The session
-        // view consumes this on `alt_screen_resize_tx` and drives the model +
-        // PTY resize with a `&mut ViewContext` (which layout/paint lack), so the
-        // size change is applied outside the measurement pass.
-        if let Some(size) = self.size {
-            let _ = self.resize_tx.try_send(size);
-        }
     }
 
     fn render(

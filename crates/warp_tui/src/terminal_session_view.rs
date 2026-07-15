@@ -66,6 +66,7 @@ use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::resume::TuiExitSummaryHandle;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
+use crate::terminal_size_element::TuiTerminalSizeElement;
 use crate::terminal_use::{
     hide_agent_requested_command_from_top_level, terminal_use_conversation_to_resume,
     terminal_use_interrupt_action, user_controlled_line_bytes, TerminalUseInterruptAction,
@@ -232,12 +233,13 @@ pub(crate) struct TuiTerminalSessionView {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Last dimensions applied to the terminal model and PTY.
     size_info: SizeInfo,
-    /// Reports the full area allocated to the active alt-screen element.
+    /// Reports the area allocated to whichever element displays PTY content
+    /// (the block-list content column or the full-screen alt-screen grid).
     /// This layout→channel→view pathway is the GUI's terminal-resize prior
     /// art (`TerminalSizeElement::after_layout` → `resize_tx` →
     /// `after_terminal_view_layout`): layout lacks a `ViewContext`, so the
     /// settled size is handed off to a view-side handler to apply.
-    alt_screen_resize_tx: Sender<TuiSize>,
+    terminal_resize_tx: Sender<TuiSize>,
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
     /// shell submission).
     transient_hint: TransientHint,
@@ -492,7 +494,7 @@ impl TuiTerminalSessionView {
             size_info,
             ..
         } = surface_init;
-        let (alt_screen_resize_tx, alt_screen_resize_rx) = async_channel::unbounded();
+        let (terminal_resize_tx, terminal_resize_rx) = async_channel::unbounded();
         model
             .lock()
             .block_list_mut()
@@ -917,11 +919,7 @@ impl TuiTerminalSessionView {
             },
             |_, _| {},
         );
-        ctx.spawn_stream_local(
-            alt_screen_resize_rx,
-            Self::handle_alt_screen_resize,
-            |_, _| {},
-        );
+        ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
 
         // Focus the input view so the keymap responder chain is
         // [root, session, input]: input bindings win for keys they define,
@@ -952,7 +950,7 @@ impl TuiTerminalSessionView {
             ai_input_model,
             terminal_model: model,
             size_info,
-            alt_screen_resize_tx,
+            terminal_resize_tx,
             transient_hint: TransientHint::default(),
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
@@ -1198,11 +1196,14 @@ impl TuiTerminalSessionView {
         self.exit_summary.set_token(token);
     }
 
-    /// Applies an alt-screen layout size to the terminal model and PTY.
+    /// Applies a laid-out terminal content size to the terminal model and PTY.
     /// TUI counterpart of the GUI's `after_terminal_view_layout`
     /// (`app/src/terminal/view.rs`): consumes the after-layout resize channel
-    /// and commits the resize with a `ViewContext`.
-    fn handle_alt_screen_resize(&mut self, size: TuiSize, ctx: &mut ViewContext<Self>) {
+    /// and commits the resize with a `ViewContext`. Fed by the
+    /// [`TuiTerminalSizeElement`] wrapping the block-list content column or the
+    /// alt-screen grid, so the PTY tracks whichever region PTY content
+    /// currently occupies.
+    fn handle_terminal_resize(&mut self, size: TuiSize, ctx: &mut ViewContext<Self>) {
         if size.width == 0 || size.height == 0 {
             return;
         }
@@ -2116,9 +2117,9 @@ impl TuiView for TuiTerminalSessionView {
         // While a full-screen (alt-screen) app is active, hand the whole pane to
         // it: render its grid and forward input, instead of the block UI.
         if self.terminal_model.lock().is_alt_screen_active() {
-            return AltScreenElement::new(
-                self.terminal_model.clone(),
-                self.alt_screen_resize_tx.clone(),
+            return TuiTerminalSizeElement::new(
+                self.terminal_resize_tx.clone(),
+                AltScreenElement::new(self.terminal_model.clone()).finish(),
             )
             .finish();
         }
@@ -2226,10 +2227,17 @@ impl TuiView for TuiTerminalSessionView {
                 .with_max_rows(1)
                 .finish(),
         );
-        TuiContainer::new(content.finish())
-            .with_padding_x(2)
-            .with_padding_top(2)
-            .finish()
+
+        // The size wrapper sits inside the horizontal padding so the PTY's
+        // columns match the width block content actually renders at (the GUI
+        // wraps its view root, but its padding is sub-cell; here it is 4 whole
+        // columns).
+        TuiContainer::new(
+            TuiTerminalSizeElement::new(self.terminal_resize_tx.clone(), content.finish()).finish(),
+        )
+        .with_padding_x(2)
+        .with_padding_top(2)
+        .finish()
     }
 }
 
