@@ -112,13 +112,16 @@ fn token_exchange_posts_form_to_local_server() {
         &url,
     ))
     .unwrap();
-    assert_eq!(tokens.id_token, "id");
+    assert_eq!(tokens.id_token.as_deref(), Some("id"));
     assert_eq!(tokens.access_token, "access");
-    assert_eq!(tokens.refresh_token, "refresh");
+    assert_eq!(tokens.refresh_token.as_deref(), Some("refresh"));
     assert_eq!(tokens.expires_in, Some(3600));
 
     let request = request_rx.recv().unwrap();
     assert!(request.starts_with("POST /oauth/token HTTP/1.1\r\n"));
+    assert!(request
+        .to_ascii_lowercase()
+        .contains("content-type: application/x-www-form-urlencoded"));
     let body = request.split_once("\r\n\r\n").unwrap().1;
     let form: HashMap<String, String> = serde_urlencoded::from_str(body).unwrap();
     assert_eq!(form.get("grant_type").map(String::as_str), Some("authorization_code"));
@@ -130,19 +133,23 @@ fn token_exchange_posts_form_to_local_server() {
 }
 
 #[test]
-fn refresh_posts_required_form_to_local_server() {
+fn refresh_posts_json_while_authorization_exchange_remains_form_encoded() {
     let response = r#"{"id_token":"id2","access_token":"access2","refresh_token":"refresh2"}"#;
     let (url, request_rx, server) = spawn_http_server("200 OK", response);
-    let tokens = warpui_core::r#async::block_on(refresh_access_token_at("old-refresh", &url)).unwrap();
+    let tokens =
+        warpui_core::r#async::block_on(refresh_access_token_at("old-refresh", &url)).unwrap();
     assert_eq!(tokens.access_token, "access2");
     assert_eq!(tokens.expires_in, None);
 
     let request = request_rx.recv().unwrap();
+    assert!(request
+        .to_ascii_lowercase()
+        .contains("content-type: application/json"));
     let body = request.split_once("\r\n\r\n").unwrap().1;
-    let form: HashMap<String, String> = serde_urlencoded::from_str(body).unwrap();
-    assert_eq!(form.get("client_id").map(String::as_str), Some(CLIENT_ID));
-    assert_eq!(form.get("grant_type").map(String::as_str), Some("refresh_token"));
-    assert_eq!(form.get("refresh_token").map(String::as_str), Some("old-refresh"));
+    let json: Value = serde_json::from_str(body).unwrap();
+    assert_eq!(json["client_id"], CLIENT_ID);
+    assert_eq!(json["grant_type"], "refresh_token");
+    assert_eq!(json["refresh_token"], "old-refresh");
     server.join().unwrap();
 }
 

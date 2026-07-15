@@ -112,9 +112,11 @@ fn authorize_url(pkce: &PkceParams, redirect_uri: &str) -> String {
 /// Tokens returned by OpenAI's authorization-code and refresh grants.
 #[derive(Clone, Debug, Deserialize)]
 pub struct TokenResponse {
-    pub id_token: String,
+    #[serde(default)]
+    pub id_token: Option<String>,
     pub access_token: String,
-    pub refresh_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
     #[serde(default)]
     pub expires_in: Option<u64>,
 }
@@ -318,7 +320,7 @@ async fn exchange_code_for_tokens_at(
         ("client_id", CLIENT_ID),
         ("code_verifier", verifier),
     ];
-    post_token_request_at(&form, token_url).await
+    post_form_token_request_at(&form, token_url).await
 }
 
 /// Exchanges a refresh token for a new OpenAI token response.
@@ -326,19 +328,32 @@ pub async fn refresh_access_token(refresh_token: &str) -> anyhow::Result<TokenRe
     refresh_access_token_at(refresh_token, TOKEN_URL).await
 }
 
+#[derive(Serialize)]
+struct RefreshRequest<'a> {
+    client_id: &'static str,
+    grant_type: &'static str,
+    refresh_token: &'a str,
+}
+
 async fn refresh_access_token_at(
     refresh_token: &str,
     token_url: &str,
 ) -> anyhow::Result<TokenResponse> {
-    let form: [(&str, &str); 3] = [
-        ("client_id", CLIENT_ID),
-        ("grant_type", "refresh_token"),
-        ("refresh_token", refresh_token),
-    ];
-    post_token_request_at(&form, token_url).await
+    let request = RefreshRequest {
+        client_id: CLIENT_ID,
+        grant_type: "refresh_token",
+        refresh_token,
+    };
+    let response = http_client::Client::new()
+        .post(token_url)
+        .json(&request)
+        .send()
+        .await
+        .context("failed to send the Codex refresh request")?;
+    parse_token_response(response).await
 }
 
-async fn post_token_request_at<T: Serialize + ?Sized>(
+async fn post_form_token_request_at<T: Serialize + ?Sized>(
     form: &T,
     token_url: &str,
 ) -> anyhow::Result<TokenResponse> {
@@ -348,6 +363,12 @@ async fn post_token_request_at<T: Serialize + ?Sized>(
         .send()
         .await
         .context("failed to send the Codex token request")?;
+    parse_token_response(response).await
+}
+
+async fn parse_token_response(
+    response: http_client::Response,
+) -> anyhow::Result<TokenResponse> {
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
