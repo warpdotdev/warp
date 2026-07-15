@@ -499,6 +499,71 @@ fn test_unmatched_keystroke_does_not_yield_escape_sequence() {
     }
 }
 
+#[test]
+fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
+    let mock = TerminalModelMock::new();
+    let pty_bytes = |keystroke: &Keystroke, chars: Option<&str>| {
+        KeystrokeWithDetails {
+            keystroke,
+            key_without_modifiers: None,
+            chars,
+        }
+        .to_pty_bytes(&mock)
+    };
+    // A key with no `chars` and no encoder mapping, built the way the
+    // crossterm→key-event conversion supplies named keys (tab is "\t").
+    let named = |key: &str| Keystroke {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        cmd: false,
+        meta: false,
+        key: key.to_owned(),
+    };
+
+    // 1. The shared encoder still wins for special keys.
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("up").unwrap(), None),
+        Some(vec![C0::ESC, b'[', b'A'])
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("backspace").unwrap(), None),
+        Some(vec![C0::DEL])
+    );
+
+    // 2. Ctrl+letter -> C0 (0x01..0x1A); the encoder leaves these alone here.
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("ctrl-a").unwrap(), Some("a")),
+        Some(vec![0x01])
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("ctrl-c").unwrap(), Some("c")),
+        Some(vec![0x03])
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("ctrl-d").unwrap(), Some("d")),
+        Some(vec![0x04])
+    );
+
+    // 3. Printable text -> its UTF-8 bytes.
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("a").unwrap(), Some("a")),
+        Some(b"a".to_vec())
+    );
+    assert_eq!(
+        pty_bytes(&Keystroke::parse("1").unwrap(), Some("1")),
+        Some(b"1".to_vec())
+    );
+
+    // 4. Named control keys with no `chars` -> their C0 bytes.
+    assert_eq!(pty_bytes(&named("enter"), None), Some(vec![C0::CR]));
+    assert_eq!(pty_bytes(&named("escape"), None), Some(vec![C0::ESC]));
+    assert_eq!(pty_bytes(&named("\t"), None), Some(vec![C0::HT]));
+
+    // Nothing to send.
+    assert_eq!(pty_bytes(&named("insert"), None), None);
+}
+
 struct TerminalModelMock {
     term_mode: TermMode,
 }

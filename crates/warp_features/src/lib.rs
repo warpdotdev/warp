@@ -987,6 +987,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
+    FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
 ];
 

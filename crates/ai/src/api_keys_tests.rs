@@ -671,6 +671,7 @@ fn api_keys_for_request_omits_geap_token_for_non_loaded_states() {
     for state in [
         GeapCredentialsState::Missing,
         GeapCredentialsState::Disabled,
+        GeapCredentialsState::Unconfigured,
         GeapCredentialsState::Failed {
             error: LoadGeapCredentialsError::ExchangeToken {
                 status: None,
