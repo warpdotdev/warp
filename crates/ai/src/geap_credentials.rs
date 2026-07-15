@@ -120,7 +120,7 @@ impl LoadGeapCredentialsError {
             ),
             Self::ExchangeToken { status, .. } if is_admin_config_status(*status) => (
                 "Gemini Enterprise is misconfigured".to_string(),
-                "Google rejected Warp's identity token. Ask your workspace admin to verify \
+                "Google rejected Warp's identity token. Ask your team admin to verify \
                  that the Workload Identity Federation audience exactly matches the provider's \
                  full resource name, the provider trusts Warp's OIDC issuer, and its attribute \
                  condition allows this workspace."
@@ -137,7 +137,7 @@ impl LoadGeapCredentialsError {
             Self::ImpersonateServiceAccount { status, .. } if is_admin_config_status(*status) => (
                 "Gemini Enterprise service account access is misconfigured".to_string(),
                 "Warp couldn't obtain credentials for the service account configured by your \
-                 workspace admin. Ask them to verify the service account email, confirm the Warp \
+                 team admin. Ask them to verify the service account email, confirm the Warp \
                  workload identity has the Workload Identity User role on that service account, \
                  and ensure the IAM Service Account Credentials API is enabled."
                     .to_string(),
@@ -184,13 +184,13 @@ impl GeapCredentialsState {
             Self::Disabled => (
                 "Gemini Enterprise disabled".to_string(),
                 "Warp will not load Gemini Enterprise credentials until it's enabled by you or \
-                 your workspace admin."
+                 your team admin."
                     .to_string(),
                 Icon::Key,
             ),
             Self::Unconfigured => (
                 "Gemini Enterprise setup incomplete".to_string(),
-                "Your workspace admin needs to configure the Workload Identity Federation audience \
+                "Your team admin needs to configure the Workload Identity Federation audience \
                 before Warp can load credentials."
                     .to_string(),
                 Icon::AlertTriangle,
