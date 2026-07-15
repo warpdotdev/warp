@@ -91,6 +91,22 @@ fn is_transient_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 500..=599)
 }
 
+/// Returns `true` if the error chain carries an [`HttpStatusError`] with an
+/// authentication/authorization status (401 or 403).
+///
+/// Used by long-lived listeners to distinguish "credentials are permanently
+/// invalid" (for example, a cloud-agent task whose token stops working once the
+/// task ends) from generic permanent errors, so they can stop retrying instead
+/// of reconnecting forever.
+pub(crate) fn is_auth_error(e: &anyhow::Error) -> bool {
+    for cause in e.chain() {
+        if let Some(http_err) = cause.downcast_ref::<HttpStatusError>() {
+            return matches!(http_err.status, 401 | 403);
+        }
+    }
+    false
+}
+
 /// Maximum total attempts per operation (initial attempt plus retries on transient errors).
 pub(crate) const MAX_ATTEMPTS: usize = 3;
 
