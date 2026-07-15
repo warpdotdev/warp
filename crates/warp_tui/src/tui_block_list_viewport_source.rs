@@ -13,7 +13,7 @@ use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiChildView, TuiElement, TuiLayoutContext, TuiRowResize, TuiViewportContent,
+    TuiChildView, TuiElement, TuiLayoutContext, TuiRowResize, TuiSelectionSpan, TuiViewportContent,
     TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
 };
 use warpui_core::AppContext;
@@ -406,6 +406,60 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         _app: &AppContext,
     ) -> Option<TuiViewportContent> {
         Some(self.read_only_content(window, available_width))
+    }
+
+    fn selection_logical_text(
+        &self,
+        selection: TuiSelectionSpan,
+        available_width: u16,
+        app: &AppContext,
+    ) -> Option<String> {
+        let end_row_exclusive = if selection.end.col == 0 {
+            selection.end.row
+        } else {
+            selection.end.row.saturating_add(1)
+        };
+        // Source logical text only when the whole selection lands inside a
+        // single agent block. Overlap with a second item, a terminal block, or
+        // any other non-agent content returns `None`, keeping those selections
+        // on the per-row grid path.
+        let (block_top, view) = {
+            let model = self.model.lock();
+            let block_list = model.block_list();
+            let agent_blocks = self.agent_blocks.borrow();
+            let mut found: Option<(usize, ViewHandle<TuiAIBlock>)> = None;
+            let mut cursor = block_list
+                .block_heights()
+                .cursor::<BlockHeight, BlockHeightSummary>();
+            cursor.seek_clamped(
+                &BlockHeight::from(selection.start.row as f64),
+                SeekBias::Left,
+            );
+            while let Some(item) = cursor.item() {
+                let item_top = cursor.start().height.as_f64().floor().max(0.0) as usize;
+                if item_top >= end_row_exclusive {
+                    break;
+                }
+                let item_bottom = item_top.saturating_add(item.height().as_f64().ceil() as usize);
+                let overlaps = item_bottom > selection.start.row && item_top < end_row_exclusive;
+                if overlaps {
+                    match item {
+                        BlockHeightItem::RichContent(rich) if !rich.should_hide => {
+                            if found.is_some() {
+                                return None;
+                            }
+                            let view = agent_blocks.get(&rich.view_id)?;
+                            found = Some((item_top, view.clone()));
+                        }
+                        _ => return None,
+                    }
+                }
+                cursor.next();
+            }
+            found?
+        };
+        view.as_ref(app)
+            .selection_logical_text(selection, block_top, available_width, app)
     }
 
     fn take_selection_row_resizes(&self) -> Vec<TuiRowResize> {
