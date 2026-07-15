@@ -179,8 +179,23 @@ impl TaskStore {
     }
 
     pub fn exchange_by_id(&self, exchange_id: AIAgentExchangeId) -> Option<&AIAgentExchange> {
-        let exchange_ref = self.exchanges.get(&exchange_id)?;
-        self.lookup_exchange(exchange_ref)
+        if let Some(exchange) = self
+            .exchanges
+            .get(&exchange_id)
+            .and_then(|exchange_ref| self.lookup_exchange(exchange_ref))
+        {
+            return Some(exchange);
+        }
+        // The linearized index only spans tasks reachable from the root via
+        // sub-agent output messages, so it can transiently miss an exchange
+        // that lives in a task not yet linked into that traversal — e.g. a
+        // just-spawned CLI sub-agent subtask whose parent's sub-agent output
+        // message hasn't streamed in yet. Fall back to scanning all tasks (as
+        // `exchange_mut` does) so an exchange that exists in the store is always
+        // resolvable by id.
+        self.tasks
+            .values()
+            .find_map(|task| task.exchange(exchange_id))
     }
 
     pub fn first_exchange(&self) -> Option<&AIAgentExchange> {
